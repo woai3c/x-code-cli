@@ -1,0 +1,25 @@
+{
+  "name": "@x-code/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "x-code": "dist/cli.js",
+    "xc": "dist/cli.js"
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "dev": "node esbuild.config.js --watch"
+  },
+  "dependencies": {
+    "@x-code/core": "workspace:*",
+    "ink": "^6.6.0",
+    "react": "^19.1.0",
+    "yargs": "^18.0.0",
+    "chalk": "^5.4.0",
+    "diff": "^8.0.0"
+  }
+}

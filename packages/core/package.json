@@ -1,0 +1,40 @@
+{
+  "name": "@x-code/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch"
+  },
+  "dependencies": {
+    "ai": "^6.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/xai": "^3.0.0",
+    "@ai-sdk/deepseek": "^2.0.0",
+    "@ai-sdk/alibaba": "^1.0.0",
+    "@ai-sdk/moonshotai": "^2.0.0",
+    "@ai-sdk/openai-compatible": "^2.0.0",
+    "zhipu-ai-provider": "^0.2.0",
+    "zod": "^3.25.76",
+    "globby": "^14.0.0",
+    "execa": "^9.0.0",
+    "@tavily/core": "^0.7.0",
+    "@vscode/ripgrep": "^1.17.0",
+    "cheerio": "^1.0.0",
+    "turndown": "^7.2.0",
+    "diff": "^8.0.0",
+    "chalk": "^5.4.0"
+  }
+}

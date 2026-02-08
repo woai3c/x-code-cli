@@ -1,0 +1,118 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    // ──────────────────── CLI 调试 ────────────────────
+    {
+      "name": "xc (交互模式)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
+      "args": ["packages/cli/src/index.ts"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "xc --model (指定模型)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
+      "args": ["packages/cli/src/index.ts", "--model", "${input:modelName}"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "xc --print (非交互模式)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
+      "args": ["packages/cli/src/index.ts", "--print", "${input:prompt}"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "xc --trust (信任模式)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
+      "args": ["packages/cli/src/index.ts", "--trust"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "xc (构建产物)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/packages/cli/dist/cli.js",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "sourceMapPathOverrides": {
+        "../src/*": "${workspaceFolder}/packages/cli/src/*",
+        "../../packages/core/src/*": "${workspaceFolder}/packages/core/src/*"
+      },
+      "skipFiles": ["<node_internals>/**"]
+    },
+
+    // ──────────────────── 测试调试 ────────────────────
+    {
+      "name": "Vitest: 全部测试",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/vitest",
+      "args": ["run", "--no-file-parallelism"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "Vitest: 当前文件",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/vitest",
+      "args": ["run", "--no-file-parallelism", "${relativeFile}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+
+    // ──────────────────── 构建调试 ────────────────────
+    {
+      "name": "esbuild: CLI 构建",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/packages/cli/esbuild.config.js",
+      "cwd": "${workspaceFolder}/packages/cli",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "modelName",
+      "type": "promptString",
+      "description": "模型名 (如 sonnet, deepseek, openai:gpt-4.1)",
+      "default": "sonnet"
+    },
+    {
+      "id": "prompt",
+      "type": "promptString",
+      "description": "发送给 AI 的提示词",
+      "default": "你好"
+    }
+  ]
+}
