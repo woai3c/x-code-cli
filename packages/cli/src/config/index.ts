@@ -16,7 +16,7 @@ export interface CliOptions {
 export async function resolveCliConfig(args: CliOptions) {
   const config = await loadConfig()
   const modelId = resolveModelId(args.model, config)
-  const availableProviders = getAvailableProviders(config)
+  const availableProviders = getAvailableProviders()
 
   return {
     config,

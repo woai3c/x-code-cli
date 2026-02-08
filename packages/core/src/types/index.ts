@@ -60,15 +60,8 @@ export interface AgentOptions {
 
 // ─── Config ───
 
-export interface ProviderConfig {
-  apiKey: string
-  baseURL?: string
-  name?: string
-}
-
 export interface AppConfig {
-  model?: string
-  providers: Record<string, ProviderConfig>
+  model?: string // default model preference (e.g. "anthropic:claude-sonnet-4-5")
 }
 
 // ─── Knowledge ───

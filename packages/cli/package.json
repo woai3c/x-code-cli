@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "node esbuild.config.js",
-    "dev": "node esbuild.config.js --watch"
+    "dev": "tsx src/index.ts"
   },
   "dependencies": {
     "@x-code/core": "workspace:*",

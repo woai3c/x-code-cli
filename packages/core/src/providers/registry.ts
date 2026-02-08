@@ -11,11 +11,10 @@ import { moonshotai } from '@ai-sdk/moonshotai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { zhipu } from 'zhipu-ai-provider'
 
-import type { AppConfig } from '../types/index.js'
 import { getProviderOptions } from '../config/index.js'
 
-export function createModelRegistry(config: AppConfig) {
-  const opts = getProviderOptions(config)
+export function createModelRegistry() {
+  const opts = getProviderOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers: Record<string, any> = {}
 

@@ -3,9 +3,7 @@
 import React from 'react'
 
 import { render } from 'ink'
-import type { LanguageModel } from 'ai'
-
-import type { AgentOptions } from '@x-code/core'
+import type { AgentOptions, LanguageModel } from '@x-code/core'
 
 import { App } from './ui/components/App.js'
 

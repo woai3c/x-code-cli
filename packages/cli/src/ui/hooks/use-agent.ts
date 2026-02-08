@@ -2,8 +2,6 @@
 
 import { useState, useCallback, useRef } from 'react'
 
-import type { LanguageModel } from 'ai'
-
 import {
   agentLoop,
   saveSession,
@@ -13,6 +11,7 @@ import {
   loadLatestSession,
 } from '@x-code/core'
 import type {
+  LanguageModel,
   DisplayMessage,
   DisplayToolCall,
   TokenUsage,

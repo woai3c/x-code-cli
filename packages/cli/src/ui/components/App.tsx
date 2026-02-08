@@ -1,30 +1,21 @@
 // @x-code/cli — Root App component
-
 import React, { useEffect } from 'react'
 
 import { Box, Text, useApp, useInput } from 'ink'
-import type { LanguageModel } from 'ai'
 
-import {
-  VERSION,
-  resolveModelId,
-  loadConfig,
-  createModelRegistry,
-  initProject,
-  MODEL_ALIASES,
-} from '@x-code/core'
-import type { AgentOptions } from '@x-code/core'
+import { MODEL_ALIASES, VERSION, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code/core'
+import type { AgentOptions, LanguageModel } from '@x-code/core'
 
 import { useAgent } from '../hooks/use-agent.js'
+import { ChatInput } from './ChatInput.js'
 import { MessageList } from './MessageList.js'
-import { StreamingText } from './StreamingText.js'
-import { ToolCall } from './ToolCall.js'
-import { ShellOutput } from './ShellOutput.js'
 import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
+import { ShellOutput } from './ShellOutput.js'
 import { Spinner } from './Spinner.js'
 import { StatusBar } from './StatusBar.js'
-import { ChatInput } from './ChatInput.js'
+import { StreamingText } from './StreamingText.js'
+import { ToolCall } from './ToolCall.js'
 
 interface AppProps {
   model: LanguageModel
@@ -149,7 +140,9 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           return
 
         case 'plan':
-          await submit('Please enter plan mode to explore the codebase and design an implementation plan before making changes.')
+          await submit(
+            'Please enter plan mode to explore the codebase and design an implementation plan before making changes.',
+          )
           return
 
         case 'exit':
@@ -184,8 +177,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
         addInfoMessage(`Could not resolve model: ${arg}`)
         return
       }
-      const registry = createModelRegistry(config)
-      const newModel = registry.languageModel(newModelId)
+      const registry = createModelRegistry()
+      const newModel = registry.languageModel(newModelId as `${string}:${string}`)
       switchModel(newModelId, newModel)
       addInfoMessage(`Model switched to: ${newModelId}`)
     } catch (err) {
@@ -265,11 +258,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
 
       {/* Current tool call */}
       {state.currentToolCall && !state.pendingPermission && (
-        <ToolCall
-          toolName={state.currentToolCall.toolName}
-          input={state.currentToolCall.input}
-          status="running"
-        />
+        <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} status="running" />
       )}
 
       {/* Shell output */}
@@ -297,9 +286,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       {state.isLoading && !state.streamingText && !state.currentToolCall && <Spinner />}
 
       {/* Error */}
-      {state.error && (
-        <Text color="red">Error: {state.error}</Text>
-      )}
+      {state.error && <Text color="red">Error: {state.error}</Text>}
 
       {/* Status bar */}
       <StatusBar modelId={options.modelId} usage={state.usage} />

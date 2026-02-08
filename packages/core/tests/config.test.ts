@@ -6,8 +6,8 @@ import { resolveModelId, getAvailableProviders } from '../src/config/index.js'
 import type { AppConfig } from '../src/types/index.js'
 
 describe('resolveModelId', () => {
-  const emptyConfig: AppConfig = { providers: {} }
-  const configWithModel: AppConfig = { model: 'anthropic:claude-sonnet-4-5', providers: {} }
+  const emptyConfig: AppConfig = {}
+  const configWithModel: AppConfig = { model: 'anthropic:claude-sonnet-4-5' }
 
   beforeEach(() => {
     // Clear env vars
@@ -39,8 +39,15 @@ describe('resolveModelId', () => {
     expect(resolveModelId(undefined, emptyConfig)).toBe('openai:gpt-4.1')
   })
 
-  it('falls back to config file model', () => {
+  it('falls back to config file model only if provider key exists', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
     expect(resolveModelId(undefined, configWithModel)).toBe('anthropic:claude-sonnet-4-5')
+  })
+
+  it('skips config file model if provider key missing', () => {
+    // Config has anthropic model but no ANTHROPIC_API_KEY → falls through
+    process.env.OPENAI_API_KEY = 'test-key'
+    expect(resolveModelId(undefined, configWithModel)).toBe('openai:gpt-4.1')
   })
 
   it('falls back to smart default from env API key', () => {
@@ -57,13 +64,9 @@ describe('resolveModelId', () => {
     expect(resolveModelId(undefined, emptyConfig)).toBeNull()
   })
 
-  it('falls back to config providers for smart default', () => {
-    const config: AppConfig = {
-      providers: {
-        deepseek: { apiKey: 'sk-test' },
-      },
-    }
-    expect(resolveModelId(undefined, config)).toBe('deepseek:deepseek-chat')
+  it('returns model even if provider key missing when explicitly requested via input', () => {
+    // --model deepseek should return it even without key (will error at runtime)
+    expect(resolveModelId('deepseek', emptyConfig)).toBe('deepseek:deepseek-chat')
   })
 })
 
@@ -80,24 +83,21 @@ describe('getAvailableProviders', () => {
     delete process.env.DEEPSEEK_API_KEY
   })
 
-  it('returns empty array when no providers configured', () => {
-    expect(getAvailableProviders({ providers: {} })).toEqual([])
+  it('returns empty array when no env vars set', () => {
+    expect(getAvailableProviders()).toEqual([])
   })
 
   it('detects providers from env vars', () => {
     process.env.ANTHROPIC_API_KEY = 'test'
     process.env.OPENAI_API_KEY = 'test'
-    const providers = getAvailableProviders({ providers: {} })
+    const providers = getAvailableProviders()
     expect(providers).toContain('anthropic')
     expect(providers).toContain('openai')
   })
 
-  it('detects providers from config', () => {
-    const config: AppConfig = {
-      providers: {
-        deepseek: { apiKey: 'sk-test' },
-      },
-    }
-    expect(getAvailableProviders(config)).toContain('deepseek')
+  it('does not detect providers from config file only', () => {
+    // API keys must come from env vars, not config file
+    const providers = getAvailableProviders()
+    expect(providers).not.toContain('deepseek')
   })
 })

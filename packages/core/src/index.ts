@@ -11,7 +11,6 @@ export type {
   AgentCallbacks,
   AgentOptions,
   AppConfig,
-  ProviderConfig,
   KnowledgeFact,
   SessionSummary,
   RuleFrontmatter,
@@ -23,7 +22,7 @@ export type {
 export { MODEL_ALIASES, PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS } from './types/index.js'
 
 // Config
-export { loadConfig, saveConfig, resolveModelId, getAvailableProviders, CONFIG_DIR, CONFIG_FILE } from './config/index.js'
+export { loadConfig, resolveModelId, getAvailableProviders, getEnvVarName, CONFIG_DIR, CONFIG_FILE } from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry } from './providers/registry.js'

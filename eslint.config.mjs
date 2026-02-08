@@ -1,6 +1,6 @@
-import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 import unusedImports from 'eslint-plugin-unused-imports'
+import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
@@ -31,12 +31,10 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      '@typescript-eslint/no-unused-vars': [
-        'warn',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
-      ],
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
       'unused-imports/no-unused-imports': 'error',
+      '@typescript-eslint/no-floating-promises': 'off',
     },
   },
 )

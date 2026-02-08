@@ -127,6 +127,15 @@ function classifyApiError(err: unknown): { message: string; retryable: boolean }
   const statusMatch = msg.match(/(\d{3})/)
   const status = statusMatch ? Number(statusMatch[1]) : 0
 
+  if (msg.includes('API key is missing') || msg.includes('API_KEY')) {
+    // Extract provider name from message like "DeepSeek API key API key is missing..."
+    const providerMatch = msg.match(/^(\w+)\s+API key/i)
+    const provider = providerMatch ? providerMatch[1] : 'Provider'
+    return {
+      message: `${provider} API key is not set. Please set the corresponding environment variable (e.g. ${provider.toUpperCase()}_API_KEY).`,
+      retryable: false,
+    }
+  }
   if (status === 401 || msg.includes('Unauthorized') || msg.includes('Invalid API Key')) {
     return {
       message: 'API authentication failed (401). Please check your API key with /model or reconfigure with `xc init`.',
@@ -276,27 +285,42 @@ export async function agentLoop(
       break
     }
 
-    // Collect response + usage
-    const response = await result.response
-    state.messages.push(...response.messages)
+    // Collect response + usage (may fail if stream errored)
+    let finishReason: string
+    try {
+      const response = await result.response
+      state.messages.push(...response.messages)
 
-    const usage = await result.usage
-    if (usage) {
-      state.tokenUsage.inputTokens += usage.inputTokens ?? 0
-      state.tokenUsage.outputTokens += usage.outputTokens ?? 0
-      state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
-      state.tokenUsage.estimatedCost = estimateCost(
-        options.modelId,
-        state.tokenUsage.inputTokens,
-        state.tokenUsage.outputTokens,
-      )
-      callbacks.onUsageUpdate(state.tokenUsage)
+      const usage = await result.usage
+      if (usage) {
+        state.tokenUsage.inputTokens += usage.inputTokens ?? 0
+        state.tokenUsage.outputTokens += usage.outputTokens ?? 0
+        state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
+        state.tokenUsage.estimatedCost = estimateCost(
+          options.modelId,
+          state.tokenUsage.inputTokens,
+          state.tokenUsage.outputTokens,
+        )
+        callbacks.onUsageUpdate(state.tokenUsage)
+      }
+
+      finishReason = await result.finishReason
+    } catch (err) {
+      const classified = classifyApiError(err)
+      callbacks.onError(new Error(classified.message))
+      break
     }
 
-    const finishReason = await result.finishReason
-
     if (finishReason === 'tool-calls') {
-      const toolCalls = await result.toolCalls
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let toolCalls: any[]
+      try {
+        toolCalls = await result.toolCalls
+      } catch (err) {
+        const classified = classifyApiError(err)
+        callbacks.onError(new Error(classified.message))
+        break
+      }
 
       for (const tc of toolCalls) {
         const toolName = tc.toolName

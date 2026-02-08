@@ -1,23 +1,21 @@
 // @x-code/cli — CLI entry point
 
-import React from 'react'
-
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
-import { render } from 'ink'
 
 import {
   VERSION,
   loadConfig,
   resolveModelId,
   getAvailableProviders,
+  getEnvVarName,
   createModelRegistry,
-  initProject,
+  PROVIDER_DETECTION_ORDER,
+  PROVIDER_KEY_URLS,
 } from '@x-code/core'
-import type { AgentOptions, AppConfig } from '@x-code/core'
+import type { AgentOptions } from '@x-code/core'
 
 import { startApp, getCleanupFn } from './app.js'
-import { SetupWizard } from './ui/components/SetupWizard.js'
 
 const MIN_NODE_VERSION = [20, 19, 0]
 
@@ -80,26 +78,34 @@ async function main() {
     stdinContent = await readStdin()
   }
 
-  // Load config
+  // Load config (for model preference only; API keys come from env vars)
   const config = await loadConfig()
-  const availableProviders = getAvailableProviders(config)
+  const availableProviders = getAvailableProviders()
 
-  // If no providers configured, show setup wizard
+  // If no providers configured, show helpful message and exit
   if (availableProviders.length === 0) {
-    await runSetupWizard(config, argv as Record<string, unknown>, prompt, stdinContent)
-    return
+    printNoApiKeyMessage()
+    process.exit(1)
   }
 
   // Resolve model
   const modelId = resolveModelId(argv.model as string | undefined, config)
   if (!modelId) {
-    console.error('Error: Could not determine model. Use --model flag or configure an API key.')
+    // User specified a model whose provider has no key
+    const requested = argv.model as string | undefined
+    if (requested) {
+      const provider = requested.split(':')[0]
+      const envVar = getEnvVarName(provider) ?? `${provider.toUpperCase()}_API_KEY`
+      console.error(`Error: ${envVar} is not set. Please set this environment variable to use ${requested}.`)
+    } else {
+      printNoApiKeyMessage()
+    }
     process.exit(1)
   }
 
   // Create registry and get model
-  const registry = createModelRegistry(config)
-  const model = registry.languageModel(modelId)
+  const registry = createModelRegistry()
+  const model = registry.languageModel(modelId as `${string}:${string}`)
 
   const options: AgentOptions = {
     modelId,
@@ -116,36 +122,18 @@ async function main() {
   await waitUntilExit()
 }
 
-async function runSetupWizard(
-  _config: AppConfig,
-  argv: Record<string, unknown>,
-  prompt: string | undefined,
-  stdinContent: string,
-) {
-  return new Promise<void>((resolve) => {
-    const { waitUntilExit } = render(
-      React.createElement(SetupWizard, {
-        onComplete: async (newConfig: AppConfig, modelId: string) => {
-          const registry = createModelRegistry(newConfig)
-          const model = registry.languageModel(modelId)
-
-          const options: AgentOptions = {
-            modelId,
-            trustMode: (argv.trust as boolean) ?? false,
-            printMode: (argv.print as boolean) ?? false,
-            maxTurns: (argv['max-turns'] as number) ?? 100,
-          }
-
-          const fullPrompt = [stdinContent, prompt].filter(Boolean).join('\n\n')
-          const waitForApp = startApp(model, options, fullPrompt || undefined)
-          await waitForApp()
-          resolve()
-        },
-      }),
-    )
-
-    waitUntilExit().then(resolve)
-  })
+function printNoApiKeyMessage() {
+  console.error('Error: No API key found.\n')
+  console.error('Set one of the following environment variables:\n')
+  for (const { envKey } of PROVIDER_DETECTION_ORDER) {
+    const provider = envKey.replace(/_API_KEY$/, '').replace('GOOGLE_GENERATIVE_AI', 'google').replace('MOONSHOT', 'moonshotai').toLowerCase()
+    const url = PROVIDER_KEY_URLS[provider] ?? ''
+    console.error(`  ${envKey.padEnd(32)} ${url}`)
+  }
+  console.error(`\n  OPENAI_COMPATIBLE_API_KEY        (custom OpenAI-compatible endpoint)`)
+  console.error('\nExample:')
+  console.error('  export ANTHROPIC_API_KEY=sk-ant-...')
+  console.error('  xc')
 }
 
 function readStdin(): Promise<string> {
