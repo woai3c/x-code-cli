@@ -1,5 +1,6 @@
 import esbuild from 'esbuild'
 import { builtinModules } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 // ESM polyfills — provide __dirname, __filename, and require() for CJS compat
 const ESM_POLYFILLS = `
@@ -34,7 +35,7 @@ const entitiesFixPlugin = {
     build.onResolve({ filter: /^entities\/(decode|escape)$/ }, (args) => {
       const subpath = args.path.split('/')[1]
       return {
-        path: new URL(`${entitiesBase}/${subpath}.js`, import.meta.url).pathname,
+        path: fileURLToPath(new URL(`${entitiesBase}/${subpath}.js`, import.meta.url)),
       }
     })
   },
