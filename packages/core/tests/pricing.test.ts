@@ -1,6 +1,5 @@
 // Tests for pricing module
-
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { estimateCost } from '../src/agent/pricing.js'
 
@@ -14,7 +13,7 @@ describe('estimateCost', () => {
   it('calculates Anthropic Opus cost correctly', () => {
     // 10K input @ $15/M + 2K output @ $75/M = $0.15 + $0.15 = $0.30
     const cost = estimateCost('anthropic:claude-opus-4-6', 10_000, 2_000)
-    expect(cost).toBeCloseTo(0.30, 4)
+    expect(cost).toBeCloseTo(0.3, 4)
   })
 
   it('calculates OpenAI GPT-4.1 cost correctly', () => {

@@ -1,8 +1,7 @@
 // @x-code/cli — Message history (uses Ink Static for performance)
-
 import React from 'react'
 
-import { Static, Box, Text } from 'ink'
+import { Box, Static, Text } from 'ink'
 
 import type { DisplayMessage } from '@x-code/core'
 
@@ -17,7 +16,9 @@ export function MessageList({ messages }: MessageListProps) {
         <Box key={msg.id} flexDirection="column" marginBottom={1}>
           {msg.role === 'user' ? (
             <Text>
-              <Text color="blue" bold>{'> '}</Text>
+              <Text color="blue" bold>
+                {'> '}
+              </Text>
               <Text color="blue">{msg.content}</Text>
             </Text>
           ) : (

@@ -4,7 +4,15 @@ import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/*.js', '**/*.mjs'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      '**/*.js',
+      '**/*.mjs',
+      '**/tests/**',
+      '**/vitest.config.ts',
+    ],
   },
   ...tseslint.configs.recommendedTypeChecked,
   {
@@ -35,6 +43,7 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'warn',
       'unused-imports/no-unused-imports': 'error',
       '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: { attributes: false } }],
     },
   },
 )

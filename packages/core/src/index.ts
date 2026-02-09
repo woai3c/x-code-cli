@@ -22,13 +22,21 @@ export type {
 export { MODEL_ALIASES, PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS } from './types/index.js'
 
 // Config
-export { loadConfig, resolveModelId, getAvailableProviders, getEnvVarName, CONFIG_DIR, CONFIG_FILE } from './config/index.js'
+export {
+  loadConfig,
+  resolveModelId,
+  getAvailableProviders,
+  getEnvVarName,
+  CONFIG_DIR,
+  CONFIG_FILE,
+} from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry } from './providers/registry.js'
 
 // Agent
 export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
+export type { LoopState } from './agent/loop.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
 export { estimateTokens } from './agent/messages.js'
 export { estimateCost } from './agent/pricing.js'

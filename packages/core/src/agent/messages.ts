@@ -1,5 +1,4 @@
 // @x-code/core — Message types and helpers
-
 import type { ModelMessage } from 'ai'
 
 /** Create a user message */

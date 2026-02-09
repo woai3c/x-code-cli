@@ -1,8 +1,7 @@
 // Tests for config module
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-
-import { resolveModelId, getAvailableProviders } from '../src/config/index.js'
+import { getAvailableProviders, resolveModelId } from '../src/config/index.js'
 import type { AppConfig } from '../src/types/index.js'
 
 describe('resolveModelId', () => {

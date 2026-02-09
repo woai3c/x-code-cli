@@ -1,5 +1,4 @@
 // @x-code/cli — User text input component
-
 import React, { useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'
@@ -57,7 +56,9 @@ export function ChatInput({ onSubmit, disabled }: ChatInputProps) {
 
   return (
     <Box>
-      <Text color="blue" bold>{'> '}</Text>
+      <Text color="blue" bold>
+        {'> '}
+      </Text>
       <Text>{displayText}</Text>
       <Text dimColor>█</Text>
     </Box>

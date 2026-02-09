@@ -1,6 +1,5 @@
 // @x-code/core — Public type definitions
-
-import type { ModelMessage, LanguageModel } from 'ai'
+import type { LanguageModel, ModelMessage } from 'ai'
 
 // ─── Permission ───
 

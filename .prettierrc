@@ -4,15 +4,7 @@
   "printWidth": 120,
   "trailingComma": "all",
   "plugins": ["@trivago/prettier-plugin-sort-imports"],
-  "importOrder": [
-    "^node:",
-    "^react",
-    "^ink",
-    "^(ai|@ai-sdk)",
-    "^zod",
-    "^@x-code/",
-    "^[./]"
-  ],
+  "importOrder": ["^node:", "^react", "^ink", "^(ai|@ai-sdk)", "^zod", "^@x-code/", "^[./]"],
   "importOrderSeparation": true,
   "importOrderSortSpecifiers": true
 }

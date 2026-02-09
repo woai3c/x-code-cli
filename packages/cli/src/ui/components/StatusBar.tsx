@@ -1,5 +1,4 @@
 // @x-code/cli — Bottom status bar (model / token / cost)
-
 import React from 'react'
 
 import { Box, Text } from 'ink'

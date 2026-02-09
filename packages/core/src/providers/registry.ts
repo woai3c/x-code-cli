@@ -1,15 +1,15 @@
 // @x-code/core — AI SDK Provider Registry (multi-model support)
-
-import { createProviderRegistry } from 'ai'
-import { anthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
-import { google } from '@ai-sdk/google'
-import { xai } from '@ai-sdk/xai'
-import { deepseek } from '@ai-sdk/deepseek'
-import { createAlibaba } from '@ai-sdk/alibaba'
-import { moonshotai } from '@ai-sdk/moonshotai'
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { zhipu } from 'zhipu-ai-provider'
+
+import { createAlibaba } from '@ai-sdk/alibaba'
+import { anthropic } from '@ai-sdk/anthropic'
+import { deepseek } from '@ai-sdk/deepseek'
+import { google } from '@ai-sdk/google'
+import { moonshotai } from '@ai-sdk/moonshotai'
+import { createOpenAI } from '@ai-sdk/openai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { xai } from '@ai-sdk/xai'
+import { createProviderRegistry } from 'ai'
 
 import { getProviderOptions } from '../config/index.js'
 

@@ -1,21 +1,23 @@
 // @x-code/cli — CLI entry point
-
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 
+import fs from 'node:fs'
+import path from 'node:path'
+
 import {
-  VERSION,
-  loadConfig,
-  resolveModelId,
-  getAvailableProviders,
-  getEnvVarName,
-  createModelRegistry,
   PROVIDER_DETECTION_ORDER,
   PROVIDER_KEY_URLS,
+  VERSION,
+  createModelRegistry,
+  getAvailableProviders,
+  getEnvVarName,
+  loadConfig,
+  resolveModelId,
 } from '@x-code/core'
 import type { AgentOptions } from '@x-code/core'
 
-import { startApp, getCleanupFn } from './app.js'
+import { getCleanupFn, startApp } from './app.js'
 
 const MIN_NODE_VERSION = [20, 19, 0]
 
@@ -29,7 +31,7 @@ function checkNodeVersion(): void {
   ) {
     console.error(
       `Error: X-Code CLI requires Node.js >= ${MIN_NODE_VERSION.join('.')}, but you are running ${process.versions.node}.\n` +
-      'Please upgrade Node.js: https://nodejs.org/',
+        'Please upgrade Node.js: https://nodejs.org/',
     )
     process.exit(1)
   }
@@ -37,6 +39,7 @@ function checkNodeVersion(): void {
 
 async function main() {
   checkNodeVersion()
+  loadEnvFile()
 
   // Parse CLI arguments
   const argv = await yargs(hideBin(process.argv))
@@ -89,10 +92,10 @@ async function main() {
   }
 
   // Resolve model
-  const modelId = resolveModelId(argv.model as string | undefined, config)
+  const modelId = resolveModelId(argv.model, config)
   if (!modelId) {
     // User specified a model whose provider has no key
-    const requested = argv.model as string | undefined
+    const requested = argv.model
     if (requested) {
       const provider = requested.split(':')[0]
       const envVar = getEnvVarName(provider) ?? `${provider.toUpperCase()}_API_KEY`
@@ -109,9 +112,9 @@ async function main() {
 
   const options: AgentOptions = {
     modelId,
-    trustMode: argv.trust as boolean,
-    printMode: argv.print as boolean,
-    maxTurns: argv['max-turns'] as number ?? 100,
+    trustMode: argv.trust,
+    printMode: argv.print,
+    maxTurns: argv['max-turns'] ?? 100,
   }
 
   // Combine prompt with stdin
@@ -122,25 +125,58 @@ async function main() {
   await waitUntilExit()
 }
 
+/** Load .env file from cwd (walk up to find it, like dotenv convention) */
+function loadEnvFile(): void {
+  let dir = process.cwd()
+  while (true) {
+    const envPath = path.join(dir, '.env')
+    if (fs.existsSync(envPath)) {
+      try {
+        process.loadEnvFile(envPath)
+      } catch {
+        // Ignore parse errors
+      }
+      return
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break // reached root
+    dir = parent
+  }
+}
+
 function printNoApiKeyMessage() {
+  const isWindows = process.platform === 'win32'
   console.error('Error: No API key found.\n')
-  console.error('Set one of the following environment variables:\n')
+  console.error('Option 1: Create a .env file in your project root:\n')
+  console.error('  cp .env.example .env')
+  console.error('  # Edit .env and fill in your API key\n')
+  console.error('Option 2: Set an environment variable:\n')
   for (const { envKey } of PROVIDER_DETECTION_ORDER) {
-    const provider = envKey.replace(/_API_KEY$/, '').replace('GOOGLE_GENERATIVE_AI', 'google').replace('MOONSHOT', 'moonshotai').toLowerCase()
+    const provider = envKey
+      .replace(/_API_KEY$/, '')
+      .replace('GOOGLE_GENERATIVE_AI', 'google')
+      .replace('MOONSHOT', 'moonshotai')
+      .toLowerCase()
     const url = PROVIDER_KEY_URLS[provider] ?? ''
     console.error(`  ${envKey.padEnd(32)} ${url}`)
   }
   console.error(`\n  OPENAI_COMPATIBLE_API_KEY        (custom OpenAI-compatible endpoint)`)
-  console.error('\nExample:')
-  console.error('  export ANTHROPIC_API_KEY=sk-ant-...')
-  console.error('  xc')
+  if (isWindows) {
+    console.error('\nExample (PowerShell):')
+    console.error('  $env:ANTHROPIC_API_KEY="sk-ant-..."')
+    console.error('  xc')
+  } else {
+    console.error('\nExample:')
+    console.error('  export ANTHROPIC_API_KEY=sk-ant-...')
+    console.error('  xc')
+  }
 }
 
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     let data = ''
     process.stdin.setEncoding('utf-8')
-    process.stdin.on('data', (chunk) => {
+    process.stdin.on('data', (chunk: string) => {
       data += chunk
     })
     process.stdin.on('end', () => {
@@ -153,21 +189,24 @@ function readStdin(): Promise<string> {
 
 // Handle Ctrl+C gracefully — save session before exit
 let sigintCount = 0
-process.on('SIGINT', async () => {
+process.on('SIGINT', () => {
   sigintCount++
   if (sigintCount >= 2) {
     // Force exit on second Ctrl+C
     process.exit(1)
   }
-  try {
-    const cleanup = getCleanupFn()
-    if (cleanup) {
-      await cleanup()
-    }
-  } catch {
-    // Don't crash on cleanup failure
+  const cleanup = getCleanupFn()
+  if (cleanup) {
+    cleanup()
+      .catch(() => {
+        // Don't crash on cleanup failure
+      })
+      .finally(() => {
+        process.exit(0)
+      })
+  } else {
+    process.exit(0)
   }
-  process.exit(0)
 })
 
 main().catch((err) => {

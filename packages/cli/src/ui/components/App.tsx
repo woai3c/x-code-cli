@@ -162,7 +162,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
   async function handleModelSwitch(arg: string) {
     if (!arg) {
       // List available models
-      const config = await loadConfig()
+      const _config = await loadConfig()
       const aliases = Object.entries(MODEL_ALIASES)
         .map(([alias, id]) => `  ${alias} → ${id}`)
         .join('\n')

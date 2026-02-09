@@ -1,6 +1,6 @@
 // @x-code/core — shell tool (cross-platform command execution, no execute — needs permission check)
-
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const shell = tool({

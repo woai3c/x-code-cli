@@ -1,5 +1,4 @@
 // @x-code/cli — Tool call display component
-
 import React from 'react'
 
 import { Box, Text } from 'ink'
@@ -27,26 +26,32 @@ export function ToolCall({ toolName, input, status, output }: ToolCallProps) {
   }
 
   // Show relevant input preview
-  const inputPreview = toolName === 'shell'
-    ? (input.command as string)
-    : toolName === 'readFile' || toolName === 'writeFile' || toolName === 'edit'
-      ? (input.filePath as string)
-      : toolName === 'glob'
-        ? (input.pattern as string)
-        : toolName === 'grep'
+  const inputPreview =
+    toolName === 'shell'
+      ? (input.command as string)
+      : toolName === 'readFile' || toolName === 'writeFile' || toolName === 'edit'
+        ? (input.filePath as string)
+        : toolName === 'glob'
           ? (input.pattern as string)
-          : JSON.stringify(input).slice(0, 80)
+          : toolName === 'grep'
+            ? (input.pattern as string)
+            : JSON.stringify(input).slice(0, 80)
 
   return (
     <Box flexDirection="column" marginLeft={1}>
       <Text>
         <Text color={statusColors[status]}>{statusIcons[status]} </Text>
-        <Text bold color="yellow">{toolName}</Text>
+        <Text bold color="yellow">
+          {toolName}
+        </Text>
         <Text dimColor> {inputPreview}</Text>
       </Text>
       {output && status === 'completed' && (
         <Box marginLeft={3}>
-          <Text dimColor>{output.slice(0, 200)}{output.length > 200 ? '...' : ''}</Text>
+          <Text dimColor>
+            {output.slice(0, 200)}
+            {output.length > 200 ? '...' : ''}
+          </Text>
         </Box>
       )}
     </Box>

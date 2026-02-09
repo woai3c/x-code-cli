@@ -1,10 +1,11 @@
 // @x-code/cli — Permission confirmation component (Y/N + diff preview)
+import { diffLines } from 'diff'
 
-import React, { useState, useEffect } from 'react'
 import fs from 'node:fs/promises'
 
+import React, { useEffect, useState } from 'react'
+
 import { Box, Text, useInput } from 'ink'
-import { diffLines } from 'diff'
 
 import { getPermissionLevel } from '@x-code/core'
 
@@ -103,7 +104,10 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
   return (
     <Box flexDirection="column" marginLeft={2}>
       <Text color="cyan">{filePath} (new file)</Text>
-      <Text dimColor>{content.slice(0, 300)}{content.length > 300 ? '\n...' : ''}</Text>
+      <Text dimColor>
+        {content.slice(0, 300)}
+        {content.length > 300 ? '\n...' : ''}
+      </Text>
     </Box>
   )
 }
@@ -141,7 +145,8 @@ function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
       } else {
         elements.push(
           <Text key={` ${lineCount}`} dimColor>
-            {'  '}{line}
+            {'  '}
+            {line}
           </Text>,
         )
       }

@@ -1,8 +1,7 @@
 // Tests for message helpers
+import { describe, expect, it } from 'vitest'
 
-import { describe, it, expect } from 'vitest'
-
-import { userMessage, toolResultMessage, estimateTokens } from '../src/agent/messages.js'
+import { estimateTokens, toolResultMessage, userMessage } from '../src/agent/messages.js'
 
 describe('userMessage', () => {
   it('creates a user message', () => {

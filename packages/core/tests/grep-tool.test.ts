@@ -1,7 +1,7 @@
 // Tests for grep tool (ripgrep-based content search)
 // Note: Execution tests require ripgrep binary — skipped if not available
+import { describe, expect, it } from 'vitest'
 
-import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -16,7 +16,9 @@ function isRipgrepAvailable(): boolean {
     const rg = require('@vscode/ripgrep') as { rgPath: string }
     execFileSync(rg.rgPath, ['--version'], { stdio: 'ignore' })
     return true
-  } catch { /* fall through */ }
+  } catch {
+    /* fall through */
+  }
   // Fallback to system rg
   try {
     execFileSync('rg', ['--version'], { stdio: 'ignore' })

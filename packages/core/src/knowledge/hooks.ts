@@ -1,5 +1,4 @@
 // @x-code/core — Startup project scan (reads config files to inject basic context)
-
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -58,9 +57,11 @@ export async function scanProject(projectRoot: string): Promise<void> {
       ...(pkg.dependencies as Record<string, string> | undefined),
       ...(pkg.devDependencies as Record<string, string> | undefined),
     }
-    if (deps.react) memory.add({ key: 'ui-framework', fact: `React ${deps.react}`, category: 'tech-stack', date: today() })
+    if (deps.react)
+      memory.add({ key: 'ui-framework', fact: `React ${deps.react}`, category: 'tech-stack', date: today() })
     if (deps.vitest) memory.add({ key: 'test-framework', fact: 'Vitest', category: 'tech-stack', date: today() })
-    if (deps.typescript) memory.add({ key: 'language', fact: `TypeScript ${deps.typescript}`, category: 'tech-stack', date: today() })
+    if (deps.typescript)
+      memory.add({ key: 'language', fact: `TypeScript ${deps.typescript}`, category: 'tech-stack', date: today() })
     if (deps.ink) memory.add({ key: 'tui-framework', fact: `Ink ${deps.ink}`, category: 'tech-stack', date: today() })
   }
 

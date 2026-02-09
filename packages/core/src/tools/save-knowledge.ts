@@ -1,6 +1,6 @@
 // @x-code/core — saveKnowledge tool (knowledge CRUD)
-
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 import { getAutoMemory } from '../knowledge/auto-memory.js'
@@ -21,7 +21,7 @@ export const saveKnowledge = tool({
     scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.xcode/)'),
     category: z.enum(['tech-stack', 'commands', 'conventions', 'preferences', 'context']),
   }),
-  execute: async ({ action, key, fact, scope, category }) => {
+  execute: ({ action, key, fact, scope, category }) => {
     try {
       const memory = getAutoMemory(scope)
       if (action === 'add') {

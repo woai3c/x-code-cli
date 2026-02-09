@@ -1,5 +1,4 @@
 // @x-code/core — System Prompt management
-
 import { getShellConfig } from '../tools/shell-utils.js'
 
 const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal.
@@ -71,14 +70,10 @@ The ONLY exception: use writeFile to save your plan to .x-code/plans/{plan-id}.m
 When the plan is ready, call exitPlanMode.`
 
 /** Build the full system prompt with dynamic values and optional knowledge context */
-export function buildSystemPrompt(options?: {
-  knowledgeContext?: string
-  planMode?: boolean
-}): string {
+export function buildSystemPrompt(options?: { knowledgeContext?: string; planMode?: boolean }): string {
   const shellConfig = getShellConfig()
 
-  let prompt = BASE_SYSTEM_PROMPT
-    .replace(/\{platform\}/g, process.platform)
+  let prompt = BASE_SYSTEM_PROMPT.replace(/\{platform\}/g, process.platform)
     .replace(/\{shell\}/g, shellConfig.type)
     .replace(/\{cwd\}/g, process.cwd())
 

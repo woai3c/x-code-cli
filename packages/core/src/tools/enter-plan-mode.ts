@@ -1,6 +1,6 @@
 // @x-code/core — enterPlanMode tool (no execute — handled in agent loop)
-
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const enterPlanMode = tool({

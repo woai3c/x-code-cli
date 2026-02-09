@@ -1,8 +1,8 @@
 // @x-code/core — readFile tool
-
 import fs from 'node:fs/promises'
 
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const readFile = tool({

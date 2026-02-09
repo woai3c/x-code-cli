@@ -1,11 +1,13 @@
 // @x-code/core — webFetch tool (HTTP fetch + HTML→Markdown)
-
-import { tool } from 'ai'
-import { z } from 'zod'
 import * as cheerio from 'cheerio'
 // @ts-expect-error turndown has no types
 import TurndownService from 'turndown'
 
+import { tool } from 'ai'
+
+import { z } from 'zod'
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-call
 const turndown = new TurndownService({
   headingStyle: 'atx',
   codeBlockStyle: 'fenced',

@@ -1,5 +1,4 @@
 // @x-code/core — Session memory (structured JSON summaries for cross-session continuation)
-
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -67,7 +66,7 @@ Return ONLY valid JSON, no markdown fencing.`,
   })
 
   try {
-    const parsed = JSON.parse(text)
+    const parsed = JSON.parse(text) as Partial<SessionSummary>
     return {
       id: sessionId,
       startedAt,

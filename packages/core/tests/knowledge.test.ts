@@ -1,6 +1,5 @@
 // Tests for knowledge system (auto-memory + loader)
-
-import { describe, it, expect, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import { AutoMemory } from '../src/knowledge/auto-memory.js'
 import type { KnowledgeFact } from '../src/types/index.js'

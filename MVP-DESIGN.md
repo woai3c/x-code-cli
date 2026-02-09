@@ -10,18 +10,18 @@ X-Code CLI 是一个终端 AI 编程助手，通过自然语言与用户交互�
 
 ## 二、技术栈
 
-| 类别 | 选型 | 版本 | 说明 |
-|------|------|------|------|
-| 语言 | TypeScript | 5.7+ | 严格模式，ESM |
-| 运行时 | Node.js | 20.19+ | Ink 6 要求，ESLint 10 / yargs 18 要求 ≥20.19 |
-| TUI 框架 | Ink | 6.6+ | React for CLI，ESM-only |
-| UI 库 | React | 19+ | Ink 6 的 peer dependency |
-| AI 接入 | Vercel AI SDK | 6.0+ | 统一 LLM 接口，流式 + 工具调用 |
-| AI 模型 | 多模型 | @ai-sdk/* | 8 家内置（Anthropic / OpenAI / Google / xAI / DeepSeek / Qwen / 智谱 / Moonshot）+ 自定义 |
-| Schema | Zod | 3.25+ | 工具参数校验（AI SDK 6 要求 ≥3.25.76） |
-| 构建 | esbuild | 0.27+ | 打包为单文件 |
-| 测试 | Vitest | 4.0+ | 单元 + 集成测试 |
-| 参数解析 | yargs | 18+ | CLI 参数处理 |
+| 类别     | 选型          | 版本       | 说明                                                                                      |
+| -------- | ------------- | ---------- | ----------------------------------------------------------------------------------------- |
+| 语言     | TypeScript    | 5.7+       | 严格模式，ESM                                                                             |
+| 运行时   | Node.js       | 20.19+     | Ink 6 要求，ESLint 10 / yargs 18 要求 ≥20.19                                              |
+| TUI 框架 | Ink           | 6.6+       | React for CLI，ESM-only                                                                   |
+| UI 库    | React         | 19+        | Ink 6 的 peer dependency                                                                  |
+| AI 接入  | Vercel AI SDK | 6.0+       | 统一 LLM 接口，流式 + 工具调用                                                            |
+| AI 模型  | 多模型        | @ai-sdk/\* | 8 家内置（Anthropic / OpenAI / Google / xAI / DeepSeek / Qwen / 智谱 / Moonshot）+ 自定义 |
+| Schema   | Zod           | 3.25+      | 工具参数校验（AI SDK 6 要求 ≥3.25.76）                                                    |
+| 构建     | esbuild       | 0.27+      | 打包为单文件                                                                              |
+| 测试     | Vitest        | 4.0+       | 单元 + 集成测试                                                                           |
+| 参数解析 | yargs         | 18+        | CLI 参数处理                                                                              |
 
 ---
 
@@ -194,7 +194,7 @@ async function agentLoop(userMessage, callbacks) {
     // 上下文压缩检查：超过阈值时压缩旧消息
     if (estimateTokens(messages) > TOKEN_BUDGET * 0.8) {
       const summary = await compressMessages(messages, model)
-      await saveSessionSummary(summary)          // 同时保存会话摘要
+      await saveSessionSummary(summary) // 同时保存会话摘要
       callbacks.onContextCompressed(summary)
     }
 
@@ -218,14 +218,14 @@ async function agentLoop(userMessage, callbacks) {
     // 收集完整响应 + 统计 token 用量
     const response = await result.response
     messages.push(...response.messages)
-    tokenUsage.add(await result.usage)            // 累计 token 消耗
+    tokenUsage.add(await result.usage) // 累计 token 消耗
     callbacks.onUsageUpdate(tokenUsage)
 
     if ((await result.finishReason) === 'tool-calls') {
       for (const toolCall of await result.toolCalls) {
         const approved = await checkPermission(toolCall, callbacks.onAskPermission)
         const output = approved
-          ? await executeTool(toolCall, callbacks)  // 传入 callbacks 用于流式输出
+          ? await executeTool(toolCall, callbacks) // 传入 callbacks 用于流式输出
           : 'Permission denied by user.'
         messages.push(toolResultMessage(toolCall, output))
       }
@@ -260,16 +260,17 @@ async function compressMessages(messages: Message[], model): Promise<Message[]> 
   const { text: summary } = await generateText({
     model,
     messages: [
-      { role: 'system', content: 'Summarize the following conversation concisely, preserving key decisions, file changes, and context needed to continue.' },
+      {
+        role: 'system',
+        content:
+          'Summarize the following conversation concisely, preserving key decisions, file changes, and context needed to continue.',
+      },
       ...old,
     ],
   })
 
   // 3. 用摘要替换旧消息
-  return [
-    { role: 'user', content: `[Previous conversation summary]\n${summary}` },
-    ...recent,
-  ]
+  return [{ role: 'user', content: `[Previous conversation summary]\n${summary}` }, ...recent]
 }
 ```
 
@@ -285,10 +286,10 @@ async function compressMessages(messages: Message[], model): Promise<Message[]> 
 
 ```typescript
 interface TokenUsage {
-  inputTokens: number        // 输入 token 总数（AI SDK v6 命名）
-  outputTokens: number       // 输出 token 总数（AI SDK v6 命名）
-  totalTokens: number        // 合计
-  estimatedCost: number      // 估算费用（基于模型单价）
+  inputTokens: number // 输入 token 总数（AI SDK v6 命名）
+  outputTokens: number // 输出 token 总数（AI SDK v6 命名）
+  totalTokens: number // 合计
+  estimatedCost: number // 估算费用（基于模型单价）
 }
 ```
 
@@ -310,35 +311,35 @@ interface TokenUsage {
 
 **第一层：核心工具** — 基础文件操作与命令执行
 
-| 工具 | 功能 | 权限级别 |
-|------|------|---------|
-| `readFile` | 读取文件内容，支持行号范围 | 自动允许 |
-| `writeFile` | 创建或覆盖文件 | 需确认 |
-| `edit` | 精确字符串替换（比整文件覆写更安全、省 token） | 需确认 |
-| `shell` | 执行命令（跨平台：Windows → PowerShell，Unix → bash） | 需确认（只读命令自动允许） |
-| `glob` | 按 pattern 搜索文件路径 | 自动允许 |
-| `grep` | 按正则搜索文件内容（底层用 ripgrep，通过 `@vscode/ripgrep` 包） | 自动允许 |
-| `listDir` | 列出目录内容（比 shell ls 对 LLM 更友好） | 自动允许 |
+| 工具        | 功能                                                            | 权限级别                   |
+| ----------- | --------------------------------------------------------------- | -------------------------- |
+| `readFile`  | 读取文件内容，支持行号范围                                      | 自动允许                   |
+| `writeFile` | 创建或覆盖文件                                                  | 需确认                     |
+| `edit`      | 精确字符串替换（比整文件覆写更安全、省 token）                  | 需确认                     |
+| `shell`     | 执行命令（跨平台：Windows → PowerShell，Unix → bash）           | 需确认（只读命令自动允许） |
+| `glob`      | 按 pattern 搜索文件路径                                         | 自动允许                   |
+| `grep`      | 按正则搜索文件内容（底层用 ripgrep，通过 `@vscode/ripgrep` 包） | 自动允许                   |
+| `listDir`   | 列出目录内容（比 shell ls 对 LLM 更友好）                       | 自动允许                   |
 
 **第二层：信息获取工具** — 网络搜索与页面抓取
 
-| 工具 | 功能 | 权限级别 |
-|------|------|---------|
+| 工具        | 功能                           | 权限级别 |
+| ----------- | ------------------------------ | -------- |
 | `webSearch` | 网页搜索（查文档、查错误信息） | 自动允许 |
-| `webFetch` | 抓取网页内容并提取信息 | 自动允许 |
+| `webFetch`  | 抓取网页内容并提取信息         | 自动允许 |
 
 **webSearch API 选型 — Tavily**：
 
 竞品搜索方案对比：
 
-| 竞品 | 搜索方案 |
-|------|---------|
-| Gemini CLI | Google Search Grounding（自家 API） |
+| 竞品        | 搜索方案                                         |
+| ----------- | ------------------------------------------------ |
+| Gemini CLI  | Google Search Grounding（自家 API）              |
 | Claude Code | Brave Search（Anthropic 服务端封装，$10/1000次） |
-| OpenCode | Exa AI |
-| Cline | 自建后端 |
-| Roo Code | 无内置，MCP 接入 Tavily / Brave |
-| Aider | 无搜索功能 |
+| OpenCode    | Exa AI                                           |
+| Cline       | 自建后端                                         |
+| Roo Code    | 无内置，MCP 接入 Tavily / Brave                  |
+| Aider       | 无搜索功能                                       |
 
 竞品基本都是用各自绑定的搜索方案，没有统一标准。**Tavily** 是开源生态中最常见的选择（LangChain 默认集成、Roo Code MCP 推荐），返回格式对 LLM 友好，且提供免费额度（1000 次/月）。
 
@@ -351,7 +352,7 @@ async function webSearch(query: string): Promise<SearchResult> {
   }
   const client = new TavilyClient({ apiKey: process.env.TAVILY_API_KEY })
   const response = await client.search(query, { maxResults: 5 })
-  return { results: response.results.map(r => ({ title: r.title, url: r.url, content: r.content })) }
+  return { results: response.results.map((r) => ({ title: r.title, url: r.url, content: r.content })) }
 }
 ```
 
@@ -359,9 +360,9 @@ webFetch 不需要任何 API Key，直接 HTTP 请求 + HTML 转 Markdown（使�
 
 **第三层：交互与知识工具** — Agent 与用户的结构化交互 + 持久化知识
 
-| 工具 | 功能 | 权限级别 |
-|------|------|---------|
-| `askUser` | 向用户提出多选题，获取偏好或澄清需求 | 自动允许 |
+| 工具            | 功能                                    | 权限级别 |
+| --------------- | --------------------------------------- | -------- |
+| `askUser`       | 向用户提出多选题，获取偏好或澄清需求    | 自动允许 |
 | `saveKnowledge` | 持久化项目/全局知识（新增、修改、删除） | 自动允许 |
 
 > **注意**：工具名从 `bash` 改为 `shell`，这是跨平台支持的关键设计决策（详见第 6.9 节）。
@@ -370,9 +371,11 @@ webFetch 不需要任何 API Key，直接 HTTP 请求 + HTML 转 Markdown（使�
 
 ```typescript
 // packages/core/src/tools/read-file.ts
-import { tool } from 'ai'
-import { z } from 'zod'
 import fs from 'node:fs/promises'
+
+import { tool } from 'ai'
+
+import { z } from 'zod'
 
 export const readFile = tool({
   description: 'Read the contents of a file at the given path. Returns the file content with line numbers.',
@@ -396,10 +399,12 @@ export const readFile = tool({
 ```typescript
 // packages/core/src/tools/shell.ts — 跨平台命令执行
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const shell = tool({
-  description: 'Execute a shell command and return stdout/stderr. Commands should be compatible with the current platform shell.',
+  description:
+    'Execute a shell command and return stdout/stderr. Commands should be compatible with the current platform shell.',
   parameters: z.object({
     command: z.string().describe('The command to execute'),
     timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
@@ -424,16 +429,24 @@ async function executeShell(command: string, timeout: number, callbacks): Promis
 ```typescript
 // packages/core/src/tools/ask-user.ts — 交互式询问
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const askUser = tool({
-  description: 'Ask the user a clarifying question with multiple-choice options. Use when you need user input to decide between approaches.',
+  description:
+    'Ask the user a clarifying question with multiple-choice options. Use when you need user input to decide between approaches.',
   parameters: z.object({
     question: z.string().describe('The question to ask'),
-    options: z.array(z.object({
-      label: z.string().describe('Option label (1-5 words)'),
-      description: z.string().describe('What this option means'),
-    })).min(2).max(4).describe('Choices (an "Other" option is auto-appended)'),
+    options: z
+      .array(
+        z.object({
+          label: z.string().describe('Option label (1-5 words)'),
+          description: z.string().describe('What this option means'),
+        }),
+      )
+      .min(2)
+      .max(4)
+      .describe('Choices (an "Other" option is auto-appended)'),
   }),
   // 不提供 execute —— 通过回调触发 UI 渲染
 })
@@ -442,10 +455,19 @@ export const askUser = tool({
 ```typescript
 // packages/core/src/tools/index.ts
 export const toolRegistry = {
-  readFile, writeFile, edit, shell, glob, grep, listDir,
-  webSearch, webFetch,
-  askUser, saveKnowledge,
-  enterPlanMode, exitPlanMode,
+  readFile,
+  writeFile,
+  edit,
+  shell,
+  glob,
+  grep,
+  listDir,
+  webSearch,
+  webFetch,
+  askUser,
+  saveKnowledge,
+  enterPlanMode,
+  exitPlanMode,
 }
 ```
 
@@ -454,15 +476,13 @@ export const toolRegistry = {
 工具返回的结果可能非常大（grep 搜到数千行、readFile 读大文件），直接塞进消息会撑爆上下文。所有工具结果在返回给模型前做截断处理：
 
 ```typescript
-const MAX_TOOL_RESULT_CHARS = 30000  // ~7500 tokens
+const MAX_TOOL_RESULT_CHARS = 30000 // ~7500 tokens
 
 function truncateToolResult(result: string): string {
   if (result.length <= MAX_TOOL_RESULT_CHARS) return result
   const half = Math.floor(MAX_TOOL_RESULT_CHARS / 2)
   const truncatedLines = result.slice(half, -half).split('\n').length
-  return result.slice(0, half)
-    + `\n\n... [truncated ${truncatedLines} lines] ...\n\n`
-    + result.slice(-half)
+  return result.slice(0, half) + `\n\n... [truncated ${truncatedLines} lines] ...\n\n` + result.slice(-half)
 }
 ```
 
@@ -578,11 +598,11 @@ xc --trust "修复所有 lint 错误"
 
 **行为对比**：
 
-| 权限级别 | 默认模式 | `--trust` 模式 |
-|---------|---------|---------------|
-| `always-allow` | 自动放行 | 自动放行 |
-| `ask` | 弹出 Y/N 确认 | **自动放行** |
-| `deny` | 直接拒绝 | **仍然拒绝** |
+| 权限级别       | 默认模式      | `--trust` 模式 |
+| -------------- | ------------- | -------------- |
+| `always-allow` | 自动放行      | 自动放行       |
+| `ask`          | 弹出 Y/N 确认 | **自动放行**   |
+| `deny`         | 直接拒绝      | **仍然拒绝**   |
 
 `deny` 级别永远不会被跳过（`rm -rf /`、`sudo`、`mkfs` 等破坏性命令），即使在 trust 模式下也会被拦截。
 
@@ -593,7 +613,7 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
   const level = rules[toolCall.toolName](toolCall.input)
   if (level === 'deny') return false
   if (level === 'always-allow' || trustMode) return true
-  return onAskPermission(toolCall)  // 弹出 UI 确认
+  return onAskPermission(toolCall) // 弹出 UI 确认
 }
 ```
 
@@ -628,6 +648,7 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 **`<Permission>`** — 当工具需要权限确认时显示。展示工具名 + 参数 + **变更预览**，等待用户按 Y/N。使用 Ink 的 `useInput` hook 捕获键盘输入。在 `--trust` 模式下此组件不渲染。
 
 对不同工具展示不同预览：
+
 - **edit 工具**：显示 diff（红色旧文本 → 绿色新文本），让用户看到"具体改了什么"
 - **writeFile 工具**：如果是覆盖已有文件，显示 diff；如果是新建文件，显示文件内容摘要
 - **shell 工具**：显示完整命令 + 权限级别标识（只读/写入/危险）
@@ -646,11 +667,11 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 
 ```typescript
 const PASTE_PREVIEW_THRESHOLD = 500 // 字符数阈值
-const PASTE_PREVIEW_LINES = 3       // 预览显示的最大行数
+const PASTE_PREVIEW_LINES = 3 // 预览显示的最大行数
 
 // ChatInput 内部状态
 interface InputState {
-  rawText: string          // 用户输入的完整原始文本
+  rawText: string // 用户输入的完整原始文本
   isPasteTruncated: boolean // 是否处于截断预览模式
 }
 
@@ -673,6 +694,7 @@ function getPreviewText(raw: string): string {
 ```
 
 **交互流程**：
+
 1. 用户粘贴大段文本 → 检测到 `isPasteInput` → 设置 `isPasteTruncated = true`
 2. 输入框显示：前 3 行 + `... (12345 characters)` 灰色提示
 3. 用户可以继续正常输入/编辑（追加内容到 `rawText` 末尾）
@@ -687,15 +709,17 @@ function getPreviewText(raw: string): string {
 
 ```typescript
 interface AgentState {
-  messages: DisplayMessage[]     // 已完成的消息列表（驱动 Static）
-  streamingText: string          // 当前流式文本
-  isLoading: boolean             // 是否等待 LLM 响应
-  pendingPermission: {           // 待确认的权限请求
+  messages: DisplayMessage[] // 已完成的消息列表（驱动 Static）
+  streamingText: string // 当前流式文本
+  isLoading: boolean // 是否等待 LLM 响应
+  pendingPermission: {
+    // 待确认的权限请求
     toolName: string
     input: Record<string, unknown>
     resolve: (approved: boolean) => void
   } | null
-  pendingQuestion: {             // 待回答的 askUser 请求
+  pendingQuestion: {
+    // 待回答的 askUser 请求
     question: string
     options: { label: string; description: string }[]
     resolve: (answer: string) => void
@@ -765,7 +789,8 @@ Skip for: single-line fixes, obvious bugs, specific user instructions.`,
 })
 
 export const exitPlanMode = tool({
-  description: 'Signal that the plan is complete and ready for user review. The system will read the plan file and present it to the user.',
+  description:
+    'Signal that the plan is complete and ready for user review. The system will read the plan file and present it to the user.',
   parameters: z.object({}),
   // 不提供 execute — 在 Agent Loop 中处理（读取计划文件 + 展示给用户）
 })
@@ -781,6 +806,7 @@ When the plan is ready, call exitPlanMode.
 ```
 
 **关键设计决策**：
+
 - **工具不实际移除**：只通过 prompt 约束行为，实现简单，与 Claude Code 做法一致
 - **计划存文件**：写到 `.x-code/plans/` 目录，方便用户查看/编辑/复用
 - **模型可主动触发**：System Prompt 指导模型对复杂任务主动调用 `enterPlanMode`，但需用户同意
@@ -859,11 +885,11 @@ Do NOT create memories for temporary, one-off information.
 
 运行时动态填充的变量：
 
-| 变量 | 来源 | 示例 |
-|------|------|------|
-| `{platform}` | `process.platform` | `win32` / `darwin` / `linux` |
-| `{shell}` | 平台检测 | `powershell` / `bash` / `zsh` |
-| `{cwd}` | `process.cwd()` | `/Users/xxx/project` |
+| 变量         | 来源               | 示例                          |
+| ------------ | ------------------ | ----------------------------- |
+| `{platform}` | `process.platform` | `win32` / `darwin` / `linux`  |
+| `{shell}`    | 平台检测           | `powershell` / `bash` / `zsh` |
+| `{cwd}`      | `process.cwd()`    | `/Users/xxx/project`          |
 
 **注入 shell 类型是跨平台支持的核心** — 模型看到 `Shell: powershell` 时会生成 PowerShell 命令，看到 `Shell: bash` 时生成 bash 命令。
 
@@ -884,28 +910,29 @@ Do NOT create memories for temporary, one-off information.
 
 ### 6.2 支持的模型提供商
 
-| 提供商 | SDK 包 | 环境变量 | 模型示例 |
-|--------|--------|---------|---------|
-| Anthropic | `@ai-sdk/anthropic` | `ANTHROPIC_API_KEY` | claude-sonnet-4-5, claude-opus-4-6 |
-| OpenAI | `@ai-sdk/openai` | `OPENAI_API_KEY` | gpt-4.1, o3 |
-| Google | `@ai-sdk/google` | `GOOGLE_GENERATIVE_AI_API_KEY` | gemini-2.5-pro |
-| xAI | `@ai-sdk/xai` | `XAI_API_KEY` | grok-3 |
-| DeepSeek | `@ai-sdk/deepseek` | `DEEPSEEK_API_KEY` | deepseek-chat, deepseek-reasoner |
-| Alibaba Qwen（通义千问） | `@ai-sdk/alibaba` | `ALIBABA_API_KEY` | qwen-max, qwen-plus |
-| Zhipu AI（智谱 GLM） | `zhipu-ai-provider` | `ZHIPU_API_KEY` | glm-4-plus, glm-4-flash |
-| Moonshot AI（Kimi） | `@ai-sdk/moonshotai` | `MOONSHOT_API_KEY` | kimi-k2.5, moonshot-v1-128k |
+| 提供商                   | SDK 包               | 环境变量                       | 模型示例                           |
+| ------------------------ | -------------------- | ------------------------------ | ---------------------------------- |
+| Anthropic                | `@ai-sdk/anthropic`  | `ANTHROPIC_API_KEY`            | claude-sonnet-4-5, claude-opus-4-6 |
+| OpenAI                   | `@ai-sdk/openai`     | `OPENAI_API_KEY`               | gpt-4.1, o3                        |
+| Google                   | `@ai-sdk/google`     | `GOOGLE_GENERATIVE_AI_API_KEY` | gemini-2.5-pro                     |
+| xAI                      | `@ai-sdk/xai`        | `XAI_API_KEY`                  | grok-3                             |
+| DeepSeek                 | `@ai-sdk/deepseek`   | `DEEPSEEK_API_KEY`             | deepseek-chat, deepseek-reasoner   |
+| Alibaba Qwen（通义千问） | `@ai-sdk/alibaba`    | `ALIBABA_API_KEY`              | qwen-max, qwen-plus                |
+| Zhipu AI（智谱 GLM）     | `zhipu-ai-provider`  | `ZHIPU_API_KEY`                | glm-4-plus, glm-4-flash            |
+| Moonshot AI（Kimi）      | `@ai-sdk/moonshotai` | `MOONSHOT_API_KEY`             | kimi-k2.5, moonshot-v1-128k        |
 
 **自定义 OpenAI 兼容提供商**：
 
 对于未内置的模型提供商（如火山引擎豆包、百度文心一言），用户可通过配置 OpenAI 兼容端点接入：
 
-| 环境变量 | 说明 |
-|---------|------|
-| `OPENAI_COMPATIBLE_API_KEY` | 自定义提供商的 API Key |
+| 环境变量                     | 说明                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `OPENAI_COMPATIBLE_API_KEY`  | 自定义提供商的 API Key                                                   |
 | `OPENAI_COMPATIBLE_BASE_URL` | 自定义提供商的 API 端点（如 `https://ark.cn-beijing.volces.com/api/v3`） |
-| `OPENAI_COMPATIBLE_MODEL` | 要使用的模型名（如 `doubao-1.5-pro`） |
+| `OPENAI_COMPATIBLE_MODEL`    | 要使用的模型名（如 `doubao-1.5-pro`）                                    |
 
 示例：接入火山引擎豆包
+
 ```bash
 export OPENAI_COMPATIBLE_API_KEY="your-ark-api-key"
 export OPENAI_COMPATIBLE_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
@@ -930,18 +957,18 @@ xc --model custom:doubao-1.5-pro
 
 **内置别名**（可直接使用，无需写完整 ID）：
 
-| 别名 | 解析为 | 说明 |
-|------|--------|------|
-| `sonnet` | `anthropic:claude-sonnet-4-5` | 默认推荐 |
-| `opus` | `anthropic:claude-opus-4-6` | 最强 |
-| `haiku` | `anthropic:claude-haiku-4-5` | 最快 |
-| `gpt4` | `openai:gpt-4.1` | OpenAI 主力 |
-| `gemini` | `google:gemini-2.5-pro` | Google 主力 |
-| `deepseek` | `deepseek:deepseek-chat` | DeepSeek V3 |
-| `r1` | `deepseek:deepseek-reasoner` | DeepSeek R1 推理模型 |
-| `qwen` | `alibaba:qwen-max` | 通义千问 |
-| `glm` | `zhipu:glm-4-plus` | 智谱 GLM |
-| `kimi` | `moonshotai:kimi-k2.5` | Moonshot Kimi |
+| 别名       | 解析为                        | 说明                 |
+| ---------- | ----------------------------- | -------------------- |
+| `sonnet`   | `anthropic:claude-sonnet-4-5` | 默认推荐             |
+| `opus`     | `anthropic:claude-opus-4-6`   | 最强                 |
+| `haiku`    | `anthropic:claude-haiku-4-5`  | 最快                 |
+| `gpt4`     | `openai:gpt-4.1`              | OpenAI 主力          |
+| `gemini`   | `google:gemini-2.5-pro`       | Google 主力          |
+| `deepseek` | `deepseek:deepseek-chat`      | DeepSeek V3          |
+| `r1`       | `deepseek:deepseek-reasoner`  | DeepSeek R1 推理模型 |
+| `qwen`     | `alibaba:qwen-max`            | 通义千问             |
+| `glm`      | `zhipu:glm-4-plus`            | 智谱 GLM             |
+| `kimi`     | `moonshotai:kimi-k2.5`        | Moonshot Kimi        |
 
 使用示例：`xc --model sonnet` 或 `xc --model deepseek` 或 `xc --model openai:gpt-4.1`
 
@@ -950,16 +977,17 @@ xc --model custom:doubao-1.5-pro
 基于 AI SDK 的 `createProviderRegistry`，运行时根据可用 API Key 动态注册：
 
 ```typescript
-import { createProviderRegistry } from 'ai'
-import { anthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
-import { google } from '@ai-sdk/google'
-import { xai } from '@ai-sdk/xai'
-import { deepseek } from '@ai-sdk/deepseek'
-import { createAlibaba } from '@ai-sdk/alibaba'
-import { moonshotai } from '@ai-sdk/moonshotai'
 import { zhipu } from 'zhipu-ai-provider'
+
+import { createAlibaba } from '@ai-sdk/alibaba'
+import { anthropic } from '@ai-sdk/anthropic'
+import { deepseek } from '@ai-sdk/deepseek'
+import { google } from '@ai-sdk/google'
+import { moonshotai } from '@ai-sdk/moonshotai'
+import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { xai } from '@ai-sdk/xai'
+import { createProviderRegistry } from 'ai'
 
 export function createModelRegistry() {
   const providers: Record<string, any> = {}
@@ -970,9 +998,10 @@ export function createModelRegistry() {
   if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) providers.google = google
   if (process.env.XAI_API_KEY) providers.xai = xai
   if (process.env.DEEPSEEK_API_KEY) providers.deepseek = deepseek
-  if (process.env.ALIBABA_API_KEY) providers.alibaba = createAlibaba({
-    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  })
+  if (process.env.ALIBABA_API_KEY)
+    providers.alibaba = createAlibaba({
+      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    })
   if (process.env.ZHIPU_API_KEY) providers.zhipu = zhipu
   if (process.env.MOONSHOT_API_KEY) providers.moonshotai = moonshotai
 
@@ -1043,16 +1072,16 @@ $ xc
 
 **各提供商 API Key 获取地址**：
 
-| 提供商 | 获取地址 |
-|--------|---------|
-| Anthropic | https://console.anthropic.com/ |
-| OpenAI | https://platform.openai.com/api-keys |
-| Google | https://aistudio.google.com/apikey |
-| xAI | https://console.x.ai/ |
-| DeepSeek | https://platform.deepseek.com/api_keys |
-| 通义千问 | https://dashscope.console.aliyun.com/apiKey |
-| 智谱 AI | https://open.bigmodel.cn/usercenter/apikeys |
-| Moonshot | https://platform.moonshot.ai/console/api-keys |
+| 提供商    | 获取地址                                      |
+| --------- | --------------------------------------------- |
+| Anthropic | https://console.anthropic.com/                |
+| OpenAI    | https://platform.openai.com/api-keys          |
+| Google    | https://aistudio.google.com/apikey            |
+| xAI       | https://console.x.ai/                         |
+| DeepSeek  | https://platform.deepseek.com/api_keys        |
+| 通义千问  | https://dashscope.console.aliyun.com/apiKey   |
+| 智谱 AI   | https://open.bigmodel.cn/usercenter/apikeys   |
+| Moonshot  | https://platform.moonshot.ai/console/api-keys |
 
 ### 6.6 配置文件格式
 
@@ -1080,21 +1109,21 @@ $ xc
 
 **完整环境变量清单**：
 
-| 环境变量 | 说明 | 必填 |
-|---------|------|:---:|
-| `ANTHROPIC_API_KEY` | Anthropic Claude API Key | 按需 |
-| `OPENAI_API_KEY` | OpenAI GPT API Key | 按需 |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google Gemini API Key | 按需 |
-| `XAI_API_KEY` | xAI Grok API Key | 按需 |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key | 按需 |
-| `ALIBABA_API_KEY` | 通义千问 / DashScope API Key | 按需 |
-| `ZHIPU_API_KEY` | 智谱 GLM API Key | 按需 |
-| `MOONSHOT_API_KEY` | Moonshot / Kimi API Key | 按需 |
-| `OPENAI_COMPATIBLE_API_KEY` | 自定义 OpenAI 兼容提供商 Key | 按需 |
-| `OPENAI_COMPATIBLE_BASE_URL` | 自定义提供商 API 端点 | 与上面配套 |
-| `OPENAI_COMPATIBLE_MODEL` | 自定义提供商模型名 | 与上面配套 |
-| `X_CODE_MODEL` | 默认使用的模型（如 `deepseek:deepseek-chat`） | 可选 |
-| `TAVILY_API_KEY` | Tavily 搜索 API Key（免费 1000 次/月，https://tavily.com） | 可选 |
+| 环境变量                       | 说明                                                       |    必填    |
+| ------------------------------ | ---------------------------------------------------------- | :--------: |
+| `ANTHROPIC_API_KEY`            | Anthropic Claude API Key                                   |    按需    |
+| `OPENAI_API_KEY`               | OpenAI GPT API Key                                         |    按需    |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google Gemini API Key                                      |    按需    |
+| `XAI_API_KEY`                  | xAI Grok API Key                                           |    按需    |
+| `DEEPSEEK_API_KEY`             | DeepSeek API Key                                           |    按需    |
+| `ALIBABA_API_KEY`              | 通义千问 / DashScope API Key                               |    按需    |
+| `ZHIPU_API_KEY`                | 智谱 GLM API Key                                           |    按需    |
+| `MOONSHOT_API_KEY`             | Moonshot / Kimi API Key                                    |    按需    |
+| `OPENAI_COMPATIBLE_API_KEY`    | 自定义 OpenAI 兼容提供商 Key                               |    按需    |
+| `OPENAI_COMPATIBLE_BASE_URL`   | 自定义提供商 API 端点                                      | 与上面配套 |
+| `OPENAI_COMPATIBLE_MODEL`      | 自定义提供商模型名                                         | 与上面配套 |
+| `X_CODE_MODEL`                 | 默认使用的模型（如 `deepseek:deepseek-chat`）              |    可选    |
+| `TAVILY_API_KEY`               | Tavily 搜索 API Key（免费 1000 次/月，https://tavily.com） |    可选    |
 
 > 至少需要配置 **一个** 模型提供商的 API Key 才能使用。
 
@@ -1102,17 +1131,17 @@ $ xc
 
 对话中可使用以下内置命令：
 
-| 命令 | 功能 | 说明 |
-|------|------|------|
-| `/help` | 显示所有可用命令 | |
-| `/model [name]` | 切换模型 / 查看可用模型 | `/model opus`、`/model deepseek` |
-| `/plan` | 进入 Plan Mode | 只读探索 + 生成实施计划，需用户审核通过后执行（详见 4.7） |
-| `/compact` | 手动触发上下文压缩 | 不等自动阈值，立即压缩旧消息 |
-| `/usage` | 查看 token 用量和费用 | 本次会话的累计统计 |
-| `/clear` | 清空对话历史 | 不退出程序，重新开始新对话（保留知识上下文） |
-| `/init` | 初始化项目知识 | 分析项目结构，生成 `.x-code/knowledge.md` 等 |
-| `/session save` | 手动保存会话摘要 | 不退出程序，保存当前进度 |
-| `/exit` | 退出（等同 Ctrl+C） | 自动保存会话摘要后退出 |
+| 命令            | 功能                    | 说明                                                      |
+| --------------- | ----------------------- | --------------------------------------------------------- |
+| `/help`         | 显示所有可用命令        |                                                           |
+| `/model [name]` | 切换模型 / 查看可用模型 | `/model opus`、`/model deepseek`                          |
+| `/plan`         | 进入 Plan Mode          | 只读探索 + 生成实施计划，需用户审核通过后执行（详见 4.7） |
+| `/compact`      | 手动触发上下文压缩      | 不等自动阈值，立即压缩旧消息                              |
+| `/usage`        | 查看 token 用量和费用   | 本次会话的累计统计                                        |
+| `/clear`        | 清空对话历史            | 不退出程序，重新开始新对话（保留知识上下文）              |
+| `/init`         | 初始化项目知识          | 分析项目结构，生成 `.x-code/knowledge.md` 等              |
+| `/session save` | 手动保存会话摘要        | 不退出程序，保存当前进度                                  |
+| `/exit`         | 退出（等同 Ctrl+C）     | 自动保存会话摘要后退出                                    |
 
 ### 6.8 CLI 参数
 
@@ -1183,20 +1212,21 @@ export function getShellConfig(): { executable: string; args: string[]; type: Sh
 
 #### 各层跨平台要点
 
-| 层面 | 设计决策 |
-|------|---------|
-| **工具命名** | `shell`（非 `bash`），语义上不绑定特定 shell |
-| **命令执行** | 运行时检测：Windows → PowerShell，macOS/Linux → bash/zsh |
-| **System Prompt** | 注入 `{shell}` 变量，模型据此生成对应语法的命令 |
-| **路径处理** | 全部用 Node.js `path` 模块（自动处理 `\` vs `/`） |
-| **进程管理** | 使用 `execa` 库（跨平台进程管理，自动处理信号/编码） |
-| **危险命令检测** | PowerShell 和 bash 分别维护检测规则 |
-| **文件操作** | 使用 `node:fs` API，不依赖 shell 命令 |
-| **沙盒** | MVP 不实现，后续可分平台实现 |
+| 层面              | 设计决策                                                 |
+| ----------------- | -------------------------------------------------------- |
+| **工具命名**      | `shell`（非 `bash`），语义上不绑定特定 shell             |
+| **命令执行**      | 运行时检测：Windows → PowerShell，macOS/Linux → bash/zsh |
+| **System Prompt** | 注入 `{shell}` 变量，模型据此生成对应语法的命令          |
+| **路径处理**      | 全部用 Node.js `path` 模块（自动处理 `\` vs `/`）        |
+| **进程管理**      | 使用 `execa` 库（跨平台进程管理，自动处理信号/编码）     |
+| **危险命令检测**  | PowerShell 和 bash 分别维护检测规则                      |
+| **文件操作**      | 使用 `node:fs` API，不依赖 shell 命令                    |
+| **沙盒**          | MVP 不实现，后续可分平台实现                             |
 
 #### 已知挑战
 
 Gemini CLI 的跨平台经验表明以下问题需要注意：
+
 - PowerShell 的引号规则与 bash 差异巨大（单引号/双引号/转义）
 - Windows 路径中的 `\` 可能被 shell 解释为转义符
 - 部分 npm 包（如 `node-pty`）在 Windows 上需要预编译二进制
@@ -1206,16 +1236,16 @@ Gemini CLI 的跨平台经验表明以下问题需要注意：
 
 **文件**: `packages/core/src/agent/loop.ts`（集成在 Agent Loop 中）
 
-| 错误类型 | 恢复策略 | 说明 |
-|---------|---------|------|
-| **API 限流 (429)** | 指数退避重试（1s → 2s → 4s，最多 3 次） | AI SDK 内置 `maxRetries` 参数 |
-| **API 认证失败 (401)** | 提示用户检查 Key，提供重新配置入口 | 不重试，直接提示 |
-| **网络超时** | 重试 1 次，失败后提示 | 保留当前对话状态，不丢失上下文 |
-| **模型不可用 (503)** | 提示用户切换备用模型 (`/model`) | 如果用户配置了多个 provider，建议切换 |
-| **工具执行超时** | 返回超时提示给模型，模型决定下一步 | shell 默认 30s 超时，可通过参数调整 |
-| **工具执行错误** | 将 stderr 返回给模型，模型自主修正 | 不中断循环，让模型看到错误并调整 |
-| **上下文超限** | 触发压缩（4.2 节），压缩后继续 | 如果压缩后仍超限，提示用户开启新会话 |
-| **Ctrl+C** | 中断当前操作，保存会话摘要后退出 | 不丢弃已完成的工作 |
+| 错误类型               | 恢复策略                                | 说明                                  |
+| ---------------------- | --------------------------------------- | ------------------------------------- |
+| **API 限流 (429)**     | 指数退避重试（1s → 2s → 4s，最多 3 次） | AI SDK 内置 `maxRetries` 参数         |
+| **API 认证失败 (401)** | 提示用户检查 Key，提供重新配置入口      | 不重试，直接提示                      |
+| **网络超时**           | 重试 1 次，失败后提示                   | 保留当前对话状态，不丢失上下文        |
+| **模型不可用 (503)**   | 提示用户切换备用模型 (`/model`)         | 如果用户配置了多个 provider，建议切换 |
+| **工具执行超时**       | 返回超时提示给模型，模型决定下一步      | shell 默认 30s 超时，可通过参数调整   |
+| **工具执行错误**       | 将 stderr 返回给模型，模型自主修正      | 不中断循环，让模型看到错误并调整      |
+| **上下文超限**         | 触发压缩（4.2 节），压缩后继续          | 如果压缩后仍超限，提示用户开启新会话  |
+| **Ctrl+C**             | 中断当前操作，保存会话摘要后退出        | 不丢弃已完成的工作                    |
 
 ```typescript
 // AI SDK 内置重试配置
@@ -1331,16 +1361,16 @@ export default defineConfig({
 
 ### MVP 测试范围
 
-| 模块 | 测试内容 | 优先级 |
-|------|---------|--------|
-| `tools/read-file` | 正常读取、行号范围、文件不存在 | P0 |
-| `tools/write-file` | 正常写入、路径不存在 | P0 |
-| `tools/shell` | 命令执行、超时、stderr、流式输出 | P0 |
-| `tools/glob` | pattern 匹配 | P1 |
-| `tools/grep` | 正则搜索、无结果 | P1 |
-| `permissions` | 规则匹配、allow/ask/deny | P0 |
-| `agent/loop` | mock LLM 响应，验证循环逻辑 | P1 |
-| `ui/App` | ink-testing-library 渲染测试 | P2 |
+| 模块               | 测试内容                         | 优先级 |
+| ------------------ | -------------------------------- | ------ |
+| `tools/read-file`  | 正常读取、行号范围、文件不存在   | P0     |
+| `tools/write-file` | 正常写入、路径不存在             | P0     |
+| `tools/shell`      | 命令执行、超时、stderr、流式输出 | P0     |
+| `tools/glob`       | pattern 匹配                     | P1     |
+| `tools/grep`       | 正则搜索、无结果                 | P1     |
+| `permissions`      | 规则匹配、allow/ask/deny         | P0     |
+| `agent/loop`       | mock LLM 响应，验证循环逻辑      | P1     |
+| `ui/App`           | ink-testing-library 渲染测试     | P2     |
 
 ### Mock 策略
 
@@ -1483,19 +1513,19 @@ description: Create a well-formatted git commit following project conventions.
 
 #### 后续迭代清单
 
-| 优先级 | 功能 | 说明 |
-|--------|------|------|
-| P0 | **MCP 协议** | 外部工具连接（GitHub、数据库、Jira 等），stdio + HTTP |
-| P1 | **Skills 系统** | 可复用操作手册，遵循开放标准 |
-| P1 | **Subagent（子 Agent）** | 独立上下文的子 LLM 实例。内置 Explore（只读，用便宜模型搜索代码库）和 General（全工具）子 Agent，支持自定义子 Agent（YAML frontmatter），支持并行执行。通过 `task` 工具在主 Agent 中调用 |
-| P1 | **任务追踪** | todoWrite 工具，进度管理，复杂任务自动拆解为 checklist |
-| P1 | **对话历史浏览** | `xc --resume` 继续上次会话、`/sessions` 查看历史会话列表、选择历史会话继续 |
-| P2 | **费用预算限制** | `--max-cost 1.0` 控制单次会话最大花费，超出自动暂停 |
-| P2 | **Git 集成** | 内置 git 操作（不依赖 shell 调用） |
-| P2 | **图片/PDF 支持** | 多模态输入（截图分析、文档阅读） |
-| P2 | **浏览器自动化** | Playwright 集成（截图、交互测试） |
-| P3 | **插件系统** | 第三方扩展框架 |
-| P3 | **VSCode 扩展** | 复用 @x-code/core，IDE 内使用 |
+| 优先级 | 功能                     | 说明                                                                                                                                                                                     |
+| ------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0     | **MCP 协议**             | 外部工具连接（GitHub、数据库、Jira 等），stdio + HTTP                                                                                                                                    |
+| P1     | **Skills 系统**          | 可复用操作手册，遵循开放标准                                                                                                                                                             |
+| P1     | **Subagent（子 Agent）** | 独立上下文的子 LLM 实例。内置 Explore（只读，用便宜模型搜索代码库）和 General（全工具）子 Agent，支持自定义子 Agent（YAML frontmatter），支持并行执行。通过 `task` 工具在主 Agent 中调用 |
+| P1     | **任务追踪**             | todoWrite 工具，进度管理，复杂任务自动拆解为 checklist                                                                                                                                   |
+| P1     | **对话历史浏览**         | `xc --resume` 继续上次会话、`/sessions` 查看历史会话列表、选择历史会话继续                                                                                                               |
+| P2     | **费用预算限制**         | `--max-cost 1.0` 控制单次会话最大花费，超出自动暂停                                                                                                                                      |
+| P2     | **Git 集成**             | 内置 git 操作（不依赖 shell 调用）                                                                                                                                                       |
+| P2     | **图片/PDF 支持**        | 多模态输入（截图分析、文档阅读）                                                                                                                                                         |
+| P2     | **浏览器自动化**         | Playwright 集成（截图、交互测试）                                                                                                                                                        |
+| P3     | **插件系统**             | 第三方扩展框架                                                                                                                                                                           |
+| P3     | **VSCode 扩展**          | 复用 @x-code/core，IDE 内使用                                                                                                                                                            |
 
 ---
 
@@ -1541,17 +1571,18 @@ AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构
 
 ### 10.3 各层职责
 
-| 层级 | 文件 | 编写者 | Git | 加载时机 |
-|------|------|--------|-----|---------|
-| 全局偏好 | `~/.xcode/knowledge.md` | 用户手动 | N/A | 始终加载 |
-| 全局自动记忆 | `~/.xcode/memory/auto.md` | **AI 自动** | N/A | 前 200 行加载 |
-| 项目知识 | `.x-code/knowledge.md` | 团队手动 / `xc init` 预填充 | 追踪 | 始终加载 |
-| 路径规则 | `.x-code/rules/*.md` | 团队手动 | 追踪 | 按 paths 条件加载 |
-| 项目自动记忆 | `.x-code/memory/auto.md` | **AI 自动** | 建议追踪 | 前 200 行加载 |
-| 会话记忆 | `.x-code/sessions/latest.json` | **系统自动** | 忽略 | 仅最近一次会话 |
-| 本地偏好 | `.x-code/local/preferences.md` | 用户手动 | 忽略 | 始终加载 |
+| 层级         | 文件                           | 编写者                      | Git      | 加载时机          |
+| ------------ | ------------------------------ | --------------------------- | -------- | ----------------- |
+| 全局偏好     | `~/.xcode/knowledge.md`        | 用户手动                    | N/A      | 始终加载          |
+| 全局自动记忆 | `~/.xcode/memory/auto.md`      | **AI 自动**                 | N/A      | 前 200 行加载     |
+| 项目知识     | `.x-code/knowledge.md`         | 团队手动 / `xc init` 预填充 | 追踪     | 始终加载          |
+| 路径规则     | `.x-code/rules/*.md`           | 团队手动                    | 追踪     | 按 paths 条件加载 |
+| 项目自动记忆 | `.x-code/memory/auto.md`       | **AI 自动**                 | 建议追踪 | 前 200 行加载     |
+| 会话记忆     | `.x-code/sessions/latest.json` | **系统自动**                | 忽略     | 仅最近一次会话    |
+| 本地偏好     | `.x-code/local/preferences.md` | 用户手动                    | 忽略     | 始终加载          |
 
 自动记忆分两个维度：
+
 - **项目自动记忆**（`.x-code/memory/auto.md`）— 项目级事实（技术栈、构建命令、代码约定），跟随仓库
 - **全局自动记忆**（`~/.xcode/memory/auto.md`）— 用户级偏好（代码风格、交互习惯），跨项目生效
 
@@ -1559,14 +1590,14 @@ AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构
 
 **最有价值的六类知识**（按价值排序）：
 
-| 类别 | 示例 | 来源 |
-|------|------|------|
-| **构建/测试命令** | `pnpm vitest run`、`pnpm build` | 自动提炼 |
-| **技术选型** | "用 pnpm 不用 npm"、"用 Vitest 不用 Jest" | 手动 + 自动 |
-| **架构地图** | 目录结构、模块关系、关键文件 | 手动 + `xc init` 生成 |
-| **代码约定** | "组件用 PascalCase"、"用 named export" | 手动 |
-| **注意事项** | "不要改 `generated/` 目录"、"API Key 在 .env" | 手动 + 自动 |
-| **业务上下文** | "这是一个电商后台"、"用户体系基于 RBAC" | 手动 |
+| 类别              | 示例                                          | 来源                  |
+| ----------------- | --------------------------------------------- | --------------------- |
+| **构建/测试命令** | `pnpm vitest run`、`pnpm build`               | 自动提炼              |
+| **技术选型**      | "用 pnpm 不用 npm"、"用 Vitest 不用 Jest"     | 手动 + 自动           |
+| **架构地图**      | 目录结构、模块关系、关键文件                  | 手动 + `xc init` 生成 |
+| **代码约定**      | "组件用 PascalCase"、"用 named export"        | 手动                  |
+| **注意事项**      | "不要改 `generated/` 目录"、"API Key 在 .env" | 手动 + 自动           |
+| **业务上下文**    | "这是一个电商后台"、"用户体系基于 RBAC"       | 手动                  |
 
 ### 10.5 `.x-code/knowledge.md` 示例
 
@@ -1574,9 +1605,11 @@ AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构
 # 项目知识
 
 ## 概述
+
 X-Code CLI 是一个终端 AI 编程助手，pnpm monorepo，包含 @x-code/core 和 @x-code/cli 两个包。
 
 ## 技术栈
+
 - 语言: TypeScript 5.7+, 严格模式, ESM
 - 运行时: Node.js 20.19+
 - TUI: Ink 6 + React 19
@@ -1585,6 +1618,7 @@ X-Code CLI 是一个终端 AI 编程助手，pnpm monorepo，包含 @x-code/core
 - 构建: esbuild
 
 ## 常用命令
+
 - 安装依赖: `pnpm install`
 - 构建: `pnpm build`
 - 测试: `pnpm test`
@@ -1592,11 +1626,13 @@ X-Code CLI 是一个终端 AI 编程助手，pnpm monorepo，包含 @x-code/core
 - Lint: `pnpm lint`
 
 ## 代码约定
+
 - 组件用 PascalCase, 文件用 kebab-case
 - 优先用 named export
 - 使用 Prettier 格式化, 不加分号, 单引号
 
 ## 注意事项
+
 - 不要手动修改 `dist/` 目录下的文件
 - `.x-code/local/` 不要提交到 git
 ```
@@ -1605,19 +1641,20 @@ X-Code CLI 是一个终端 AI 编程助手，pnpm monorepo，包含 @x-code/core
 
 `.x-code/rules/` 下的规则文件支持 **4 种加载模式**，通过 frontmatter 控制：
 
-| 模式 | frontmatter | 加载时机 | 适用场景 |
-|------|-------------|---------|---------|
-| **Always** | `alwaysApply: true` | 始终加载 | 全局代码风格、安全规范 |
-| **Path Match** | `paths: [glob]` | 操作匹配路径的文件时 | 模块/目录特定约定 |
-| **Agent Requested** | `description: "..."` | 模型根据描述判断是否需要 | 特定任务的指导（如数据库迁移、性能优化） |
-| **Manual** | 无 frontmatter | 用户在对话中 `@rule-name` 引用 | 低频使用的参考规则 |
+| 模式                | frontmatter          | 加载时机                       | 适用场景                                 |
+| ------------------- | -------------------- | ------------------------------ | ---------------------------------------- |
+| **Always**          | `alwaysApply: true`  | 始终加载                       | 全局代码风格、安全规范                   |
+| **Path Match**      | `paths: [glob]`      | 操作匹配路径的文件时           | 模块/目录特定约定                        |
+| **Agent Requested** | `description: "..."` | 模型根据描述判断是否需要       | 特定任务的指导（如数据库迁移、性能优化） |
+| **Manual**          | 无 frontmatter       | 用户在对话中 `@rule-name` 引用 | 低频使用的参考规则                       |
 
 **示例**：
 
 ```markdown
 ---
-paths: ["packages/core/src/tools/**"]
+paths: ['packages/core/src/tools/**']
 ---
+
 # 工具开发约定
 
 - 每个工具一个文件，放在 `packages/core/src/tools/` 下
@@ -1628,8 +1665,9 @@ paths: ["packages/core/src/tools/**"]
 
 ```markdown
 ---
-paths: ["**/*.test.ts", "**/*.test.tsx"]
+paths: ['**/*.test.ts', '**/*.test.tsx']
 ---
+
 # 测试约定
 
 - 使用 Vitest, 开启 globals
@@ -1640,8 +1678,9 @@ paths: ["**/*.test.ts", "**/*.test.tsx"]
 
 ```markdown
 ---
-description: "数据库 schema 变更、迁移文件编写、ORM 配置相关的任务"
+description: '数据库 schema 变更、迁移文件编写、ORM 配置相关的任务'
 ---
+
 # 数据库迁移约定
 
 - 迁移文件使用时间戳命名: `YYYYMMDDHHMMSS_description.ts`
@@ -1676,10 +1715,17 @@ description: "数据库 schema 变更、迁移文件编写、ORM 配置相关的
 ```typescript
 // packages/core/src/tools/save-knowledge.ts
 export const saveKnowledge = tool({
-  description: 'Save, update, or delete a project/user knowledge fact in persistent memory. Use when you discover project conventions, user preferences, or important facts worth remembering for future sessions.',
+  description:
+    'Save, update, or delete a project/user knowledge fact in persistent memory. Use when you discover project conventions, user preferences, or important facts worth remembering for future sessions.',
   parameters: z.object({
-    action: z.enum(['add', 'delete']).describe('add = create or update (auto-replaces conflicting old fact), delete = remove outdated fact'),
-    key: z.string().describe('A short unique identifier for this fact, e.g. "包管理器", "测试框架", "构建命令". Same key = same fact, used for conflict detection'),
+    action: z
+      .enum(['add', 'delete'])
+      .describe('add = create or update (auto-replaces conflicting old fact), delete = remove outdated fact'),
+    key: z
+      .string()
+      .describe(
+        'A short unique identifier for this fact, e.g. "包管理器", "测试框架", "构建命令". Same key = same fact, used for conflict detection',
+      ),
     fact: z.string().describe('The fact value, e.g. "pnpm (workspace 模式)", "Vitest 3", "pnpm build"'),
     scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.xcode/)'),
     category: z.enum(['tech-stack', 'commands', 'conventions', 'preferences', 'context']),
@@ -1738,13 +1784,13 @@ export async function scanProject(projectRoot: string, memory: AutoMemory) {
 
 **扫描能做的事情很有限**，只有这些"一眼就能看出来"的配置信息：
 
-| 扫描的文件 | 提取的信息 |
-|-----------|-----------|
-| `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` | 包管理器类型 |
-| `package.json` scripts | 构建、测试、lint 命令 |
-| `package.json` dependencies | 主要框架和版本 |
-| `tsconfig.json` | TypeScript 配置（严格模式、ESM 等） |
-| `.eslintrc` / `prettierrc` | 代码风格工具 |
+| 扫描的文件                                           | 提取的信息                          |
+| ---------------------------------------------------- | ----------------------------------- |
+| `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` | 包管理器类型                        |
+| `package.json` scripts                               | 构建、测试、lint 命令               |
+| `package.json` dependencies                          | 主要框架和版本                      |
+| `tsconfig.json`                                      | TypeScript 配置（严格模式、ESM 等） |
+| `.eslintrc` / `prettierrc`                           | 代码风格工具                        |
 
 **它做不到**理解代码含义、发现架构模式、学习用户习惯 — 这些全部依赖模型通过 `saveKnowledge` 工具在对话中完成。
 
@@ -1766,11 +1812,11 @@ export async function scanProject(projectRoot: string, memory: AutoMemory) {
 
 自动记忆不是只追加的日志，而是一个可维护的知识库。新知识可能与旧知识冲突，需要处理：
 
-| 操作 | 触发方 | 示例 |
-|------|--------|------|
-| **新增** | 模型调用 `saveKnowledge(action:'add')` 或项目扫描 | key="包管理器", fact="pnpm (workspace)" |
-| **修改** | 模型 add 时检测到同 key → 替换旧值 | key="构建命令" 从 `npm run build` → `pnpm build` |
-| **删除** | 模型调用 `saveKnowledge(action:'delete')` | 迁移到 Vitest 后删除 key="Jest 测试命令" |
+| 操作     | 触发方                                            | 示例                                             |
+| -------- | ------------------------------------------------- | ------------------------------------------------ |
+| **新增** | 模型调用 `saveKnowledge(action:'add')` 或项目扫描 | key="包管理器", fact="pnpm (workspace)"          |
+| **修改** | 模型 add 时检测到同 key → 替换旧值                | key="构建命令" 从 `npm run build` → `pnpm build` |
+| **删除** | 模型调用 `saveKnowledge(action:'delete')`         | 迁移到 Vitest 后删除 key="Jest 测试命令"         |
 
 **冲突检测逻辑**（基于 `key` 字段精确匹配，不再靠字符串前缀猜测）：
 
@@ -1778,10 +1824,10 @@ export async function scanProject(projectRoot: string, memory: AutoMemory) {
 // packages/core/src/knowledge/auto-memory.ts
 
 interface KnowledgeFact {
-  key: string       // 唯一标识（如 "测试框架"、"构建命令"），相同 key = 同一件事
-  fact: string      // 事实值（如 "Vitest 3"、"pnpm build"）
+  key: string // 唯一标识（如 "测试框架"、"构建命令"），相同 key = 同一件事
+  fact: string // 事实值（如 "Vitest 3"、"pnpm build"）
   category: 'tech-stack' | 'commands' | 'conventions' | 'preferences' | 'context'
-  date: string      // 最后更新日期，用于淘汰判定
+  date: string // 最后更新日期，用于淘汰判定
 }
 
 class AutoMemory {
@@ -1790,26 +1836,26 @@ class AutoMemory {
   /** 新增或修改：同 category + 同 key → 替换旧的 */
   add(newFact: KnowledgeFact) {
     const conflictIndex = this.facts.findIndex(
-      existing => existing.category === newFact.category && existing.key === newFact.key
+      (existing) => existing.category === newFact.category && existing.key === newFact.key,
     )
     if (conflictIndex >= 0) {
-      this.facts[conflictIndex] = newFact  // 同 key → 替换（= 修改）
+      this.facts[conflictIndex] = newFact // 同 key → 替换（= 修改）
     } else {
-      this.facts.push(newFact)             // 新 key → 追加（= 新增）
+      this.facts.push(newFact) // 新 key → 追加（= 新增）
     }
     this.save()
   }
 
   /** 删除：按 key 精确移除 */
   delete(key: string, category?: string) {
-    this.facts = this.facts.filter(f => !(f.key === key && (!category || f.category === category)))
+    this.facts = this.facts.filter((f) => !(f.key === key && (!category || f.category === category)))
     this.save()
   }
 
   /** 淘汰：移除超过 N 天未更新的事实 */
   evict(maxAgeDays: number = 90) {
     const cutoff = Date.now() - maxAgeDays * 86400_000
-    this.facts = this.facts.filter(f => new Date(f.date).getTime() > cutoff)
+    this.facts = this.facts.filter((f) => new Date(f.date).getTime() > cutoff)
     this.save()
   }
 }
@@ -1817,10 +1863,10 @@ class AutoMemory {
 
 #### 全局 vs 项目
 
-| 维度 | 写入文件 | 来源 |
-|------|---------|------|
-| 项目记忆 | `.x-code/memory/auto.md` | 启动扫描（基础配置）+ 模型 `saveKnowledge(scope:'project')`（代码约定、技术选型等） |
-| 全局记忆 | `~/.xcode/memory/auto.md` | 仅模型 `saveKnowledge(scope:'global')`（用户偏好、交互习惯，跨项目生效） |
+| 维度     | 写入文件                  | 来源                                                                                |
+| -------- | ------------------------- | ----------------------------------------------------------------------------------- |
+| 项目记忆 | `.x-code/memory/auto.md`  | 启动扫描（基础配置）+ 模型 `saveKnowledge(scope:'project')`（代码约定、技术选型等） |
+| 全局记忆 | `~/.xcode/memory/auto.md` | 仅模型 `saveKnowledge(scope:'global')`（用户偏好、交互习惯，跨项目生效）            |
 
 #### 存储格式
 
@@ -1828,20 +1874,24 @@ class AutoMemory {
 ## 自动记忆
 
 ### tech-stack
+
 - [2025-02-08] 包管理器: pnpm (workspace 模式)
 - [2025-02-08] UI 框架: React 19 + Ink 6
 - [2025-02-08] 测试框架: Vitest 3
 
 ### commands
+
 - [2025-02-08] 构建命令: pnpm build
 - [2025-02-08] 测试命令: pnpm vitest run
 - [2025-02-08] Lint 命令: pnpm lint
 
 ### conventions
+
 - [2025-02-09] 组件命名: PascalCase 组件文件，kebab-case 工具文件
 - [2025-02-09] 导出方式: 公共 API 通过 src/index.ts barrel export
 
 ### preferences（仅全局 auto.md）
+
 - [2025-02-09] 语言偏好: 中文回复和中文代码注释
 - [2025-02-09] 编程风格: 函数式风格而非 OOP
 ```
@@ -1873,26 +1923,26 @@ class AutoMemory {
 
 ```typescript
 interface SessionSummary {
-  id: string              // 会话 ID
-  title: string           // 自动生成的标题（如 "实现用户认证模块"）
-  startedAt: string       // 开始时间
-  endedAt: string         // 结束时间
+  id: string // 会话 ID
+  title: string // 自动生成的标题（如 "实现用户认证模块"）
+  startedAt: string // 开始时间
+  endedAt: string // 结束时间
   status: 'completed' | 'in_progress' | 'abandoned'
-  summary: string         // 工作内容概要（2-3 句话）
-  keyResults: string[]    // 关键成果（完成了什么）
-  pendingWork: string[]   // 未完成的工作（下次继续）
+  summary: string // 工作内容概要（2-3 句话）
+  keyResults: string[] // 关键成果（完成了什么）
+  pendingWork: string[] // 未完成的工作（下次继续）
   filesModified: string[] // 本次修改的文件列表
-  decisions: string[]     // 重要决策记录（如 "选择了 JWT 而非 session"）
+  decisions: string[] // 重要决策记录（如 "选择了 JWT 而非 session"）
 }
 ```
 
 #### 摘要生成时机
 
-| 时机 | 触发方式 | 说明 |
-|------|---------|------|
-| **上下文压缩时** | 自动 | 对话过长需要压缩时，在压缩前生成摘要保存 |
-| **会话结束时** | 自动 | 用户退出（Ctrl+C / `/exit`）时自动生成 |
-| **手动保存** | `/session save` | 用户主动保存当前会话状态 |
+| 时机             | 触发方式        | 说明                                     |
+| ---------------- | --------------- | ---------------------------------------- |
+| **上下文压缩时** | 自动            | 对话过长需要压缩时，在压缩前生成摘要保存 |
+| **会话结束时**   | 自动            | 用户退出（Ctrl+C / `/exit`）时自动生成   |
+| **手动保存**     | `/session save` | 用户主动保存当前会话状态                 |
 
 #### 启动时加载
 
@@ -1911,13 +1961,13 @@ $ xc
 
 #### 与竞品对比
 
-| 工具 | 会话记忆 | 实现方式 |
-|------|---------|---------|
-| **X-Code** | **结构化摘要（JSON）** | 上下文压缩时 / 退出时自动生成，启动时询问是否继续 |
-| Claude Code | 自动会话摘要 | 后台定时提取（每 ~5000 token），JSON 格式，自动注入 |
-| Windsurf | 无 | — |
-| Cursor | 无 | — |
-| Copilot | 无 | — |
+| 工具        | 会话记忆               | 实现方式                                            |
+| ----------- | ---------------------- | --------------------------------------------------- |
+| **X-Code**  | **结构化摘要（JSON）** | 上下文压缩时 / 退出时自动生成，启动时询问是否继续   |
+| Claude Code | 自动会话摘要           | 后台定时提取（每 ~5000 token），JSON 格式，自动注入 |
+| Windsurf    | 无                     | —                                                   |
+| Cursor      | 无                     | —                                                   |
+| Copilot     | 无                     | —                                                   |
 
 ### 10.9 知识验证与淘汰
 
@@ -1973,13 +2023,13 @@ if (existing && existing.fact !== 'pnpm') {
 
 GitHub Copilot 的方案更精密（引用验证 + 28 天过期 + 自我修正），但它是**云端方案**，依赖 GitHub 基础设施。X-Code 作为本地 CLI，采用更轻量的方案：
 
-| 维度 | Copilot Agentic Memory | X-Code |
-|------|----------------------|--------|
-| 存储 | GitHub 云端 | 本地文件 |
-| 过期 | 28 天固定 TTL | 90 天可配置 TTL |
-| 验证 | 引用验证（检查代码位置是否还存在） | 启动时配置文件校验 + 模型主动清理 |
-| 自我修正 | 代码与记忆矛盾时自动修正 | 模型在对话中发现矛盾时调用 delete/add |
-| 跨 Agent | 支持（Copilot 内部各 Agent 共享） | N/A（单 Agent） |
+| 维度     | Copilot Agentic Memory             | X-Code                                |
+| -------- | ---------------------------------- | ------------------------------------- |
+| 存储     | GitHub 云端                        | 本地文件                              |
+| 过期     | 28 天固定 TTL                      | 90 天可配置 TTL                       |
+| 验证     | 引用验证（检查代码位置是否还存在） | 启动时配置文件校验 + 模型主动清理     |
+| 自我修正 | 代码与记忆矛盾时自动修正           | 模型在对话中发现矛盾时调用 delete/add |
+| 跨 Agent | 支持（Copilot 内部各 Agent 共享）  | N/A（单 Agent）                       |
 
 ### 10.10 初始化命令 `xc init`
 
@@ -2033,6 +2083,7 @@ $ xc init
 ```
 
 **规则加载**：
+
 - **Always** 规则：启动时全部加载
 - **Path Match** 规则：AI 操作对应路径的文件时动态追加
 - **Agent Requested** 规则：规则描述列表始终加载，规则正文按模型请求加载
@@ -2040,19 +2091,19 @@ $ xc init
 
 ### 10.12 与各家方案的对比
 
-| 特性 | X-Code | Claude Code | Copilot | Windsurf | Cursor | Gemini CLI | Codex CLI |
-|------|--------|-------------|---------|----------|--------|------------|-----------|
-| 项目知识 | `.x-code/knowledge.md` | `CLAUDE.md`（6 层） | `.github/copilot-instructions.md` | `.windsurf/rules/*.md` | `.cursor/rules/*.mdc` | `GEMINI.md` | `AGENTS.md` |
-| 全局配置 | `~/.xcode/knowledge.md` | `~/.claude/CLAUDE.md` | 用户级文件 | `global_rules.md` | User Rules (UI) | `~/.gemini/GEMINI.md` | `~/.codex/AGENTS.md` |
-| 路径规则 | **4 种加载模式** | paths frontmatter | applyTo frontmatter | 4 种激活模式 | 4 种规则类型 | 子目录文件 | 子目录文件 |
-| 项目自动记忆 | **结构化 CRUD** | 模型自由读写文件 | **Agentic Memory** | 模型自动提炼 | 无 | 无 | 早期阶段 |
-| 全局自动记忆 | **模型工具 (跨项目)** | 无 | 无 | 无 | 无 | `/memory add` | 无 |
-| 知识 CRUD | **key-based 精确替换** | 模型自由编辑 | 引用验证 + 自我修正 | 手动管理 | 手动编辑 | 仅追加 | 手动编辑 |
-| 知识淘汰 | **90 天 TTL + 启动校验** | 无 | **28 天 TTL + 引用验证** | 无 | 无 | 无 | 无 |
-| 会话记忆 | **结构化摘要** | 自动会话摘要 | 无 | 无 | 无 | 无 | 早期阶段 |
-| 初始化 | **`xc init` (预填充)** | `/init` (骨架模板) | 无 | 无 | 无 | 无 | 无 |
-| 本地覆盖 | `local/preferences.md` | `CLAUDE.local.md` | 无 | 无 | 无 | 无 | `AGENTS.override.md` |
-| 存储位置 | 本地文件（项目内） | 本地文件（项目外） | **云端** | 本地加密 | 本地 | 本地文件 | 本地文件 |
+| 特性         | X-Code                   | Claude Code           | Copilot                           | Windsurf               | Cursor                | Gemini CLI            | Codex CLI            |
+| ------------ | ------------------------ | --------------------- | --------------------------------- | ---------------------- | --------------------- | --------------------- | -------------------- |
+| 项目知识     | `.x-code/knowledge.md`   | `CLAUDE.md`（6 层）   | `.github/copilot-instructions.md` | `.windsurf/rules/*.md` | `.cursor/rules/*.mdc` | `GEMINI.md`           | `AGENTS.md`          |
+| 全局配置     | `~/.xcode/knowledge.md`  | `~/.claude/CLAUDE.md` | 用户级文件                        | `global_rules.md`      | User Rules (UI)       | `~/.gemini/GEMINI.md` | `~/.codex/AGENTS.md` |
+| 路径规则     | **4 种加载模式**         | paths frontmatter     | applyTo frontmatter               | 4 种激活模式           | 4 种规则类型          | 子目录文件            | 子目录文件           |
+| 项目自动记忆 | **结构化 CRUD**          | 模型自由读写文件      | **Agentic Memory**                | 模型自动提炼           | 无                    | 无                    | 早期阶段             |
+| 全局自动记忆 | **模型工具 (跨项目)**    | 无                    | 无                                | 无                     | 无                    | `/memory add`         | 无                   |
+| 知识 CRUD    | **key-based 精确替换**   | 模型自由编辑          | 引用验证 + 自我修正               | 手动管理               | 手动编辑              | 仅追加                | 手动编辑             |
+| 知识淘汰     | **90 天 TTL + 启动校验** | 无                    | **28 天 TTL + 引用验证**          | 无                     | 无                    | 无                    | 无                   |
+| 会话记忆     | **结构化摘要**           | 自动会话摘要          | 无                                | 无                     | 无                    | 无                    | 早期阶段             |
+| 初始化       | **`xc init` (预填充)**   | `/init` (骨架模板)    | 无                                | 无                     | 无                    | 无                    | 无                   |
+| 本地覆盖     | `local/preferences.md`   | `CLAUDE.local.md`     | 无                                | 无                     | 无                    | 无                    | `AGENTS.override.md` |
+| 存储位置     | 本地文件（项目内）       | 本地文件（项目外）    | **云端**                          | 本地加密               | 本地                  | 本地文件              | 本地文件             |
 
 #### X-Code 的差异化亮点
 
@@ -2066,6 +2117,7 @@ $ xc init
 #### 坦诚不足（与 Copilot Agentic Memory 相比）
 
 Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
+
 - **引用验证**：每条记忆关联具体代码位置，使用前检查源码是否还存在 — X-Code 靠 TTL + 启动校验替代，精度较低
 - **跨 Agent 共享**：Copilot 内部多个 Agent（coding / review / CLI）共享记忆 — X-Code 是单 Agent，暂不需要
 - **自我修正**：代码与记忆矛盾时自动生成修正版 — X-Code 依赖模型在对话中发现并手动删除
@@ -2076,15 +2128,15 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 
 `saveKnowledge` 工具的可靠性取决于模型的工具调用能力。不同模型的行为差异：
 
-| 模型 | 工具调用可靠性 | 注意事项 |
-|------|-------------|---------|
-| Claude (Sonnet/Opus) | 高 | 工具调用倾向性强，通常会主动记录知识 |
-| GPT-4o / o3 | 高 | 需要在 System Prompt 中明确提示何时该调用 |
-| Gemini | 中 | 工具调用格式偶有偏差，需要更严格的 schema 校验 |
-| DeepSeek (V3/R1) | 高 | Function calling 能力强，R1 推理模型可能响应较慢 |
-| Qwen (Max/Plus) | 高 | 通义千问工具调用兼容性好，与 OpenAI 格式一致 |
-| GLM-4 Plus | 中 | 需测试工具调用格式兼容性 |
-| Kimi (K2.5) | 中 | 工具调用支持较新，需关注 schema 复杂度 |
+| 模型                 | 工具调用可靠性 | 注意事项                                         |
+| -------------------- | -------------- | ------------------------------------------------ |
+| Claude (Sonnet/Opus) | 高             | 工具调用倾向性强，通常会主动记录知识             |
+| GPT-4o / o3          | 高             | 需要在 System Prompt 中明确提示何时该调用        |
+| Gemini               | 中             | 工具调用格式偶有偏差，需要更严格的 schema 校验   |
+| DeepSeek (V3/R1)     | 高             | Function calling 能力强，R1 推理模型可能响应较慢 |
+| Qwen (Max/Plus)      | 高             | 通义千问工具调用兼容性好，与 OpenAI 格式一致     |
+| GLM-4 Plus           | 中             | 需测试工具调用格式兼容性                         |
+| Kimi (K2.5)          | 中             | 工具调用支持较新，需关注 schema 复杂度           |
 
 **缓解策略**：在 System Prompt 中增加明确的指导段落，告诉模型何时应该调用 `saveKnowledge`：
 
@@ -2104,57 +2156,57 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 
 ### `@x-code/core` dependencies
 
-| 包 | 版本 | 用途 |
-|----|------|------|
-| `ai` | ^6.0.0 | Vercel AI SDK Core + Provider Registry（latest 6.0.77） |
-| `@ai-sdk/anthropic` | ^3.0.0 | Claude 模型接入（latest 3.0.38） |
-| `@ai-sdk/openai` | ^3.0.0 | OpenAI / GPT 模型接入（latest 3.0.26） |
-| `@ai-sdk/google` | ^3.0.0 | Google / Gemini 模型接入（latest 3.0.22） |
-| `@ai-sdk/xai` | ^3.0.0 | xAI / Grok 模型接入（latest 3.0.48） |
-| `@ai-sdk/deepseek` | ^2.0.0 | DeepSeek 模型接入（latest 2.0.18） |
-| `@ai-sdk/alibaba` | ^1.0.0 | 通义千问模型接入（latest 1.0.1） |
-| `@ai-sdk/moonshotai` | ^2.0.0 | Moonshot / Kimi 模型接入（latest 2.0.3） |
-| `@ai-sdk/openai-compatible` | ^2.0.0 | 自定义 OpenAI 兼容提供商接入（豆包、文心一言等）（latest 2.0.28） |
-| `zhipu-ai-provider` | ^0.2.0 | 智谱 GLM 模型接入（社区包，latest 0.2.2） |
-| `zod` | ^3.25.76 | 工具参数 Schema（AI SDK 6 peerDep 要求 ≥3.25.76） |
-| `globby` | ^14.0.0 | glob 工具的底层依赖（latest 14.1.0） |
-| `execa` | ^9.0.0 | 跨平台进程执行（latest 9.6.1） |
-| `@tavily/core` | ^0.7.0 | webSearch 搜索 API（免费 1000 次/月，latest 0.7.1） |
-| `@vscode/ripgrep` | ^1.17.0 | grep 工具底层（预编译 ripgrep 二进制，latest 1.17.0） |
-| `cheerio` | ^1.0.0 | webFetch HTML 解析（latest 1.2.0） |
-| `turndown` | ^7.2.0 | webFetch HTML→Markdown 转换（latest 7.2.2） |
-| `diff` | ^8.0.0 | Permission 组件 diff 预览（edit/writeFile 变更对比，latest 8.0.3） |
-| `chalk` | ^5.4.0 | 颜色输出（latest 5.6.2） |
+| 包                          | 版本     | 用途                                                               |
+| --------------------------- | -------- | ------------------------------------------------------------------ |
+| `ai`                        | ^6.0.0   | Vercel AI SDK Core + Provider Registry（latest 6.0.77）            |
+| `@ai-sdk/anthropic`         | ^3.0.0   | Claude 模型接入（latest 3.0.38）                                   |
+| `@ai-sdk/openai`            | ^3.0.0   | OpenAI / GPT 模型接入（latest 3.0.26）                             |
+| `@ai-sdk/google`            | ^3.0.0   | Google / Gemini 模型接入（latest 3.0.22）                          |
+| `@ai-sdk/xai`               | ^3.0.0   | xAI / Grok 模型接入（latest 3.0.48）                               |
+| `@ai-sdk/deepseek`          | ^2.0.0   | DeepSeek 模型接入（latest 2.0.18）                                 |
+| `@ai-sdk/alibaba`           | ^1.0.0   | 通义千问模型接入（latest 1.0.1）                                   |
+| `@ai-sdk/moonshotai`        | ^2.0.0   | Moonshot / Kimi 模型接入（latest 2.0.3）                           |
+| `@ai-sdk/openai-compatible` | ^2.0.0   | 自定义 OpenAI 兼容提供商接入（豆包、文心一言等）（latest 2.0.28）  |
+| `zhipu-ai-provider`         | ^0.2.0   | 智谱 GLM 模型接入（社区包，latest 0.2.2）                          |
+| `zod`                       | ^3.25.76 | 工具参数 Schema（AI SDK 6 peerDep 要求 ≥3.25.76）                  |
+| `globby`                    | ^14.0.0  | glob 工具的底层依赖（latest 14.1.0）                               |
+| `execa`                     | ^9.0.0   | 跨平台进程执行（latest 9.6.1）                                     |
+| `@tavily/core`              | ^0.7.0   | webSearch 搜索 API（免费 1000 次/月，latest 0.7.1）                |
+| `@vscode/ripgrep`           | ^1.17.0  | grep 工具底层（预编译 ripgrep 二进制，latest 1.17.0）              |
+| `cheerio`                   | ^1.0.0   | webFetch HTML 解析（latest 1.2.0）                                 |
+| `turndown`                  | ^7.2.0   | webFetch HTML→Markdown 转换（latest 7.2.2）                        |
+| `diff`                      | ^8.0.0   | Permission 组件 diff 预览（edit/writeFile 变更对比，latest 8.0.3） |
+| `chalk`                     | ^5.4.0   | 颜色输出（latest 5.6.2）                                           |
 
 ### `@x-code/cli` dependencies
 
-| 包 | 版本 | 用途 |
-|----|------|------|
-| `@x-code/core` | workspace:* | Agent 逻辑层 |
-| `ink` | ^6.6.0 | TUI 框架（latest 6.6.0） |
-| `react` | ^19.1.0 | Ink 的 peer dependency（latest 19.2.4） |
-| `yargs` | ^18.0.0 | CLI 参数解析（latest 18.0.0） |
-| `chalk` | ^5.4.0 | 颜色工具（latest 5.6.2） |
+| 包             | 版本         | 用途                                    |
+| -------------- | ------------ | --------------------------------------- |
+| `@x-code/core` | workspace:\* | Agent 逻辑层                            |
+| `ink`          | ^6.6.0       | TUI 框架（latest 6.6.0）                |
+| `react`        | ^19.1.0      | Ink 的 peer dependency（latest 19.2.4） |
+| `yargs`        | ^18.0.0      | CLI 参数解析（latest 18.0.0）           |
+| `chalk`        | ^5.4.0       | 颜色工具（latest 5.6.2）                |
 
 ### 根包 devDependencies（共享）
 
-| 包 | 版本 | 用途 |
-|----|------|------|
-| `typescript` | ^5.7.0 | 类型检查（latest 5.9.3） |
-| `esbuild` | ^0.27.0 | 构建打包（latest 0.27.3，注意 0.x 下 ^ 只覆盖同 minor） |
-| `vitest` | ^4.0.0 | 测试框架（latest 4.0.18） |
-| `eslint` | ^9.0.0 | 代码检查（ESLint 10 插件生态尚未兼容，暂用 9，latest 9.28.0） |
-| `typescript-eslint` | ^8.0.0 | ESLint TypeScript 支持（latest 8.54.0） |
-| `eslint-plugin-react-hooks` | ^7.0.0 | React Hooks 规则（latest 7.0.1） |
-| `eslint-plugin-unused-imports` | ^4.0.0 | 自动移除未使用 import（latest 4.3.0） |
-| `prettier` | ^3.0.0 | 代码格式化（latest 3.8.1） |
-| `@trivago/prettier-plugin-sort-imports` | ^6.0.0 | import 排序（latest 6.0.2） |
-| `husky` | ^9.0.0 | Git hooks（latest 9.1.7） |
-| `lint-staged` | ^16.0.0 | 只对暂存文件运行 lint/format（latest 16.2.7） |
-| `@types/react` | ^19.0.0 | React 类型（latest 19.2.13） |
-| `@types/node` | ^22.0.0 | Node.js 类型（latest 22.x，25.x 也可用但我们 target Node 20） |
-| `@types/yargs` | ^17.0.0 | yargs 类型（yargs 18 暂无 @types/yargs@18，沿用 @types/yargs@17） |
-| `ink-testing-library` | ^4.0.0 | Ink 组件测试（latest 4.0.0） |
+| 包                                      | 版本    | 用途                                                              |
+| --------------------------------------- | ------- | ----------------------------------------------------------------- |
+| `typescript`                            | ^5.7.0  | 类型检查（latest 5.9.3）                                          |
+| `esbuild`                               | ^0.27.0 | 构建打包（latest 0.27.3，注意 0.x 下 ^ 只覆盖同 minor）           |
+| `vitest`                                | ^4.0.0  | 测试框架（latest 4.0.18）                                         |
+| `eslint`                                | ^9.0.0  | 代码检查（ESLint 10 插件生态尚未兼容，暂用 9，latest 9.28.0）     |
+| `typescript-eslint`                     | ^8.0.0  | ESLint TypeScript 支持（latest 8.54.0）                           |
+| `eslint-plugin-react-hooks`             | ^7.0.0  | React Hooks 规则（latest 7.0.1）                                  |
+| `eslint-plugin-unused-imports`          | ^4.0.0  | 自动移除未使用 import（latest 4.3.0）                             |
+| `prettier`                              | ^3.0.0  | 代码格式化（latest 3.8.1）                                        |
+| `@trivago/prettier-plugin-sort-imports` | ^6.0.0  | import 排序（latest 6.0.2）                                       |
+| `husky`                                 | ^9.0.0  | Git hooks（latest 9.1.7）                                         |
+| `lint-staged`                           | ^16.0.0 | 只对暂存文件运行 lint/format（latest 16.2.7）                     |
+| `@types/react`                          | ^19.0.0 | React 类型（latest 19.2.13）                                      |
+| `@types/node`                           | ^22.0.0 | Node.js 类型（latest 22.x，25.x 也可用但我们 target Node 20）     |
+| `@types/yargs`                          | ^17.0.0 | yargs 类型（yargs 18 暂无 @types/yargs@18，沿用 @types/yargs@17） |
+| `ink-testing-library`                   | ^4.0.0  | Ink 组件测试（latest 4.0.0）                                      |
 
 ---
 
@@ -2171,6 +2223,7 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 - `eslint-plugin-unused-imports` — 自动移除未使用的 import
 
 关键自定义规则：
+
 - `@typescript-eslint/no-unused-vars` — 允许 `_` 前缀的未使用变量
 - `@typescript-eslint/no-explicit-any` — 警告而非报错
 - 全局注入 Vitest 的 `describe`、`it`、`expect` 等（替代 jest globals）
@@ -2186,15 +2239,7 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
   "printWidth": 120,
   "trailingComma": "all",
   "plugins": ["@trivago/prettier-plugin-sort-imports"],
-  "importOrder": [
-    "^node:",
-    "^react",
-    "^ink",
-    "^(ai|@ai-sdk)",
-    "^zod",
-    "^@x-code/",
-    "^[./]"
-  ],
+  "importOrder": ["^node:", "^react", "^ink", "^(ai|@ai-sdk)", "^zod", "^@x-code/", "^[./]"],
   "importOrderSeparation": true,
   "importOrderSortSpecifiers": true
 }
@@ -2280,8 +2325,8 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 
 ## 十四、参考项目
 
-| 项目 | 参考价值 | 链接 |
-|------|---------|------|
-| **Gemini CLI** | 技术栈完全一致（TS + esbuild + Ink + Vitest），架构最值得参考 | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
-| **AI SDK 文档** | streamText / tool 调用 / Agent Loop 的权威参考 | [ai-sdk.dev/docs](https://ai-sdk.dev/docs) |
-| **Ink 文档** | 组件 API、hooks、Static 等 | [github.com/vadimdemedes/ink](https://github.com/vadimdemedes/ink) |
+| 项目            | 参考价值                                                      | 链接                                                                               |
+| --------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **Gemini CLI**  | 技术栈完全一致（TS + esbuild + Ink + Vitest），架构最值得参考 | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
+| **AI SDK 文档** | streamText / tool 调用 / Agent Loop 的权威参考                | [ai-sdk.dev/docs](https://ai-sdk.dev/docs)                                         |
+| **Ink 文档**    | 组件 API、hooks、Static 等                                    | [github.com/vadimdemedes/ink](https://github.com/vadimdemedes/ink)                 |

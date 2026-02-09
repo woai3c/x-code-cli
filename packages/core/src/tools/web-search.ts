@@ -1,6 +1,6 @@
 // @x-code/core — webSearch tool (Tavily API)
-
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const webSearch = tool({

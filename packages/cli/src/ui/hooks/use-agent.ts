@@ -1,23 +1,15 @@
 // @x-code/cli — Agent state management hook
+import { useCallback, useRef, useState } from 'react'
 
-import { useState, useCallback, useRef } from 'react'
-
-import {
-  agentLoop,
-  saveSession,
-  compressMessages,
-  initMemories,
-  scanProject,
-  loadLatestSession,
-} from '@x-code/core'
+import { agentLoop, compressMessages, initMemories, loadLatestSession, saveSession, scanProject } from '@x-code/core'
 import type {
-  LanguageModel,
-  DisplayMessage,
-  DisplayToolCall,
-  TokenUsage,
   AgentCallbacks,
   AgentOptions,
+  DisplayMessage,
+  LanguageModel,
+  LoopState,
   SessionSummary,
+  TokenUsage,
 } from '@x-code/core'
 
 interface PendingPermission {
@@ -61,8 +53,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
 
   const modelRef = useRef<LanguageModel>(initialModel)
   const modelIdRef = useRef<string>(options.modelId)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const loopStateRef = useRef<any>(null)
+  const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const initializedRef = useRef(false)
 
@@ -239,10 +230,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Manual context compression */
   const compact = useCallback(async () => {
     if (!loopStateRef.current) return
-    loopStateRef.current.messages = await compressMessages(
-      loopStateRef.current.messages,
-      modelRef.current,
-    )
+    loopStateRef.current.messages = await compressMessages(loopStateRef.current.messages, modelRef.current)
   }, [])
 
   /** Switch model at runtime */

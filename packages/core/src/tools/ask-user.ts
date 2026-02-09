@@ -1,6 +1,6 @@
 // @x-code/core — askUser tool (interactive question, no execute — handled via callback)
-
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const askUser = tool({

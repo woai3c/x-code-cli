@@ -1,27 +1,49 @@
 // @x-code/core — Agent Loop (core logic: streaming, tool calls, permission, context compression)
+import { execa } from 'execa'
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { streamText, generateText } from 'ai'
+import { generateText, streamText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
-import { execa } from 'execa'
 
-import type { AgentCallbacks, AgentOptions, TokenUsage } from '../types/index.js'
-import { toolRegistry, truncateToolResult } from '../tools/index.js'
-import { getShellConfig } from '../tools/shell-utils.js'
-import { checkPermission } from '../permissions/index.js'
-import { buildSystemPrompt } from './system-prompt.js'
-import { estimateTokens, toolResultMessage } from './messages.js'
-import { estimateCost } from './pricing.js'
 import { buildKnowledgeContext, loadRuleFiles } from '../knowledge/loader.js'
 import {
-  generateSessionSummary,
-  saveSessionSummary,
   formatSessionForPrompt,
+  generateSessionSummary,
   loadLatestSession,
+  saveSessionSummary,
 } from '../knowledge/session.js'
+import { checkPermission } from '../permissions/index.js'
+import { toolRegistry, truncateToolResult } from '../tools/index.js'
+import { getShellConfig } from '../tools/shell-utils.js'
+import type { AgentCallbacks, AgentOptions, TokenUsage } from '../types/index.js'
+import { estimateTokens, toolResultMessage } from './messages.js'
 import { ensurePlansDir, generatePlanId, getPlanPath } from './plan-mode.js'
+import { estimateCost } from './pricing.js'
+import { buildSystemPrompt } from './system-prompt.js'
+
+/** Minimal shape of what we use from streamText() result — avoids complex generic propagation */
+interface StreamResult {
+  fullStream: AsyncIterable<{
+    type: string
+    text?: string
+    toolName?: string
+    input?: unknown
+    output?: unknown
+    toolCallId?: string
+  }>
+  response: Promise<{ messages: ModelMessage[] }>
+  usage: Promise<{ inputTokens?: number; outputTokens?: number } | undefined>
+  finishReason: Promise<string>
+  toolCalls: Promise<
+    Array<{
+      toolName: string
+      toolCallId: string
+      input: Record<string, unknown>
+    }>
+  >
+}
 
 const KEEP_RECENT = 6
 const DEFAULT_TOKEN_BUDGET_RATIO = 0.8
@@ -43,7 +65,7 @@ function getTokenBudget(modelId: string): number {
   return Math.floor(contextWindow * DEFAULT_TOKEN_BUDGET_RATIO)
 }
 
-interface LoopState {
+export interface LoopState {
   messages: ModelMessage[]
   tokenUsage: TokenUsage
   planMode: boolean
@@ -114,7 +136,8 @@ export async function compressMessages(messages: ModelMessage[], model: Language
 
   const { text: summary } = await generateText({
     model,
-    system: 'Summarize the following conversation concisely, preserving key decisions, file changes, and context needed to continue.',
+    system:
+      'Summarize the following conversation concisely, preserving key decisions, file changes, and context needed to continue.',
     messages: old,
   })
 
@@ -156,7 +179,8 @@ function classifyApiError(err: unknown): { message: string; retryable: boolean }
   }
   if (status === 429 || msg.includes('rate limit') || msg.includes('Rate limit')) {
     return {
-      message: 'Rate limited (429). Waiting for retry... (AI SDK handles exponential backoff automatically with maxRetries: 3)',
+      message:
+        'Rate limited (429). Waiting for retry... (AI SDK handles exponential backoff automatically with maxRetries: 3)',
       retryable: true, // AI SDK maxRetries handles this
     }
   }
@@ -217,13 +241,9 @@ export async function agentLoop(
     // Context compression check — also saves session summary before compressing
     if (estimateTokens(state.messages) > tokenBudget) {
       try {
-        const summary = await generateSessionSummary(
-          state.messages,
-          model,
-          state.sessionId,
-          state.startedAt,
-          [...state.filesModified],
-        )
+        const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
+          ...state.filesModified,
+        ])
         await saveSessionSummary(summary)
       } catch {
         // Don't block compression on session save failure
@@ -237,8 +257,7 @@ export async function agentLoop(
       planMode: state.planMode,
     })
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let result: any
+    let result: StreamResult
     try {
       result = streamText({
         model,
@@ -247,7 +266,7 @@ export async function agentLoop(
         tools: toolRegistry,
         maxRetries: 3,
         abortSignal: options.abortSignal,
-      })
+      }) as unknown as StreamResult
     } catch (err) {
       const classified = classifyApiError(err)
       callbacks.onError(new Error(classified.message))
@@ -255,24 +274,22 @@ export async function agentLoop(
     }
 
     // Stream chunks to UI
-    let fullText = ''
     try {
       for await (const chunk of result.fullStream) {
         if (chunk.type === 'text-delta') {
-          fullText += chunk.text
-          callbacks.onTextDelta(chunk.text)
+          callbacks.onTextDelta(chunk.text ?? '')
         }
         if (chunk.type === 'tool-call') {
-          callbacks.onToolCall(chunk.toolName, chunk.input as Record<string, unknown>)
+          callbacks.onToolCall(chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
         }
         // Truncate auto-executed tool results (readFile, glob, grep, etc.)
         if (chunk.type === 'tool-result') {
-          const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output)
+          const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
           const truncated = truncateToolResult(raw)
           if (truncated !== raw) {
             // Result was truncated — the original is already in messages via AI SDK,
             // but we notify via callback so the UI can show it
-            callbacks.onToolResult(chunk.toolCallId, truncated)
+            callbacks.onToolResult(chunk.toolCallId ?? '', truncated)
           }
         }
       }
@@ -312,8 +329,7 @@ export async function agentLoop(
     }
 
     if (finishReason === 'tool-calls') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let toolCalls: any[]
+      let toolCalls: Awaited<StreamResult['toolCalls']>
       try {
         toolCalls = await result.toolCalls
       } catch (err) {
@@ -324,7 +340,7 @@ export async function agentLoop(
 
       for (const tc of toolCalls) {
         const toolName = tc.toolName
-        const input = tc.input as Record<string, unknown>
+        const input = tc.input
         let output: string
 
         // ── Plan mode tools ──
@@ -369,11 +385,7 @@ export async function agentLoop(
 
         // ── Permission check for write tools and shell ──
         if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
-          const approved = await checkPermission(
-            { toolName, input },
-            options.trustMode,
-            callbacks.onAskPermission,
-          )
+          const approved = await checkPermission({ toolName, input }, options.trustMode, callbacks.onAskPermission)
 
           if (!approved) {
             output = 'Permission denied by user.'
@@ -421,13 +433,9 @@ export async function agentLoop(
 /** Save session on exit */
 export async function saveSession(state: LoopState, model: LanguageModel): Promise<void> {
   try {
-    const summary = await generateSessionSummary(
-      state.messages,
-      model,
-      state.sessionId,
-      state.startedAt,
-      [...state.filesModified],
-    )
+    const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
+      ...state.filesModified,
+    ])
     await saveSessionSummary(summary)
   } catch {
     // Don't crash on session save failure

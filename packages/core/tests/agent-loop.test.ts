@@ -1,6 +1,10 @@
 // Tests for agent loop (mock LLM responses)
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { streamText } from 'ai'
+
+import { agentLoop } from '../src/agent/loop.js'
+import type { AgentCallbacks, TokenUsage } from '../src/types/index.js'
 
 // Mock cheerio + turndown (pulled in via toolRegistry → webFetch)
 vi.mock('cheerio', () => ({
@@ -10,7 +14,13 @@ vi.mock('cheerio', () => ({
     return $
   }),
 }))
-vi.mock('turndown', () => ({ default: class { turndown() { return '' } } }))
+vi.mock('turndown', () => ({
+  default: class {
+    turndown() {
+      return ''
+    }
+  },
+}))
 
 // Mock AI SDK
 vi.mock('ai', async () => {
@@ -34,10 +44,6 @@ vi.mock('../src/knowledge/session.js', () => ({
   generateSessionSummary: vi.fn().mockResolvedValue({}),
   saveSessionSummary: vi.fn().mockResolvedValue(undefined),
 }))
-
-import { streamText } from 'ai'
-import type { AgentCallbacks, TokenUsage } from '../src/types/index.js'
-import { agentLoop } from '../src/agent/loop.js'
 
 describe('agent loop', () => {
   let mockCallbacks: AgentCallbacks

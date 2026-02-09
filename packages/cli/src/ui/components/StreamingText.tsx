@@ -1,5 +1,4 @@
 // @x-code/cli — Streaming text output component
-
 import React from 'react'
 
 import { Text } from 'ink'

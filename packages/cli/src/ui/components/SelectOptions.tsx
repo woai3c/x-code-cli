@@ -1,5 +1,4 @@
 // @x-code/cli — askUser multi-select interaction component
-
 import React, { useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'
@@ -58,7 +57,9 @@ export function SelectOptions({ question, options, onSelect }: SelectOptionsProp
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-      <Text color="cyan" bold>? {question}</Text>
+      <Text color="cyan" bold>
+        ? {question}
+      </Text>
       {!isCustomMode ? (
         allOptions.map((opt, i) => (
           <Box key={i}>
@@ -76,9 +77,7 @@ export function SelectOptions({ question, options, onSelect }: SelectOptionsProp
           <Text dimColor>█</Text>
         </Box>
       )}
-      <Text dimColor>
-        {isCustomMode ? 'Enter to confirm, Esc to go back' : '↑↓ Navigate  Enter Confirm'}
-      </Text>
+      <Text dimColor>{isCustomMode ? 'Enter to confirm, Esc to go back' : '↑↓ Navigate  Enter Confirm'}</Text>
     </Box>
   )
 }

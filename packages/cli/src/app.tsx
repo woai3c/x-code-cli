@@ -1,8 +1,8 @@
 // @x-code/cli — Ink render entry
-
 import React from 'react'
 
 import { render } from 'ink'
+
 import type { AgentOptions, LanguageModel } from '@x-code/core'
 
 import { App } from './ui/components/App.js'
@@ -20,7 +20,9 @@ export function startApp(model: LanguageModel, options: AgentOptions, initialPro
       model={model}
       options={options}
       initialPrompt={initialPrompt}
-      onCleanupReady={(fn) => { registeredCleanup = fn }}
+      onCleanupReady={(fn) => {
+        registeredCleanup = fn
+      }}
     />,
   )
   return waitUntilExit

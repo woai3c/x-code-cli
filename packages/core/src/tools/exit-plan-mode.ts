@@ -1,6 +1,6 @@
 // @x-code/core — exitPlanMode tool (no execute — handled in agent loop)
-
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 export const exitPlanMode = tool({

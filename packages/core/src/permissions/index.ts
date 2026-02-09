@@ -1,7 +1,6 @@
 // @x-code/core — Permission system (3-level model)
-
+import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { PermissionLevel } from '../types/index.js'
-import { splitShellCommands, isReadOnly, isDestructive } from '../tools/shell-utils.js'
 
 type PermissionInput = Record<string, unknown>
 

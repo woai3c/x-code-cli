@@ -1,7 +1,8 @@
 // Tests for tool registry
 // Note: Uses dynamic import to handle module resolution issues in test environment
+import { describe, expect, it, vi } from 'vitest'
 
-import { describe, it, expect, vi } from 'vitest'
+import { MAX_TOOL_RESULT_CHARS, toolRegistry, truncateToolResult } from '../src/tools/index.js'
 
 // Mock cheerio + turndown to avoid module resolution issues in test env
 vi.mock('cheerio', () => ({
@@ -13,10 +14,12 @@ vi.mock('cheerio', () => ({
 }))
 
 vi.mock('turndown', () => ({
-  default: class { turndown() { return '' } },
+  default: class {
+    turndown() {
+      return ''
+    }
+  },
 }))
-
-import { toolRegistry, truncateToolResult, MAX_TOOL_RESULT_CHARS } from '../src/tools/index.js'
 
 describe('toolRegistry', () => {
   it('contains all 13 tools', () => {

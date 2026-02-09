@@ -1,9 +1,9 @@
 // @x-code/core — grep tool (content search via ripgrep)
-
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 const execFileAsync = promisify(execFile)
@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile)
 function getRipgrepPath(): string {
   try {
     // @vscode/ripgrep provides the binary path
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const rg = require('@vscode/ripgrep') as { rgPath: string }
     return rg.rgPath
   } catch {

@@ -1,8 +1,7 @@
 // Tests for permission system
+import { describe, expect, it, vi } from 'vitest'
 
-import { describe, it, expect, vi } from 'vitest'
-
-import { getPermissionLevel, checkPermission } from '../src/permissions/index.js'
+import { checkPermission, getPermissionLevel } from '../src/permissions/index.js'
 
 describe('getPermissionLevel', () => {
   it('returns always-allow for read-only tools', () => {
@@ -71,11 +70,7 @@ describe('checkPermission', () => {
 
   it('returns false for denied tools without asking', async () => {
     const askFn = vi.fn()
-    const result = await checkPermission(
-      { toolName: 'shell', input: { command: 'rm -rf /' } },
-      false,
-      askFn,
-    )
+    const result = await checkPermission({ toolName: 'shell', input: { command: 'rm -rf /' } }, false, askFn)
     expect(result).toBe(false)
     expect(askFn).not.toHaveBeenCalled()
   })

@@ -1,8 +1,9 @@
 // @x-code/core — glob tool (file search by pattern)
+import { globby } from 'globby'
 
 import { tool } from 'ai'
+
 import { z } from 'zod'
-import { globby } from 'globby'
 
 export const glob = tool({
   description: 'Find files matching a glob pattern. Returns file paths sorted by modification time.',

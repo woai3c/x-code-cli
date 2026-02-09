@@ -1,18 +1,17 @@
 // @x-code/core — Tool registry (unified export)
-
-import { readFile } from './read-file.js'
-import { writeFile } from './write-file.js'
+import { askUser } from './ask-user.js'
 import { edit } from './edit.js'
-import { shell } from './shell.js'
+import { enterPlanMode } from './enter-plan-mode.js'
+import { exitPlanMode } from './exit-plan-mode.js'
 import { glob } from './glob.js'
 import { grep } from './grep.js'
 import { listDir } from './list-dir.js'
-import { webSearch } from './web-search.js'
-import { webFetch } from './web-fetch.js'
-import { askUser } from './ask-user.js'
+import { readFile } from './read-file.js'
 import { saveKnowledge } from './save-knowledge.js'
-import { enterPlanMode } from './enter-plan-mode.js'
-import { exitPlanMode } from './exit-plan-mode.js'
+import { shell } from './shell.js'
+import { webFetch } from './web-fetch.js'
+import { webSearch } from './web-search.js'
+import { writeFile } from './write-file.js'
 
 export const toolRegistry = {
   readFile,

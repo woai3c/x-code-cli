@@ -1,5 +1,4 @@
 // @x-code/cli — Shell command real-time output component
-
 import React from 'react'
 
 import { Box, Text } from 'ink'
@@ -19,10 +18,14 @@ export function ShellOutput({ output }: ShellOutputProps) {
   return (
     <Box flexDirection="column" marginLeft={2} borderStyle="single" borderColor="gray" paddingX={1}>
       {displayLines.map((line, i) => (
-        <Text key={i} dimColor>{line}</Text>
+        <Text key={i} dimColor>
+          {line}
+        </Text>
       ))}
       {lines.length > maxLines && (
-        <Text dimColor color="yellow">... ({lines.length - maxLines} lines above)</Text>
+        <Text dimColor color="yellow">
+          ... ({lines.length - maxLines} lines above)
+        </Text>
       )}
     </Box>
   )

@@ -1,8 +1,7 @@
 // Tests for shell utility functions
+import { describe, expect, it } from 'vitest'
 
-import { describe, it, expect } from 'vitest'
-
-import { splitShellCommands, isReadOnly, isDestructive, getShellConfig } from '../src/tools/shell-utils.js'
+import { getShellConfig, isDestructive, isReadOnly, splitShellCommands } from '../src/tools/shell-utils.js'
 
 describe('getShellConfig', () => {
   it('returns a valid shell config', () => {
