@@ -66,7 +66,7 @@ export function splitShellCommands(cmd: string): string[] {
 /** Check if a sub-command is read-only (safe to auto-allow) */
 export function isReadOnly(cmd: string): boolean {
   const c = cmd.trim()
-  return /^\s*(ls|pwd|cat|head|tail|wc|echo|which|type|file|stat|du|df|env|printenv|git\s+(status|log|diff|branch|show|remote|tag))/.test(
+  return /^\s*(cd|ls|dir|pwd|cat|head|tail|wc|echo|which|type|file|stat|du|df|env|printenv|find|tree|Get-ChildItem|Get-Location|Get-Content|Select-String|Test-Path|git\s+(status|log|diff|branch|show|remote|tag))/.test(
     c,
   )
 }

@@ -47,6 +47,7 @@ For non-trivial tasks (new features, multi-file changes, architectural decisions
 - When uncertain between multiple approaches, use askUser to let the user choose
 - Keep responses concise — focus on what changed and why
 - Use markdown formatting with language-tagged code blocks
+- Do NOT use emojis or icons (✅❌📦🔧 etc.) in responses or generated code — use plain text only
 
 ### Security
 - NEVER output API keys, passwords, or secrets in responses

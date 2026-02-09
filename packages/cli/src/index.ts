@@ -17,7 +17,7 @@ import {
 } from '@x-code/core'
 import type { AgentOptions } from '@x-code/core'
 
-import { getCleanupFn, startApp } from './app.js'
+import { getCleanupFn, printExitSummary, startApp } from './app.js'
 
 const MIN_NODE_VERSION = [20, 19, 0]
 
@@ -123,6 +123,9 @@ async function main() {
   // Start the app
   const waitUntilExit = startApp(model, options, fullPrompt || undefined)
   await waitUntilExit()
+
+  // Print session usage summary after Ink unmounts
+  printExitSummary()
 }
 
 /** Load .env file from cwd (walk up to find it, like dotenv convention) */
@@ -202,9 +205,11 @@ process.on('SIGINT', () => {
         // Don't crash on cleanup failure
       })
       .finally(() => {
+        printExitSummary()
         process.exit(0)
       })
   } else {
+    printExitSummary()
     process.exit(0)
   }
 })

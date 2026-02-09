@@ -8,17 +8,22 @@
 //
 // The fix follows the same approach used by Gemini CLI:
 //   Only display the TAIL of the streaming text, capped to
-//   (terminal rows − reserved rows for StatusBar / ChatInput / padding).
+//   (terminal rows − reserved rows for ChatInput / padding).
 //
 // The full text is still accumulated in state.streamingText; once streaming
 // finishes it is moved into the <Static> message history where Ink writes
 // it permanently without further redraws.
+//
+// Markdown rendering is applied to the visible tail so headings, bold,
+// code blocks, etc. display with proper terminal formatting.
 
 import React, { useMemo } from 'react'
 
 import { Box, Text, useStdout } from 'ink'
 
-/** Rows reserved for other non-Static UI: StatusBar + ChatInput + padding + 1 buffer */
+import { renderMarkdown } from '../render-markdown.js'
+
+/** Rows reserved for other non-Static UI: ChatInput + padding + 1 buffer */
 const RESERVED_ROWS = 6
 
 interface StreamingTextProps {
@@ -41,11 +46,14 @@ export function StreamingText({ text }: StreamingTextProps) {
     return lines.slice(-maxLines).join('\n')
   }, [text, maxLines])
 
-  if (!visibleText) return null
+  // Render markdown to ANSI
+  const rendered = useMemo(() => renderMarkdown(visibleText), [visibleText])
+
+  if (!rendered) return null
 
   return (
     <Box flexDirection="column" overflow="hidden">
-      <Text color="green">{visibleText}</Text>
+      <Text>{rendered}</Text>
     </Box>
   )
 }

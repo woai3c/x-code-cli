@@ -3,6 +3,8 @@ import React from 'react'
 
 import { Box, Text } from 'ink'
 
+import { ACCENT, ERROR, SUCCESS, WARNING } from '../theme.js'
+
 interface ToolCallProps {
   toolName: string
   input: Record<string, unknown>
@@ -12,10 +14,10 @@ interface ToolCallProps {
 
 export function ToolCall({ toolName, input, status, output }: ToolCallProps) {
   const statusColors: Record<string, string> = {
-    pending: 'yellow',
-    running: 'cyan',
-    completed: 'green',
-    denied: 'red',
+    pending: WARNING,
+    running: ACCENT,
+    completed: SUCCESS,
+    denied: ERROR,
   }
 
   const statusIcons: Record<string, string> = {
@@ -41,7 +43,7 @@ export function ToolCall({ toolName, input, status, output }: ToolCallProps) {
     <Box flexDirection="column" marginLeft={1}>
       <Text>
         <Text color={statusColors[status]}>{statusIcons[status]} </Text>
-        <Text bold color="yellow">
+        <Text bold color={ACCENT}>
           {toolName}
         </Text>
         <Text dimColor> {inputPreview}</Text>

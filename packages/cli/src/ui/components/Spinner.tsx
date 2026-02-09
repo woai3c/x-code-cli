@@ -3,6 +3,8 @@ import React, { useEffect, useState } from 'react'
 
 import { Text } from 'ink'
 
+import { ACCENT } from '../theme.js'
+
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
 interface SpinnerProps {
@@ -20,7 +22,7 @@ export function Spinner({ label = 'Thinking...' }: SpinnerProps) {
   }, [])
 
   return (
-    <Text color="cyan">
+    <Text color={ACCENT}>
       {FRAMES[frame]} {label}
     </Text>
   )

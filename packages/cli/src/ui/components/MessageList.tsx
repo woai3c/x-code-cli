@@ -4,12 +4,18 @@
 // scrollback buffer.  Ink never clears or redraws them.  This is why
 // the startup header is included here as the first Static item — it gets
 // "printed" once and stays at the top, just like Gemini CLI does.
+//
+// Assistant messages are passed through renderMarkdown() so headings,
+// bold, code blocks, lists, etc. display with proper terminal formatting.
 
 import React from 'react'
 
 import { Box, Static, Text } from 'ink'
 
 import type { DisplayMessage } from '@x-code/core'
+
+import { renderMarkdown } from '../render-markdown.js'
+import { ACCENT, WARNING } from '../theme.js'
 
 interface MessageListProps {
   messages: DisplayMessage[]
@@ -39,17 +45,17 @@ export function MessageList({ messages, header }: MessageListProps) {
           <Box key={msg.id} flexDirection="column" marginBottom={1}>
             {msg.role === 'user' ? (
               <Text>
-                <Text color="blue" bold>
+                <Text color={ACCENT} bold>
                   {'> '}
                 </Text>
-                <Text color="blue">{msg.content}</Text>
+                {msg.content}
               </Text>
             ) : (
-              <Text color="green">{msg.content}</Text>
+              <Text>{renderMarkdown(msg.content)}</Text>
             )}
             {msg.toolCalls?.map((tc) => (
               <Box key={tc.id} marginLeft={2}>
-                <Text color="yellow" dimColor>
+                <Text color={WARNING} dimColor>
                   [{tc.status}] {tc.toolName}
                   {tc.output ? `: ${tc.output.slice(0, 100)}${tc.output.length > 100 ? '...' : ''}` : ''}
                 </Text>

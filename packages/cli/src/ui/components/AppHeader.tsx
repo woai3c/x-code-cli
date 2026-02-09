@@ -5,6 +5,8 @@ import { Box, Text, useStdout } from 'ink'
 
 import { VERSION } from '@x-code/core'
 
+import { ACCENT } from '../theme.js'
+
 interface AppHeaderProps {
   modelId: string
 }
@@ -46,16 +48,16 @@ export function AppHeader({ modelId }: AppHeaderProps) {
 
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text color="cyan" bold>
+      <Text color={ACCENT} bold>
         {logo}
       </Text>
 
       <Box marginTop={0} gap={1}>
         <Text dimColor>v{VERSION}</Text>
         <Text dimColor>│</Text>
-        <Text color="green">{provider}</Text>
+        <Text color={ACCENT}>{provider}</Text>
         <Text dimColor>/</Text>
-        <Text color="green" bold>
+        <Text color={ACCENT} bold>
           {modelName}
         </Text>
       </Box>

@@ -9,6 +9,8 @@ import { Box, Text, useInput } from 'ink'
 
 import { getPermissionLevel } from '@x-code/core'
 
+import { ACCENT, ERROR, SUCCESS, WARNING } from '../theme.js'
+
 interface PermissionProps {
   toolName: string
   input: Record<string, unknown>
@@ -16,9 +18,23 @@ interface PermissionProps {
 }
 
 const PERMISSION_LABELS: Record<string, { label: string; color: string }> = {
-  'always-allow': { label: 'read-only', color: 'green' },
-  ask: { label: 'write', color: 'yellow' },
-  deny: { label: 'dangerous', color: 'red' },
+  'always-allow': { label: 'read-only', color: SUCCESS },
+  ask: { label: 'write', color: WARNING },
+  deny: { label: 'dangerous', color: ERROR },
+}
+
+/** Build a human-readable title for the permission request */
+function getPermissionTitle(toolName: string): string {
+  switch (toolName) {
+    case 'shell':
+      return 'X-Code wants to run a shell command'
+    case 'writeFile':
+      return 'X-Code wants to write a file'
+    case 'edit':
+      return 'X-Code wants to edit a file'
+    default:
+      return `X-Code wants to use ${toolName}`
+  }
 }
 
 export function Permission({ toolName, input, onResolve }: PermissionProps) {
@@ -36,7 +52,7 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
     preview = (
       <Box flexDirection="column" marginLeft={2}>
         <Box gap={1}>
-          <Text color="cyan">$ {input.command as string}</Text>
+          <Text color={ACCENT}>$ {input.command as string}</Text>
           <Text color={info.color}>[{info.label}]</Text>
         </Box>
       </Box>
@@ -49,18 +65,28 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
     const newStr = input.newString as string
     preview = (
       <Box flexDirection="column" marginLeft={2}>
-        <Text color="cyan">{filePath}</Text>
+        <Text color={ACCENT}>{filePath}</Text>
         <DiffView oldText={oldStr} newText={newStr} />
       </Box>
     )
   }
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-      <Text color="yellow" bold>
-        ? Allow {toolName}? (y/n)
+    <Box flexDirection="column" borderStyle="round" borderColor={WARNING} paddingX={1}>
+      <Text color={WARNING} bold>
+        {getPermissionTitle(toolName)}
       </Text>
       {preview}
+      <Box marginTop={0} gap={1}>
+        <Text dimColor>Allow?</Text>
+        <Text color={SUCCESS} bold>
+          (y)es
+        </Text>
+        <Text dimColor>/</Text>
+        <Text color={ERROR} bold>
+          (n)o
+        </Text>
+      </Box>
     </Box>
   )
 }
@@ -94,7 +120,7 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
   if (existingContent !== null) {
     return (
       <Box flexDirection="column" marginLeft={2}>
-        <Text color="cyan">{filePath} (overwrite)</Text>
+        <Text color={ACCENT}>{filePath} (overwrite)</Text>
         <DiffView oldText={existingContent} newText={content} />
       </Box>
     )
@@ -103,7 +129,7 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
   // New file — show content summary
   return (
     <Box flexDirection="column" marginLeft={2}>
-      <Text color="cyan">{filePath} (new file)</Text>
+      <Text color={ACCENT}>{filePath} (new file)</Text>
       <Text dimColor>
         {content.slice(0, 300)}
         {content.length > 300 ? '\n...' : ''}
@@ -132,13 +158,13 @@ function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
       }
       if (change.added) {
         elements.push(
-          <Text key={`+${lineCount}`} color="green">
+          <Text key={`+${lineCount}`} color={SUCCESS}>
             + {line}
           </Text>,
         )
       } else if (change.removed) {
         elements.push(
-          <Text key={`-${lineCount}`} color="red">
+          <Text key={`-${lineCount}`} color={ERROR}>
             - {line}
           </Text>,
         )

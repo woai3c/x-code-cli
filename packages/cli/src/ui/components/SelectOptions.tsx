@@ -3,6 +3,8 @@ import React, { useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'
 
+import { ACCENT } from '../theme.js'
+
 interface Option {
   label: string
   description: string
@@ -56,14 +58,14 @@ export function SelectOptions({ question, options, onSelect }: SelectOptionsProp
   })
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-      <Text color="cyan" bold>
+    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
+      <Text color={ACCENT} bold>
         ? {question}
       </Text>
       {!isCustomMode ? (
         allOptions.map((opt, i) => (
           <Box key={i}>
-            <Text color={i === selected ? 'cyan' : undefined}>
+            <Text color={i === selected ? ACCENT : undefined}>
               {i === selected ? '> ' : '  '}
               {opt.label}
             </Text>
@@ -72,7 +74,7 @@ export function SelectOptions({ question, options, onSelect }: SelectOptionsProp
         ))
       ) : (
         <Box>
-          <Text color="cyan">{'> '}</Text>
+          <Text color={ACCENT}>{'> '}</Text>
           <Text>{customInput}</Text>
           <Text dimColor>█</Text>
         </Box>

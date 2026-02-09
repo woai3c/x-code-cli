@@ -3,6 +3,8 @@ import React from 'react'
 
 import { Box, Text } from 'ink'
 
+import { DIM, WARNING } from '../theme.js'
+
 interface ShellOutputProps {
   output: string
 }
@@ -16,14 +18,14 @@ export function ShellOutput({ output }: ShellOutputProps) {
   const displayLines = lines.length > maxLines ? lines.slice(-maxLines) : lines
 
   return (
-    <Box flexDirection="column" marginLeft={2} borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box flexDirection="column" marginLeft={2} borderStyle="single" borderColor={DIM} paddingX={1}>
       {displayLines.map((line, i) => (
         <Text key={i} dimColor>
           {line}
         </Text>
       ))}
       {lines.length > maxLines && (
-        <Text dimColor color="yellow">
+        <Text dimColor color={WARNING}>
           ... ({lines.length - maxLines} lines above)
         </Text>
       )}

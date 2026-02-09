@@ -303,6 +303,22 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     }))
   }, [])
 
+  /** Add a user message to the history (for echoing slash commands) */
+  const addUserMessage = useCallback((content: string) => {
+    setState((prev) => ({
+      ...prev,
+      messages: [
+        ...prev.messages,
+        {
+          id: Date.now().toString(),
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+        },
+      ],
+    }))
+  }, [])
+
   return {
     state,
     submit,
@@ -316,5 +332,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     saveCurrentSession,
     dismissSession,
     addInfoMessage,
+    addUserMessage,
   }
 }

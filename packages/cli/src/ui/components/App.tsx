@@ -7,6 +7,7 @@ import { MODEL_ALIASES, VERSION, createModelRegistry, initProject, loadConfig, r
 import type { AgentOptions, LanguageModel } from '@x-code/core'
 
 import { useAgent } from '../hooks/use-agent.js'
+import { ACCENT, ERROR, WARNING } from '../theme.js'
 import { AppHeader } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 import { MessageList } from './MessageList.js'
@@ -14,7 +15,6 @@ import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
 import { ShellOutput } from './ShellOutput.js'
 import { Spinner } from './Spinner.js'
-import { StatusBar } from './StatusBar.js'
 import { StreamingText } from './StreamingText.js'
 import { ToolCall } from './ToolCall.js'
 
@@ -23,27 +23,29 @@ interface AppProps {
   options: AgentOptions
   initialPrompt?: string
   onCleanupReady?: (fn: () => Promise<void>) => void
+  onUsageUpdate?: (usage: import('@x-code/core').TokenUsage, modelId: string) => void
 }
 
-const HELP_TEXT = `**X-Code CLI v${VERSION}**
+/** Slash commands — used for both help text and tab completion */
+export const SLASH_COMMANDS = [
+  { name: '/help', description: 'Show this help message' },
+  { name: '/model', description: 'Switch model or list available models' },
+  { name: '/usage', description: 'Show token usage and cost' },
+  { name: '/clear', description: 'Clear conversation history' },
+  { name: '/compact', description: 'Manually compress context' },
+  { name: '/init', description: 'Initialize project knowledge' },
+  { name: '/session save', description: 'Save current session' },
+  { name: '/plan', description: 'Enter plan mode' },
+  { name: '/exit', description: 'Exit (saves session)' },
+] as const
 
-Available commands:
-| Command | Description |
-|---------|-------------|
-| \`/help\` | Show this help message |
-| \`/model [name]\` | Switch model or list available models |
-| \`/usage\` | Show token usage and cost |
-| \`/clear\` | Clear conversation history |
-| \`/compact\` | Manually compress context |
-| \`/init\` | Initialize project knowledge |
-| \`/session save\` | Save current session |
-| \`/plan\` | Enter plan mode |
-| \`/exit\` | Exit (saves session) |
+const HELP_TEXT =
+  `X-Code CLI v${VERSION}\n\n` +
+  SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
+  `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
+  `\nKeyboard: Ctrl+C to abort current operation`
 
-Model aliases: ${Object.keys(MODEL_ALIASES).join(', ')}
-Keyboard: Ctrl+C to abort current operation`
-
-export function App({ model, options, initialPrompt, onCleanupReady }: AppProps) {
+export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpdate }: AppProps) {
   const { exit } = useApp()
   const {
     state,
@@ -57,12 +59,18 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     saveCurrentSession,
     dismissSession,
     addInfoMessage,
+    addUserMessage,
   } = useAgent(model, options)
 
   // Register cleanup function for graceful exit (SIGINT)
   useEffect(() => {
     onCleanupReady?.(cleanup)
   }, [cleanup]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync usage to the global ref so exit handler can print it
+  useEffect(() => {
+    onUsageUpdate?.(state.usage, options.modelId)
+  }, [state.usage, options.modelId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle initial prompt
   useEffect(() => {
@@ -98,6 +106,11 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     },
   )
 
+  /** Echo a slash command to the message history (so the user can see what they typed) */
+  function echoCommand(text: string) {
+    addUserMessage(text)
+  }
+
   /** Handle user input (including slash commands) */
   async function handleSubmit(text: string) {
     // Slash commands
@@ -108,14 +121,17 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
 
       switch (command) {
         case 'help':
+          echoCommand(text)
           addInfoMessage(HELP_TEXT)
           return
 
         case 'model':
+          echoCommand(text)
           await handleModelSwitch(arg)
           return
 
         case 'usage':
+          echoCommand(text)
           handleUsage()
           return
 
@@ -125,14 +141,17 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           return
 
         case 'compact':
+          echoCommand(text)
           await handleCompact()
           return
 
         case 'init':
+          echoCommand(text)
           await handleInit()
           return
 
         case 'session':
+          echoCommand(text)
           if (arg.toLowerCase() === 'save') {
             await handleSessionSave()
           } else {
@@ -152,6 +171,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           return
 
         default:
+          echoCommand(text)
           addInfoMessage(`Unknown command: /${command}. Type /help for available commands.`)
           return
       }
@@ -192,12 +212,12 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     const symbol = usage.costCurrency === 'CNY' ? '¥' : '$'
     const costStr = usage.estimatedCost > 0 ? `${symbol}${usage.estimatedCost.toFixed(4)}` : 'N/A'
     addInfoMessage(
-      `**Token Usage**\n` +
-        `- Input: ${usage.inputTokens.toLocaleString()} tokens\n` +
-        `- Output: ${usage.outputTokens.toLocaleString()} tokens\n` +
-        `- Total: ${usage.totalTokens.toLocaleString()} tokens\n` +
-        `- Estimated cost: ${costStr}\n` +
-        `- Model: ${options.modelId}`,
+      `Token Usage\n` +
+        `  Input:    ${usage.inputTokens.toLocaleString()} tokens\n` +
+        `  Output:   ${usage.outputTokens.toLocaleString()} tokens\n` +
+        `  Total:    ${usage.totalTokens.toLocaleString()} tokens\n` +
+        `  Cost:     ${costStr}\n` +
+        `  Model:    ${options.modelId}`,
     )
   }
 
@@ -230,12 +250,13 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     }
   }
 
+
   return (
     <Box flexDirection="column" padding={1}>
       {/* Session continuation prompt */}
       {state.latestSession && !state.isLoading && (
-        <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginBottom={1}>
-          <Text color="blue" bold>
+        <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} marginBottom={1}>
+          <Text color={ACCENT} bold>
             Previous session: &quot;{state.latestSession.title}&quot; ({state.latestSession.status})
           </Text>
           {state.latestSession.pendingWork.length > 0 && (
@@ -248,7 +269,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
               ))}
             </Box>
           )}
-          <Text color="yellow">Continue previous session? (y/n)</Text>
+          <Text color={WARNING}>Continue previous session? (y/n)</Text>
         </Box>
       )}
 
@@ -288,16 +309,14 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       {state.isLoading && !state.streamingText && !state.currentToolCall && <Spinner />}
 
       {/* Error */}
-      {state.error && <Text color="red">Error: {state.error}</Text>}
-
-      {/* Status bar */}
-      <StatusBar modelId={options.modelId} usage={state.usage} />
+      {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
 
       {/* Input */}
       {!state.latestSession && (
         <ChatInput
           onSubmit={handleSubmit}
           disabled={state.isLoading || !!state.pendingPermission || !!state.pendingQuestion}
+          commands={SLASH_COMMANDS}
         />
       )}
     </Box>
