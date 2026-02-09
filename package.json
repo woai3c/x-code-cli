@@ -21,9 +21,9 @@
     "@types/react": "^19.0.0",
     "@types/yargs": "^17.0.0",
     "esbuild": "^0.27.0",
-    "eslint": "^9.0.0",
+    "eslint": "^10.0.0",
     "eslint-plugin-react-hooks": "^7.0.0",
-    "eslint-plugin-unused-imports": "^4.0.0",
+    "eslint-plugin-unused-imports": "^4.4.1",
     "husky": "^9.0.0",
     "ink-testing-library": "^4.0.0",
     "lint-staged": "^16.0.0",
@@ -45,6 +45,11 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "eslint": "10"
+      }
+    }
   }
 }
