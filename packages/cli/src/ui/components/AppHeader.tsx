@@ -1,42 +1,46 @@
 // @x-code/cli — Startup header banner
-import React from 'react'
+//
+// printHeader() writes the banner directly to stdout BEFORE Ink starts.
+// This avoids the Ink <Static> re-render bug where the header would
+// appear multiple times as the dynamic area changes height.
 
-import { Box, Text, useStdout } from 'ink'
+import { Chalk } from 'chalk'
 
 import { VERSION } from '@x-code/core'
 
 import { ACCENT } from '../theme.js'
 
-interface AppHeaderProps {
-  modelId: string
-}
+const c = new Chalk({ level: 3 })
 
 // ── ASCII logos for different terminal widths ──
 
 const LOGO_WIDE = `
- ██╗  ██╗       ██████╗ ██████╗ ██████╗ ███████╗
- ╚██╗██╔╝      ██╔════╝██╔═══██╗██╔══██╗██╔════╝
-  ╚███╔╝ █████╗██║     ██║   ██║██║  ██║█████╗  
-  ██╔██╗ ╚════╝██║     ██║   ██║██║  ██║██╔══╝  
- ██╔╝ ██╗      ╚██████╗╚██████╔╝██████╔╝███████╗
- ╚═╝  ╚═╝       ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
+  ██╗  ██╗       ██████╗ ██████╗ ██████╗ ███████╗
+  ╚██╗██╔╝      ██╔════╝██╔═══██╗██╔══██╗██╔════╝
+   ╚███╔╝ █████╗██║     ██║   ██║██║  ██║█████╗  
+   ██╔██╗ ╚════╝██║     ██║   ██║██║  ██║██╔══╝  
+  ██╔╝ ██╗      ╚██████╗╚██████╔╝██████╔╝███████╗
+  ╚═╝  ╚═╝       ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
 
 const LOGO_COMPACT = `
- ╔═╗       ╔═╗╔═╗╔╦╗╔═╗
- ╔╩╦╝ ───── ║  ║ ║ ║║║╣ 
- ╩ ╚═       ╚═╝╚═╝═╩╝╚═╝`
+  ╔═╗       ╔═╗╔═╗╔╦╗╔═╗
+  ╔╩╦╝ ───── ║  ║ ║ ║║║╣ 
+  ╩ ╚═       ╚═╝╚═╝═╩╝╚═╝`
 
-const LOGO_TINY = ' X-Code'
+const LOGO_TINY = '  X-Code'
 
-export function AppHeader({ modelId }: AppHeaderProps) {
-  const { stdout } = useStdout()
-  const terminalWidth = stdout?.columns ?? 80
+/**
+ * Print the startup header banner directly to stdout.
+ * Call this ONCE before Ink's render() so it is never re-drawn.
+ */
+export function printHeader(modelId: string): void {
+  const cols = process.stdout.columns ?? 80
 
   // Pick logo based on terminal width
   let logo: string
-  if (terminalWidth >= 52) {
+  if (cols >= 52) {
     logo = LOGO_WIDE
-  } else if (terminalWidth >= 30) {
+  } else if (cols >= 30) {
     logo = LOGO_COMPACT
   } else {
     logo = LOGO_TINY
@@ -46,25 +50,12 @@ export function AppHeader({ modelId }: AppHeaderProps) {
   const [provider, ...modelParts] = modelId.split(':')
   const modelName = modelParts.join(':') || modelId
 
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text color={ACCENT} bold>
-        {logo}
-      </Text>
+  const lines = [
+    c.hex(ACCENT).bold(logo),
+    ` ${c.dim(`v${VERSION}`)} ${c.dim('│')} ${c.hex(ACCENT)(provider)} ${c.dim('/')} ${c.hex(ACCENT).bold(modelName)}`,
+    ` ${c.dim('Type /help for commands, Ctrl+C to abort')}`,
+    '', // blank line after header
+  ]
 
-      <Box marginTop={0} gap={1}>
-        <Text dimColor>v{VERSION}</Text>
-        <Text dimColor>│</Text>
-        <Text color={ACCENT}>{provider}</Text>
-        <Text dimColor>/</Text>
-        <Text color={ACCENT} bold>
-          {modelName}
-        </Text>
-      </Box>
-
-      <Box>
-        <Text dimColor>Type /help for commands, Ctrl+C to abort</Text>
-      </Box>
-    </Box>
-  )
+  process.stdout.write(lines.join('\n') + '\n')
 }

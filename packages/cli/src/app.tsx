@@ -6,6 +6,7 @@ import { render } from 'ink'
 import type { AgentOptions, LanguageModel, TokenUsage } from '@x-code/core'
 
 import { App } from './ui/components/App.js'
+import { printHeader } from './ui/components/AppHeader.js'
 
 /** Global cleanup ref — set by App component via onCleanupReady prop */
 let registeredCleanup: (() => Promise<void>) | null = null
@@ -34,6 +35,9 @@ export function printExitSummary(): void {
 }
 
 export function startApp(model: LanguageModel, options: AgentOptions, initialPrompt?: string) {
+  // Print header ONCE before Ink starts — avoids Static re-render duplication
+  printHeader(options.modelId)
+
   const { waitUntilExit } = render(
     <App
       model={model}
