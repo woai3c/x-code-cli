@@ -7,6 +7,7 @@ import { MODEL_ALIASES, VERSION, createModelRegistry, initProject, loadConfig, r
 import type { AgentOptions, LanguageModel } from '@x-code/core'
 
 import { useAgent } from '../hooks/use-agent.js'
+import { AppHeader } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 import { MessageList } from './MessageList.js'
 import { Permission } from './Permission.js'
@@ -251,8 +252,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
         </Box>
       )}
 
-      {/* Message history */}
-      <MessageList messages={state.messages} />
+      {/* Message history (includes startup header as first Static item) */}
+      <MessageList messages={state.messages} header={<AppHeader modelId={options.modelId} />} />
 
       {/* Current streaming text */}
       {state.streamingText && <StreamingText text={state.streamingText} />}
