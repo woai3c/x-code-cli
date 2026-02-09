@@ -355,11 +355,7 @@ export async function agentLoop(
         state.tokenUsage.inputTokens += usage.inputTokens ?? 0
         state.tokenUsage.outputTokens += usage.outputTokens ?? 0
         state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
-        const costEstimate = estimateCost(
-          options.modelId,
-          state.tokenUsage.inputTokens,
-          state.tokenUsage.outputTokens,
-        )
+        const costEstimate = estimateCost(options.modelId, state.tokenUsage.inputTokens, state.tokenUsage.outputTokens)
         state.tokenUsage.estimatedCost = costEstimate.cost
         state.tokenUsage.costCurrency = costEstimate.currency
         callbacks.onUsageUpdate(state.tokenUsage)

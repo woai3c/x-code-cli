@@ -10,24 +10,27 @@
 //   2. Code spans are protected — their content is never re-interpreted.
 //   3. Streaming partial text degrades gracefully (unclosed tokens are
 //      simply treated as plain text by the lexer).
-
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-explicit-any */
- 
-
 import { Chalk } from 'chalk'
-import { marked, type Token } from 'marked'
+import { type Token, marked } from 'marked'
 
 // ── chalk instance with 24-bit colour ──
 const c = new Chalk({ level: 3 })
 
 // Disable del (strikethrough) extension to avoid conflicts with file paths
 // containing tildes — same approach Claude Code uses.
-marked.use({ tokenizer: { del() { return undefined as any } } })
+marked.use({
+  tokenizer: {
+    del() {
+      return undefined as any
+    },
+  },
+})
 
 // ── Theme colours (keep in sync with theme.ts) ──
 const ACCENT = '#89b4fa'
@@ -72,11 +75,13 @@ function renderToken(
     case 'blockquote': {
       const content = renderTokens(token.tokens ?? [], depth)
       // Indent each line with a dim vertical bar
-      return content
-        .split(NL)
-        .map((line) => (line.trim() ? c.dim.italic(`  │ ${line}`) : ''))
-        .filter(Boolean)
-        .join(NL) + NL
+      return (
+        content
+          .split(NL)
+          .map((line) => (line.trim() ? c.dim.italic(`  │ ${line}`) : ''))
+          .filter(Boolean)
+          .join(NL) + NL
+      )
     }
 
     case 'code': {
@@ -105,12 +110,9 @@ function renderToken(
           // inline children directly (without adding an extra newline that
           // 'paragraph' would add).
           if (child.type === 'text') {
-            const prefix =
-              orderedStart !== null ? `${orderedStart}.` : '•'
+            const prefix = orderedStart !== null ? `${orderedStart}.` : '•'
             const indent = '  '.repeat(depth)
-            const inlineContent = child.tokens
-              ? renderTokens(child.tokens, depth)
-              : (child.text ?? '')
+            const inlineContent = child.tokens ? renderTokens(child.tokens, depth) : (child.text ?? '')
             return `${indent}${prefix} ${inlineContent}${NL}`
           }
           if (child.type === 'list') {
@@ -119,8 +121,7 @@ function renderToken(
           }
           // Other block elements inside a list item (e.g. paragraph)
           if (child.type === 'paragraph') {
-            const prefix =
-              orderedStart !== null ? `${orderedStart}.` : '•'
+            const prefix = orderedStart !== null ? `${orderedStart}.` : '•'
             const indent = '  '.repeat(depth)
             const inlineContent = renderTokens(child.tokens ?? [], depth)
             return `${indent}${prefix} ${inlineContent}${NL}`
@@ -261,7 +262,6 @@ export function renderMarkdown(text: string): string {
  * Strip ANSI escape codes from a string (for width calculation).
  */
 function stripAnsi(str: string): string {
-   
   return str.replace(/\x1B\[[0-9;]*m/g, '')
 }
 

@@ -8,7 +8,6 @@
 //
 // Assistant messages are passed through renderMarkdown() so headings,
 // bold, code blocks, lists, etc. display with proper terminal formatting.
-
 import React from 'react'
 
 import { Box, Static, Text } from 'ink'

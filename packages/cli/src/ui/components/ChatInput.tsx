@@ -4,7 +4,6 @@
 // with a soft colour scheme — selected item uses the accent blue, unselected
 // items are dimmed grey.  The input line only ever shows what the user has
 // actually typed — no ghost hints that confuse backspace behaviour.
-
 import React, { useMemo, useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'

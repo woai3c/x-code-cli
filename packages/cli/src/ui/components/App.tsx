@@ -249,7 +249,6 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
     }
   }
 
-
   return (
     <Box flexDirection="column" padding={1}>
       {/* Session continuation prompt */}

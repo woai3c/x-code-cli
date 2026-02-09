@@ -16,7 +16,6 @@
 //
 // Markdown rendering is applied to the visible tail so headings, bold,
 // code blocks, etc. display with proper terminal formatting.
-
 import React, { useMemo } from 'react'
 
 import { Box, Text, useStdout } from 'ink'

@@ -79,7 +79,11 @@ The ONLY exception: use writeFile to save your plan to .x-code/plans/{plan-id}.m
 When the plan is ready, call exitPlanMode.`
 
 /** Build the full system prompt with dynamic values and optional knowledge context */
-export function buildSystemPrompt(options?: { knowledgeContext?: string; planMode?: boolean; modelId?: string }): string {
+export function buildSystemPrompt(options?: {
+  knowledgeContext?: string
+  planMode?: boolean
+  modelId?: string
+}): string {
   const shellConfig = getShellConfig()
 
   let prompt = BASE_SYSTEM_PROMPT.replace(/\{platform\}/g, process.platform)
