@@ -1,5 +1,5 @@
 // @x-code/cli — Agent state management hook
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { agentLoop, compressMessages, initMemories, loadLatestSession, saveSession, scanProject } from '@x-code/core'
 import type {
@@ -46,7 +46,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     shellOutput: '',
     pendingPermission: null,
     pendingQuestion: null,
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0 },
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
     error: null,
     latestSession: null,
   })
@@ -56,6 +56,43 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const initializedRef = useRef(false)
+
+  // ── Throttled streaming text buffer ──
+  // Accumulate text deltas in a ref and flush to state at a fixed interval
+  // to avoid triggering a React re-render on every single token delta.
+  const streamingBufferRef = useRef('')
+  const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const startStreamingFlush = useCallback(() => {
+    if (flushTimerRef.current) return
+    flushTimerRef.current = setInterval(() => {
+      if (streamingBufferRef.current) {
+        const buffered = streamingBufferRef.current
+        streamingBufferRef.current = ''
+        setState((prev) => ({ ...prev, streamingText: prev.streamingText + buffered }))
+      }
+    }, 50)
+  }, [])
+
+  const stopStreamingFlush = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearInterval(flushTimerRef.current)
+      flushTimerRef.current = null
+    }
+    // Flush any remaining buffered text
+    if (streamingBufferRef.current) {
+      const buffered = streamingBufferRef.current
+      streamingBufferRef.current = ''
+      setState((prev) => ({ ...prev, streamingText: prev.streamingText + buffered }))
+    }
+  }, [])
+
+  // Cleanup flush timer on unmount
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current)
+    }
+  }, [])
 
   /** Initialize memories and scan project (once) */
   const initialize = useCallback(async () => {
@@ -96,9 +133,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       const controller = new AbortController()
       abortControllerRef.current = controller
 
+      startStreamingFlush()
+
       const callbacks: AgentCallbacks = {
         onTextDelta: (delta) => {
-          setState((prev) => ({ ...prev, streamingText: prev.streamingText + delta }))
+          streamingBufferRef.current += delta
         },
         onToolCall: (toolName, input) => {
           setState((prev) => ({ ...prev, currentToolCall: { toolName, input } }))
@@ -145,6 +184,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           loopStateRef.current ?? undefined,
         )
 
+        // Flush any remaining buffered text before finalizing
+        stopStreamingFlush()
+
         // Add assistant message from streaming text
         setState((prev) => {
           const assistantMsg: DisplayMessage = {
@@ -162,6 +204,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           }
         })
       } catch (err) {
+        stopStreamingFlush()
         setState((prev) => ({
           ...prev,
           isLoading: false,
@@ -169,7 +212,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         }))
       }
     },
-    [options, initialize],
+    [options, initialize, startStreamingFlush, stopStreamingFlush],
   )
 
   /** Resolve a pending permission request */
@@ -221,7 +264,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       shellOutput: '',
       pendingPermission: null,
       pendingQuestion: null,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0 },
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
       error: null,
       latestSession: null,
     })

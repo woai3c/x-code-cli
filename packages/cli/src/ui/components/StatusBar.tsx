@@ -11,7 +11,8 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ modelId, usage }: StatusBarProps) {
-  const costStr = usage.estimatedCost > 0 ? ` $${usage.estimatedCost.toFixed(4)}` : ''
+  const symbol = usage.costCurrency === 'CNY' ? '¥' : '$'
+  const costStr = usage.estimatedCost > 0 ? ` ${symbol}${usage.estimatedCost.toFixed(4)}` : ''
   return (
     <Box>
       <Text dimColor>

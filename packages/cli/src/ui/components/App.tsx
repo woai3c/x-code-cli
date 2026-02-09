@@ -188,7 +188,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
 
   function handleUsage() {
     const { usage } = state
-    const costStr = usage.estimatedCost > 0 ? `$${usage.estimatedCost.toFixed(4)}` : 'N/A'
+    const symbol = usage.costCurrency === 'CNY' ? '¥' : '$'
+    const costStr = usage.estimatedCost > 0 ? `${symbol}${usage.estimatedCost.toFixed(4)}` : 'N/A'
     addInfoMessage(
       `**Token Usage**\n` +
         `- Input: ${usage.inputTokens.toLocaleString()} tokens\n` +

@@ -48,6 +48,36 @@ interface StreamResult {
 const KEEP_RECENT = 6
 const DEFAULT_TOKEN_BUDGET_RATIO = 0.8
 
+/**
+ * Ensure all assistant messages have a reasoning content part.
+ *
+ * DeepSeek Reasoner requires the `reasoning_content` field on every assistant
+ * message during tool-call chains.  The upstream `@ai-sdk/deepseek` converter
+ * sets `reasoning_content: undefined` when no reasoning part exists, and
+ * `JSON.stringify` strips `undefined` values — causing the DeepSeek API to
+ * reject the request with a 400 "Missing reasoning_content" error.
+ *
+ * This helper injects an empty `{ type: 'reasoning', text: '' }` part into any
+ * assistant message that lacks one, so the converter always produces
+ * `"reasoning_content": ""` in the JSON body.
+ */
+function ensureReasoningContentParts(messages: ModelMessage[], modelId: string): void {
+  if (!modelId.includes('deepseek-reasoner')) return
+
+  for (const msg of messages) {
+    if (msg.role !== 'assistant') continue
+
+    const content = msg.content
+    if (!Array.isArray(content)) continue
+
+    const hasReasoning = (content as Array<{ type: string }>).some((p) => p.type === 'reasoning')
+    if (!hasReasoning) {
+      // Prepend an empty reasoning part so the converter produces `reasoning_content: ""`
+      ;(content as Array<{ type: string; text?: string }>).unshift({ type: 'reasoning', text: '' })
+    }
+  }
+}
+
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   anthropic: 200000,
   openai: 128000,
@@ -150,6 +180,13 @@ function classifyApiError(err: unknown): { message: string; retryable: boolean }
   const statusMatch = msg.match(/(\d{3})/)
   const status = statusMatch ? Number(statusMatch[1]) : 0
 
+  if (msg.includes('Missing `reasoning_content`') || msg.includes('reasoning_content')) {
+    return {
+      message:
+        'DeepSeek Reasoner requires reasoning_content in assistant messages during tool-call chains. This is usually an SDK compatibility issue — please report it.',
+      retryable: false,
+    }
+  }
   if (msg.includes('API key is missing') || msg.includes('API_KEY')) {
     // Extract provider name from message like "DeepSeek API key API key is missing..."
     const providerMatch = msg.match(/^(\w+)\s+API key/i)
@@ -203,7 +240,7 @@ export async function agentLoop(
 ): Promise<LoopState> {
   const state: LoopState = existingState ?? {
     messages: [],
-    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0 },
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
     planMode: false,
     planId: null,
     sessionId: Date.now().toString(36),
@@ -255,6 +292,7 @@ export async function agentLoop(
     const systemPrompt = buildSystemPrompt({
       knowledgeContext: fullKnowledgeContext,
       planMode: state.planMode,
+      modelId: options.modelId,
     })
 
     let result: StreamResult
@@ -308,16 +346,22 @@ export async function agentLoop(
       const response = await result.response
       state.messages.push(...response.messages)
 
+      // Workaround: DeepSeek Reasoner requires `reasoning_content` on every
+      // assistant message in tool-call chains.  Ensure it's always present.
+      ensureReasoningContentParts(state.messages, options.modelId)
+
       const usage = await result.usage
       if (usage) {
         state.tokenUsage.inputTokens += usage.inputTokens ?? 0
         state.tokenUsage.outputTokens += usage.outputTokens ?? 0
         state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
-        state.tokenUsage.estimatedCost = estimateCost(
+        const costEstimate = estimateCost(
           options.modelId,
           state.tokenUsage.inputTokens,
           state.tokenUsage.outputTokens,
         )
+        state.tokenUsage.estimatedCost = costEstimate.cost
+        state.tokenUsage.costCurrency = costEstimate.currency
         callbacks.onUsageUpdate(state.tokenUsage)
       }
 

@@ -1,7 +1,12 @@
 // @x-code/core — System Prompt management
 import { getShellConfig } from '../tools/shell-utils.js'
 
-const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal.
+const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal. You are powered by the {model} model.
+
+When users ask about your identity, model, or version, you should tell them:
+- You are X-Code CLI, a terminal-based AI coding assistant
+- You are powered by {model}
+- Do NOT fabricate information about your training data cutoff, architecture, or capabilities beyond what is stated here
 
 ## Capabilities
 You have access to these tools:
@@ -70,12 +75,13 @@ The ONLY exception: use writeFile to save your plan to .x-code/plans/{plan-id}.m
 When the plan is ready, call exitPlanMode.`
 
 /** Build the full system prompt with dynamic values and optional knowledge context */
-export function buildSystemPrompt(options?: { knowledgeContext?: string; planMode?: boolean }): string {
+export function buildSystemPrompt(options?: { knowledgeContext?: string; planMode?: boolean; modelId?: string }): string {
   const shellConfig = getShellConfig()
 
   let prompt = BASE_SYSTEM_PROMPT.replace(/\{platform\}/g, process.platform)
     .replace(/\{shell\}/g, shellConfig.type)
     .replace(/\{cwd\}/g, process.cwd())
+    .replace(/\{model\}/g, options?.modelId ?? 'unknown')
 
   if (options?.planMode) {
     prompt += '\n' + PLAN_MODE_PROMPT

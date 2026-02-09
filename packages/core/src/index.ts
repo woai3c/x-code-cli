@@ -39,7 +39,8 @@ export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
 export { estimateTokens } from './agent/messages.js'
-export { estimateCost } from './agent/pricing.js'
+export { estimateCost, formatCost } from './agent/pricing.js'
+export type { CostEstimate } from './agent/pricing.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'
