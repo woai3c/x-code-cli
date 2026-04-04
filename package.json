@@ -1,6 +1,7 @@
 {
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.7.1",
   "engines": {
     "node": ">=20.19.0"
   },
@@ -16,6 +17,8 @@
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.0",
+    "@commitlint/config-conventional": "^20.5.0",
     "@trivago/prettier-plugin-sort-imports": "^6.0.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",

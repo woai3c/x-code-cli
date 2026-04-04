@@ -132,8 +132,7 @@ const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {
 }
 
 function getTokenBudget(modelId: string): number {
-  const contextWindow =
-    MODEL_CONTEXT_WINDOWS[modelId] ?? PROVIDER_CONTEXT_WINDOWS[modelId.split(':')[0]] ?? 128000
+  const contextWindow = MODEL_CONTEXT_WINDOWS[modelId] ?? PROVIDER_CONTEXT_WINDOWS[modelId.split(':')[0]] ?? 128000
   return Math.floor(contextWindow * DEFAULT_TOKEN_BUDGET_RATIO)
 }
 
