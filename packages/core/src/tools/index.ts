@@ -52,6 +52,6 @@ export const MAX_TOOL_RESULT_CHARS = 30000
 export function truncateToolResult(result: string): string {
   if (result.length <= MAX_TOOL_RESULT_CHARS) return result
   const half = Math.floor(MAX_TOOL_RESULT_CHARS / 2)
-  const truncatedLines = result.slice(half, -half).split('\n').length
-  return result.slice(0, half) + `\n\n... [truncated ${truncatedLines} lines] ...\n\n` + result.slice(-half)
+  const truncatedChars = result.length - MAX_TOOL_RESULT_CHARS
+  return result.slice(0, half) + `\n\n... [truncated ${truncatedChars} characters] ...\n\n` + result.slice(-half)
 }
