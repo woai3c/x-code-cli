@@ -63,25 +63,61 @@ export function splitShellCommands(cmd: string): string[] {
   return parts.map((p) => p.trim()).filter(Boolean)
 }
 
+/** Unix/PowerShell commands that are safe to auto-allow */
+const READ_ONLY_COMMANDS = [
+  'cd',
+  'ls',
+  'dir',
+  'pwd',
+  'cat',
+  'head',
+  'tail',
+  'wc',
+  'echo',
+  'which',
+  'type',
+  'file',
+  'stat',
+  'du',
+  'df',
+  'env',
+  'printenv',
+  'find',
+  'tree',
+  // PowerShell
+  'Get-ChildItem',
+  'Get-Location',
+  'Get-Content',
+  'Select-String',
+  'Test-Path',
+]
+
+/** Git sub-commands that are read-only */
+const READ_ONLY_GIT_SUBCOMMANDS = ['status', 'log', 'diff', 'branch', 'show', 'remote', 'tag']
+
+// Pre-compiled regexes for performance
+const READ_ONLY_REGEX = new RegExp(
+  `^\\s*(${READ_ONLY_COMMANDS.join('|')}|git\\s+(${READ_ONLY_GIT_SUBCOMMANDS.join('|')}))\\b`,
+)
+
+const DESTRUCTIVE_PATTERNS: RegExp[] = [
+  /\brm\s+(-[a-z]*f|-[a-z]*r|--force|--recursive)/,
+  /\bsudo\b/,
+  /\bmkfs\b/,
+  /\bdd\s+if=/,
+  /\b(chmod|chown)\s+.*\//,
+  />\s*\/dev\/sd/,
+  /\bformat\b/,
+  /\bRemove-Item\s+.*-Recurse/,
+]
+
 /** Check if a sub-command is read-only (safe to auto-allow) */
 export function isReadOnly(cmd: string): boolean {
-  const c = cmd.trim()
-  return /^\s*(cd|ls|dir|pwd|cat|head|tail|wc|echo|which|type|file|stat|du|df|env|printenv|find|tree|Get-ChildItem|Get-Location|Get-Content|Select-String|Test-Path|git\s+(status|log|diff|branch|show|remote|tag))/.test(
-    c,
-  )
+  return READ_ONLY_REGEX.test(cmd.trim())
 }
 
 /** Check if a sub-command is destructive (should be denied) */
 export function isDestructive(cmd: string): boolean {
   const c = cmd.trim()
-  return (
-    /\brm\s+(-[a-z]*f|-[a-z]*r|--force|--recursive)/.test(c) ||
-    /\bsudo\b/.test(c) ||
-    /\bmkfs\b/.test(c) ||
-    /\bdd\s+if=/.test(c) ||
-    /\b(chmod|chown)\s+.*\//.test(c) ||
-    />\s*\/dev\/sd/.test(c) ||
-    /\bformat\b/.test(c) ||
-    /\bRemove-Item\s+.*-Recurse/.test(c)
-  )
+  return DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(c))
 }
