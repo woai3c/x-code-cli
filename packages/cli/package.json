@@ -1,6 +1,11 @@
 {
   "name": "@x-code-cli/cli",
   "version": "0.1.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/woai3c/x-code-cli",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "bin": {
     "x-code": "dist/cli.js",
