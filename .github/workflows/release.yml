@@ -2,13 +2,10 @@ name: Release
 
 on:
   push:
-    branches: [main]
-
-concurrency: ${{ github.workflow }}-${{ github.ref }}
+    tags: ['v*']
 
 permissions:
   contents: write
-  pull-requests: write
   id-token: write
 
 jobs:
@@ -30,12 +27,15 @@ jobs:
 
       - run: pnpm build
 
-      - name: Create Release Pull Request or Publish
-        uses: changesets/action@v1
-        with:
-          publish: pnpm changeset publish
-          title: "chore: version packages"
-          commit: "chore: version packages"
+      - name: Publish to npm
+        run: |
+          pnpm --filter @x-code-cli/core publish --access public --no-git-checks
+          pnpm --filter @x-code-cli/cli publish --access public --no-git-checks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          generate_release_notes: false
