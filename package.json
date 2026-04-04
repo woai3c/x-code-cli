@@ -17,6 +17,8 @@
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.30.0",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
     "@trivago/prettier-plugin-sort-imports": "^6.0.0",
