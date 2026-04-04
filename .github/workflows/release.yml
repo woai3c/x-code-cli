@@ -23,16 +23,16 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      - run: npm install -g npm@latest
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm build
 
       - name: Publish to npm
         run: |
-          pnpm --filter @x-code-cli/core publish --access public --no-git-checks
-          pnpm --filter @x-code-cli/cli publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          cd packages/core && npm publish --provenance --access public
+          cd ../cli && npm publish --provenance --access public
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
