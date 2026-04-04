@@ -10,6 +10,8 @@ const MAX_LOAD_LINES = 200
 class AutoMemory {
   private facts: KnowledgeFact[] = []
   private filePath: string
+  /** Queued save promise – prevents concurrent writes */
+  private saveQueue: Promise<void> = Promise.resolve()
 
   constructor(filePath: string) {
     this.filePath = filePath
@@ -35,13 +37,13 @@ class AutoMemory {
     } else {
       this.facts.push(newFact)
     }
-    this.save()
+    this.enqueueSave()
   }
 
   /** Delete by key (optionally scoped to category) */
   delete(key: string, category?: string): void {
     this.facts = this.facts.filter((f) => !(f.key === key && (!category || f.category === category)))
-    this.save()
+    this.enqueueSave()
   }
 
   /** Find a fact by key and optional category */
@@ -93,6 +95,14 @@ class AutoMemory {
     }
 
     return sections.join('\n')
+  }
+
+  /**
+   * Enqueue a save so that concurrent add/delete calls are serialized.
+   * Each save waits for the previous one to finish before writing.
+   */
+  private enqueueSave(): void {
+    this.saveQueue = this.saveQueue.then(() => this.save())
   }
 
   /** Save to file */
