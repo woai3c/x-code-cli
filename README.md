@@ -101,58 +101,58 @@ cli/index.ts -> app.tsx -> App.tsx -> useAgent.submit()
 
 ### Fully Implemented
 
-| Feature | Files |
-|---------|-------|
-| Agent Loop (stream + tool calls + loop) | agent/loop.ts |
-| 13 built-in tools | tools/*.ts |
-| 3-level permission model + --trust | permissions/index.ts |
+| Feature                                    | Files                                  |
+| ------------------------------------------ | -------------------------------------- |
+| Agent Loop (stream + tool calls + loop)    | agent/loop.ts                          |
+| 13 built-in tools                          | tools/\*.ts                            |
+| 3-level permission model + --trust         | permissions/index.ts                   |
 | Multi-model support (8 providers + custom) | providers/registry.ts, config/index.ts |
-| Streaming text output | StreamingText.tsx, use-agent.ts |
-| Context compression | agent/loop.ts compressMessages() |
-| Token usage tracking + cost estimation | agent/pricing.ts, StatusBar.tsx |
-| Knowledge system (7-layer loading) | knowledge/loader.ts |
-| Auto memory (CRUD + TTL eviction) | knowledge/auto-memory.ts |
-| 4 rule loading modes | knowledge/loader.ts |
-| Session memory (summary + continuation) | knowledge/session.ts |
-| xc init project initialization | knowledge/init.ts |
-| Plan Mode (enterPlanMode/exitPlanMode) | agent/loop.ts, agent/plan-mode.ts |
-| Slash commands (/help /model /plan etc.) | components/App.tsx |
-| Cross-platform shell (PowerShell/bash/zsh) | tools/shell-utils.ts |
-| Shell streaming output | ShellOutput.tsx |
-| askUser interactive tool | SelectOptions.tsx |
-| Error recovery (429 retry, 401/403/503) | agent/loop.ts classifyApiError() |
-| Ctrl+C graceful exit + session save | cli/index.ts, app.tsx |
-| Non-interactive mode (--print + pipe) | cli/index.ts |
-| Tool result truncation (30KB limit) | tools/index.ts |
-| Max turns limit (--max-turns) | agent/loop.ts |
-| DeepSeek Reasoner workaround | agent/loop.ts |
-| Tab completion for slash commands | ChatInput.tsx |
+| Streaming text output                      | StreamingText.tsx, use-agent.ts        |
+| Context compression                        | agent/loop.ts compressMessages()       |
+| Token usage tracking + cost estimation     | agent/pricing.ts, StatusBar.tsx        |
+| Knowledge system (7-layer loading)         | knowledge/loader.ts                    |
+| Auto memory (CRUD + TTL eviction)          | knowledge/auto-memory.ts               |
+| 4 rule loading modes                       | knowledge/loader.ts                    |
+| Session memory (summary + continuation)    | knowledge/session.ts                   |
+| xc init project initialization             | knowledge/init.ts                      |
+| Plan Mode (enterPlanMode/exitPlanMode)     | agent/loop.ts, agent/plan-mode.ts      |
+| Slash commands (/help /model /plan etc.)   | components/App.tsx                     |
+| Cross-platform shell (PowerShell/bash/zsh) | tools/shell-utils.ts                   |
+| Shell streaming output                     | ShellOutput.tsx                        |
+| askUser interactive tool                   | SelectOptions.tsx                      |
+| Error recovery (429 retry, 401/403/503)    | agent/loop.ts classifyApiError()       |
+| Ctrl+C graceful exit + session save        | cli/index.ts, app.tsx                  |
+| Non-interactive mode (--print + pipe)      | cli/index.ts                           |
+| Tool result truncation (30KB limit)        | tools/index.ts                         |
+| Max turns limit (--max-turns)              | agent/loop.ts                          |
+| DeepSeek Reasoner workaround               | agent/loop.ts                          |
+| Tab completion for slash commands          | ChatInput.tsx                          |
 
 ### Not Yet Implemented (Designed in MVP but not coded)
 
-| Feature | Notes |
-|---------|-------|
-| Setup Wizard | Interactive first-time provider/key/model guided setup |
-| Permission diff preview | Show edit diffs in permission confirmation UI |
-| Paste preview | Truncate large pasted text in input, show char count |
-| esbuild single-file bundle | Currently uses tsc, no esbuild config |
-| Husky + lint-staged | No git hooks configured |
+| Feature                     | Notes                                                   |
+| --------------------------- | ------------------------------------------------------- |
+| Setup Wizard                | Interactive first-time provider/key/model guided setup  |
+| Permission diff preview     | Show edit diffs in permission confirmation UI           |
+| Paste preview               | Truncate large pasted text in input, show char count    |
+| esbuild single-file bundle  | Currently uses tsc, no esbuild config                   |
+| Husky + lint-staged         | No git hooks configured                                 |
 | Config file API key storage | Only env vars; config.json only stores model preference |
 
 ### Future Iterations (Post-MVP)
 
-| Priority | Feature | Description |
-|----------|---------|-------------|
-| P0 | MCP Protocol | External tool integration (GitHub, DB, Jira, etc.) |
-| P1 | Skills System | Reusable operation manuals (Agent Skills standard) |
-| P1 | Subagent | Independent child LLM instances for parallel work |
-| P1 | Task Tracking | todoWrite tool, checklist management |
-| P1 | Session History | --resume, /sessions list |
-| P2 | Cost Budget | --max-cost per session |
-| P2 | Image/PDF | Multimodal input |
-| P2 | Browser Automation | Playwright integration |
-| P3 | Plugin System | Third-party extensions |
-| P3 | VSCode Extension | Reuse @x-code/core in IDE |
+| Priority | Feature            | Description                                        |
+| -------- | ------------------ | -------------------------------------------------- |
+| P0       | MCP Protocol       | External tool integration (GitHub, DB, Jira, etc.) |
+| P1       | Skills System      | Reusable operation manuals (Agent Skills standard) |
+| P1       | Subagent           | Independent child LLM instances for parallel work  |
+| P1       | Task Tracking      | todoWrite tool, checklist management               |
+| P1       | Session History    | --resume, /sessions list                           |
+| P2       | Cost Budget        | --max-cost per session                             |
+| P2       | Image/PDF          | Multimodal input                                   |
+| P2       | Browser Automation | Playwright integration                             |
+| P3       | Plugin System      | Third-party extensions                             |
+| P3       | VSCode Extension   | Reuse @x-code/core in IDE                          |
 
 ## Project Structure
 
@@ -213,17 +213,17 @@ node packages/cli/dist/index.js "explain this project"
 
 At least one provider API key is required:
 
-| Variable | Provider |
-|----------|----------|
-| ANTHROPIC_API_KEY | Anthropic (Claude) |
-| OPENAI_API_KEY | OpenAI (GPT) |
-| DEEPSEEK_API_KEY | DeepSeek |
-| GOOGLE_GENERATIVE_AI_API_KEY | Google (Gemini) |
-| ALIBABA_API_KEY | Alibaba (Qwen) |
-| XAI_API_KEY | xAI (Grok) |
-| ZHIPU_API_KEY | Zhipu (GLM) |
-| MOONSHOT_API_KEY | Moonshot (Kimi) |
-| TAVILY_API_KEY | Tavily web search (optional) |
+| Variable                     | Provider                     |
+| ---------------------------- | ---------------------------- |
+| ANTHROPIC_API_KEY            | Anthropic (Claude)           |
+| OPENAI_API_KEY               | OpenAI (GPT)                 |
+| DEEPSEEK_API_KEY             | DeepSeek                     |
+| GOOGLE_GENERATIVE_AI_API_KEY | Google (Gemini)              |
+| ALIBABA_API_KEY              | Alibaba (Qwen)               |
+| XAI_API_KEY                  | xAI (Grok)                   |
+| ZHIPU_API_KEY                | Zhipu (GLM)                  |
+| MOONSHOT_API_KEY             | Moonshot (Kimi)              |
+| TAVILY_API_KEY               | Tavily web search (optional) |
 
 ## CLI Options
 
@@ -240,14 +240,14 @@ xc [options] [prompt]
 
 ## Slash Commands
 
-| Command | Description |
-|---------|-------------|
-| /help | Show available commands |
+| Command        | Description                    |
+| -------------- | ------------------------------ |
+| /help          | Show available commands        |
 | /model [alias] | Switch model or list available |
-| /usage | Show token usage and cost |
-| /clear | Clear conversation |
-| /compact | Manually compress context |
-| /init | Initialize project knowledge |
-| /session save | Save session without exiting |
-| /plan | Enter plan mode |
-| /exit | Save session and exit |
+| /usage         | Show token usage and cost      |
+| /clear         | Clear conversation             |
+| /compact       | Manually compress context      |
+| /init          | Initialize project knowledge   |
+| /session save  | Save session without exiting   |
+| /plan          | Enter plan mode                |
+| /exit          | Save session and exit          |

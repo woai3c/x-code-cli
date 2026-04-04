@@ -130,4 +130,3 @@ function generateKnowledgeMd(facts: { key: string; fact: string; category: strin
 
   return lines.join('\n')
 }
-
