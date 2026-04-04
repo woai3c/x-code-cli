@@ -48,6 +48,17 @@ interface StreamResult {
 const KEEP_RECENT = 6
 const DEFAULT_TOKEN_BUDGET_RATIO = 0.8
 
+/** Count occurrences of a substring without creating intermediate arrays */
+function countOccurrences(content: string, search: string): number {
+  let count = 0
+  let pos = 0
+  while ((pos = content.indexOf(search, pos)) !== -1) {
+    count++
+    pos += search.length
+  }
+  return count
+}
+
 /**
  * Ensure all assistant messages have a reasoning content part.
  *
@@ -78,7 +89,38 @@ function ensureReasoningContentParts(messages: ModelMessage[], modelId: string):
   }
 }
 
+/** Context window sizes per model (tokens). Falls back to provider default, then 128k. */
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  // Anthropic
+  'anthropic:claude-opus-4-6': 200000,
+  'anthropic:claude-sonnet-4-5': 200000,
+  'anthropic:claude-haiku-4-5': 200000,
+  // OpenAI
+  'openai:gpt-4.1': 1047576,
+  'openai:gpt-4.1-mini': 1047576,
+  'openai:gpt-4.1-nano': 1047576,
+  'openai:o3': 200000,
+  'openai:o4-mini': 200000,
+  // Google
+  'google:gemini-2.5-pro': 1000000,
+  'google:gemini-2.5-flash': 1000000,
+  // DeepSeek
+  'deepseek:deepseek-chat': 64000,
+  'deepseek:deepseek-reasoner': 64000,
+  // Alibaba
+  'alibaba:qwen-max': 128000,
+  'alibaba:qwen-plus': 128000,
+  // xAI
+  'xai:grok-3': 131072,
+  'xai:grok-3-mini': 131072,
+  // Zhipu
+  'zhipu:glm-4-plus': 128000,
+  // Moonshot
+  'moonshotai:kimi-k2.5': 131072,
+}
+
+/** Provider-level fallback context windows */
+const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {
   anthropic: 200000,
   openai: 128000,
   google: 1000000,
@@ -90,8 +132,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 }
 
 function getTokenBudget(modelId: string): number {
-  const provider = modelId.split(':')[0]
-  const contextWindow = MODEL_CONTEXT_WINDOWS[provider] ?? 128000
+  const contextWindow =
+    MODEL_CONTEXT_WINDOWS[modelId] ?? PROVIDER_CONTEXT_WINDOWS[modelId.split(':')[0]] ?? 128000
   return Math.floor(contextWindow * DEFAULT_TOKEN_BUDGET_RATIO)
 }
 
@@ -124,7 +166,7 @@ async function executeWriteTool(toolName: string, input: Record<string, unknown>
 
     const content = await fs.readFile(filePath, 'utf-8')
     if (!replaceAll) {
-      const count = content.split(oldString).length - 1
+      const count = countOccurrences(content, oldString)
       if (count === 0) return `Error: old_string not found in ${filePath}`
       if (count > 1)
         return `Error: old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`
@@ -230,6 +272,98 @@ function classifyApiError(err: unknown): { message: string; retryable: boolean }
   return { message: msg, retryable: false }
 }
 
+/** Helper to push a tool result to state and notify the UI */
+function pushToolResult(
+  state: LoopState,
+  callbacks: AgentCallbacks,
+  toolCallId: string,
+  toolName: string,
+  output: string,
+): void {
+  state.messages.push(toolResultMessage(toolCallId, toolName, output))
+  callbacks.onToolResult(toolCallId, output)
+}
+
+/** Handle all tool calls from a single model turn */
+async function handleToolCalls(
+  toolCalls: Array<{ toolName: string; toolCallId: string; input: Record<string, unknown> }>,
+  state: LoopState,
+  options: AgentOptions,
+  callbacks: AgentCallbacks,
+): Promise<void> {
+  for (const tc of toolCalls) {
+    const { toolName, input, toolCallId } = tc
+    let output: string
+
+    // ── Plan mode tools ──
+    if (toolName === 'enterPlanMode') {
+      state.planMode = true
+      state.planId = generatePlanId()
+      await ensurePlansDir()
+      output = `Plan mode activated. Plan ID: ${state.planId}. Use only read-only tools. Save plan to ${getPlanPath(state.planId)}`
+      pushToolResult(state, callbacks, toolCallId, toolName, output)
+      continue
+    }
+
+    if (toolName === 'exitPlanMode') {
+      state.planMode = false
+      if (state.planId) {
+        const planPath = getPlanPath(state.planId)
+        try {
+          const planContent = await fs.readFile(planPath, 'utf-8')
+          output = `Plan ready for review:\n\n${planContent}`
+        } catch {
+          output = 'Plan mode exited. No plan file found.'
+        }
+      } else {
+        output = 'Plan mode exited.'
+      }
+      pushToolResult(state, callbacks, toolCallId, toolName, output)
+      continue
+    }
+
+    // ── askUser tool ──
+    if (toolName === 'askUser') {
+      const question = input.question as string
+      const optionsList = input.options as { label: string; description: string }[]
+      const answer = await callbacks.onAskUser(question, optionsList)
+      output = `User answered: ${answer}`
+      pushToolResult(state, callbacks, toolCallId, toolName, output)
+      continue
+    }
+
+    // ── Permission check for write tools and shell ──
+    if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
+      const approved = await checkPermission({ toolName, input }, options.trustMode, callbacks.onAskPermission)
+
+      if (!approved) {
+        pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
+        continue
+      }
+    }
+
+    // ── Execute tool ──
+    try {
+      if (toolName === 'writeFile' || toolName === 'edit') {
+        output = await executeWriteTool(toolName, input)
+        const filePath = input.filePath as string
+        state.filesModified.add(filePath)
+      } else if (toolName === 'shell') {
+        const timeout = (input.timeout as number) ?? 30000
+        output = await executeShell(input.command as string, timeout, callbacks)
+      } else {
+        // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
+        continue
+      }
+    } catch (err) {
+      output = `Error: ${err instanceof Error ? err.message : String(err)}`
+    }
+
+    output = truncateToolResult(output)
+    pushToolResult(state, callbacks, toolCallId, toolName, output)
+  }
+}
+
 /** Main agent loop */
 export async function agentLoop(
   userMessage: string,
@@ -251,11 +385,13 @@ export async function agentLoop(
 
   state.messages.push({ role: 'user', content: userMessage })
 
-  // Check for @rule-name references in user message and load matching rules
+  // Load rules once — shared between @rule-name resolution and buildKnowledgeContext
+  const rules = await loadRuleFiles()
+
+  // Check for @rule-name references in user message
   const ruleRefs = userMessage.match(/@([\w-]+)/g)
   let extraRuleContext = ''
   if (ruleRefs) {
-    const rules = await loadRuleFiles()
     for (const ref of ruleRefs) {
       const ruleName = ref.slice(1) // remove @
       const rule = rules.find((r) => r.filename === ruleName)
@@ -267,7 +403,7 @@ export async function agentLoop(
 
   const sessionSummary = await loadLatestSession()
   const sessionContext = sessionSummary ? formatSessionForPrompt(sessionSummary) : undefined
-  const knowledgeContext = await buildKnowledgeContext({ sessionContext })
+  const knowledgeContext = await buildKnowledgeContext({ sessionContext, rules })
   const fullKnowledgeContext = knowledgeContext + extraRuleContext
 
   const tokenBudget = getTokenBudget(options.modelId)
@@ -378,85 +514,7 @@ export async function agentLoop(
         break
       }
 
-      for (const tc of toolCalls) {
-        const toolName = tc.toolName
-        const input = tc.input
-        let output: string
-
-        // ── Plan mode tools ──
-        if (toolName === 'enterPlanMode') {
-          state.planMode = true
-          state.planId = generatePlanId()
-          await ensurePlansDir()
-          output = `Plan mode activated. Plan ID: ${state.planId}. Use only read-only tools. Save plan to ${getPlanPath(state.planId)}`
-          state.messages.push(toolResultMessage(tc.toolCallId, toolName, output))
-          callbacks.onToolResult(tc.toolCallId, output)
-          continue
-        }
-
-        if (toolName === 'exitPlanMode') {
-          state.planMode = false
-          if (state.planId) {
-            const planPath = getPlanPath(state.planId)
-            try {
-              const planContent = await fs.readFile(planPath, 'utf-8')
-              output = `Plan ready for review:\n\n${planContent}`
-            } catch {
-              output = 'Plan mode exited. No plan file found.'
-            }
-          } else {
-            output = 'Plan mode exited.'
-          }
-          state.messages.push(toolResultMessage(tc.toolCallId, toolName, output))
-          callbacks.onToolResult(tc.toolCallId, output)
-          continue
-        }
-
-        // ── askUser tool ──
-        if (toolName === 'askUser') {
-          const question = input.question as string
-          const optionsList = input.options as { label: string; description: string }[]
-          const answer = await callbacks.onAskUser(question, optionsList)
-          output = `User answered: ${answer}`
-          state.messages.push(toolResultMessage(tc.toolCallId, toolName, output))
-          callbacks.onToolResult(tc.toolCallId, output)
-          continue
-        }
-
-        // ── Permission check for write tools and shell ──
-        if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
-          const approved = await checkPermission({ toolName, input }, options.trustMode, callbacks.onAskPermission)
-
-          if (!approved) {
-            output = 'Permission denied by user.'
-            state.messages.push(toolResultMessage(tc.toolCallId, toolName, output))
-            callbacks.onToolResult(tc.toolCallId, output)
-            continue
-          }
-        }
-
-        // ── Execute tool ──
-        try {
-          if (toolName === 'writeFile' || toolName === 'edit') {
-            output = await executeWriteTool(toolName, input)
-            const filePath = input.filePath as string
-            state.filesModified.add(filePath)
-          } else if (toolName === 'shell') {
-            const timeout = (input.timeout as number) ?? 30000
-            output = await executeShell(input.command as string, timeout, callbacks)
-          } else {
-            // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
-            continue
-          }
-        } catch (err) {
-          output = `Error: ${err instanceof Error ? err.message : String(err)}`
-        }
-
-        output = truncateToolResult(output)
-        state.messages.push(toolResultMessage(tc.toolCallId, toolName, output))
-        callbacks.onToolResult(tc.toolCallId, output)
-      }
-
+      await handleToolCalls(toolCalls, state, options, callbacks)
       continue
     }
 
