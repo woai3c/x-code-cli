@@ -6,8 +6,11 @@ import { generateText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import type { SessionSummary } from '../types/index.js'
+import { XCODE_DIR } from '../utils.js'
 
-const SESSIONS_DIR = '.x-code/sessions'
+const SESSIONS_DIR = `${XCODE_DIR}/sessions`
+/** Number of recent messages to include when generating session summaries */
+const SESSION_SUMMARY_MESSAGE_COUNT = 20
 
 function getSessionsDir(): string {
   return path.join(process.cwd(), SESSIONS_DIR)
@@ -61,7 +64,7 @@ export async function generateSessionSummary(
 
 Return ONLY valid JSON, no markdown fencing.`,
       },
-      ...messages.slice(-20),
+      ...messages.slice(-SESSION_SUMMARY_MESSAGE_COUNT),
     ],
   })
 

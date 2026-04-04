@@ -1,29 +1,11 @@
 // @x-code/core — Startup project scan (reads config files to inject basic context)
-import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { fileExists, readJsonSafe } from '../utils.js'
 import { getAutoMemory } from './auto-memory.js'
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function readJsonSafe(filePath: string): Promise<Record<string, unknown> | null> {
-  try {
-    const content = await fs.readFile(filePath, 'utf-8')
-    return JSON.parse(content) as Record<string, unknown>
-  } catch {
-    return null
-  }
 }
 
 /** Scan project root and populate auto memory with basic facts */

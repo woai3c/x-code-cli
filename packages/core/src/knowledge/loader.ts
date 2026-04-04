@@ -4,19 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type { RuleFile, RuleFrontmatter } from '../types/index.js'
+import { XCODE_DIR, readFileSafe } from '../utils.js'
 import { getAutoMemory } from './auto-memory.js'
 
-const XCODE_DIR = '.x-code'
 const GLOBAL_DIR = path.join(os.homedir(), '.xcode')
-
-/** Read a file safely, return empty string on error */
-async function readFileSafe(filePath: string): Promise<string> {
-  try {
-    return await fs.readFile(filePath, 'utf-8')
-  } catch {
-    return ''
-  }
-}
 
 /** Parse frontmatter from a markdown rule file */
 function parseFrontmatter(content: string): { frontmatter: RuleFrontmatter; body: string } {
@@ -78,6 +69,8 @@ function matchesPath(filePath: string, patterns: string[]): boolean {
 export async function buildKnowledgeContext(options?: {
   activeFilePaths?: string[]
   sessionContext?: string
+  /** Pre-loaded rules to avoid redundant disk reads */
+  rules?: RuleFile[]
 }): Promise<string> {
   const sections: string[] = []
 
@@ -114,7 +107,7 @@ export async function buildKnowledgeContext(options?: {
   }
 
   // 6. Rules (4 loading modes)
-  const rules = await loadRuleFiles()
+  const rules = options?.rules ?? (await loadRuleFiles())
 
   // Always rules
   for (const rule of rules) {

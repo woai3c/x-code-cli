@@ -2,10 +2,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { XCODE_DIR, fileExists } from '../utils.js'
 import { getAutoMemory } from './auto-memory.js'
 import { scanProject } from './hooks.js'
-
-const XCODE_DIR = '.x-code'
 
 interface InitResult {
   detectedFacts: string[]
@@ -132,11 +131,3 @@ function generateKnowledgeMd(facts: { key: string; fact: string; category: strin
   return lines.join('\n')
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath)
-    return true
-  } catch {
-    return false
-  }
-}
