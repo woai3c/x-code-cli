@@ -33,6 +33,15 @@ export function estimateTokens(messages: ModelMessage[]): number {
           chars += part.text.length
         } else if ('result' in part && typeof part.result === 'string') {
           chars += part.result.length
+        } else if ('output' in part) {
+          // Handle tool-result messages created by toolResultMessage()
+          const output = (part as { output: unknown }).output
+          if (typeof output === 'string') {
+            chars += output.length
+          } else if (output && typeof output === 'object' && 'value' in output) {
+            const value = (output as { value: unknown }).value
+            if (typeof value === 'string') chars += value.length
+          }
         }
       }
     }
