@@ -218,7 +218,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Resolve a pending permission request */
   const resolvePermission = useCallback((approved: boolean) => {
     setState((prev) => {
-      prev.pendingPermission?.resolve(approved)
+      if (prev.pendingPermission) {
+        // Defer the side-effect outside the setState updater to avoid
+        // double-invocation under React 18 Strict Mode.
+        queueMicrotask(() => prev.pendingPermission!.resolve(approved))
+      }
       return { ...prev, pendingPermission: null }
     })
   }, [])
@@ -226,7 +230,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Resolve a pending question */
   const resolveQuestion = useCallback((answer: string) => {
     setState((prev) => {
-      prev.pendingQuestion?.resolve(answer)
+      if (prev.pendingQuestion) {
+        queueMicrotask(() => prev.pendingQuestion!.resolve(answer))
+      }
       return { ...prev, pendingQuestion: null }
     })
   }, [])
