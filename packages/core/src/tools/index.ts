@@ -1,4 +1,4 @@
-// @x-code/core — Tool registry (unified export)
+// @x-code-cli/core — Tool registry (unified export)
 import { askUser } from './ask-user.js'
 import { edit } from './edit.js'
 import { enterPlanMode } from './enter-plan-mode.js'

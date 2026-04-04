@@ -1,4 +1,4 @@
-// @x-code/cli — User text input component with slash command completion
+// @x-code-cli/cli — User text input component with slash command completion
 //
 // Inspired by Claude Code: completion list appears BELOW the input line,
 // with a soft colour scheme — selected item uses the accent blue, unselected

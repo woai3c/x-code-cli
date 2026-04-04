@@ -1,11 +1,11 @@
-// @x-code/cli — Startup header banner
+// @x-code-cli/cli — Startup header banner
 //
 // printHeader() writes the banner directly to stdout BEFORE Ink starts.
 // This avoids the Ink <Static> re-render bug where the header would
 // appear multiple times as the dynamic area changes height.
 import { Chalk } from 'chalk'
 
-import { VERSION } from '@x-code/core'
+import { VERSION } from '@x-code-cli/core'
 
 import { ACCENT } from '../theme.js'
 

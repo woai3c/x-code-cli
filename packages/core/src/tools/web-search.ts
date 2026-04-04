@@ -1,4 +1,4 @@
-// @x-code/core — webSearch tool (Tavily API)
+// @x-code-cli/core — webSearch tool (Tavily API)
 import { tool } from 'ai'
 
 import { z } from 'zod'

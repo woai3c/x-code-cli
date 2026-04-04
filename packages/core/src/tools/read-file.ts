@@ -1,4 +1,4 @@
-// @x-code/core — readFile tool
+// @x-code-cli/core — readFile tool
 import fs from 'node:fs/promises'
 
 import { tool } from 'ai'

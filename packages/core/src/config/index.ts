@@ -1,4 +1,4 @@
-// @x-code/core — Configuration loading (env vars for API keys, config file for model preference)
+// @x-code-cli/core — Configuration loading (env vars for API keys, config file for model preference)
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'

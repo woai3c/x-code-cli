@@ -1,4 +1,4 @@
-// @x-code/core — glob tool (file search by pattern)
+// @x-code-cli/core — glob tool (file search by pattern)
 import { globby } from 'globby'
 
 import { tool } from 'ai'

@@ -1,4 +1,4 @@
-// @x-code/core — saveKnowledge tool (knowledge CRUD)
+// @x-code-cli/core — saveKnowledge tool (knowledge CRUD)
 import { tool } from 'ai'
 
 import { z } from 'zod'

@@ -1,4 +1,4 @@
-// @x-code/core — Startup project scan (reads config files to inject basic context)
+// @x-code-cli/core — Startup project scan (reads config files to inject basic context)
 import path from 'node:path'
 
 import { fileExists, readJsonSafe } from '../utils.js'

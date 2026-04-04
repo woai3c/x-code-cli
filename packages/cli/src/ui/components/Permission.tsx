@@ -1,4 +1,4 @@
-// @x-code/cli — Permission confirmation component (Y/N + diff preview)
+// @x-code-cli/cli — Permission confirmation component (Y/N + diff preview)
 import { diffLines } from 'diff'
 
 import fs from 'node:fs/promises'
@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'
 
-import { getPermissionLevel } from '@x-code/core'
+import { getPermissionLevel } from '@x-code-cli/core'
 
 import { ACCENT, ERROR, SUCCESS, WARNING } from '../theme.js'
 

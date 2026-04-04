@@ -1,10 +1,10 @@
-// @x-code/cli — Root App component
+// @x-code-cli/cli — Root App component
 import React, { useEffect } from 'react'
 
 import { Box, Text, useApp, useInput } from 'ink'
 
-import { MODEL_ALIASES, VERSION, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code/core'
-import type { AgentOptions, LanguageModel } from '@x-code/core'
+import { MODEL_ALIASES, VERSION, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code-cli/core'
+import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
 import { useAgent } from '../hooks/use-agent.js'
 import { ACCENT, ERROR, WARNING } from '../theme.js'
@@ -22,7 +22,7 @@ interface AppProps {
   options: AgentOptions
   initialPrompt?: string
   onCleanupReady?: (fn: () => Promise<void>) => void
-  onUsageUpdate?: (usage: import('@x-code/core').TokenUsage, modelId: string) => void
+  onUsageUpdate?: (usage: import('@x-code-cli/core').TokenUsage, modelId: string) => void
 }
 
 /** Slash commands — used for both help text and tab completion */

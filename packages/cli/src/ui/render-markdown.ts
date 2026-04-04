@@ -1,4 +1,4 @@
-// @x-code/cli — Markdown-to-ANSI renderer (token-based)
+// @x-code-cli/cli — Markdown-to-ANSI renderer (token-based)
 //
 // Uses `marked.lexer()` to parse Markdown into an AST (token tree), then
 // recursively renders each token to ANSI-styled terminal text using chalk.

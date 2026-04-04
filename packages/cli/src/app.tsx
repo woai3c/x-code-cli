@@ -1,9 +1,9 @@
-// @x-code/cli — Ink render entry
+// @x-code-cli/cli — Ink render entry
 import React from 'react'
 
 import { render } from 'ink'
 
-import type { AgentOptions, LanguageModel, TokenUsage } from '@x-code/core'
+import type { AgentOptions, LanguageModel, TokenUsage } from '@x-code-cli/core'
 
 import { App } from './ui/components/App.js'
 import { printHeader } from './ui/components/AppHeader.js'

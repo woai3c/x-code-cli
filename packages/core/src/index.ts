@@ -1,4 +1,4 @@
-// @x-code/core — Public API exports
+// @x-code-cli/core — Public API exports
 
 export const VERSION = '0.1.0'
 

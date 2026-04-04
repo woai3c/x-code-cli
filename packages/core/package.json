@@ -1,5 +1,5 @@
 {
-  "name": "@x-code/core",
+  "name": "@x-code-cli/core",
   "version": "0.1.0",
   "type": "module",
   "exports": {

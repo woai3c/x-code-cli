@@ -1,4 +1,4 @@
-// @x-code/core — enterPlanMode tool (no execute — handled in agent loop)
+// @x-code-cli/core — enterPlanMode tool (no execute — handled in agent loop)
 import { tool } from 'ai'
 
 import { z } from 'zod'

@@ -1,4 +1,4 @@
-// @x-code/core — webFetch tool (HTTP fetch + HTML→Markdown)
+// @x-code-cli/core — webFetch tool (HTTP fetch + HTML→Markdown)
 import * as cheerio from 'cheerio'
 // @ts-expect-error turndown has no types
 import TurndownService from 'turndown'

@@ -1,4 +1,4 @@
-// @x-code/core — Model pricing table and cost estimation
+// @x-code-cli/core — Model pricing table and cost estimation
 
 /** Price per million tokens */
 interface ModelPrice {

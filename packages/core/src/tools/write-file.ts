@@ -1,4 +1,4 @@
-// @x-code/core — writeFile tool (no execute — needs permission check in agent loop)
+// @x-code-cli/core — writeFile tool (no execute — needs permission check in agent loop)
 import { tool } from 'ai'
 
 import { z } from 'zod'

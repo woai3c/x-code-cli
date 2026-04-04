@@ -1,4 +1,4 @@
-// @x-code/core — grep tool (content search via ripgrep)
+// @x-code-cli/core — grep tool (content search via ripgrep)
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 

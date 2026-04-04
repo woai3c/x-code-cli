@@ -1,4 +1,4 @@
-// @x-code/core — System Prompt management
+// @x-code-cli/core — System Prompt management
 import { getShellConfig } from '../tools/shell-utils.js'
 
 const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal. You are powered by the {model} model.

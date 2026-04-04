@@ -1,4 +1,4 @@
-// @x-code/cli — Message history (uses Ink Static for performance)
+// @x-code-cli/cli — Message history (uses Ink Static for performance)
 //
 // Static items are rendered ONCE and written permanently to the terminal's
 // scrollback buffer.  Ink never clears or redraws them.
@@ -12,7 +12,7 @@ import React from 'react'
 
 import { Box, Static, Text } from 'ink'
 
-import type { DisplayMessage } from '@x-code/core'
+import type { DisplayMessage } from '@x-code-cli/core'
 
 import { renderMarkdown } from '../render-markdown.js'
 import { ACCENT, WARNING } from '../theme.js'

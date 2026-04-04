@@ -71,7 +71,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@x-code/core':
+      '@x-code-cli/core':
         specifier: workspace:*
         version: link:../core
       chalk:

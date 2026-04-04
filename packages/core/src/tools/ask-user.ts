@@ -1,4 +1,4 @@
-// @x-code/core — askUser tool (interactive question, no execute — handled via callback)
+// @x-code-cli/core — askUser tool (interactive question, no execute — handled via callback)
 import { tool } from 'ai'
 
 import { z } from 'zod'

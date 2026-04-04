@@ -1,4 +1,4 @@
-// @x-code/cli — Tool call display component
+// @x-code-cli/cli — Tool call display component
 import React from 'react'
 
 import { Box, Text } from 'ink'

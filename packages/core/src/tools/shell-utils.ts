@@ -1,4 +1,4 @@
-// @x-code/core — Cross-platform shell detection and abstraction
+// @x-code-cli/core — Cross-platform shell detection and abstraction
 import os from 'node:os'
 
 export type ShellType = 'powershell' | 'bash' | 'zsh'

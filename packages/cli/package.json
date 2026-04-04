@@ -1,5 +1,5 @@
 {
-  "name": "@x-code/cli",
+  "name": "@x-code-cli/cli",
   "version": "0.1.0",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@x-code/core": "workspace:*",
+    "@x-code-cli/core": "workspace:*",
     "chalk": "^5.4.0",
     "diff": "^8.0.0",
     "ink": "^6.6.0",

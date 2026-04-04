@@ -1,4 +1,4 @@
-// @x-code/cli — Streaming text output component
+// @x-code-cli/cli — Streaming text output component
 //
 // IMPORTANT: This component renders OUTSIDE of Ink's <Static> region, which
 // means Ink clears and redraws it on every state change.  If the rendered

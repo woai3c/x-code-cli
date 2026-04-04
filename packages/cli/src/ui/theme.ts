@@ -1,4 +1,4 @@
-// @x-code/cli — Shared UI colour tokens
+// @x-code-cli/cli — Shared UI colour tokens
 //
 // Soft colour palette inspired by Claude Code's dark theme.
 // All colours are hex values so they render consistently across terminals

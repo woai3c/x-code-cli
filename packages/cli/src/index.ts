@@ -1,4 +1,4 @@
-// @x-code/cli — CLI entry point
+// @x-code-cli/cli — CLI entry point
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 
@@ -14,8 +14,8 @@ import {
   getEnvVarName,
   loadConfig,
   resolveModelId,
-} from '@x-code/core'
-import type { AgentOptions } from '@x-code/core'
+} from '@x-code-cli/core'
+import type { AgentOptions } from '@x-code-cli/core'
 
 import { getCleanupFn, printExitSummary, startApp } from './app.js'
 

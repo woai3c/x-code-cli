@@ -1,4 +1,4 @@
-// @x-code/core — Permission system (3-level model)
+// @x-code-cli/core — Permission system (3-level model)
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { PermissionLevel } from '../types/index.js'
 

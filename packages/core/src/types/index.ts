@@ -1,4 +1,4 @@
-// @x-code/core — Public type definitions
+// @x-code-cli/core — Public type definitions
 import type { LanguageModel, ModelMessage } from 'ai'
 
 // ─── Permission ───

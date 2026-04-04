@@ -1,7 +1,7 @@
-// @x-code/cli — Agent state management hook
+// @x-code-cli/cli — Agent state management hook
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { agentLoop, compressMessages, initMemories, loadLatestSession, saveSession, scanProject } from '@x-code/core'
+import { agentLoop, compressMessages, initMemories, loadLatestSession, saveSession, scanProject } from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,
@@ -10,7 +10,7 @@ import type {
   LoopState,
   SessionSummary,
   TokenUsage,
-} from '@x-code/core'
+} from '@x-code-cli/core'
 
 interface PendingPermission {
   toolName: string

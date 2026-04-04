@@ -1,4 +1,4 @@
-// @x-code/core — Agent Loop (core logic: streaming, tool calls, permission, context compression)
+// @x-code-cli/core — Agent Loop (core logic: streaming, tool calls, permission, context compression)
 import { execa } from 'execa'
 
 import fs from 'node:fs/promises'

@@ -1,4 +1,4 @@
-// @x-code/cli — Loading spinner component
+// @x-code-cli/cli — Loading spinner component
 import React, { useEffect, useState } from 'react'
 
 import { Text } from 'ink'

@@ -1,4 +1,4 @@
-// @x-code/core — AI SDK Provider Registry (multi-model support)
+// @x-code-cli/core — AI SDK Provider Registry (multi-model support)
 import { zhipu } from 'zhipu-ai-provider'
 
 import { createAlibaba } from '@ai-sdk/alibaba'

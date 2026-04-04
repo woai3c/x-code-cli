@@ -1,4 +1,4 @@
-// @x-code/core — Project initialization (xc init / /init)
+// @x-code-cli/core — Project initialization (xc init / /init)
 import fs from 'node:fs/promises'
 import path from 'node:path'
 

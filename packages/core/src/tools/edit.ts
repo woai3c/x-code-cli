@@ -1,4 +1,4 @@
-// @x-code/core — edit tool (precise string replacement, no execute — needs permission check)
+// @x-code-cli/core — edit tool (precise string replacement, no execute — needs permission check)
 import { tool } from 'ai'
 
 import { z } from 'zod'

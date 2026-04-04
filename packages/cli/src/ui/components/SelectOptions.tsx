@@ -1,4 +1,4 @@
-// @x-code/cli — askUser multi-select interaction component
+// @x-code-cli/cli — askUser multi-select interaction component
 import React, { useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'

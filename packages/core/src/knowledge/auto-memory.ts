@@ -1,4 +1,4 @@
-// @x-code/core — AutoMemory class (key-based CRUD + conflict detection + TTL eviction)
+// @x-code-cli/core — AutoMemory class (key-based CRUD + conflict detection + TTL eviction)
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'

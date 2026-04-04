@@ -5,7 +5,7 @@
     { "repo": "woai3c/x-code-cli" }
   ],
   "commit": false,
-  "fixed": [["@x-code/cli", "@x-code/core"]],
+  "fixed": [["@x-code-cli/cli", "@x-code-cli/core"]],
   "linked": [],
   "access": "public",
   "baseBranch": "main",

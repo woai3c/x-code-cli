@@ -1,6 +1,6 @@
-// @x-code/cli — CLI-level config helpers
-import { getAvailableProviders, loadConfig, resolveModelId } from '@x-code/core'
-import type { AppConfig } from '@x-code/core'
+// @x-code-cli/cli — CLI-level config helpers
+import { getAvailableProviders, loadConfig, resolveModelId } from '@x-code-cli/core'
+import type { AppConfig } from '@x-code-cli/core'
 
 export interface CliOptions {
   model?: string

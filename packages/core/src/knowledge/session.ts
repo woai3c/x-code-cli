@@ -1,4 +1,4 @@
-// @x-code/core — Session memory (structured JSON summaries for cross-session continuation)
+// @x-code-cli/core — Session memory (structured JSON summaries for cross-session continuation)
 import fs from 'node:fs/promises'
 import path from 'node:path'
 

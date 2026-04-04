@@ -1,9 +1,9 @@
-// @x-code/cli — Bottom status bar (model / token / cost)
+// @x-code-cli/cli — Bottom status bar (model / token / cost)
 import React from 'react'
 
 import { Box, Text } from 'ink'
 
-import type { TokenUsage } from '@x-code/core'
+import type { TokenUsage } from '@x-code-cli/core'
 
 interface StatusBarProps {
   modelId: string

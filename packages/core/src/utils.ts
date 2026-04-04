@@ -1,4 +1,4 @@
-// @x-code/core — Shared utilities and constants
+// @x-code-cli/core — Shared utilities and constants
 import fs from 'node:fs/promises'
 
 /** Project-local config directory name */

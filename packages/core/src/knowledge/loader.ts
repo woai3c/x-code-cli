@@ -1,4 +1,4 @@
-// @x-code/core — Knowledge loader (layered loading + 4 rule loading modes)
+// @x-code-cli/core — Knowledge loader (layered loading + 4 rule loading modes)
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'

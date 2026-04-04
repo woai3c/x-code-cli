@@ -1,4 +1,4 @@
-// @x-code/cli — Shell command real-time output component
+// @x-code-cli/cli — Shell command real-time output component
 import React from 'react'
 
 import { Box, Text } from 'ink'
