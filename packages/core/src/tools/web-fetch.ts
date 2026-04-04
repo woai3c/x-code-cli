@@ -7,6 +7,9 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+const FETCH_TIMEOUT_MS = 15000
+const MAX_CONTENT_CHARS = 30000
+
 // eslint-disable-next-line @typescript-eslint/no-unsafe-call
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -26,7 +29,7 @@ export const webFetch = tool({
           'User-Agent': 'Mozilla/5.0 (compatible; X-Code-CLI/0.1)',
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       })
 
       if (!response.ok) {
@@ -37,7 +40,7 @@ export const webFetch = tool({
       const body = await response.text()
 
       if (contentType.includes('application/json')) {
-        return body.slice(0, 30000)
+        return body.slice(0, MAX_CONTENT_CHARS)
       }
 
       // HTML → Markdown
@@ -50,8 +53,8 @@ export const webFetch = tool({
       if (!html) return 'Error: Could not extract content from page.'
 
       let markdown: string = turndown.turndown(html)
-      if (markdown.length > 30000) {
-        markdown = markdown.slice(0, 30000) + '\n\n... [content truncated]'
+      if (markdown.length > MAX_CONTENT_CHARS) {
+        markdown = markdown.slice(0, MAX_CONTENT_CHARS) + '\n\n... [content truncated]'
       }
 
       if (prompt) {
