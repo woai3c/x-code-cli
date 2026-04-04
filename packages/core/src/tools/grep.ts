@@ -8,15 +8,19 @@ import { z } from 'zod'
 
 const execFileAsync = promisify(execFile)
 
+let _rgPath: string | null = null
+
 function getRipgrepPath(): string {
+  if (_rgPath) return _rgPath
   try {
     // @vscode/ripgrep provides the binary path
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const rg = require('@vscode/ripgrep') as { rgPath: string }
-    return rg.rgPath
+    _rgPath = rg.rgPath
   } catch {
-    return 'rg'
+    _rgPath = 'rg'
   }
+  return _rgPath
 }
 
 export const grep = tool({
