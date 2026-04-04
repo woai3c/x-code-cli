@@ -44,12 +44,7 @@ export function getEnvVarName(provider: string): string | undefined {
 
 /** Check which providers have API keys configured (env vars only) */
 export function getAvailableProviders(): string[] {
-  const providers: string[] = []
-  const allProviders = ['anthropic', 'openai', 'google', 'xai', 'deepseek', 'alibaba', 'zhipu', 'moonshotai']
-  for (const p of allProviders) {
-    if (getApiKey(p)) providers.push(p)
-  }
-  // Check custom OpenAI compatible
+  const providers = Object.keys(ENV_MAP).filter((p) => getApiKey(p))
   if (process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_BASE_URL) {
     providers.push('custom')
   }
