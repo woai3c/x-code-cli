@@ -124,32 +124,183 @@ Turn 5: AI 觉得信息够了 → 输出分析结论（纯文本，不调用工�
         → 循环结束
 ```
 
-### 第四步：工具执行
+### 第四步：streamText() 详解 — 发请求与收响应
 
-两类执行方式：
+`streamText()` 是 Vercel AI SDK 提供的函数，**它既发请求又收响应**，不是两个分开的步骤：
 
-**自动执行（只读操作）** — AI SDK 直接调用，无需权限：
+```typescript
+result = streamText({
+  model,                    // 用哪个模型
+  system: systemPrompt,     // 系统提示词
+  messages: state.messages, // 对话历史
+  tools: toolRegistry,      // 工具定义（13 个工具的 name + description + inputSchema）
+})
+```
+
+这一行等价于发送如下 HTTP 请求并打开一个流式连接：
+
+```json
+POST /v1/messages (以 Anthropic 为例)
+{
+  "system": "You are X-Code, an AI coding assistant...",
+  "messages": [
+    { "role": "user", "content": "分析一下项目有什么功能" }
+  ],
+  "tools": [
+    {
+      "name": "glob",
+      "description": "Find files matching a glob pattern...",
+      "input_schema": {
+        "properties": {
+          "pattern": { "type": "string", "description": "Glob pattern" }
+        }
+      }
+    },
+    { "name": "readFile", "description": "Read the contents of a file...", ... },
+    { "name": "grep", "description": "Search file contents using regex...", ... }
+    // ... 共 13 个工具定义
+  ]
+}
+```
+
+**工具定义在每一轮 API 请求中都会完整传递。** 模型看到 `tools` 数组中每个工具的 `description` 和 `input_schema`，就知道自己能用什么、怎么用。没有任何硬编码的路由逻辑，模型自己决定用哪些工具。
+
+#### streamText 返回的是一个流对象
+
+`result` 不是一个静态结果，而是一个**可遍历的流**：
+
+```typescript
+result = streamText(...)
+
+// 逐 chunk 读取 AI 的流式响应
+for await (const chunk of result.fullStream) {
+  chunk.type === 'text-delta'   → AI 输出了一段文本
+  chunk.type === 'tool-call'    → AI 要调用某个工具
+  chunk.type === 'tool-result'  → 工具执行完毕，拿到结果
+}
+
+// 流结束后可以拿到汇总信息
+await result.finishReason   → "tool-calls" 或 "end_turn"
+await result.toolCalls      → 所有工具调用的列表
+await result.response       → 完整的 assistant 消息
+```
+
+#### 流式处理的完整时序
+
+```
+streamText() 发出请求，打开流式连接
+  │
+  ├─ chunk: { type: "text-delta", text: "让我看一下项目结构" }
+  │    → callbacks.onTextDelta() → 终端实时显示文字
+  │
+  ├─ chunk: { type: "tool-call", name: "glob", input: { pattern: "**/*.ts" } }
+  │    → callbacks.onToolCall() → 终端显示 "○ glob **/*.ts"
+  │    → AI SDK 内部发现 glob 有 execute 函数 → 立即自动执行
+  │
+  ├─ chunk: { type: "tool-result", content: "file1.ts\nfile2.ts\n..." }
+  │    → callbacks.onToolResult() → 终端显示 "● glob **/*.ts ✓"
+  │    → AI SDK 自动把结果写入 messages
+  │
+  ├─ chunk: { type: "tool-call", name: "readFile", input: { filePath: "src/index.ts" } }
+  │    → 同上，AI SDK 自动执行
+  │
+  ├─ ... 更多 chunk ...
+  │
+  └─ 流结束
+       → finishReason = "tool-calls"（还有手动工具要处理）
+       或 finishReason = "end_turn"（AI 说完了）
+```
+
+### 第五步：两套工具执行路径
+
+工具的执行分两个阶段，由不同的代码负责：
+
+#### 阶段一：streamText 内部自动执行（流式阶段）
+
+带 `execute` 函数的只读工具，AI SDK 在收到 `tool-call` chunk 时**立即在内部执行**：
 - `glob`, `grep`, `readFile`, `listDir`, `webSearch`, `webFetch`
+- 不需要权限检查，不经过 `handleToolCalls`
+- 结果作为 `tool-result` chunk 自动推入流中
 
-**需要权限（写操作）** — 弹窗确认：
-- `writeFile`, `edit`, `shell`
+#### 阶段二：handleToolCalls 手动执行（流结束后）
 
-### 第五步：流式输出到 UI
+没有 `execute` 函数的写操作工具，在流结束后由 `handleToolCalls()` 串行处理：
+- `writeFile`, `edit` → 需要权限确认 → `executeWriteTool()`
+- `shell` → 需要权限确认 → `executeShell()`
+- `askUser`, `enterPlanMode`, `exitPlanMode` → 特殊逻辑
+
+```
+工具类型          谁执行              何时执行              是否需要权限
+─────────────    ──────              ──────               ──────
+有 execute 的    AI SDK 内部          流式接收阶段           否（只读）
+(glob/grep/      自动执行
+readFile...)
+
+没 execute 的    handleToolCalls      流结束后              是（写操作）
+(writeFile/      手动执行
+edit/shell)
+```
+
+### 第六步：流式输出到 UI
 
 整个过程实时渲染到终端：
 
 ```
 > 分析一下项目有什么功能
 
-○ glob **/*.ts                          ← 工具调用出现
-● glob **/*.ts (found 42 files)         ← 工具完成
-○ readFile package.json
-● readFile package.json ✓
+让我看一下项目结构                       ← text-delta chunk（实时显示）
+○ glob **/*.ts                          ← tool-call chunk（AI SDK 自动执行）
+● glob **/*.ts (found 42 files)         ← tool-result chunk（执行完毕）
+○ readFile package.json                 ← 又一个 tool-call
+● readFile package.json ✓               ← 执行完毕
 ○ grep TODO|FIXME **/*.ts
 ● grep TODO|FIXME (3 matches)
 
 这个项目是一个 AI 编码助手 CLI 工具，主要功能包括：  ← AI 最终输出
 1. 多模型支持...
+```
+
+### 完整数据流总图
+
+```
+用户输入 "分析项目功能"
+  │
+  ▼
+useAgent.submit(text)
+  │ messages.push({ role: 'user', content: text })
+  ▼
+agentLoop() ── while 循环开始 ──────────────────────────────┐
+  │                                                         │
+  ├─ buildSystemPrompt()                                    │
+  │   拼装: 身份 + 工具说明 + 规则 + 知识上下文              │
+  │                                                         │
+  ├─ streamText({ model, system, messages, tools })         │
+  │   │                                                     │
+  │   ├─ 发送 HTTP 请求（携带完整 tools 定义）               │
+  │   │                                                     │
+  │   ├─ 接收流式响应                                       │
+  │   │   ├─ text-delta → onTextDelta → 终端显示文字         │
+  │   │   ├─ tool-call  → onToolCall  → 终端显示工具状态     │
+  │   │   │               └─ 有 execute? → SDK 自动执行      │
+  │   │   ├─ tool-result → onToolResult → 终端显示结果       │
+  │   │   │               └─ SDK 自动写入 messages           │
+  │   │   └─ ... 重复直到流结束                              │
+  │   │                                                     │
+  │   └─ 流结束，拿到 finishReason                           │
+  │                                                         │
+  ├─ finishReason === 'tool-calls'?                         │
+  │   ├─ 是 → handleToolCalls()                             │
+  │   │       串行处理 writeFile/edit/shell（需权限）        │
+  │   │       结果 push 到 messages                         │
+  │   │       continue → 回到循环顶部 ─────────────────────→│
+  │   │                                                     │
+  │   └─ 否 → break → 退出循环                              │
+  │                                                         │
+  └────────────────────────────────────────────────────────┘
+  │
+  ▼
+saveSession() → 保存会话摘要
+返回 state → UI 显示最终结果
 ```
 
 ---
