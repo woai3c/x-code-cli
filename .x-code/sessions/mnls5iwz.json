@@ -1,0 +1,12 @@
+{
+  "id": "mnls5iwz",
+  "startedAt": "2026-04-05T13:11:20.579Z",
+  "endedAt": "2026-04-05T13:14:31.438Z",
+  "title": "Session",
+  "summary": "<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"listDir\">\n<｜DSML｜parameter name=\"dirPath\" string=\"true\">d:\\res\\x-code-cli\\packages\\core\\src</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+  "keyResults": [],
+  "pendingWork": [],
+  "filesModified": [],
+  "decisions": [],
+  "status": "completed"
+}
