@@ -42,7 +42,9 @@ const entitiesFixPlugin = {
   },
 }
 
-// Plugin to fix signal-exit@4 missing default export (ink/restore-cursor expect `import signalExit from 'signal-exit'`)
+// Plugin to fix signal-exit ESM/CJS interop
+// signal-exit@3 exports a single CJS function (module.exports = fn), so the default import IS the onExit function.
+// Ink expects `import { onExit } from 'signal-exit'`, so we alias default → onExit.
 const signalExitFixPlugin = {
   name: 'fix-signal-exit-default',
   setup(build) {
@@ -56,7 +58,7 @@ const signalExitFixPlugin = {
       }
     })
     build.onLoad({ filter: /.*/, namespace: 'signal-exit-shim' }, (args) => ({
-      contents: `export { onExit as default, onExit, load, unload, signals } from 'signal-exit';`,
+      contents: `export { default as default, default as onExit } from 'signal-exit';`,
       loader: 'js',
       resolveDir: args.pluginData.resolveDir,
     }))
