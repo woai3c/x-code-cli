@@ -1,7 +1,8 @@
 // @x-code-cli/cli — Loading spinner component with elapsed time and token count
 //
-// Token display follows Claude Code: ↓ + cumulative token count.
-// The ↓ arrow indicates tokens flowing through the interaction.
+// Arrow direction follows the current phase:
+//   ↑ = Spinner is only visible while sending/waiting for API response
+// When the model starts streaming back, Spinner hides and StreamingText shows.
 import React, { useEffect, useRef, useState } from 'react'
 
 import { Text } from 'ink'
@@ -48,7 +49,7 @@ export function Spinner({ label = 'Thinking', totalTokens }: SpinnerProps) {
 
   const parts: string[] = []
   if (elapsed >= 2000) parts.push(formatElapsed(elapsed))
-  if (hasTokens) parts.push(`↓ ${formatTokens(totalTokens)} tokens`)
+  if (hasTokens) parts.push(`↑ ${formatTokens(totalTokens)} tokens`)
   const metaStr = parts.join(' · ')
 
   return (
