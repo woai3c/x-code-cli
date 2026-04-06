@@ -305,7 +305,7 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
 
       {/* Loading spinner */}
       {state.isLoading && !state.streamingText && !state.currentToolCall && (
-        <Spinner totalTokens={state.usage.totalTokens} isStreaming={false} />
+        <Spinner totalTokens={state.usage.totalTokens} />
       )}
 
       {/* Error */}

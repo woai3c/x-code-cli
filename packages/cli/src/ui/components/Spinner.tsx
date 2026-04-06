@@ -1,8 +1,7 @@
 // @x-code-cli/cli — Loading spinner component with elapsed time and token count
 //
-// Token display follows Claude Code: single arrow + cumulative token count.
-//   ↑ = sending/processing input (no streaming text yet)
-//   ↓ = receiving output (streaming text is flowing)
+// Token display follows Claude Code: ↓ + cumulative token count.
+// The ↓ arrow indicates tokens flowing through the interaction.
 import React, { useEffect, useRef, useState } from 'react'
 
 import { Text } from 'ink'
@@ -15,8 +14,6 @@ interface SpinnerProps {
   label?: string
   /** Cumulative total tokens */
   totalTokens?: number
-  /** Whether the model is currently streaming output */
-  isStreaming?: boolean
 }
 
 function formatElapsed(ms: number): string {
@@ -32,7 +29,7 @@ function formatTokens(tokens: number): string {
   return `${tokens}`
 }
 
-export function Spinner({ label = 'Thinking', totalTokens, isStreaming }: SpinnerProps) {
+export function Spinner({ label = 'Thinking', totalTokens }: SpinnerProps) {
   const [frame, setFrame] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const startTimeRef = useRef(Date.now())
@@ -48,11 +45,10 @@ export function Spinner({ label = 'Thinking', totalTokens, isStreaming }: Spinne
 
   const hasTokens = totalTokens != null && totalTokens > 0
   const showMeta = elapsed >= 2000 || hasTokens
-  const arrow = isStreaming ? '↓' : '↑'
 
   const parts: string[] = []
   if (elapsed >= 2000) parts.push(formatElapsed(elapsed))
-  if (hasTokens) parts.push(`${arrow} ${formatTokens(totalTokens)} tokens`)
+  if (hasTokens) parts.push(`↓ ${formatTokens(totalTokens)} tokens`)
   const metaStr = parts.join(' · ')
 
   return (
