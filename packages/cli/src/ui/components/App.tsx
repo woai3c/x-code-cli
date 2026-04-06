@@ -13,7 +13,7 @@ import { MessageList } from './MessageList.js'
 import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
 import { ShellOutput } from './ShellOutput.js'
-import { Spinner } from './Spinner.js'
+import { Spinner, type SpinnerMode } from './Spinner.js'
 import { StreamingText } from './StreamingText.js'
 import { ToolCall } from './ToolCall.js'
 
@@ -303,10 +303,13 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
         />
       )}
 
-      {/* Loading spinner */}
-      {state.isLoading && !state.streamingText && !state.currentToolCall && (
-        <Spinner totalTokens={state.usage.totalTokens} />
-      )}
+      {/* Loading spinner — always visible during isLoading, arrow changes by phase */}
+      {state.isLoading && (() => {
+        let mode: SpinnerMode = 'requesting'
+        if (state.currentToolCall) mode = 'tool-use'
+        else if (state.streamingText) mode = 'responding'
+        return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
+      })()}
 
       {/* Error */}
       {state.error && <Text color={ERROR}>Error: {state.error}</Text>}

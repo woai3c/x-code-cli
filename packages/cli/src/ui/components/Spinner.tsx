@@ -1,8 +1,9 @@
 // @x-code-cli/cli — Loading spinner component with elapsed time and token count
 //
-// Arrow direction follows the current phase:
-//   ↑ = Spinner is only visible while sending/waiting for API response
-// When the model starts streaming back, Spinner hides and StreamingText shows.
+// Visible throughout the entire isLoading phase (not hidden during streaming).
+// Arrow direction follows Claude Code's convention:
+//   ↑ = requesting (sending to API, waiting for first token)
+//   ↓ = responding/thinking/tool-use (receiving output)
 import React, { useEffect, useRef, useState } from 'react'
 
 import { Text } from 'ink'
@@ -11,10 +12,14 @@ import { ACCENT, DIM } from '../theme.js'
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
+export type SpinnerMode = 'requesting' | 'responding' | 'thinking' | 'tool-use'
+
 interface SpinnerProps {
   label?: string
   /** Cumulative total tokens */
   totalTokens?: number
+  /** Current phase — controls arrow direction */
+  mode?: SpinnerMode
 }
 
 function formatElapsed(ms: number): string {
@@ -30,7 +35,7 @@ function formatTokens(tokens: number): string {
   return `${tokens}`
 }
 
-export function Spinner({ label = 'Thinking', totalTokens }: SpinnerProps) {
+export function Spinner({ label = 'Thinking', totalTokens, mode = 'requesting' }: SpinnerProps) {
   const [frame, setFrame] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const startTimeRef = useRef(Date.now())
@@ -46,10 +51,11 @@ export function Spinner({ label = 'Thinking', totalTokens }: SpinnerProps) {
 
   const hasTokens = totalTokens != null && totalTokens > 0
   const showMeta = elapsed >= 2000 || hasTokens
+  const arrow = mode === 'requesting' ? '↑' : '↓'
 
   const parts: string[] = []
   if (elapsed >= 2000) parts.push(formatElapsed(elapsed))
-  if (hasTokens) parts.push(`↑ ${formatTokens(totalTokens)} tokens`)
+  if (hasTokens) parts.push(`${arrow} ${formatTokens(totalTokens)} tokens`)
   const metaStr = parts.join(' · ')
 
   return (
