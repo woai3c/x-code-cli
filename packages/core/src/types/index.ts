@@ -31,6 +31,8 @@ export interface DisplayToolCall {
   input: Record<string, unknown>
   output?: string
   status: 'pending' | 'running' | 'completed' | 'denied'
+  /** How long the tool call took to execute (milliseconds) */
+  durationMs?: number
 }
 
 // ─── Agent callbacks (core → UI bridge) ───

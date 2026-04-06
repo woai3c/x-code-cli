@@ -181,11 +181,29 @@ async function executeWriteTool(toolName: string, input: Record<string, unknown>
 
 /** Execute a shell command with streaming */
 async function executeShell(command: string, timeout: number, callbacks: AgentCallbacks): Promise<string> {
-  const { executable, args } = getShellConfig()
-  const proc = execa(executable, [...args, command], {
-    timeout,
-    reject: false,
-  })
+  const { executable, args, type } = getShellConfig()
+
+  // On Windows, force the console codepage to UTF-8 (65001) at the OS level
+  // BEFORE PowerShell starts parsing the command. This ensures even parse errors
+  // (e.g. `&&` on PS 5.1) produce UTF-8 output instead of GBK garbled text.
+  // We wrap via `cmd.exe /c "chcp 65001 >nul && powershell ..."` because
+  // [Console]::OutputEncoding only takes effect after parsing completes.
+  let proc
+  if (type === 'powershell') {
+    // Build as a single string for cmd.exe /c so redirections like >nul work
+    const psCmd = `chcp 65001 >nul && ${executable} ${args.join(' ')} ${command}`
+    proc = execa('cmd.exe', ['/c', psCmd], {
+      timeout,
+      reject: false,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+  } else {
+    proc = execa(executable, [...args, command], {
+      timeout,
+      reject: false,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+  }
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     callbacks.onShellOutput(chunk.toString())
@@ -455,15 +473,11 @@ export async function agentLoop(
         if (chunk.type === 'tool-call') {
           callbacks.onToolCall(chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
         }
-        // Truncate auto-executed tool results (readFile, glob, grep, etc.)
+        // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
         if (chunk.type === 'tool-result') {
           const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
           const truncated = truncateToolResult(raw)
-          if (truncated !== raw) {
-            // Result was truncated — the original is already in messages via AI SDK,
-            // but we notify via callback so the UI can show it
-            callbacks.onToolResult(chunk.toolCallId ?? '', truncated)
-          }
+          callbacks.onToolResult(chunk.toolCallId ?? '', truncated)
         }
       }
     } catch (err) {

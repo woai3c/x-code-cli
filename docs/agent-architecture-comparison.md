@@ -58,14 +58,15 @@ while (未结束) {
 
 ## 二、AI API 调用位置
 
-| 项目 | API 调用位置 | 调用方式 |
-|------|------------|---------|
-| **x-code-cli** | `loop.ts:435` (streamText) + `loop.ts:208` / `session.ts:52` (generateText) | Vercel AI SDK |
-| **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()` | Anthropic SDK 原生 |
-| **Codex** | `client.rs:1360` → OpenAI `/responses` endpoint | Rust HTTP/WebSocket |
-| **Gemini CLI** | `geminiChat.ts:639` → `generateContentStream()` | Google GenAI SDK |
+| 项目            | API 调用位置                                                                | 调用方式            |
+| --------------- | --------------------------------------------------------------------------- | ------------------- |
+| **x-code-cli**  | `loop.ts:435` (streamText) + `loop.ts:208` / `session.ts:52` (generateText) | Vercel AI SDK       |
+| **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`                  | Anthropic SDK 原生  |
+| **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                             | Rust HTTP/WebSocket |
+| **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                             | Google GenAI SDK    |
 
 x-code-cli 的 AI 调用只在 agentLoop 里：
+
 - **主循环** `streamText()` — 核心对话
 - **辅助** `generateText()` — 上下文压缩和会话摘要
 
@@ -130,10 +131,10 @@ Turn 5: AI 觉得信息够了 → 输出分析结论（纯文本，不调用工�
 
 ```typescript
 result = streamText({
-  model,                    // 用哪个模型
-  system: systemPrompt,     // 系统提示词
+  model, // 用哪个模型
+  system: systemPrompt, // 系统提示词
   messages: state.messages, // 对话历史
-  tools: toolRegistry,      // 工具定义（13 个工具的 name + description + inputSchema）
+  tools: toolRegistry, // 工具定义（13 个工具的 name + description + inputSchema）
 })
 ```
 
@@ -218,6 +219,7 @@ streamText() 发出请求，打开流式连接
 #### 阶段一：streamText 内部自动执行（流式阶段）
 
 带 `execute` 函数的只读工具，AI SDK 在收到 `tool-call` chunk 时**立即在内部执行**：
+
 - `glob`, `grep`, `readFile`, `listDir`, `webSearch`, `webFetch`
 - 不需要权限检查，不经过 `handleToolCalls`
 - 结果作为 `tool-result` chunk 自动推入流中
@@ -225,6 +227,7 @@ streamText() 发出请求，打开流式连接
 #### 阶段二：handleToolCalls 手动执行（流结束后）
 
 没有 `execute` 函数的写操作工具，在流结束后由 `handleToolCalls()` 串行处理：
+
 - `writeFile`, `edit` → 需要权限确认 → `executeWriteTool()`
 - `shell` → 需要权限确认 → `executeShell()`
 - `askUser`, `enterPlanMode`, `exitPlanMode` → 特殊逻辑
@@ -356,12 +359,12 @@ if (finishReason === 'tool-calls') {
 
 ### 所有项目的判断方式
 
-| 项目 | 判断方式 | 代码位置 |
-|------|---------|---------|
-| **x-code-cli** | `finishReason === 'tool-calls'` | `loop.ts:506` |
-| **Claude Code** | 检查响应中是否有 `tool_use` content block | `query.ts` |
-| **Codex** | `ResponseEvent::Completed` + 检查待执行工具 | `codex.rs` |
-| **Gemini CLI** | `functionCalls` 是否存在于 response parts | `turn.ts` |
+| 项目            | 判断方式                                    | 代码位置      |
+| --------------- | ------------------------------------------- | ------------- |
+| **x-code-cli**  | `finishReason === 'tool-calls'`             | `loop.ts:506` |
+| **Claude Code** | 检查响应中是否有 `tool_use` content block   | `query.ts`    |
+| **Codex**       | `ResponseEvent::Completed` + 检查待执行工具 | `codex.rs`    |
+| **Gemini CLI**  | `functionCalls` 是否存在于 response parts   | `turn.ts`     |
 
 没有任何一个项目自己判断"该不该继续" — 全部委托给模型。唯一的例外是防护性措施：`maxTurns` 超限强制停止，防止模型无限循环。
 
@@ -380,66 +383,66 @@ Gemini CLI:     四层嵌套（sendMessageStream → processTurn → run → mak
 
 ### 5.2 工具并发执行
 
-| 项目 | 策略 | 细节 |
-|------|------|------|
-| **x-code-cli** | 串行执行 | 工具逐个执行 |
-| **Claude Code** | 读写分离并发 | 只读工具最多 10 个并行，写工具串行 |
-| **Codex** | 读写锁并发 | `RwLock` — 并行安全的工具拿读锁，其他拿写锁 |
-| **Gemini CLI** | 调度器批量执行 | `Scheduler` 类，队列+事件驱动协调 |
+| 项目            | 策略           | 细节                                        |
+| --------------- | -------------- | ------------------------------------------- |
+| **x-code-cli**  | 串行执行       | 工具逐个执行                                |
+| **Claude Code** | 读写分离并发   | 只读工具最多 10 个并行，写工具串行          |
+| **Codex**       | 读写锁并发     | `RwLock` — 并行安全的工具拿读锁，其他拿写锁 |
+| **Gemini CLI**  | 调度器批量执行 | `Scheduler` 类，队列+事件驱动协调           |
 
 ### 5.3 上下文/Token 管理
 
-| 项目 | 策略 |
-|------|------|
-| **x-code-cli** | 单一策略：超限时压缩（generateText 生成摘要，保留最后 6 条消息） |
+| 项目            | 策略                                                                        |
+| --------------- | --------------------------------------------------------------------------- |
+| **x-code-cli**  | 单一策略：超限时压缩（generateText 生成摘要，保留最后 6 条消息）            |
 | **Claude Code** | **四层策略**：History Snip → Microcompact → Context Collapse → Auto Compact |
-| **Codex** | Pre-sampling compact + 上下文差异记录 |
-| **Gemini CLI** | Chat Compression Service + Agent History Provider + 溢出检测事件 |
+| **Codex**       | Pre-sampling compact + 上下文差异记录                                       |
+| **Gemini CLI**  | Chat Compression Service + Agent History Provider + 溢出检测事件            |
 
 ### 5.4 Prompt Caching
 
-| 项目 | 支持 |
-|------|------|
-| **x-code-cli** | 无 |
-| **Claude Code** | 多层缓存：全局缓存域 + 缓存断点 + 缓存编辑，1 小时 TTL |
-| **Codex** | Sticky routing（`x-codex-turn-state` header 保持服务端状态） |
-| **Gemini CLI** | 依赖 Gemini API 内置缓存 |
+| 项目            | 支持                                                         |
+| --------------- | ------------------------------------------------------------ |
+| **x-code-cli**  | 无                                                           |
+| **Claude Code** | 多层缓存：全局缓存域 + 缓存断点 + 缓存编辑，1 小时 TTL       |
+| **Codex**       | Sticky routing（`x-codex-turn-state` header 保持服务端状态） |
+| **Gemini CLI**  | 依赖 Gemini API 内置缓存                                     |
 
 ### 5.5 流式工具执行
 
-| 项目 | 策略 |
-|------|------|
-| **x-code-cli** | 等 AI 输出完毕后才执行工具 |
+| 项目            | 策略                                                            |
+| --------------- | --------------------------------------------------------------- |
+| **x-code-cli**  | 等 AI 输出完毕后才执行工具                                      |
 | **Claude Code** | `StreamingToolExecutor` — AI 还在输出时就开始执行已解析完的工具 |
-| **Codex** | 异步队列 `FuturesOrdered` — 工具边解析边执行 |
-| **Gemini CLI** | 等一轮输出结束后批量调度 |
+| **Codex**       | 异步队列 `FuturesOrdered` — 工具边解析边执行                    |
+| **Gemini CLI**  | 等一轮输出结束后批量调度                                        |
 
 ### 5.6 循环检测
 
-| 项目 | 支持 |
-|------|------|
-| **x-code-cli** | 仅 maxTurns 限制 |
-| **Claude Code** | maxTurns 限制 |
-| **Codex** | maxTurns + 重试上限 |
-| **Gemini CLI** | **三重检测**：工具重复调用（5次阈值）+ 内容重复（10次）+ LLM 判断（30轮后） |
+| 项目            | 支持                                                                        |
+| --------------- | --------------------------------------------------------------------------- |
+| **x-code-cli**  | 仅 maxTurns 限制                                                            |
+| **Claude Code** | maxTurns 限制                                                               |
+| **Codex**       | maxTurns + 重试上限                                                         |
+| **Gemini CLI**  | **三重检测**：工具重复调用（5次阈值）+ 内容重复（10次）+ LLM 判断（30轮后） |
 
 ### 5.7 错误恢复与重试
 
-| 项目 | 策略 |
-|------|------|
-| **x-code-cli** | AI SDK 内置 `maxRetries: 3` |
+| 项目            | 策略                                                            |
+| --------------- | --------------------------------------------------------------- |
+| **x-code-cli**  | AI SDK 内置 `maxRetries: 3`                                     |
 | **Claude Code** | 自定义重试：最多 10 次，529 错误 3 次后切换备用模型，OAuth 刷新 |
-| **Codex** | 指数退避重试 + WebSocket → HTTP 降级 |
-| **Gemini CLI** | 重试 + 无效流恢复（自动重新发送）+ 模型降级 |
+| **Codex**       | 指数退避重试 + WebSocket → HTTP 降级                            |
+| **Gemini CLI**  | 重试 + 无效流恢复（自动重新发送）+ 模型降级                     |
 
 ### 5.8 权限模型
 
-| 项目 | 策略 |
-|------|------|
-| **x-code-cli** | 3 级：always-allow（只读）/ ask（写操作）/ deny（危险命令） |
+| 项目            | 策略                                                                         |
+| --------------- | ---------------------------------------------------------------------------- |
+| **x-code-cli**  | 3 级：always-allow（只读）/ ask（写操作）/ deny（危险命令）                  |
 | **Claude Code** | 多模式：default / plan / bypassPermissions / acceptEdits / auto（ML 分类器） |
-| **Codex** | Guardian 系统：调用 GPT 进行风险评分（<80 分自动通过）+ 沙箱 + 网络策略 |
-| **Gemini CLI** | 多层策略引擎：policy → approval mode → confirmation UI → sandbox expansion |
+| **Codex**       | Guardian 系统：调用 GPT 进行风险评分（<80 分自动通过）+ 沙箱 + 网络策略      |
+| **Gemini CLI**  | 多层策略引擎：policy → approval mode → confirmation UI → sandbox expansion   |
 
 ---
 
@@ -459,9 +462,9 @@ for (const toolCall of toolCalls) {
 
 // 优化：读写分离并行（参考 Claude Code）
 const { readOnly, writeable } = partitionTools(toolCalls)
-const readResults = await Promise.all(readOnly.map(executeTool))  // 并行
+const readResults = await Promise.all(readOnly.map(executeTool)) // 并行
 for (const tool of writeable) {
-  await executeTool(tool)  // 串行
+  await executeTool(tool) // 串行
 }
 ```
 
@@ -527,19 +530,19 @@ x-code-cli    Claude Code      Gemini CLI    Codex
 
 不在循环本身，而在循环的"装饰"：
 
-| 维度 | 本质 | 各家差异点 |
-|------|------|-----------|
-| **调 AI** | 都是发 HTTP 请求 | 缓存、重试、降级、WebSocket |
-| **执行工具** | 都是根据 name 分发执行 | 并行 vs 串行、流式启动 |
-| **喂结果** | 都是 push 到 messages | 结果截断策略、摘要替代 |
-| **判断结束** | 都是看 finish_reason | 循环检测、maxTurns |
-| **管理上下文** | 都是控制 messages 大小 | 压缩策略的精细程度 |
+| 维度           | 本质                   | 各家差异点                  |
+| -------------- | ---------------------- | --------------------------- |
+| **调 AI**      | 都是发 HTTP 请求       | 缓存、重试、降级、WebSocket |
+| **执行工具**   | 都是根据 name 分发执行 | 并行 vs 串行、流式启动      |
+| **喂结果**     | 都是 push 到 messages  | 结果截断策略、摘要替代      |
+| **判断结束**   | 都是看 finish_reason   | 循环检测、maxTurns          |
+| **管理上下文** | 都是控制 messages 大小 | 压缩策略的精细程度          |
 
 ### 各项目关键文件索引
 
-| 项目 | Agent Loop | API 调用 | 工具系统 | 权限 |
-|------|-----------|---------|---------|------|
-| **x-code-cli** | `core/src/agent/loop.ts` | 同左 (streamText) | `core/src/tools/index.ts` | `core/src/permissions/index.ts` |
-| **Claude Code** | `src/query.ts` | `src/services/api/claude.ts` | `src/Tool.ts` + `services/tools/` | `src/types/permissions.ts` |
-| **Codex** | `codex-rs/core/src/codex.rs` | `codex-rs/core/src/client.rs` | `codex-rs/core/src/tools/` | `codex-rs/core/src/guardian/` |
-| **Gemini CLI** | `packages/core/src/core/client.ts` | `packages/core/src/core/geminiChat.ts` | `packages/core/src/scheduler/` | `packages/core/src/scheduler/policy.ts` |
+| 项目            | Agent Loop                         | API 调用                               | 工具系统                          | 权限                                    |
+| --------------- | ---------------------------------- | -------------------------------------- | --------------------------------- | --------------------------------------- |
+| **x-code-cli**  | `core/src/agent/loop.ts`           | 同左 (streamText)                      | `core/src/tools/index.ts`         | `core/src/permissions/index.ts`         |
+| **Claude Code** | `src/query.ts`                     | `src/services/api/claude.ts`           | `src/Tool.ts` + `services/tools/` | `src/types/permissions.ts`              |
+| **Codex**       | `codex-rs/core/src/codex.rs`       | `codex-rs/core/src/client.rs`          | `codex-rs/core/src/tools/`        | `codex-rs/core/src/guardian/`           |
+| **Gemini CLI**  | `packages/core/src/core/client.ts` | `packages/core/src/core/geminiChat.ts` | `packages/core/src/scheduler/`    | `packages/core/src/scheduler/policy.ts` |

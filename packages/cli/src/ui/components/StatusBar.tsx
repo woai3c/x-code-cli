@@ -1,9 +1,11 @@
-// @x-code-cli/cli — Bottom status bar (model / token / cost)
+// @x-code-cli/cli — Bottom status bar (model / token count)
 import React from 'react'
 
 import { Box, Text } from 'ink'
 
 import type { TokenUsage } from '@x-code-cli/core'
+
+import { ACCENT_DIM, DIM } from '../theme.js'
 
 interface StatusBarProps {
   modelId: string
@@ -11,13 +13,13 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ modelId, usage }: StatusBarProps) {
-  const symbol = usage.costCurrency === 'CNY' ? '¥' : '$'
-  const costStr = usage.estimatedCost > 0 ? ` ${symbol}${usage.estimatedCost.toFixed(4)}` : ''
+  if (usage.totalTokens === 0) return null
+
   return (
-    <Box>
-      <Text dimColor>
-        {modelId} | {usage.totalTokens.toLocaleString()} tokens{costStr}
-      </Text>
+    <Box marginTop={0} gap={1}>
+      <Text color={ACCENT_DIM}>{modelId}</Text>
+      <Text color={DIM}>·</Text>
+      <Text dimColor>{usage.totalTokens.toLocaleString()} tokens</Text>
     </Box>
   )
 }

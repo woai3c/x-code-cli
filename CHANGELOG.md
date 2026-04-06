@@ -10,4 +10,3 @@
 
 - use npm publish with OIDC provenance instead of pnpm (22bfcfc)
 - use NPM_TOKEN for npm publish authentication (7444647)
-

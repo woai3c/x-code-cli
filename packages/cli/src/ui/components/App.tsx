@@ -13,7 +13,7 @@ import { MessageList } from './MessageList.js'
 import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
 import { ShellOutput } from './ShellOutput.js'
-import { Spinner } from './Spinner.js'
+import { Spinner, type SpinnerMode } from './Spinner.js'
 import { StreamingText } from './StreamingText.js'
 import { ToolCall } from './ToolCall.js'
 
@@ -271,15 +271,15 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
         </Box>
       )}
 
-      {/* Message history */}
+      {/* Message history (tool calls appear here progressively as they complete) */}
       <MessageList messages={state.messages} />
 
       {/* Current streaming text */}
       {state.streamingText && <StreamingText text={state.streamingText} />}
 
-      {/* Current tool call */}
+      {/* Current tool call (in-progress) */}
       {state.currentToolCall && !state.pendingPermission && (
-        <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} status="running" />
+        <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
       )}
 
       {/* Shell output */}
@@ -303,8 +303,14 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
         />
       )}
 
-      {/* Loading spinner */}
-      {state.isLoading && !state.streamingText && !state.currentToolCall && <Spinner />}
+      {/* Loading spinner — always visible during isLoading, arrow changes by phase */}
+      {state.isLoading &&
+        (() => {
+          let mode: SpinnerMode = 'requesting'
+          if (state.currentToolCall) mode = 'tool-use'
+          else if (state.streamingText) mode = 'responding'
+          return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
+        })()}
 
       {/* Error */}
       {state.error && <Text color={ERROR}>Error: {state.error}</Text>}

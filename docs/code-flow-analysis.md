@@ -198,14 +198,14 @@ main()
 
 **模型别名映射表（定义在 `core/src/types/index.ts`）：**
 
-| 别名 | 完整 Model ID |
-|------|---------------|
-| sonnet | anthropic:claude-sonnet-4-5 |
-| opus | anthropic:claude-opus-4-6 |
-| haiku | anthropic:claude-haiku-4-5 |
-| gpt4 | openai:gpt-4.1 |
-| deepseek | deepseek:deepseek-chat |
-| ... | ... |
+| 别名     | 完整 Model ID               |
+| -------- | --------------------------- |
+| sonnet   | anthropic:claude-sonnet-4-5 |
+| opus     | anthropic:claude-opus-4-6   |
+| haiku    | anthropic:claude-haiku-4-5  |
+| gpt4     | openai:gpt-4.1              |
+| deepseek | deepseek:deepseek-chat      |
+| ...      | ...                         |
 
 **Provider 检测顺序：** Anthropic → OpenAI → Google → DeepSeek → xAI → Alibaba → Zhipu → Moonshot → Custom
 
@@ -213,10 +213,10 @@ main()
 
 ```typescript
 const options: AgentOptions = {
-  modelId,              // 如 "anthropic:claude-sonnet-4-5"
-  trustMode: false,     // 默认需要确认写操作
-  printMode: false,     // 默认交互模式
-  maxTurns: 100,        // 最大 Agent 循环轮数
+  modelId, // 如 "anthropic:claude-sonnet-4-5"
+  trustMode: false, // 默认需要确认写操作
+  printMode: false, // 默认交互模式
+  maxTurns: 100, // 最大 Agent 循环轮数
 }
 ```
 
@@ -236,6 +236,7 @@ startApp()
 ```
 
 **终端显示效果：**
+
 ```
   ██╗  ██╗       ██████╗ ██████╗ ██████╗ ███████╗
   ╚██╗██╔╝      ██╔════╝██╔═══██╗██╔══██╗██╔════╝
@@ -261,6 +262,7 @@ startApp()
 ```
 
 **初始 AgentState：**
+
 ```typescript
 {
   messages: [],                    // 对话历史
@@ -333,11 +335,13 @@ ChatInput 组件
 ```
 
 **斜杠命令补全：**
+
 - 用户输入 `/` 时，显示所有命令列表
 - 模糊匹配：输入 `/m` 匹配 `/model`
 - Tab 键接受补全
 
 **终端显示：**
+
 ```
 > /█                          ← 用户正在输入
   /help            Show this help message
@@ -639,6 +643,7 @@ Trust Mode (--trust / -t):
 ```
 
 **终端权限确认显示：**
+
 ```
 ╭──────────────────────────────────────────╮
 │ X-Code wants to edit a file              │
@@ -1001,29 +1006,29 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 
 ## 文件索引
 
-| 阶段 | 文件 | 关键函数/组件 |
-|------|------|---------------|
-| CLI 入口 | `cli/src/index.ts` | `main()`, `checkNodeVersion()`, `loadEnvFile()` |
-| Ink 渲染 | `cli/src/app.tsx` | `startApp()`, `printExitSummary()` |
-| 根组件 | `cli/src/ui/components/App.tsx` | `App`, `handleSubmit()`, `SLASH_COMMANDS` |
-| Agent Hook | `cli/src/ui/hooks/use-agent.ts` | `useAgent()`, `submit()`, `AgentState` |
-| Agent 循环 | `core/src/agent/loop.ts` | `agentLoop()`, `handleToolCalls()`, `compressMessages()` |
-| System Prompt | `core/src/agent/system-prompt.ts` | `buildSystemPrompt()`, `PLAN_MODE_PROMPT` |
-| 消息处理 | `core/src/agent/messages.ts` | `estimateTokens()`, `toolResultMessage()` |
-| 定价 | `core/src/agent/pricing.ts` | `estimateCost()`, `MODEL_PRICING` |
-| 工具注册 | `core/src/tools/index.ts` | `toolRegistry`, `truncateToolResult()` |
-| 权限系统 | `core/src/permissions/index.ts` | `checkPermission()`, `getPermissionLevel()` |
-| 知识加载 | `core/src/knowledge/loader.ts` | `buildKnowledgeContext()`, `loadRuleFiles()` |
-| 会话管理 | `core/src/knowledge/session.ts` | `loadLatestSession()`, `saveSession()`, `generateSessionSummary()` |
-| 自动记忆 | `core/src/knowledge/auto-memory.ts` | `AutoMemory`, `initMemories()` |
-| 项目扫描 | `core/src/knowledge/hooks.ts` | `scanProject()` |
-| 配置 | `core/src/config/index.ts` | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()` |
-| Provider | `core/src/providers/registry.ts` | `createModelRegistry()` |
-| 输入组件 | `cli/src/ui/components/ChatInput.tsx` | `ChatInput`, 模糊匹配补全 |
-| 消息列表 | `cli/src/ui/components/MessageList.tsx` | `MessageList` (Ink Static) |
-| 流式文本 | `cli/src/ui/components/StreamingText.tsx` | `StreamingText`, 尾部截断策略 |
-| 工具显示 | `cli/src/ui/components/ToolCall.tsx` | `ToolCall` |
-| 权限确认 | `cli/src/ui/components/Permission.tsx` | `Permission`, `DiffView` |
-| Header | `cli/src/ui/components/AppHeader.tsx` | `printHeader()`, ASCII Logo |
-| Markdown | `cli/src/ui/render-markdown.ts` | `renderMarkdown()`, marked lexer + chalk |
-| 主题 | `cli/src/ui/theme.ts` | `ACCENT`, `SUCCESS`, `WARNING`, `ERROR` |
+| 阶段          | 文件                                      | 关键函数/组件                                                      |
+| ------------- | ----------------------------------------- | ------------------------------------------------------------------ |
+| CLI 入口      | `cli/src/index.ts`                        | `main()`, `checkNodeVersion()`, `loadEnvFile()`                    |
+| Ink 渲染      | `cli/src/app.tsx`                         | `startApp()`, `printExitSummary()`                                 |
+| 根组件        | `cli/src/ui/components/App.tsx`           | `App`, `handleSubmit()`, `SLASH_COMMANDS`                          |
+| Agent Hook    | `cli/src/ui/hooks/use-agent.ts`           | `useAgent()`, `submit()`, `AgentState`                             |
+| Agent 循环    | `core/src/agent/loop.ts`                  | `agentLoop()`, `handleToolCalls()`, `compressMessages()`           |
+| System Prompt | `core/src/agent/system-prompt.ts`         | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                          |
+| 消息处理      | `core/src/agent/messages.ts`              | `estimateTokens()`, `toolResultMessage()`                          |
+| 定价          | `core/src/agent/pricing.ts`               | `estimateCost()`, `MODEL_PRICING`                                  |
+| 工具注册      | `core/src/tools/index.ts`                 | `toolRegistry`, `truncateToolResult()`                             |
+| 权限系统      | `core/src/permissions/index.ts`           | `checkPermission()`, `getPermissionLevel()`                        |
+| 知识加载      | `core/src/knowledge/loader.ts`            | `buildKnowledgeContext()`, `loadRuleFiles()`                       |
+| 会话管理      | `core/src/knowledge/session.ts`           | `loadLatestSession()`, `saveSession()`, `generateSessionSummary()` |
+| 自动记忆      | `core/src/knowledge/auto-memory.ts`       | `AutoMemory`, `initMemories()`                                     |
+| 项目扫描      | `core/src/knowledge/hooks.ts`             | `scanProject()`                                                    |
+| 配置          | `core/src/config/index.ts`                | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`      |
+| Provider      | `core/src/providers/registry.ts`          | `createModelRegistry()`                                            |
+| 输入组件      | `cli/src/ui/components/ChatInput.tsx`     | `ChatInput`, 模糊匹配补全                                          |
+| 消息列表      | `cli/src/ui/components/MessageList.tsx`   | `MessageList` (Ink Static)                                         |
+| 流式文本      | `cli/src/ui/components/StreamingText.tsx` | `StreamingText`, 尾部截断策略                                      |
+| 工具显示      | `cli/src/ui/components/ToolCall.tsx`      | `ToolCall`                                                         |
+| 权限确认      | `cli/src/ui/components/Permission.tsx`    | `Permission`, `DiffView`                                           |
+| Header        | `cli/src/ui/components/AppHeader.tsx`     | `printHeader()`, ASCII Logo                                        |
+| Markdown      | `cli/src/ui/render-markdown.ts`           | `renderMarkdown()`, marked lexer + chalk                           |
+| 主题          | `cli/src/ui/theme.ts`                     | `ACCENT`, `SUCCESS`, `WARNING`, `ERROR`                            |
