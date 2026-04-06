@@ -20,10 +20,11 @@ interface ToolCallProps {
 export function ToolCall({ toolName, input }: ToolCallProps) {
   const [frame, setFrame] = useState(0)
   const [elapsed, setElapsed] = useState(0)
-  const startRef = useRef(Date.now())
+  const startRef = useRef(0)
 
   useEffect(() => {
     startRef.current = Date.now()
+
     const timer = setInterval(() => {
       setFrame((prev) => (prev + 1) % SPINNER_FRAMES.length)
       setElapsed(Date.now() - startRef.current)

@@ -38,10 +38,11 @@ function formatTokens(tokens: number): string {
 export function Spinner({ label = 'Thinking', totalTokens, mode = 'requesting' }: SpinnerProps) {
   const [frame, setFrame] = useState(0)
   const [elapsed, setElapsed] = useState(0)
-  const startTimeRef = useRef(Date.now())
+  const startTimeRef = useRef(0)
 
   useEffect(() => {
     startTimeRef.current = Date.now()
+
     const timer = setInterval(() => {
       setFrame((prev) => (prev + 1) % FRAMES.length)
       setElapsed(Date.now() - startTimeRef.current)
