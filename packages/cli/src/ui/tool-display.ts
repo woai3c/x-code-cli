@@ -67,7 +67,7 @@ export function getToolInputPreview(toolName: string, input: Record<string, unkn
   // Generic: try common parameter names before falling back
   for (const key of ['filePath', 'file_path', 'path', 'dirPath', 'dir_path', 'command', 'pattern', 'query', 'url']) {
     if (typeof input[key] === 'string' && input[key]) {
-      return input[key] as string
+      return input[key]
     }
   }
 
@@ -80,11 +80,7 @@ export function getToolInputPreview(toolName: string, input: Record<string, unkn
 }
 
 /** Generate a short result summary for a completed tool call */
-export function getToolResultSummary(
-  toolName: string,
-  output: string | undefined,
-  status: string,
-): string | null {
+export function getToolResultSummary(toolName: string, output: string | undefined, status: string): string | null {
   if (status === 'denied') return 'Denied by user'
   if (!output) return 'Done'
 
@@ -105,31 +101,46 @@ export function getToolResultSummary(
   }
 
   if (n === 'listdir' || n === 'ls') {
-    const entries = output.trim().split('\n').filter((l) => l.trim())
+    const entries = output
+      .trim()
+      .split('\n')
+      .filter((l) => l.trim())
     return entries.length <= 6
       ? entries.join('\n')
       : entries.slice(0, 3).join('\n') + `\n... +${entries.length - 3} items`
   }
 
   if (n === 'glob') {
-    const files = output.trim().split('\n').filter((l) => l.trim())
+    const files = output
+      .trim()
+      .split('\n')
+      .filter((l) => l.trim())
     return `${files.length} file${files.length !== 1 ? 's' : ''} matched`
   }
 
   if (n === 'grep' || n === 'search') {
-    const lines = output.trim().split('\n').filter((l) => l.trim())
+    const lines = output
+      .trim()
+      .split('\n')
+      .filter((l) => l.trim())
     return `${lines.length} result${lines.length !== 1 ? 's' : ''}`
   }
 
   if (n === 'shell' || n === 'bash') {
-    const lines = output.trim().split('\n').filter((l) => l.trim())
+    const lines = output
+      .trim()
+      .split('\n')
+      .filter((l) => l.trim())
     if (lines.length === 0) return 'Done'
     if (lines.length <= 4) return lines.join('\n')
     return lines.slice(0, 3).join('\n') + `\n... +${lines.length - 3} lines`
   }
 
   // Generic: show first few lines
-  const lines = output.trim().split('\n').filter((l) => l.trim())
+  const lines = output
+    .trim()
+    .split('\n')
+    .filter((l) => l.trim())
   if (lines.length === 0) return 'Done'
   if (lines.length <= 3) return lines.join('\n')
   return lines.slice(0, 2).join('\n') + `\n... +${lines.length - 2} lines`

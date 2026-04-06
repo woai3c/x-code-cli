@@ -1,7 +1,14 @@
 // @x-code-cli/cli — Agent state management hook
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { agentLoop, compressMessages, initMemories, loadLatestSession, saveSession, scanProject } from '@x-code-cli/core'
+import {
+  agentLoop,
+  compressMessages,
+  initMemories,
+  loadLatestSession,
+  saveSession,
+  scanProject,
+} from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,

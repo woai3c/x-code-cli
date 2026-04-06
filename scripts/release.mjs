@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { createInterface } from 'node:readline'
 import { resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 
 const rootDir = resolve(import.meta.dirname, '..')
 const packages = ['packages/core/package.json', 'packages/cli/package.json']
@@ -18,16 +18,25 @@ function runCapture(cmd) {
 
 function ask(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
-  return new Promise((r) => rl.question(question, (a) => { rl.close(); r(a) }))
+  return new Promise((r) =>
+    rl.question(question, (a) => {
+      rl.close()
+      r(a)
+    }),
+  )
 }
 
 function bumpVersion(version, type) {
   const [major, minor, patch] = version.split('.').map(Number)
   switch (type) {
-    case 'patch': return `${major}.${minor}.${patch + 1}`
-    case 'minor': return `${major}.${minor + 1}.0`
-    case 'major': return `${major + 1}.0.0`
-    default: return type
+    case 'patch':
+      return `${major}.${minor}.${patch + 1}`
+    case 'minor':
+      return `${major}.${minor + 1}.0`
+    case 'major':
+      return `${major + 1}.0.0`
+    default:
+      return type
   }
 }
 
@@ -45,8 +54,30 @@ function generateChangelog(version) {
 
   if (!log) return ''
 
-  const groups = { feat: [], fix: [], perf: [], refactor: [], docs: [], chore: [], ci: [], style: [], test: [], other: [] }
-  const labels = { feat: 'Features', fix: 'Bug Fixes', perf: 'Performance', refactor: 'Refactors', docs: 'Documentation', chore: 'Chores', ci: 'CI', style: 'Styles', test: 'Tests', other: 'Other Changes' }
+  const groups = {
+    feat: [],
+    fix: [],
+    perf: [],
+    refactor: [],
+    docs: [],
+    chore: [],
+    ci: [],
+    style: [],
+    test: [],
+    other: [],
+  }
+  const labels = {
+    feat: 'Features',
+    fix: 'Bug Fixes',
+    perf: 'Performance',
+    refactor: 'Refactors',
+    docs: 'Documentation',
+    chore: 'Chores',
+    ci: 'CI',
+    style: 'Styles',
+    test: 'Tests',
+    other: 'Other Changes',
+  }
 
   for (const line of log.split('\n')) {
     const match = line.match(/^(\w+)(?:\(.+?\))?!?:\s*(.+)$/)
@@ -77,7 +108,7 @@ console.log('  3) major  → v' + bumpVersion(currentVersion, 'major'))
 console.log('  4) custom')
 
 const choice = await ask('\nSelect version type (1/2/3/4): ')
-const typeMap = { '1': 'patch', '2': 'minor', '3': 'major' }
+const typeMap = { 1: 'patch', 2: 'minor', 3: 'major' }
 
 let targetVersion
 if (choice === '4') {
@@ -111,7 +142,9 @@ console.log('\nGenerating changelog...')
 const changelog = generateChangelog(targetVersion)
 const changelogPath = resolve(rootDir, 'CHANGELOG.md')
 let existingChangelog = ''
-try { existingChangelog = readFileSync(changelogPath, 'utf-8') } catch {}
+try {
+  existingChangelog = readFileSync(changelogPath, 'utf-8')
+} catch {}
 writeFileSync(changelogPath, changelog + existingChangelog)
 console.log('  CHANGELOG.md updated')
 

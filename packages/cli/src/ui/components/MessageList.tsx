@@ -50,9 +50,7 @@ function ToolCallEntry({ tc }: { tc: DisplayToolCall }) {
   let formattedResult = resultSummary
   if (resultSummary && resultSummary.includes('\n')) {
     const lines = resultSummary.split('\n')
-    formattedResult = lines
-      .map((line, i) => (i === 0 ? line : RESULT_INDENT + line))
-      .join('\n')
+    formattedResult = lines.map((line, i) => (i === 0 ? line : RESULT_INDENT + line)).join('\n')
   }
 
   return (

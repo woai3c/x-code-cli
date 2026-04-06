@@ -61,7 +61,7 @@ export function Spinner({ label = 'Thinking', totalTokens, mode = 'requesting' }
 
   return (
     <Text>
-      <Text color={ACCENT}>  {FRAMES[frame]} </Text>
+      <Text color={ACCENT}> {FRAMES[frame]} </Text>
       <Text color={ACCENT}>{label}...</Text>
       {showMeta && <Text color={DIM}> ({metaStr})</Text>}
     </Text>

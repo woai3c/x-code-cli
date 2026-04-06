@@ -304,12 +304,13 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
       )}
 
       {/* Loading spinner — always visible during isLoading, arrow changes by phase */}
-      {state.isLoading && (() => {
-        let mode: SpinnerMode = 'requesting'
-        if (state.currentToolCall) mode = 'tool-use'
-        else if (state.streamingText) mode = 'responding'
-        return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
-      })()}
+      {state.isLoading &&
+        (() => {
+          let mode: SpinnerMode = 'requesting'
+          if (state.currentToolCall) mode = 'tool-use'
+          else if (state.streamingText) mode = 'responding'
+          return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
+        })()}
 
       {/* Error */}
       {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
