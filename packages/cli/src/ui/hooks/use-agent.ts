@@ -6,6 +6,7 @@ import type {
   AgentCallbacks,
   AgentOptions,
   DisplayMessage,
+  DisplayToolCall,
   LanguageModel,
   LoopState,
   SessionSummary,
@@ -63,13 +64,51 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   const streamingBufferRef = useRef('')
   const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // ── Tool call timing ──
+  const toolCallStartRef = useRef<number>(0)
+
+  /**
+   * How many lines to keep in the non-Static streaming area.
+   * When exceeded, ALL accumulated text is flushed to Static and
+   * the streaming area starts fresh. This prevents Ink from trying
+   * to redraw a non-Static area taller than the terminal, which
+   * causes flickering, jumping, and blank space artifacts.
+   *
+   * The text content in messages (Static) has no `●` prefix, so
+   * flushing is visually seamless.
+   */
+  const FLUSH_THRESHOLD = 16
+
   const startStreamingFlush = useCallback(() => {
     if (flushTimerRef.current) return
     flushTimerRef.current = setInterval(() => {
       if (streamingBufferRef.current) {
         const buffered = streamingBufferRef.current
         streamingBufferRef.current = ''
-        setState((prev) => ({ ...prev, streamingText: prev.streamingText + buffered }))
+        setState((prev) => {
+          const fullText = prev.streamingText + buffered
+          const lineCount = fullText.split('\n').length
+
+          // If text exceeds threshold, push ALL to Static and start fresh.
+          // This keeps the non-Static area small and prevents Ink flicker.
+          if (lineCount > FLUSH_THRESHOLD) {
+            return {
+              ...prev,
+              streamingText: '',
+              messages: [
+                ...prev.messages,
+                {
+                  id: `stream-${Date.now()}`,
+                  role: 'assistant' as const,
+                  content: fullText,
+                  timestamp: Date.now(),
+                },
+              ],
+            }
+          }
+
+          return { ...prev, streamingText: fullText }
+        })
       }
     }, 50)
   }, [])
@@ -84,6 +123,52 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       const buffered = streamingBufferRef.current
       streamingBufferRef.current = ''
       setState((prev) => ({ ...prev, streamingText: prev.streamingText + buffered }))
+    }
+  }, [])
+
+  /**
+   * Flush accumulated streaming text into messages (Static) so it appears
+   * permanently in the scrollback before a tool call is shown.
+   */
+  const flushStreamingToMessages = useCallback(() => {
+    // First, drain anything remaining in the buffer ref
+    if (streamingBufferRef.current) {
+      const buffered = streamingBufferRef.current
+      streamingBufferRef.current = ''
+      setState((prev) => {
+        const fullText = prev.streamingText + buffered
+        if (!fullText) return prev
+        return {
+          ...prev,
+          streamingText: '',
+          messages: [
+            ...prev.messages,
+            {
+              id: `text-${Date.now()}`,
+              role: 'assistant' as const,
+              content: fullText,
+              timestamp: Date.now(),
+            },
+          ],
+        }
+      })
+    } else {
+      setState((prev) => {
+        if (!prev.streamingText) return prev
+        return {
+          ...prev,
+          streamingText: '',
+          messages: [
+            ...prev.messages,
+            {
+              id: `text-${Date.now()}`,
+              role: 'assistant' as const,
+              content: prev.streamingText,
+              timestamp: Date.now(),
+            },
+          ],
+        }
+      })
     }
   }, [])
 
@@ -140,10 +225,40 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           streamingBufferRef.current += delta
         },
         onToolCall: (toolName, input) => {
+          // Flush any accumulated text to messages first, so it appears
+          // in the scrollback BEFORE the tool call indicator.
+          flushStreamingToMessages()
+          toolCallStartRef.current = Date.now()
           setState((prev) => ({ ...prev, currentToolCall: { toolName, input } }))
         },
-        onToolResult: (_toolCallId, _result) => {
-          setState((prev) => ({ ...prev, currentToolCall: null, shellOutput: '' }))
+        onToolResult: (_toolCallId, result) => {
+          const durationMs = Date.now() - toolCallStartRef.current
+          // Push the completed tool call directly into messages (Static)
+          setState((prev) => {
+            const tc: DisplayToolCall = {
+              id: `tc-${Date.now()}`,
+              toolName: prev.currentToolCall?.toolName ?? 'unknown',
+              input: prev.currentToolCall?.input ?? {},
+              output: result,
+              status: 'completed',
+              durationMs,
+            }
+            return {
+              ...prev,
+              currentToolCall: null,
+              shellOutput: '',
+              messages: [
+                ...prev.messages,
+                {
+                  id: `tool-${Date.now()}`,
+                  role: 'assistant' as const,
+                  content: '',
+                  toolCalls: [tc],
+                  timestamp: Date.now(),
+                },
+              ],
+            }
+          })
         },
         onAskPermission: (toolCall) => {
           return new Promise<boolean>((resolve) => {
@@ -187,17 +302,22 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         // Flush any remaining buffered text before finalizing
         stopStreamingFlush()
 
-        // Add assistant message from streaming text
+        // Flush any remaining streaming text to messages
         setState((prev) => {
-          const assistantMsg: DisplayMessage = {
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: prev.streamingText,
-            timestamp: Date.now(),
+          if (!prev.streamingText) {
+            return { ...prev, isLoading: false, currentToolCall: null }
           }
           return {
             ...prev,
-            messages: prev.streamingText ? [...prev.messages, assistantMsg] : prev.messages,
+            messages: [
+              ...prev.messages,
+              {
+                id: `text-${Date.now()}`,
+                role: 'assistant' as const,
+                content: prev.streamingText,
+                timestamp: Date.now(),
+              },
+            ],
             streamingText: '',
             isLoading: false,
             currentToolCall: null,
@@ -212,7 +332,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         }))
       }
     },
-    [options, initialize, startStreamingFlush, stopStreamingFlush],
+    [options, initialize, startStreamingFlush, stopStreamingFlush, flushStreamingToMessages],
   )
 
   /** Resolve a pending permission request */

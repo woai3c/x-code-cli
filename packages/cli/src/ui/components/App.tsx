@@ -271,15 +271,15 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
         </Box>
       )}
 
-      {/* Message history */}
+      {/* Message history (tool calls appear here progressively as they complete) */}
       <MessageList messages={state.messages} />
 
       {/* Current streaming text */}
       {state.streamingText && <StreamingText text={state.streamingText} />}
 
-      {/* Current tool call */}
+      {/* Current tool call (in-progress) */}
       {state.currentToolCall && !state.pendingPermission && (
-        <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} status="running" />
+        <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
       )}
 
       {/* Shell output */}
@@ -304,7 +304,9 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
       )}
 
       {/* Loading spinner */}
-      {state.isLoading && !state.streamingText && !state.currentToolCall && <Spinner />}
+      {state.isLoading && !state.streamingText && !state.currentToolCall && (
+        <Spinner totalTokens={state.usage.totalTokens} isStreaming={false} />
+      )}
 
       {/* Error */}
       {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
