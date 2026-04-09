@@ -207,7 +207,7 @@ main()
 | deepseek | deepseek:deepseek-chat      |
 | ...      | ...                         |
 
-**Provider 检测顺序：** Anthropic → OpenAI → Google → DeepSeek → xAI → Alibaba → Zhipu → Moonshot → Custom
+**Provider 检测顺序：** Anthropic → OpenAI → DeepSeek → Alibaba → Google → xAI → Zhipu → Moonshot → Custom
 
 ### 步骤 5: 构建启动参数
 
@@ -290,11 +290,11 @@ App 组件的 JSX 结构决定了终端显示布局：
   {/* 2. 消息历史 — Ink Static，写入滚动缓冲区，不重绘 */}
   <MessageList messages={state.messages} />
 
-  {/* 3. 当前流式文本 — 动态区域，只显示末尾 N 行 */}
+  {/* 3. 当前流式文本 — 动态区域 */}
   {state.streamingText && <StreamingText text={state.streamingText} />}
 
-  {/* 4. 当前工具调用显示 */}
-  {state.currentToolCall && <ToolCall ... />}
+  {/* 4. 当前工具调用显示 (Claude Code 风格: ● ToolName(preview) + ⎿ Running...) */}
+  {state.currentToolCall && !state.pendingPermission && <ToolCall ... />}
 
   {/* 5. Shell 输出 */}
   {state.shellOutput && <ShellOutput output={state.shellOutput} />}
@@ -305,8 +305,9 @@ App 组件的 JSX 结构决定了终端显示布局：
   {/* 7. 用户选择对话框 */}
   {state.pendingQuestion && <SelectOptions ... />}
 
-  {/* 8. 加载 Spinner */}
-  {state.isLoading && !state.streamingText && !state.currentToolCall && <Spinner />}
+  {/* 8. 加载 Spinner — 始终在 isLoading 时可见，箭头方向根据阶段变化 */}
+  {/*    ↑ = requesting (等待 API 响应), ↓ = responding/thinking/tool-use */}
+  {state.isLoading && <Spinner totalTokens={state.usage.totalTokens} mode={mode} />}
 
   {/* 9. 错误信息 */}
   {state.error && <Text color="red">Error: {state.error}</Text>}
@@ -413,8 +414,13 @@ submit(text)
   ├─ 5. 构建 AgentCallbacks (React State ←→ Core Agent 桥接)
   │    {
   │      onTextDelta:       delta → streamingBuffer 累积
-  │      onToolCall:        (name, input) → setState({ currentToolCall })
-  │      onToolResult:      (id, result) → setState({ currentToolCall: null })
+  │      onToolCall:        (name, input) → flushStreamingToMessages() 先将已有文本 flush 到 Static
+  │                                       → 记录 toolCallStartRef 起始时间
+  │                                       → setState({ currentToolCall })
+  │      onToolResult:      (id, result) → 计算 durationMs (工具执行耗时)
+  │                                       → 构建 DisplayToolCall { toolName, input, output, status, durationMs }
+  │                                       → push 到 messages (Static 区域)
+  │                                       → setState({ currentToolCall: null })
   │      onAskPermission:   (toolCall) → new Promise → setState({ pendingPermission })
   │      onAskUser:         (question, opts) → new Promise → setState({ pendingQuestion })
   │      onShellOutput:     chunk → setState(shellOutput += chunk)
@@ -710,30 +716,45 @@ renderMarkdown(text)  (cli/src/ui/render-markdown.ts)
 ```
 StreamingText 组件 (cli/src/ui/components/StreamingText.tsx)
   │
-  问题: Ink 动态区域超出终端高度时会出现重复渲染
-  │
-  解决方案 (参考 Gemini CLI):
-  ├─ 计算可用行数: maxLines = terminalRows - 6 (reserved)
-  ├─ 只显示文本末尾 maxLines 行
-  └─ 完整文本在流式结束后转入 Static <MessageList>
+  简化为纯 Markdown 渲染:
+  ├─ 接收 text prop → useMemo(() => renderMarkdown(text))
+  └─ 渲染: <Box marginLeft={2}><Text>{rendered}</Text></Box>
+
+  行数控制 (use-agent.ts — FLUSH_THRESHOLD):
+  ├─ 当 streamingText 超过 FLUSH_THRESHOLD (16 行) 时
+  │   → 自动将全部文本 flush 到 Static <MessageList>
+  │   → 清空 streamingText，动态区域重新开始
+  └─ 这样保持非 Static 区域很小，避免 Ink 闪烁/跳动
 
   节流策略 (use-agent.ts):
   ├─ onTextDelta → 累积到 streamingBufferRef (不触发 re-render)
   └─ 每 50ms setInterval → flush buffer → setState(streamingText)
+
+  工具调用时文本 flush (use-agent.ts — flushStreamingToMessages):
+  ├─ onToolCall 触发时，先将已有 streamingText flush 到 Static
+  └─ 确保文本在工具调用指示器之前显示，视觉顺序正确
 ```
 
-### 消息列表渲染
+### 消息列表渲染 (Claude Code 风格)
 
 ```
 MessageList 组件 (cli/src/ui/components/MessageList.tsx)
   │
+  使用 tool-display.ts 提供的共享工具显示函数:
+  ├─ getToolLabel(toolName)         → 人类可读标签 (如 readFile → "Read")
+  ├─ getToolInputPreview(name, input) → 智能提取输入预览 (文件路径/命令/模式)
+  └─ getToolResultSummary(name, output, status) → 简洁结果摘要
+  │
   └─ <Static items={messages}>   // Ink Static: 写入一次，永不重绘
        ├─ role === 'user'
-       │    → <Text color="#89b4fa" bold>> </Text>{content}
+       │    → <Text color={ACCENT} bold>❯ </Text>{content}
        │
        └─ role === 'assistant'
-            → <Text>{renderMarkdown(content)}</Text>
-            └─ toolCalls?.map → [status] toolName: output...
+            ├─ toolCalls?.map → ToolCallEntry 组件:
+            │    ● ToolName(input_preview)           ← 绿色圆点 + 粗体标签
+            │      ⎿  result_summary (duration)      ← 缩进结果 + 耗时
+            │    (denied 状态显示为红色)
+            └─ content → <Text>{renderMarkdown(content)}</Text>
 ```
 
 ---
@@ -820,12 +841,19 @@ process.on('SIGINT')  (cli/src/index.ts)
    │    └─ tool-call: readFile({ filePath: "package.json" })
    │
    │  [终端显示]
-   │  ◑ glob **/*.{ts,tsx,json}
+   │  ● Glob(**/*.{ts,tsx,json})
+   │    ⎿  ⠋ Running...
    │
    ├─ finishReason = 'tool-calls'
    ├─ handleToolCalls()
    │    ├─ glob → 自动执行 (always-allow) → 返回文件列表
    │    └─ readFile → 自动执行 (always-allow) → 返回 package.json 内容
+   │
+   │  [工具完成后终端显示 (Static 区域)]
+   │  ● Glob(**/*.{ts,tsx,json})
+   │    ⎿  42 files matched (0.1s)
+   │  ● Read(package.json)
+   │    ⎿  35 lines (0.0s)
    │
    └─ continue (进入下一轮)
 
@@ -840,7 +868,8 @@ process.on('SIGINT')  (cli/src/index.ts)
    │    └─ listDir({ path: "packages/core/src/tools" })
    │
    │  [终端显示]
-   │  ◑ readFile packages/core/src/index.ts
+   │  ● Read(packages/core/src/index.ts)
+   │    ⎿  ⠋ Running...
    │
    └─ continue
 
@@ -883,7 +912,14 @@ process.on('SIGINT')  (cli/src/index.ts)
    │
    │  [终端最终显示]
    │
-   │  > 帮忙分析一下项目产品功能以及优化点     ← Static 区 (用户消息)
+   │  ❯ 帮忙分析一下项目产品功能以及优化点     ← Static 区 (用户消息)
+   │
+   │  ● Glob(**/*.{ts,tsx,json})                ← Static 区 (工具调用历史)
+   │    ⎿  42 files matched (0.1s)
+   │  ● Read(package.json)
+   │    ⎿  35 lines (0.0s)
+   │  ● Read(packages/core/src/index.ts)
+   │    ⎿  120 lines (0.1s)
    │                                            ← Static 区 (AI 回复, Markdown 渲染)
    │  项目产品功能分析                          ← h2, bold + underline + accent blue
    │
@@ -1025,9 +1061,10 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 | 配置          | `core/src/config/index.ts`                | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`      |
 | Provider      | `core/src/providers/registry.ts`          | `createModelRegistry()`                                            |
 | 输入组件      | `cli/src/ui/components/ChatInput.tsx`     | `ChatInput`, 模糊匹配补全                                          |
-| 消息列表      | `cli/src/ui/components/MessageList.tsx`   | `MessageList` (Ink Static)                                         |
-| 流式文本      | `cli/src/ui/components/StreamingText.tsx` | `StreamingText`, 尾部截断策略                                      |
-| 工具显示      | `cli/src/ui/components/ToolCall.tsx`      | `ToolCall`                                                         |
+| 消息列表      | `cli/src/ui/components/MessageList.tsx`   | `MessageList` (Ink Static), `ToolCallEntry` (Claude Code 风格)     |
+| 流式文本      | `cli/src/ui/components/StreamingText.tsx` | `StreamingText`, Markdown 渲染                                     |
+| 工具调用      | `cli/src/ui/components/ToolCall.tsx`      | `ToolCall` (进行中工具调用, 含 Spinner + 计时)                     |
+| 工具显示      | `cli/src/ui/tool-display.ts`             | `getToolLabel()`, `getToolInputPreview()`, `getToolResultSummary()`|
 | 权限确认      | `cli/src/ui/components/Permission.tsx`    | `Permission`, `DiffView`                                           |
 | Header        | `cli/src/ui/components/AppHeader.tsx`     | `printHeader()`, ASCII Logo                                        |
 | Markdown      | `cli/src/ui/render-markdown.ts`           | `renderMarkdown()`, marked lexer + chalk                           |

@@ -60,7 +60,7 @@ while (未结束) {
 
 | 项目            | API 调用位置                                                                | 调用方式            |
 | --------------- | --------------------------------------------------------------------------- | ------------------- |
-| **x-code-cli**  | `loop.ts:435` (streamText) + `loop.ts:208` / `session.ts:52` (generateText) | Vercel AI SDK       |
+| **x-code-cli**  | `loop.ts:453` (streamText) + `loop.ts:226` / `session.ts` (generateText) | Vercel AI SDK       |
 | **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`                  | Anthropic SDK 原生  |
 | **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                             | Rust HTTP/WebSocket |
 | **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                             | Google GenAI SDK    |
@@ -249,18 +249,19 @@ edit/shell)
 整个过程实时渲染到终端：
 
 ```
-> 分析一下项目有什么功能
+❯ 分析一下项目有什么功能
 
-让我看一下项目结构                       ← text-delta chunk（实时显示）
-○ glob **/*.ts                          ← tool-call chunk（AI SDK 自动执行）
-● glob **/*.ts (found 42 files)         ← tool-result chunk（执行完毕）
-○ readFile package.json                 ← 又一个 tool-call
-● readFile package.json ✓               ← 执行完毕
-○ grep TODO|FIXME **/*.ts
-● grep TODO|FIXME (3 matches)
+  让我看一下项目结构                     ← text-delta chunk（实时显示）
 
-这个项目是一个 AI 编码助手 CLI 工具，主要功能包括：  ← AI 最终输出
-1. 多模型支持...
+● Glob(**/*.ts)                         ← tool-call chunk（进行中显示 Spinner）
+  ⎿  42 files matched (0.1s)            ← tool-result chunk（执行完毕，显示摘要 + 耗时）
+● Read(package.json)                    ← 又一个 tool-call
+  ⎿  35 lines (0.0s)                    ← 执行完毕
+● Grep(TODO|FIXME)
+  ⎿  3 results (0.2s)
+
+  这个项目是一个 AI 编码助手 CLI 工具，主要功能包括：  ← AI 最终输出
+  1. 多模型支持...
 ```
 
 ### 完整数据流总图
@@ -319,7 +320,7 @@ finish_reason: "tool_calls"  → 我还需要执行工具，别停
 finish_reason: "end_turn"    → 我说完了，停
 ```
 
-x-code-cli 中的实际代码 (`loop.ts:506`)：
+x-code-cli 中的实际代码 (`loop.ts:520`)：
 
 ```typescript
 if (finishReason === 'tool-calls') {
@@ -361,7 +362,7 @@ if (finishReason === 'tool-calls') {
 
 | 项目            | 判断方式                                    | 代码位置      |
 | --------------- | ------------------------------------------- | ------------- |
-| **x-code-cli**  | `finishReason === 'tool-calls'`             | `loop.ts:506` |
+| **x-code-cli**  | `finishReason === 'tool-calls'`             | `loop.ts:520` |
 | **Claude Code** | 检查响应中是否有 `tool_use` content block   | `query.ts`    |
 | **Codex**       | `ResponseEvent::Completed` + 检查待执行工具 | `codex.rs`    |
 | **Gemini CLI**  | `functionCalls` 是否存在于 response parts   | `turn.ts`     |

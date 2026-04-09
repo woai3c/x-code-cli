@@ -52,18 +52,21 @@ x-code-cli/
 │   │   │   ├── ui/
 │   │   │   │   ├── components/
 │   │   │   │   │   ├── App.tsx          # 根组件
-│   │   │   │   │   ├── MessageList.tsx  # 消息历史（Static）
-│   │   │   │   │   ├── StreamingText.tsx # 流式输出渲染
-│   │   │   │   │   ├── ToolCall.tsx     # 工具调用展示
+│   │   │   │   │   ├── MessageList.tsx  # 消息历史（Static, Claude Code 风格）
+│   │   │   │   │   ├── StreamingText.tsx # 流式 Markdown 渲染
+│   │   │   │   │   ├── ToolCall.tsx     # 工具调用展示（进行中, 含 Spinner + 计时）
 │   │   │   │   │   ├── ChatInput.tsx    # 用户输入框
-│   │   │   │   │   ├── Spinner.tsx      # 加载动画
+│   │   │   │   │   ├── Spinner.tsx      # 加载动画（支持 mode: requesting/responding/tool-use）
 │   │   │   │   │   ├── Permission.tsx   # 权限确认 UI（含 diff 预览）
 │   │   │   │   │   ├── ShellOutput.tsx  # Shell 命令实时输出
 │   │   │   │   │   ├── StatusBar.tsx    # 底部状态栏（模型/token/费用）
 │   │   │   │   │   ├── SelectOptions.tsx # askUser 多选交互
 │   │   │   │   │   └── SetupWizard.tsx  # 首次使用引导
-│   │   │   │   └── hooks/
-│   │   │   │       └── use-agent.ts     # Agent 状态管理 Hook
+│   │   │   │   ├── hooks/
+│   │   │   │   │   └── use-agent.ts     # Agent 状态管理 Hook
+│   │   │   │   ├── tool-display.ts      # 工具显示工具函数（标签/预览/摘要）
+│   │   │   │   ├── render-markdown.ts   # Markdown → ANSI 终端渲染
+│   │   │   │   └── theme.ts             # 主题颜色常量（ACCENT/SUCCESS/WARNING/ERROR）
 │   │   │   └── config/
 │   │   │       └── index.ts             # 配置管理（API Key 等）
 │   │   ├── tests/
