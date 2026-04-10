@@ -8,7 +8,7 @@ import React, { useMemo, useState } from 'react'
 
 import { Box, Text, useInput } from 'ink'
 
-import { ACCENT } from '../theme.js'
+import { ACCENT, PROMPT_BORDER } from '../theme.js'
 
 const PASTE_PREVIEW_THRESHOLD = 500
 const PASTE_PREVIEW_LINES = 3
@@ -123,11 +123,17 @@ export function ChatInput({ onSubmit, disabled, commands = [] }: ChatInputProps)
 
   return (
     <Box flexDirection="column">
-      {/* Input line — only shows what the user actually typed, no ghost text */}
-      <Box>
-        <Text color={ACCENT} bold>
-          {'> '}
-        </Text>
+      {/* Input line framed by top + bottom rules (borderLeft/Right disabled),
+          matching the Claude Code PromptInput visual — medium gray border
+          (rgb 153,153,153) and the ❯ pointer glyph from the figures package. */}
+      <Box
+        borderStyle="round"
+        borderLeft={false}
+        borderRight={false}
+        borderColor={PROMPT_BORDER}
+        width="100%"
+      >
+        <Text color={PROMPT_BORDER}>{'❯ '}</Text>
         <Text>{displayText}</Text>
         <Text dimColor>█</Text>
       </Box>

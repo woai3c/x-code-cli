@@ -8,7 +8,6 @@ import path from 'node:path'
 import {
   PROVIDER_DETECTION_ORDER,
   PROVIDER_KEY_URLS,
-  VERSION,
   createModelRegistry,
   getAvailableProviders,
   getEnvVarName,
@@ -18,6 +17,7 @@ import {
 import type { AgentOptions } from '@x-code-cli/core'
 
 import { getCleanupFn, printExitSummary, startApp } from './app.js'
+import { VERSION } from './version.js'
 
 const MIN_NODE_VERSION = [20, 19, 0]
 

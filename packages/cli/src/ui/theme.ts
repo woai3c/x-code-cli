@@ -22,3 +22,6 @@ export const ERROR = '#f38ba8'
 
 /** Muted elements — uses named ANSI gray for broad compatibility */
 export const DIM = 'gray'
+
+/** Prompt input top/bottom rules — medium gray matching Claude Code's `promptBorder` */
+export const PROMPT_BORDER = '#999999'

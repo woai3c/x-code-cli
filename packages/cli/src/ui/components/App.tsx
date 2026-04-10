@@ -3,9 +3,10 @@ import React, { useEffect } from 'react'
 
 import { Box, Text, useApp, useInput } from 'ink'
 
-import { MODEL_ALIASES, VERSION, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code-cli/core'
+import { MODEL_ALIASES, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code-cli/core'
 import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
+import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
 import { ACCENT, ERROR, WARNING } from '../theme.js'
 import { ChatInput } from './ChatInput.js'

@@ -5,8 +5,7 @@
 // appear multiple times as the dynamic area changes height.
 import { Chalk } from 'chalk'
 
-import { VERSION } from '@x-code-cli/core'
-
+import { VERSION } from '../../version.js'
 import { ACCENT } from '../theme.js'
 
 const c = new Chalk({ level: 3 })
