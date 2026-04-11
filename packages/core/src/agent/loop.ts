@@ -13,7 +13,7 @@ import { checkPermission } from '../permissions/index.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { getShellConfig } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../types/index.js'
-import { estimateTokens, toolResultMessage } from './messages.js'
+import { toolResultMessage } from './messages.js'
 import { ensurePlansDir, generatePlanId, getPlanPath } from './plan-mode.js'
 import { buildSystemPrompt } from './system-prompt.js'
 
@@ -40,7 +40,13 @@ interface StreamResult {
 }
 
 const KEEP_RECENT = 6
-const DEFAULT_TOKEN_BUDGET_RATIO = 0.8
+/**
+ * Compress context when the previous turn's real input-token count (reported
+ * by the model API) exceeds this fraction of the model's context window. We
+ * intentionally use real usage, not a char-based estimate, because estimates
+ * drift badly — tool output and non-ASCII text blow them up.
+ */
+const COMPRESSION_TRIGGER_RATIO = 0.8
 
 /** Count occurrences of a substring without creating intermediate arrays */
 function countOccurrences(content: string, search: string): number {
@@ -125,14 +131,16 @@ const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {
   moonshotai: 128000,
 }
 
-function getTokenBudget(modelId: string): number {
+function getCompressionThreshold(modelId: string): number {
   const contextWindow = MODEL_CONTEXT_WINDOWS[modelId] ?? PROVIDER_CONTEXT_WINDOWS[modelId.split(':')[0]] ?? 128000
-  return Math.floor(contextWindow * DEFAULT_TOKEN_BUDGET_RATIO)
+  return Math.floor(contextWindow * COMPRESSION_TRIGGER_RATIO)
 }
 
 export interface LoopState {
   messages: ModelMessage[]
   tokenUsage: TokenUsage
+  /** Real input-token count from the most recent API response, used to trigger compression. */
+  lastInputTokens: number
   planMode: boolean
   planId: string | null
   sessionId: string
@@ -386,6 +394,7 @@ export async function agentLoop(
   const state: LoopState = existingState ?? {
     messages: [],
     tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    lastInputTokens: 0,
     planMode: false,
     planId: null,
     sessionId: Date.now().toString(36),
@@ -419,13 +428,15 @@ export async function agentLoop(
   const knowledgeContext = await buildKnowledgeContext({ rules })
   const fullKnowledgeContext = knowledgeContext + extraRuleContext
 
-  const tokenBudget = getTokenBudget(options.modelId)
+  const compressionThreshold = getCompressionThreshold(options.modelId)
 
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
 
-    // Context compression check — also saves session summary before compressing
-    if (estimateTokens(state.messages) > tokenBudget) {
+    // Context compression check — driven by real input-token count from the
+    // previous turn, not a char-based estimate. Also saves session summary
+    // before compressing.
+    if (state.lastInputTokens > compressionThreshold) {
       try {
         const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
           ...state.filesModified,
@@ -435,7 +446,8 @@ export async function agentLoop(
         // Don't block compression on session save failure
       }
       state.messages = await compressMessages(state.messages, model)
-      callbacks.onContextCompressed('Context compressed to fit token budget.')
+      state.lastInputTokens = 0
+      callbacks.onContextCompressed('Context compressed to fit context window.')
     }
 
     const systemPrompt = buildSystemPrompt({
@@ -500,6 +512,7 @@ export async function agentLoop(
         state.tokenUsage.inputTokens += usage.inputTokens ?? 0
         state.tokenUsage.outputTokens += usage.outputTokens ?? 0
         state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
+        if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
         callbacks.onUsageUpdate(state.tokenUsage)
       }
 

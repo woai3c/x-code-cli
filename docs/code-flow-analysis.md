@@ -366,6 +366,7 @@ stdin data 事件
 ```
 
 **双层粘贴检测**：
+
 1. **Bracketed paste fast path**：现代终端（Windows Terminal / VS Code / iTerm2 / gnome-terminal 等）支持 `\x1b[?2004h`，粘贴原子到达
 2. **30ms debounce fallback**：老终端（cmd.exe / 老 PowerShell）不支持 marker，靠时间窗口区分"打字"（> 100ms 间隔）和"粘贴 burst"（< 1ms 间隔）
 3. **特殊键在 dispatch 前强制 flush pending**：保证 Enter/Backspace/Arrow 看到的 text state 是完整的
@@ -386,7 +387,7 @@ onPaste(content)
 onText(chunk)
   └─ setText((prev) => prev + chunk)
   //  setCompletionIndex(0)
-  
+
 onKey('return')
   └─ handleSubmit()
        ├─ expandPasteRefs(text, pastedContents) — 把所有 [Pasted text #N +M lines]
@@ -525,9 +526,12 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   ├─ 1. 初始化或复用 LoopState
   │    {
   │      messages: [],            // AI SDK ModelMessage 数组
-  │      tokenUsage: {...},       // Token 用量统计
+  │      tokenUsage: {...},       // 累计 token 用量（API 返回的真实值）
+  │      lastInputTokens: 0,      // 上一轮 API 返回的 inputTokens，用于触发压缩
   │      planMode: false,         // 计划模式标志
+  │      planId: null,            // 当前计划 ID（计划模式下生成）
   │      sessionId: '...',        // 会话 ID
+  │      startedAt: '...',        // 会话起始时间 (ISO)
   │      filesModified: Set<>,    // 已修改文件集合
   │      turnCount: 0,            // 循环轮次
   │    }
@@ -548,27 +552,22 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   │         ├─ 规则 (paths 匹配的自动加载)
   │         └─ 可用规则列表 (供 AI 按需引用)
   │
-  │    注：早期版本会在此处调用 loadLatestSession() 并把上次未完成会话的摘要自动注入
-  │    system prompt，但该行为已移除 —— 模型会把普通打招呼也当作"继续上次工作"，导致体验糟糕。
-  │    loadLatestSession / saveSession 仍然存在（会话上下文压缩时仍会持久化），预留给后续
-  │    history 功能使用，但当前启动路径不再自动读取或注入。
-  │
-  ├─ 4. 计算 Token 预算
-  │    getTokenBudget(modelId)
-  │    └─ contextWindow * 0.8
-  │       (如 anthropic 200k * 0.8 = 160k)
+  ├─ 4. 计算压缩阈值
+  │    compressionThreshold = getCompressionThreshold(modelId)
+  │    └─ contextWindow * 0.8     (如 anthropic 200k * 0.8 = 160k)
   │
   └─ 5. while (turnCount < maxTurns) 主循环
        │
        ├─ turnCount++
        │
-       ├─ Token 压缩检查
-       │    if (estimateTokens(messages) > tokenBudget)
+       ├─ 上下文压缩检查
+       │    if (state.lastInputTokens > compressionThreshold)
        │      ├─ generateSessionSummary() → saveSessionSummary()
-       │      └─ compressMessages()
-       │           ├─ 保留最近 6 条消息
-       │           ├─ 对旧消息调用 AI 生成摘要
-       │           └─ 替换为 [Previous conversation summary]
+       │      ├─ compressMessages()
+       │      │    ├─ 保留最近 6 条消息
+       │      │    ├─ 对旧消息调用 AI 生成摘要
+       │      │    └─ 替换为 [Previous conversation summary]
+       │      └─ state.lastInputTokens = 0   // 压缩后重置，下一轮再累计
        │
        ├─ 构建 System Prompt
        │    buildSystemPrompt({
@@ -600,7 +599,9 @@ agentLoop(userMessage, model, options, callbacks, existingState)
        │
        ├─ 收集响应
        │    ├─ response.messages → push 到 state.messages
-       │    ├─ usage → 累加 token 用量 (inputTokens/outputTokens/totalTokens)
+       │    ├─ usage → 累加 tokenUsage (inputTokens/outputTokens/totalTokens)
+       │    │         并把 usage.inputTokens 写入 state.lastInputTokens
+       │    │         （下一轮开头据此判断是否压缩）
        │    └─ finishReason → 决定是否继续循环
        │
        ├─ if finishReason === 'tool-calls'
@@ -817,10 +818,11 @@ use-agent.ts setState({ messages: [...prev, newMsg] })
 ```
 
 **`useStdout().write` 做了什么**（来自 Ink 源码 `ink.js::writeToStdout`）：
+
 ```js
-this.log.clear();                         // 清掉当前动态区
-this.options.stdout.write(data);          // 直接 write 到 stdout
-this.log(this.lastOutput);                // 重绘动态区到新 cursor 位置
+this.log.clear() // 清掉当前动态区
+this.options.stdout.write(data) // 直接 write 到 stdout
+this.log(this.lastOutput) // 重绘动态区到新 cursor 位置
 ```
 
 这个函数在 Ink 里被文档描述为"类似 `<Static>`，但只接受字符串"——等同的效果，但**跨越了 Ink 的 Yoga 布局**，所以 CJK 宽度不再是问题。
@@ -830,60 +832,62 @@ this.log(this.lastOutput);                // 重绘动态区到新 cursor 位置
 ```
 renderMarkdown(text)  (cli/src/ui/render-markdown.ts)
   │
-  ├─ marked.lexer(text)    // Markdown → AST Token 树
+  │  // 颜色常量（与 theme.ts 同步）:
+  │  //   ACCENT  = '#d77757'   h1 / codespan / link
+  │  //   WARNING = '#ffc107'   code block 正文
   │
-  └─ renderTokens(tokens)  // AST → ANSI 转义序列
-       ├─ heading    → chalk.hex('#89b4fa').bold.underline(text)  (h1)
-       │             → chalk.bold(text)                           (h2+)
-       ├─ paragraph  → text + '\n'
-       ├─ code block → chalk.dim('[lang]') + chalk.hex('#f9e2af')(code)
+  ├─ marked.lexer(text)         // Markdown → AST Token 树
+  │   └─ 禁用 del 扩展           // 避免文件路径里的 ~ 被当作删除线
+  │
+  └─ renderTokens(tokens)       // 递归 AST → ANSI
+       ├─ heading      → h1: chalk.hex(ACCENT).bold.underline(text)
+       │               → h2+: chalk.bold(text)
+       ├─ paragraph    → text + '\n'
+       ├─ code (block) → chalk.dim('[lang]') + 每行缩进 2 空格 + chalk.hex(WARNING)
+       ├─ list         → 递归渲染 items，bullet '•' 或 '1. / 2. ...'（带缩进）
+       ├─ list_item    → 支持嵌套 list / paragraph 子节点
+       ├─ blockquote   → 每行前缀 chalk.dim.italic('  │ ')
+       ├─ table        → padVisual 对齐，' │ ' 分隔列，'─┼─' 分隔行
+       ├─ hr           → chalk.dim('─' × 40)
+       ├─ strong       → chalk.bold(children)
+       ├─ em           → chalk.italic(children)
+       ├─ codespan     → chalk.hex(ACCENT)(code)
+       ├─ link         → chalk.hex(ACCENT).underline(text) + ' (' + dim(href) + ')'
+       │                  mailto: 链接只输出邮箱地址
+       ├─ br / space   → 换行
+       └─ text/escape  → 原样输出（text 若有 inline 子节点则递归）
 
-### Markdown 渲染
-
-```
-renderMarkdown(text)  (cli/src/ui/render-markdown.ts)
-  │
-  ├─ marked.lexer(text)    // Markdown → AST Token 树
-  │
-  └─ renderTokens(tokens)  // AST → ANSI 转义序列
-       ├─ heading    → chalk.hex('#89b4fa').bold.underline(text)  (h1)
-       │             → chalk.bold(text)                           (h2+)
-       ├─ paragraph  → text + '\n'
-       ├─ code block → chalk.dim('[lang]') + chalk.hex('#f9e2af')(code)
-       ├─ list       → bullet '•' 或 numbered '1.'
-       ├─ blockquote → chalk.dim.italic('│ ' + text)
-       ├─ strong     → chalk.bold(text)
-       ├─ em         → chalk.italic(text)
-       ├─ codespan   → chalk.hex('#89b4fa')(code)
-       ├─ link       → chalk.hex('#89b4fa').underline(text) (url)
-       ├─ table      → 对齐表格，│ 分隔，─ 分行
-       └─ hr         → chalk.dim('─' * 40)
+  流式兜底：renderMarkdown 外层 try/catch —— 部分/未闭合的 Markdown
+  走 lexer 失败时直接返回原文，保证 UI 不会因为半截流式文本崩掉。
 ```
 
 ### 流式文本累积策略
 
 ```
+
 streamBufferRef (use-agent.ts — useRef, 不在 React state 里)
-  │
-  累积 (appendTextDelta):
-  ├─ onTextDelta(delta) → streamBufferRef.current += delta
-  └─ 检查 flush 条件：三选一即触发
-       ├─ buffer.includes('\n\n')    — 段落自然断点
-       ├─ buffer.length >= 300       — 300 字符天花板（CJK 适用）
-       └─ buffer.split('\n').length > 5 — 5 行软上限
+│
+累积 (appendTextDelta):
+├─ onTextDelta(delta) → streamBufferRef.current += delta
+└─ 检查 flush 条件：三选一即触发
+├─ buffer.includes('\n\n') — 段落自然断点
+├─ buffer.length >= 300 — 300 字符天花板（CJK 适用）
+└─ buffer.split('\n').length > 5 — 5 行软上限
 
-  flush (flushBuffer):
-  ├─ 读出 buffer 的文本，清空 ref
-  └─ setState({ messages: [...prev, { role: 'assistant', content: text }] })
-       → MessageList useEffect → writeMessageToStdout → 落到 scrollback
+flush (flushBuffer):
+├─ 读出 buffer 的文本，清空 ref
+└─ setState({ messages: [...prev, { role: 'assistant', content: text }] })
+→ MessageList useEffect → writeMessageToStdout → 落到 scrollback
 
-  强制 flush 的时机:
-  ├─ 任一 flush 条件触发（段落 / 300 字 / 5 行）
-  ├─ onToolCall 触发前（保证文本先于工具调用指示符显示）
-  └─ submit 收尾时（drain 最后一段残留）
+强制 flush 的时机:
+├─ 任一 flush 条件触发（段落 / 300 字 / 5 行）
+├─ onToolCall 触发前（保证文本先于工具调用指示符显示）
+└─ submit 收尾时（drain 最后一段残留）
+
 ```
 
 **为什么用 ref 而不是 React state**：
+
 - 若把 streaming 文本放 React state，每个 delta 都会触发重渲染 → Ink 重绘动态区
 - Ink 在 CJK 宽字符场景下重绘时算错视觉行数 → 光标 rewind 超调 → 新旧内容 splice
 - 走 ref + effect-based flush 到 scrollback：**动态区从来没有过长内容**，Ink 重绘的永远只是短小 spinner + 输入框
@@ -892,24 +896,26 @@ streamBufferRef (use-agent.ts — useRef, 不在 React state 里)
 ### 消息列表组件 (effect-only)
 
 ```
+
 MessageList 组件 (cli/src/ui/components/MessageList.tsx)
-  │
-  不渲染任何 JSX —— return null
-  │
-  const { write } = useStdout()    // Ink 官方 log-update-coordinated writer
-  const writtenCountRef = useRef(0)
-  │
-  useEffect(() => {
-    // 追踪已写出的 message 数量，只 append 新条目
-    if (messages.length < writtenCountRef.current) {
-      writtenCountRef.current = messages.length  // /clear 清空后重置
-      return
-    }
-    for (let i = writtenCountRef.current; i < messages.length; i++) {
-      writeMessageToStdout(write, messages[i])
-    }
-    writtenCountRef.current = messages.length
-  }, [messages, write])
+│
+不渲染任何 JSX —— return null
+│
+const { write } = useStdout() // Ink 官方 log-update-coordinated writer
+const writtenCountRef = useRef(0)
+│
+useEffect(() => {
+// 追踪已写出的 message 数量，只 append 新条目
+if (messages.length < writtenCountRef.current) {
+writtenCountRef.current = messages.length // /clear 清空后重置
+return
+}
+for (let i = writtenCountRef.current; i < messages.length; i++) {
+writeMessageToStdout(write, messages[i])
+}
+writtenCountRef.current = messages.length
+}, [messages, write])
+
 ```
 
 ### writeMessageToStdout 的输出格式
@@ -917,23 +923,28 @@ MessageList 组件 (cli/src/ui/components/MessageList.tsx)
 用 `tool-display.ts` 提供的共享显示函数 + chalk 直出 ANSI：
 
 ```
+
 user message (writeUserMessage):
-  ❯ <first line>
-    <line 2 — 两空格缩进对齐>
-    <line 3>
-    ...
+❯ <first line>
+<line 2 — 两空格缩进对齐>
+<line 3>
+...
 
 assistant with toolCalls (formatToolCall):
-   ● ToolName(input_preview)           ← 绿色圆点 + 粗体标签
-      ⎿  result_summary (duration)     ← 缩进结果 + 耗时
-     (denied 状态显示为红色)
+● ToolName(input_preview) ← 绿色圆点 + 粗体标签
+⎿ result_summary (duration) ← 缩进结果 + 耗时
+(denied 状态显示为红色)
 
 assistant with content:
-  (2 空格缩进 mirroring 旧 MessageList marginLeft={2})
-  # Heading
-  Paragraph text...
-  - bullet
+(2 空格缩进 mirroring 旧 MessageList marginLeft={2})
+
+# Heading
+
+Paragraph text...
+
+- bullet
   ...
+
 ```
 
 所有路径都先跑 `replace(/\r\n?/g, '\n')` 归一化，防止裸 `\r` 在终端里被当 carriage return（会导致后续字符覆盖之前打印的内容，产生粘贴 splicing bug）。
@@ -945,31 +956,35 @@ assistant with content:
 ### 正常退出流程
 
 ```
+
 /exit 命令 或 Ctrl+C
-  │
-  ├─ cleanup() (use-agent.ts)
-  │    └─ saveSession(loopState, model)
-  │         ├─ generateSessionSummary()    // AI 生成会话摘要
-  │         │    → title, summary, keyResults, pendingWork, decisions, status
-  │         └─ saveSessionSummary()
-  │              ├─ .x-code/sessions/latest.json    // 最新会话
-  │              └─ .x-code/sessions/{id}.json      // 归档
-  │
-  │   注：持久化仍然会发生（上下文压缩时也会写一次），预留给后续 history 功能。
-  │       但下次启动 CLI 时不会再自动读取 latest.json 并注入到 system prompt。
-  │
-  ├─ exit() (Ink unmount)
-  │
-  └─ printExitSummary() (app.tsx)
-       → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
+│
+├─ cleanup() (use-agent.ts)
+│ └─ saveSession(loopState, model)
+│ ├─ generateSessionSummary() // AI 生成会话摘要
+│ │ → title, summary, keyResults, pendingWork, decisions, status
+│ └─ saveSessionSummary()
+│ ├─ .x-code/sessions/latest.json // 最新会话
+│ └─ .x-code/sessions/{id}.json // 归档
+│
+│ 注：持久化仍然会发生（上下文压缩时也会写一次），预留给后续 history 功能。
+│ 但下次启动 CLI 时不会再自动读取 latest.json 并注入到 system prompt。
+│
+├─ exit() (Ink unmount)
+│
+└─ printExitSummary() (app.tsx)
+→ "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
+
 ```
 
 ### SIGINT (Ctrl+C) 处理
 
 ```
-process.on('SIGINT')  (cli/src/index.ts)
-  ├─ 第一次 Ctrl+C → cleanup() → printExitSummary() → process.exit(0)
-  └─ 第二次 Ctrl+C → process.exit(1)  // 强制退出
+
+process.on('SIGINT') (cli/src/index.ts)
+├─ 第一次 Ctrl+C → cleanup() → printExitSummary() → process.exit(0)
+└─ 第二次 Ctrl+C → process.exit(1) // 强制退出
+
 ```
 
 ---
@@ -981,6 +996,7 @@ process.on('SIGINT')  (cli/src/index.ts)
 ### 完整执行流程
 
 ```
+
 1. 用户在终端输入 "帮忙分析一下项目产品功能以及优化点"，按 Enter
 
 2. ChatInput 组件
@@ -992,16 +1008,16 @@ process.on('SIGINT')  (cli/src/index.ts)
 
 4. useAgent.submit()
    ├─ initialize() (首次)
-   │    ├─ 加载 AutoMemory (全局 + 项目)
-   │    └─ scanProject() → 检测到 pnpm, TypeScript, React, Ink, Vitest 等
+   │ ├─ 加载 AutoMemory (全局 + 项目)
+   │ └─ scanProject() → 检测到 pnpm, TypeScript, React, Ink, Vitest 等
    │
    ├─ setState
-   │    → messages 追加用户消息
-   │    → isLoading = true
+   │ → messages 追加用户消息
+   │ → isLoading = true
    │
-   │  [终端显示]
-   │  > 帮忙分析一下项目产品功能以及优化点
-   │  ⠋ Thinking...
+   │ [终端显示]
+   │ > 帮忙分析一下项目产品功能以及优化点
+   │ ⠋ Thinking...
    │
    ├─ 构建 callbacks
    └─ agentLoop("帮忙分析一下项目产品功能以及优化点", model, options, callbacks)
@@ -1010,33 +1026,33 @@ process.on('SIGINT')  (cli/src/index.ts)
    ├─ messages: [{ role: 'user', content: '帮忙分析一下项目产品功能以及优化点' }]
    │
    ├─ buildKnowledgeContext()
-   │    → 加载全局/项目 knowledge.md、auto memory、rules
+   │ → 加载全局/项目 knowledge.md、auto memory、rules
    │
    ├─ buildSystemPrompt()
-   │    → 完整 system prompt (约 2000-3000 tokens)
-   │    → 包含: 身份、工具列表、规则、环境信息、知识上下文
+   │ → 完整 system prompt (约 2000-3000 tokens)
+   │ → 包含: 身份、工具列表、规则、环境信息、知识上下文
    │
    ├─ streamText({ model, system, messages, tools })
-   │    → API 请求发送到 AI Provider (如 Anthropic)
+   │ → API 请求发送到 AI Provider (如 Anthropic)
    │
    ├─ AI 决定先了解项目结构，返回 tool-calls:
-   │    ├─ tool-call: glob({ pattern: "**/*.{ts,tsx,json}" })
-   │    └─ tool-call: readFile({ filePath: "package.json" })
+   │ ├─ tool-call: glob({ pattern: "**/\*.{ts,tsx,json}" })
+   │ └─ tool-call: readFile({ filePath: "package.json" })
    │
-   │  [终端显示]
-   │  ● Glob(**/*.{ts,tsx,json})
-   │    ⎿  ⠋ Running...
+   │ [终端显示]
+   │ ● Glob(**/_.{ts,tsx,json})
+   │ ⎿ ⠋ Running...
    │
    ├─ finishReason = 'tool-calls'
    ├─ handleToolCalls()
-   │    ├─ glob → 自动执行 (always-allow) → 返回文件列表
-   │    └─ readFile → 自动执行 (always-allow) → 返回 package.json 内容
+   │ ├─ glob → 自动执行 (always-allow) → 返回文件列表
+   │ └─ readFile → 自动执行 (always-allow) → 返回 package.json 内容
    │
-   │  [工具完成后终端显示 (scrollback, 由 writeMessageToStdout 打出)]
-   │  ● Glob(**/*.{ts,tsx,json})
-   │    ⎿  42 files matched (0.1s)
-   │  ● Read(package.json)
-   │    ⎿  35 lines (0.0s)
+   │ [工具完成后终端显示 (scrollback, 由 writeMessageToStdout 打出)]
+   │ ● Glob(\*\*/_.{ts,tsx,json})
+   │ ⎿ 42 files matched (0.1s)
+   │ ● Read(package.json)
+   │ ⎿ 35 lines (0.0s)
    │
    └─ continue (进入下一轮)
 
@@ -1046,13 +1062,13 @@ process.on('SIGINT')  (cli/src/index.ts)
    ├─ streamText() → AI 继续分析
    │
    ├─ AI 可能再次调用工具读取更多文件:
-   │    ├─ readFile({ filePath: "packages/core/src/index.ts" })
-   │    ├─ readFile({ filePath: "packages/cli/src/ui/components/App.tsx" })
-   │    └─ listDir({ path: "packages/core/src/tools" })
+   │ ├─ readFile({ filePath: "packages/core/src/index.ts" })
+   │ ├─ readFile({ filePath: "packages/cli/src/ui/components/App.tsx" })
+   │ └─ listDir({ path: "packages/core/src/tools" })
    │
-   │  [终端显示]
-   │  ● Read(packages/core/src/index.ts)
-   │    ⎿  ⠋ Running...
+   │ [终端显示]
+   │ ● Read(packages/core/src/index.ts)
+   │ ⎿ ⠋ Running...
    │
    └─ continue
 
@@ -1062,76 +1078,77 @@ process.on('SIGINT')  (cli/src/index.ts)
    ├─ streamText() → AI 返回纯文本分析 (finishReason = 'stop')
    │
    ├─ 流式输出过程 (段落为单位):
-   │    ├─ text-delta: "## 项目产品功能分析\n\n"
-   │    │    → callbacks.onTextDelta(delta)
-   │    │    → streamBufferRef.current += delta
-   │    │    → buffer 含 "\n\n" 段落断 → flushBuffer()
-   │    │    → setState: messages 追加 { role: 'assistant', content: "## 项目产品功能分析\n\n" }
-   │    │    → MessageList useEffect → writeMessageToStdout → 落到 scrollback
-   │    │
-   │    │  [终端显示 — 直接到 scrollback，不走 Ink 动态区]
-   │    │    项目产品功能分析
-   │    │
-   │    ├─ text-delta: "### 核心功能\n\n1. 多模型支持..."
-   │    │    → 累积至 300 字或下一个 \n\n → 继续 flush
-   │    ├─ text-delta: "### 2. 智能工具调用\n..."
-   │    ├─ ... (持续段落 flush，每段独立 scrollback 写入)
-   │    └─ text-delta: "### 优化建议\n..."
+   │ ├─ text-delta: "## 项目产品功能分析\n\n"
+   │ │ → callbacks.onTextDelta(delta)
+   │ │ → streamBufferRef.current += delta
+   │ │ → buffer 含 "\n\n" 段落断 → flushBuffer()
+   │ │ → setState: messages 追加 { role: 'assistant', content: "## 项目产品功能分析\n\n" }
+   │ │ → MessageList useEffect → writeMessageToStdout → 落到 scrollback
+   │ │
+   │ │ [终端显示 — 直接到 scrollback，不走 Ink 动态区]
+   │ │ 项目产品功能分析
+   │ │
+   │ ├─ text-delta: "### 核心功能\n\n1. 多模型支持..."
+   │ │ → 累积至 300 字或下一个 \n\n → 继续 flush
+   │ ├─ text-delta: "### 2. 智能工具调用\n..."
+   │ ├─ ... (持续段落 flush，每段独立 scrollback 写入)
+   │ └─ text-delta: "### 优化建议\n..."
    │
    └─ finishReason = 'stop' → break 退出循环
 
 8. 回到 useAgent.submit()
-   ├─ flushBuffer()   // drain buffer 的最后一段残留到 messages
+   ├─ flushBuffer() // drain buffer 的最后一段残留到 messages
    │
    ├─ 安全网：若本轮 onTextDelta 从未触发
-   │   → extractLastAssistantText(loopState.messages) 兜底取文本
-   │   → 追加为 assistant message
+   │ → extractLastAssistantText(loopState.messages) 兜底取文本
+   │ → 追加为 assistant message
    │
    ├─ setState({
-   │    isLoading: false,
-   │    currentToolCall: null,
-   │  })
+   │ isLoading: false,
+   │ currentToolCall: null,
+   │ })
    │
-   │  [终端最终显示 — 所有 message 已在 scrollback 里]
+   │ [终端最终显示 — 所有 message 已在 scrollback 里]
    │
-   │  ❯ 帮忙分析一下项目产品功能以及优化点     ← user message (writeUserMessage)
+   │ ❯ 帮忙分析一下项目产品功能以及优化点 ← user message (writeUserMessage)
    │
-   │  ● Glob(**/*.{ts,tsx,json})                ← 工具调用历史 (formatToolCall)
-   │    ⎿  42 files matched (0.1s)
-   │  ● Read(package.json)
-   │    ⎿  35 lines (0.0s)
-   │  ● Read(packages/core/src/index.ts)
-   │    ⎿  120 lines (0.1s)
-   │                                            ← AI 回复 (多段 flush 拼接)
-   │  项目产品功能分析                          ← h2, bold + underline + accent blue
+   │ ● Glob(\*_/_.{ts,tsx,json}) ← 工具调用历史 (formatToolCall)
+   │ ⎿ 42 files matched (0.1s)
+   │ ● Read(package.json)
+   │ ⎿ 35 lines (0.0s)
+   │ ● Read(packages/core/src/index.ts)
+   │ ⎿ 120 lines (0.1s)
+   │ ← AI 回复 (多段 flush 拼接)
+   │ 项目产品功能分析 ← h2, bold + underline + accent blue
    │
-   │  核心功能                                  ← h3, bold
+   │ 核心功能 ← h3, bold
    │
-   │  1. 多模型 AI 对话                         ← ordered list
-   │     支持 Anthropic, OpenAI, Google,
-   │     DeepSeek 等多个 AI 服务商...
+   │ 1. 多模型 AI 对话 ← ordered list
+   │ 支持 Anthropic, OpenAI, Google,
+   │ DeepSeek 等多个 AI 服务商...
    │
-   │  2. 智能工具调用
-   │     13 个内置工具: 文件读写, Shell 执行,
-   │     代码搜索, 网络搜索...
+   │ 2. 智能工具调用
+   │ 13 个内置工具: 文件读写, Shell 执行,
+   │ 代码搜索, 网络搜索...
    │
-   │  3. 知识管理系统
-   │     - 分层知识加载 (全局/项目/本地)
-   │     - AutoMemory 自动记忆
-   │     - 会话持久化与恢复
+   │ 3. 知识管理系统
+   │ - 分层知识加载 (全局/项目/本地)
+   │ - AutoMemory 自动记忆
+   │ - 会话持久化与恢复
    │
-   │  ...
+   │ ...
    │
-   │  优化建议
+   │ 优化建议
    │
-   │  1. 性能优化
-   │     - 工具结果截断阈值可配置化
-   │     - 流式刷新频率自适应
-   │  ...
+   │ 1. 性能优化
+   │ - 工具结果截断阈值可配置化
+   │ - 流式刷新频率自适应
+   │ ...
    │
-   │  > █                                       ← ChatInput 重新可用
+   │ > █ ← ChatInput 重新可用
    │
    └─ 等待用户下一次输入
+
 ```
 
 ### AI 回复中可能的工具调用序列示意
@@ -1139,23 +1156,25 @@ process.on('SIGINT')  (cli/src/index.ts)
 对于"分析项目产品功能以及优化点"这类问题，AI 可能执行如下工具调用链：
 
 ```
+
 Turn 1: AI 需要了解项目结构
-  ├─ glob({ pattern: "**/package.json" })              → 找到 monorepo 结构
-  ├─ readFile({ filePath: "package.json" })             → 根 package.json
-  └─ listDir({ path: "packages" })                      → 发现 cli/ 和 core/
+├─ glob({ pattern: "\*\*/package.json" }) → 找到 monorepo 结构
+├─ readFile({ filePath: "package.json" }) → 根 package.json
+└─ listDir({ path: "packages" }) → 发现 cli/ 和 core/
 
 Turn 2: AI 深入了解各包
-  ├─ readFile({ filePath: "packages/core/package.json" })
-  ├─ readFile({ filePath: "packages/cli/package.json" })
-  └─ listDir({ path: "packages/core/src" })
+├─ readFile({ filePath: "packages/core/package.json" })
+├─ readFile({ filePath: "packages/cli/package.json" })
+└─ listDir({ path: "packages/core/src" })
 
 Turn 3: AI 阅读核心代码
-  ├─ readFile({ filePath: "packages/core/src/agent/loop.ts" })
-  ├─ readFile({ filePath: "packages/core/src/tools/index.ts" })
-  └─ readFile({ filePath: "packages/cli/src/ui/components/App.tsx" })
+├─ readFile({ filePath: "packages/core/src/agent/loop.ts" })
+├─ readFile({ filePath: "packages/core/src/tools/index.ts" })
+└─ readFile({ filePath: "packages/cli/src/ui/components/App.tsx" })
 
 Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
-  → finishReason = 'stop'
+→ finishReason = 'stop'
+
 ```
 
 ---
@@ -1163,104 +1182,105 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 ## 关键数据流总结
 
 ```
-┌──────────┐   onSubmit  ┌──────────┐   submit()   ┌────────────┐
-│ ChatInput │ ─────────> │   App    │ ──────────> │  useAgent  │
-│ + prompt  │            │ (React)  │             │  (Hook)    │
-│ input hook│            └──────────┘             └─────┬──────┘
-└──────────┘                                            │ agentLoop()
-                                                        v
-                              ┌──────────────────────────────────┐
-                              │         agentLoop (Core)          │
-                              │                                    │
-                              │  ┌─────────────┐  ┌────────────┐ │
-                              │  │ System Prompt│  │ Knowledge  │ │
-                              │  │ Builder      │  │ Loader     │ │
-                              │  └──────┬──────┘  └─────┬──────┘ │
-                              │         │               │         │
-                              │         v               v         │
-                              │  ┌─────────────────────────────┐ │
-                              │  │      streamText() (AI SDK)   │ │
-                              │  │  model + system + messages   │ │
-                              │  │  + tools                     │ │
-                              │  └──────┬───────────────┬──────┘ │
-                              │         │               │         │
-                              │    text-delta       tool-calls    │
-                              │         │               │         │
-                              │         │     ┌─────────v───────┐│
-                              │         │     │ handleToolCalls()││
-                              │         │     │ ├─ Permission   ││
-                              │         │     │ ├─ Execute      ││
-                              │         │     │ └─ Result       ││
-                              │         │     └─────────┬───────┘│
-                              │         │               │         │
-                              └─────────┼───────────────┼─────────┘
-                                        │               │
-                              callbacks │               │ callbacks
-                                        v               v
-                              ┌──────────────────────────────────┐
-                              │          useAgent (Hook)           │
-                              │                                    │
-                              │  onTextDelta  → streamBufferRef    │
-                              │                  + flushBuffer()   │
-                              │                  (段落/300字/5行)  │
-                              │  onToolCall   → setState            │
-                              │                  currentToolCall    │
-                              │  onToolResult → push DisplayToolCall│
-                              │                  into messages      │
-                              │  onAskPermission → pendingPerm      │
-                              │  onUsageUpdate → usage               │
-                              └──────────────┬───────────────────┘
-                                             │ setState({ messages, ... })
-                                             v
-                       ┌───────────────────────────────────────────────┐
-                       │  MessageList.useEffect detects new items      │
-                       │  for each new msg:                            │
-                       │    writeMessageToStdout(write, msg)           │
-                       │      → replace \r\n? → \n                    │
-                       │      → useStdout().write(formatted ANSI)      │
-                       │                                                │
-                       │  Ink dynamic region (paddingX={1} Box):       │
-                       │    ToolCall / ShellOutput / Permission /      │
-                       │    SelectOptions / Spinner / Error / ChatInput│
-                       └───────────────┬───────────────────────────────┘
-                                       │
-                                       v
-                               终端滚动缓冲区 (scrollback)
-                                       +
-                               Ink 动态区 (底部固定)
+
+┌──────────┐ onSubmit ┌──────────┐ submit() ┌────────────┐
+│ ChatInput │ ─────────> │ App │ ──────────> │ useAgent │
+│ + prompt │ │ (React) │ │ (Hook) │
+│ input hook│ └──────────┘ └─────┬──────┘
+└──────────┘ │ agentLoop()
+v
+┌──────────────────────────────────┐
+│ agentLoop (Core) │
+│ │
+│ ┌─────────────┐ ┌────────────┐ │
+│ │ System Prompt│ │ Knowledge │ │
+│ │ Builder │ │ Loader │ │
+│ └──────┬──────┘ └─────┬──────┘ │
+│ │ │ │
+│ v v │
+│ ┌─────────────────────────────┐ │
+│ │ streamText() (AI SDK) │ │
+│ │ model + system + messages │ │
+│ │ + tools │ │
+│ └──────┬───────────────┬──────┘ │
+│ │ │ │
+│ text-delta tool-calls │
+│ │ │ │
+│ │ ┌─────────v───────┐│
+│ │ │ handleToolCalls()││
+│ │ │ ├─ Permission ││
+│ │ │ ├─ Execute ││
+│ │ │ └─ Result ││
+│ │ └─────────┬───────┘│
+│ │ │ │
+└─────────┼───────────────┼─────────┘
+│ │
+callbacks │ │ callbacks
+v v
+┌──────────────────────────────────┐
+│ useAgent (Hook) │
+│ │
+│ onTextDelta → streamBufferRef │
+│ + flushBuffer() │
+│ (段落/300字/5行) │
+│ onToolCall → setState │
+│ currentToolCall │
+│ onToolResult → push DisplayToolCall│
+│ into messages │
+│ onAskPermission → pendingPerm │
+│ onUsageUpdate → usage │
+└──────────────┬───────────────────┘
+│ setState({ messages, ... })
+v
+┌───────────────────────────────────────────────┐
+│ MessageList.useEffect detects new items │
+│ for each new msg: │
+│ writeMessageToStdout(write, msg) │
+│ → replace \r\n? → \n │
+│ → useStdout().write(formatted ANSI) │
+│ │
+│ Ink dynamic region (paddingX={1} Box): │
+│ ToolCall / ShellOutput / Permission / │
+│ SelectOptions / Spinner / Error / ChatInput│
+└───────────────┬───────────────────────────────┘
+│
+v
+终端滚动缓冲区 (scrollback) +
+Ink 动态区 (底部固定)
+
 ```
 
 ---
 
 ## 文件索引
 
-| 阶段          | 文件                                      | 关键函数/组件                                                      |
-| ------------- | ----------------------------------------- | ------------------------------------------------------------------ |
-| CLI 入口      | `cli/src/index.ts`                        | `main()`, `checkNodeVersion()`, `loadEnvFile()`                    |
-| Ink 渲染      | `cli/src/app.tsx`                         | `startApp()`, `printExitSummary()`                                 |
-| 根组件        | `cli/src/ui/components/App.tsx`           | `App`, `handleSubmit()`, `SLASH_COMMANDS`                          |
-| Agent Hook    | `cli/src/ui/hooks/use-agent.ts`           | `useAgent()`, `submit()`, `AgentState`                             |
-| Agent 循环    | `core/src/agent/loop.ts`                  | `agentLoop()`, `handleToolCalls()`, `compressMessages()`, `classifyApiError()` |
-| System Prompt | `core/src/agent/system-prompt.ts`         | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                          |
-| 消息处理      | `core/src/agent/messages.ts`              | `estimateTokens()`, `toolResultMessage()`                          |
-| 计划模式      | `core/src/agent/plan-mode.ts`             | `ensurePlansDir()`, `generatePlanId()`, `getPlanPath()`            |
-| 工具注册      | `core/src/tools/index.ts`                 | `toolRegistry`, `truncateToolResult()`                             |
-| 权限系统      | `core/src/permissions/index.ts`           | `checkPermission()`, `getPermissionLevel()`                        |
-| 知识加载      | `core/src/knowledge/loader.ts`            | `buildKnowledgeContext()`, `loadRuleFiles()`                       |
-| 会话持久化    | `core/src/knowledge/session.ts`           | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history) |
-| 自动记忆      | `core/src/knowledge/auto-memory.ts`       | `AutoMemory`, `initMemories()`                                     |
-| 项目扫描      | `core/src/knowledge/hooks.ts`             | `scanProject()`                                                    |
-| 项目初始化    | `core/src/knowledge/init.ts`              | `initProject()` — `/init` 命令入口                                 |
-| 配置          | `core/src/config/index.ts`                | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`      |
-| Provider      | `core/src/providers/registry.ts`          | `createModelRegistry()`                                            |
-| 输入组件      | `cli/src/ui/components/ChatInput.tsx`     | `ChatInput`, 多行 textarea 显示 + paste 占位符 + 模糊匹配补全        |
-| 输入 Hook     | `cli/src/ui/hooks/use-prompt-input.ts`    | `usePromptInput()`, bracketed paste + 30ms debounce fallback, `\r\n` 归一化 |
-| 粘贴引用      | `cli/src/ui/paste-refs.ts`                | `formatPasteRef()`, `expandPasteRefs()`, `stripTrailingRef()`      |
-| 消息列表      | `cli/src/ui/components/MessageList.tsx`   | effect-only 组件，`useStdout().write` 把新 message 直接落到 scrollback |
-| Stdout 写入   | `cli/src/ui/stdout-writer.ts`             | `writeMessageToStdout()`, user/assistant/tool 格式化 + ANSI + 行尾归一化 |
-| 工具调用      | `cli/src/ui/components/ToolCall.tsx`      | `ToolCall` (进行中工具调用, 含 Spinner + 计时)                     |
-| 工具显示      | `cli/src/ui/tool-display.ts`              | `getToolLabel()`, `getToolInputPreview()`, `getToolResultSummary()`|
-| 权限确认      | `cli/src/ui/components/Permission.tsx`    | `Permission`, `DiffView`                                           |
-| Header        | `cli/src/ui/components/AppHeader.tsx`     | `printHeader()`, ASCII Logo                                        |
-| Markdown      | `cli/src/ui/render-markdown.ts`           | `renderMarkdown()`, marked lexer + chalk                           |
-| 主题          | `cli/src/ui/theme.ts`                     | `ACCENT`, `SUCCESS`, `WARNING`, `ERROR`                            |
+| 阶段          | 文件                                    | 关键函数/组件                                                                     |
+| ------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
+| CLI 入口      | `cli/src/index.ts`                      | `main()`, `checkNodeVersion()`, `loadEnvFile()`                                   |
+| Ink 渲染      | `cli/src/app.tsx`                       | `startApp()`, `printExitSummary()`                                                |
+| 根组件        | `cli/src/ui/components/App.tsx`         | `App`, `handleSubmit()`, `SLASH_COMMANDS`                                         |
+| Agent Hook    | `cli/src/ui/hooks/use-agent.ts`         | `useAgent()`, `submit()`, `AgentState`                                            |
+| Agent 循环    | `core/src/agent/loop.ts`                | `agentLoop()`, `handleToolCalls()`, `compressMessages()`, `classifyApiError()`    |
+| System Prompt | `core/src/agent/system-prompt.ts`       | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                                         |
+| 消息处理      | `core/src/agent/messages.ts`            | `userMessage()`, `toolResultMessage()`                                            |
+| 计划模式      | `core/src/agent/plan-mode.ts`           | `ensurePlansDir()`, `generatePlanId()`, `getPlanPath()`                           |
+| 工具注册      | `core/src/tools/index.ts`               | `toolRegistry`, `truncateToolResult()`                                            |
+| 权限系统      | `core/src/permissions/index.ts`         | `checkPermission()`, `getPermissionLevel()`                                       |
+| 知识加载      | `core/src/knowledge/loader.ts`          | `buildKnowledgeContext()`, `loadRuleFiles()`                                      |
+| 会话持久化    | `core/src/knowledge/session.ts`         | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history) |
+| 自动记忆      | `core/src/knowledge/auto-memory.ts`     | `AutoMemory`, `initMemories()`                                                    |
+| 项目扫描      | `core/src/knowledge/hooks.ts`           | `scanProject()`                                                                   |
+| 项目初始化    | `core/src/knowledge/init.ts`            | `initProject()` — `/init` 命令入口                                                |
+| 配置          | `core/src/config/index.ts`              | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`                     |
+| Provider      | `core/src/providers/registry.ts`        | `createModelRegistry()`                                                           |
+| 输入组件      | `cli/src/ui/components/ChatInput.tsx`   | `ChatInput`, 多行 textarea 显示 + paste 占位符 + 模糊匹配补全                     |
+| 输入 Hook     | `cli/src/ui/hooks/use-prompt-input.ts`  | `usePromptInput()`, bracketed paste + 30ms debounce fallback, `\r\n` 归一化       |
+| 粘贴引用      | `cli/src/ui/paste-refs.ts`              | `formatPasteRef()`, `expandPasteRefs()`, `stripTrailingRef()`                     |
+| 消息列表      | `cli/src/ui/components/MessageList.tsx` | effect-only 组件，`useStdout().write` 把新 message 直接落到 scrollback            |
+| Stdout 写入   | `cli/src/ui/stdout-writer.ts`           | `writeMessageToStdout()`, user/assistant/tool 格式化 + ANSI + 行尾归一化          |
+| 工具调用      | `cli/src/ui/components/ToolCall.tsx`    | `ToolCall` (进行中工具调用, 含 Spinner + 计时)                                    |
+| 工具显示      | `cli/src/ui/tool-display.ts`            | `getToolLabel()`, `getToolInputPreview()`, `getToolResultSummary()`               |
+| 权限确认      | `cli/src/ui/components/Permission.tsx`  | `Permission`, `DiffView`                                                          |
+| Header        | `cli/src/ui/components/AppHeader.tsx`   | `printHeader()`, ASCII Logo                                                       |
+| Markdown      | `cli/src/ui/render-markdown.ts`         | `renderMarkdown()`, marked lexer + chalk                                          |
+| 主题          | `cli/src/ui/theme.ts`                   | `ACCENT`, `SUCCESS`, `WARNING`, `ERROR`                                           |

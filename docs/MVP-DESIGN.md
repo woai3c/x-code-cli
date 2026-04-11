@@ -195,8 +195,9 @@ async function agentLoop(userMessage, callbacks) {
   messages.push({ role: 'user', content: userMessage })
 
   while (true) {
-    // 上下文压缩检查：超过阈值时压缩旧消息
-    if (estimateTokens(messages) > TOKEN_BUDGET * 0.8) {
+    // 上下文压缩检查：用上一轮 API 返回的真实 inputTokens 触发，
+    // 不做字符数估算——估算在工具输出 / 非 ASCII 文本下误差极大
+    if (lastInputTokens > COMPRESSION_THRESHOLD) {
       const summary = await compressMessages(messages, model)
       await saveSessionSummary(summary) // 同时保存会话摘要
       callbacks.onContextCompressed(summary)
@@ -219,10 +220,12 @@ async function agentLoop(userMessage, callbacks) {
       }
     }
 
-    // 收集完整响应 + 统计 token 用量
+    // 收集完整响应 + 统计 token 用量（直接采用 API 返回的真实数字）
     const response = await result.response
     messages.push(...response.messages)
-    tokenUsage.add(await result.usage) // 累计 token 消耗
+    const usage = await result.usage
+    tokenUsage.add(usage) // 累计 token 消耗（inputTokens + outputTokens）
+    lastInputTokens = usage.inputTokens // 下一轮压缩判断用
     callbacks.onUsageUpdate(tokenUsage)
 
     if ((await result.finishReason) === 'tool-calls') {
@@ -245,8 +248,8 @@ async function agentLoop(userMessage, callbacks) {
 
 - **手动循环**而非 `ToolLoopAgent`：需要在工具执行前插入权限检查
 - **callbacks 模式**：Loop 不直接操作 UI，通过回调通知状态变化
-- **消息累积 + 自动压缩**：消息持续追加，超过 token 预算 80% 时自动压缩旧消息
-- **token 用量追踪**：每轮累计 `inputTokens` + `outputTokens`，通过 callback 推送给 UI
+- **消息累积 + 自动压缩**：消息持续追加，上一轮真实 inputTokens 超过模型上下文窗口 80% 时自动压缩旧消息
+- **token 用量追踪**：每轮累计 `inputTokens` + `outputTokens`（API 返回的真实数字，不做估算，不做费用换算），通过 callback 推送给 UI
 
 #### 上下文压缩
 
@@ -278,10 +281,11 @@ async function compressMessages(messages: Message[], model): Promise<Message[]> 
 }
 ```
 
-**触发条件**：`estimateTokens(messages) > TOKEN_BUDGET * 0.8`
+**触发条件**：`lastInputTokens > contextWindow * 0.8`
 
-- `TOKEN_BUDGET` 根据模型的上下文窗口设置（如 Claude Sonnet: 200k，GPT-4o: 128k）
-- `estimateTokens` 使用字符数粗估（`text.length / 4` 作为近似值，不需要精确 tokenizer）
+- `lastInputTokens` 来自上一轮 API 响应的 `usage.inputTokens`，是模型已经实际收到的 token 数
+- `contextWindow` 根据模型设置（如 Claude Sonnet: 200k，GPT-4o: 128k）
+- **故意不做字符数估算**：`text.length / 4` 类粗估在工具输出 / 中文 / 代码场景下误差巨大，宁可用上一轮的真实数字晚一格触发，也不让估算误判
 - 压缩时同时触发**会话记忆保存**（10.8 节），一石二鸟
 
 #### Token 用量统计

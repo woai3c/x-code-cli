@@ -38,7 +38,6 @@ export { createModelRegistry } from './providers/registry.js'
 export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
-export { estimateTokens } from './agent/messages.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'

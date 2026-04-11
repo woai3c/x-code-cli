@@ -51,9 +51,9 @@ Terminal AI coding assistant -- interact with your codebase through natural lang
                           |  +----------+ +-----------+ +-------+      |
                           |                                             |
                           |  +----------+ +-----------+ +-------+      |
-                          |  | Provider | |  System   | |Pricing|      |
-                          |  | Registry | |  Prompt   | |  Est. |      |
-                          |  | 8+custom | | Builder   | |       |      |
+                          |  | Provider | |  System   | | Token |      |
+                          |  | Registry | |  Prompt   | | Usage |      |
+                          |  | 8+custom | | Builder   | | Meter |      |
                           |  +----------+ +-----------+ +-------+      |
                           +---------------------------------------------+
 ```
@@ -159,7 +159,7 @@ x-code-cli/
 +-- packages/
 |   +-- core/                     @x-code/core (AI engine, no UI)
 |   |   +-- src/
-|   |       +-- agent/            Agent loop, system prompt, pricing, plan mode
+|   |       +-- agent/            Agent loop, system prompt, plan mode
 |   |       +-- config/           Model config, API key management
 |   |       +-- knowledge/        Knowledge loader, auto-memory, session, project scan
 |   |       +-- permissions/      3-level permission system
@@ -242,7 +242,7 @@ xc [options] [prompt]
 | -------------- | ------------------------------ |
 | /help          | Show available commands        |
 | /model [alias] | Switch model or list available |
-| /usage         | Show token usage and cost      |
+| /usage         | Show token usage (input/output/total) |
 | /clear         | Clear conversation             |
 | /compact       | Manually compress context      |
 | /init          | Initialize project knowledge   |

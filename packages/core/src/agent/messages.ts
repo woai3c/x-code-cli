@@ -20,31 +20,3 @@ export function toolResultMessage(toolCallId: string, toolName: string, result: 
     ],
   }
 }
-
-/** Estimate token count from text (rough: chars / 4) */
-export function estimateTokens(messages: ModelMessage[]): number {
-  let chars = 0
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      chars += msg.content.length
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if ('text' in part && typeof part.text === 'string') {
-          chars += part.text.length
-        } else if ('result' in part && typeof part.result === 'string') {
-          chars += part.result.length
-        } else if ('output' in part) {
-          // Handle tool-result messages created by toolResultMessage()
-          const output = (part as { output: unknown }).output
-          if (typeof output === 'string') {
-            chars += output.length
-          } else if (output && typeof output === 'object' && 'value' in output) {
-            const value = (output as { value: unknown }).value
-            if (typeof value === 'string') chars += value.length
-          }
-        }
-      }
-    }
-  }
-  return Math.ceil(chars / 4)
-}
