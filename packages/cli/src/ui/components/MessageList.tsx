@@ -13,7 +13,7 @@
 // and pushes them to stdout via Ink's own `write` function (from the
 // StdoutContext) which properly coordinates with log-update. The terminal
 // itself handles line wrapping, so CJK width is no longer a problem.
-import React, { useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { useStdout } from 'ink'
 
@@ -47,7 +47,7 @@ export function MessageList({ messages }: MessageListProps) {
     }
     if (messages.length === writtenCountRef.current) return
     for (let i = writtenCountRef.current; i < messages.length; i++) {
-      writeMessageToStdout(write, messages[i]!)
+      writeMessageToStdout(write, messages[i])
     }
     writtenCountRef.current = messages.length
   }, [messages, write])

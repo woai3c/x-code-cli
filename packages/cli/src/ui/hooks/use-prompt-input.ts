@@ -63,8 +63,16 @@ export function usePromptInput({ onText, onPaste, onKey, enabled }: PromptInputH
   // Stash handlers in a ref so the effect doesn't re-subscribe on every
   // render — each render produces a fresh callback closure, but we want a
   // stable subscription that always calls through to the latest handlers.
+  //
+  // The assignment has to happen inside a useEffect (not during render)
+  // because assigning to ref.current during render is flagged by React's
+  // concurrent-mode rules — it could cause Strict Mode double-invocation
+  // to see mismatched state. An effect with no dep array runs after every
+  // commit, which is exactly the "latest value" semantics we want.
   const handlersRef = useRef({ onText, onPaste, onKey })
-  handlersRef.current = { onText, onPaste, onKey }
+  useEffect(() => {
+    handlersRef.current = { onText, onPaste, onKey }
+  })
 
   // Bracketed-paste state persists across stdin chunks so we can stitch a
   // paste that arrives in multiple data events.
