@@ -14,8 +14,7 @@ import { MessageList } from './MessageList.js'
 import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
 import { ShellOutput } from './ShellOutput.js'
-import { Spinner, type SpinnerMode } from './Spinner.js'
-import { StreamingText } from './StreamingText.js'
+import { Spinner } from './Spinner.js'
 import { ToolCall } from './ToolCall.js'
 
 interface AppProps {
@@ -237,11 +236,11 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
       {/* Message history — Static, permanent scrollback, no parent */}
       <MessageList messages={state.messages} />
 
-      {/* Dynamic region — repainted each render; kept deliberately small. */}
+      {/* Dynamic region — repainted each render; kept deliberately small.
+          Streaming text does NOT live here — it accumulates in
+          useAgent's streamBufferRef and flushes into messages (which
+          MessageList's useEffect echoes to stdout via writeMessageToStdout). */}
       <Box flexDirection="column" paddingX={1}>
-        {/* Current streaming text */}
-        {state.streamingText && <StreamingText text={state.streamingText} />}
-
         {/* Current tool call (in-progress) */}
         {state.currentToolCall && !state.pendingPermission && (
           <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
@@ -268,14 +267,16 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
           />
         )}
 
-        {/* Loading spinner — always visible during isLoading, arrow changes by phase */}
-        {state.isLoading &&
-          (() => {
-            let mode: SpinnerMode = 'requesting'
-            if (state.currentToolCall) mode = 'tool-use'
-            else if (state.streamingText) mode = 'responding'
-            return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
-          })()}
+        {/* Loading spinner — always visible during isLoading, arrow changes by phase.
+            We can't know from React state whether streaming text is in flight
+            (the buffer lives in a ref), so we only distinguish "tool-use" from
+            the default "requesting" state here. */}
+        {state.isLoading && (
+          <Spinner
+            totalTokens={state.usage.totalTokens}
+            mode={state.currentToolCall ? 'tool-use' : 'requesting'}
+          />
+        )}
 
         {/* Error */}
         {state.error && <Text color={ERROR}>Error: {state.error}</Text>}

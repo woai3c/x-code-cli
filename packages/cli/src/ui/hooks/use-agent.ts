@@ -51,7 +51,6 @@ interface PendingQuestion {
 
 export interface AgentState {
   messages: DisplayMessage[]
-  streamingText: string
   isLoading: boolean
   currentToolCall: { toolName: string; input: Record<string, unknown> } | null
   shellOutput: string
@@ -64,7 +63,6 @@ export interface AgentState {
 export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   const [state, setState] = useState<AgentState>({
     messages: [],
-    streamingText: '',
     isLoading: false,
     currentToolCall: null,
     shellOutput: '',
@@ -165,7 +163,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       setState((prev) => ({
         ...prev,
         isLoading: true,
-        streamingText: '',
         shellOutput: '',
         error: null,
         messages: [
@@ -348,9 +345,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Clear conversation */
   const clear = useCallback(() => {
     loopStateRef.current = null
+    streamBufferRef.current = ''
     setState({
       messages: [],
-      streamingText: '',
       isLoading: false,
       currentToolCall: null,
       shellOutput: '',
