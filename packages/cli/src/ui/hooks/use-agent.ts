@@ -83,65 +83,71 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   // ── Tool call timing ──
   const toolCallStartRef = useRef<number>(0)
 
-  /**
-   * How many lines to keep in the non-Static streaming area.
-   * When exceeded, all accumulated text is promoted to Static (messages)
-   * and the streaming area starts fresh. This prevents Ink from trying
-   * to redraw a non-Static area taller than the terminal.
-   */
-  const FLUSH_THRESHOLD = 16
+  // ── Streaming text buffer ──
+  //
+  // We deliberately DO NOT render streaming text in Ink's dynamic region.
+  // Ink + CJK wide characters + Yoga layout don't play well: long Chinese
+  // paragraphs get their visual row count miscalculated, so when Ink rewinds
+  // to repaint the dynamic region the cursor overshoots and old content
+  // splices into new content — you see merged bullet points and mangled
+  // scrollback on long responses.
+  //
+  // Instead, deltas are accumulated in a ref and flushed to `messages`
+  // (which renders via Ink <Static> — write-once scrollback). Flushes happen
+  // at paragraph breaks, every ~300 chars, and on tool-call / end-of-turn
+  // boundaries. The user sees text appear a paragraph at a time rather than
+  // char-by-char, which trades some "typewriter" feel for a completely
+  // corruption-free terminal.
+  const streamBufferRef = useRef<string>('')
+  const FLUSH_CHAR_THRESHOLD = 300
+  const FLUSH_LINE_THRESHOLD = 5
 
-  /**
-   * Append a text delta directly to state. React 18 auto-batches bursts of
-   * setState within a microtask/macrotask, so we don't need an extra buffer
-   * + timer layer — which previously introduced subtle ordering bugs where
-   * a fast turn could complete before the first flush tick.
-   */
-  const appendTextDelta = useCallback((delta: string) => {
-    if (!delta) return
-    setState((prev) => {
-      const fullText = prev.streamingText + delta
-      if (fullText.split('\n').length > FLUSH_THRESHOLD) {
-        return {
-          ...prev,
-          streamingText: '',
-          messages: [
-            ...prev.messages,
-            {
-              id: `stream-${Date.now()}`,
-              role: 'assistant' as const,
-              content: fullText,
-              timestamp: Date.now(),
-            },
-          ],
-        }
-      }
-      return { ...prev, streamingText: fullText }
-    })
+  /** Push whatever is in the buffer into `messages` as one assistant text item. */
+  const flushBuffer = useCallback(() => {
+    const text = streamBufferRef.current
+    if (!text) return
+    streamBufferRef.current = ''
+    setState((prev) => ({
+      ...prev,
+      messages: [
+        ...prev.messages,
+        {
+          id: `stream-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          role: 'assistant' as const,
+          content: text,
+          timestamp: Date.now(),
+        },
+      ],
+    }))
   }, [])
 
   /**
-   * Promote any accumulated streaming text into messages (Static) so it
-   * appears permanently in the scrollback before a tool call is shown.
+   * Accept a text delta from the agent loop.
+   *
+   * The buffer is flushed when any of these trigger:
+   *   1. A paragraph break (`\n\n`) — natural prose boundary
+   *   2. ≥ FLUSH_CHAR_THRESHOLD characters accumulated
+   *   3. ≥ FLUSH_LINE_THRESHOLD lines accumulated
+   *
+   * Otherwise the buffer keeps growing silently; `flushBuffer()` is also
+   * called by `onToolCall` and at end-of-submit to drain residuals.
    */
-  const flushStreamingToMessages = useCallback(() => {
-    setState((prev) => {
-      if (!prev.streamingText) return prev
-      return {
-        ...prev,
-        streamingText: '',
-        messages: [
-          ...prev.messages,
-          {
-            id: `text-${Date.now()}`,
-            role: 'assistant' as const,
-            content: prev.streamingText,
-            timestamp: Date.now(),
-          },
-        ],
-      }
-    })
-  }, [])
+  const appendTextDelta = useCallback(
+    (delta: string) => {
+      if (!delta) return
+      streamBufferRef.current += delta
+      const buf = streamBufferRef.current
+      const shouldFlush =
+        buf.includes('\n\n') ||
+        buf.length >= FLUSH_CHAR_THRESHOLD ||
+        buf.split('\n').length > FLUSH_LINE_THRESHOLD
+      if (shouldFlush) flushBuffer()
+    },
+    [flushBuffer],
+  )
+
+  /** Back-compat alias: used by onToolCall to drain text before a tool call. */
+  const flushStreamingToMessages = flushBuffer
 
   /** Initialize memories and scan project (once) */
   const initialize = useCallback(async () => {
@@ -260,38 +266,30 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           loopStateRef.current ?? undefined,
         )
 
-        // Finalize: promote any residual streaming text to messages and
-        // clear the loading flag. As a safety net, if streaming produced
+        // Finalize: drain whatever's left in the stream buffer into messages,
+        // then clear the loading flag. As a safety net, if streaming produced
         // no text (e.g. the provider only emitted reasoning chunks before
         // the final text landed on `response.messages`), extract the last
-        // assistant text directly from loopState so the user always sees
-        // a reply.
-        setState((prev) => {
-          let residual = prev.streamingText
-          if (!residual && !sawTextDelta && loopStateRef.current) {
-            residual = extractLastAssistantText(loopStateRef.current.messages)
+        // assistant text from loopState so the user always sees a reply.
+        flushBuffer()
+        if (!sawTextDelta && loopStateRef.current) {
+          const fallback = extractLastAssistantText(loopStateRef.current.messages)
+          if (fallback) {
+            setState((prev) => ({
+              ...prev,
+              messages: [
+                ...prev.messages,
+                {
+                  id: `text-${Date.now()}`,
+                  role: 'assistant' as const,
+                  content: fallback,
+                  timestamp: Date.now(),
+                },
+              ],
+            }))
           }
-
-          if (!residual) {
-            return { ...prev, isLoading: false, currentToolCall: null }
-          }
-
-          return {
-            ...prev,
-            messages: [
-              ...prev.messages,
-              {
-                id: `text-${Date.now()}`,
-                role: 'assistant' as const,
-                content: residual,
-                timestamp: Date.now(),
-              },
-            ],
-            streamingText: '',
-            isLoading: false,
-            currentToolCall: null,
-          }
-        })
+        }
+        setState((prev) => ({ ...prev, isLoading: false, currentToolCall: null }))
       } catch (err) {
         setState((prev) => ({
           ...prev,
@@ -300,7 +298,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         }))
       }
     },
-    [options, initialize, appendTextDelta, flushStreamingToMessages],
+    [options, initialize, appendTextDelta, flushStreamingToMessages, flushBuffer],
   )
 
   /** Resolve a pending permission request */

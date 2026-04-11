@@ -227,57 +227,66 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
   }
 
   return (
-    <Box flexDirection="column" padding={1}>
-      {/* Message history (tool calls appear here progressively as they complete) */}
+    // IMPORTANT: <MessageList> uses Ink <Static>, which writes items to stdout
+    // out-of-band. Wrapping it in ANY container (even a plain Box) can cause
+    // scrollback corruption when Ink's dynamic region needs to repaint over
+    // wide-character content. The safest structure is a Fragment at the top
+    // so Static items have no parent at all, with all styling isolated to the
+    // dynamic sibling below.
+    <>
+      {/* Message history — Static, permanent scrollback, no parent */}
       <MessageList messages={state.messages} />
 
-      {/* Current streaming text */}
-      {state.streamingText && <StreamingText text={state.streamingText} />}
+      {/* Dynamic region — repainted each render; kept deliberately small. */}
+      <Box flexDirection="column" paddingX={1}>
+        {/* Current streaming text */}
+        {state.streamingText && <StreamingText text={state.streamingText} />}
 
-      {/* Current tool call (in-progress) */}
-      {state.currentToolCall && !state.pendingPermission && (
-        <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
-      )}
+        {/* Current tool call (in-progress) */}
+        {state.currentToolCall && !state.pendingPermission && (
+          <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
+        )}
 
-      {/* Shell output */}
-      {state.shellOutput && <ShellOutput output={state.shellOutput} />}
+        {/* Shell output */}
+        {state.shellOutput && <ShellOutput output={state.shellOutput} />}
 
-      {/* Permission dialog */}
-      {state.pendingPermission && (
-        <Permission
-          toolName={state.pendingPermission.toolName}
-          input={state.pendingPermission.input}
-          onResolve={resolvePermission}
+        {/* Permission dialog */}
+        {state.pendingPermission && (
+          <Permission
+            toolName={state.pendingPermission.toolName}
+            input={state.pendingPermission.input}
+            onResolve={resolvePermission}
+          />
+        )}
+
+        {/* askUser dialog */}
+        {state.pendingQuestion && (
+          <SelectOptions
+            question={state.pendingQuestion.question}
+            options={state.pendingQuestion.options}
+            onSelect={resolveQuestion}
+          />
+        )}
+
+        {/* Loading spinner — always visible during isLoading, arrow changes by phase */}
+        {state.isLoading &&
+          (() => {
+            let mode: SpinnerMode = 'requesting'
+            if (state.currentToolCall) mode = 'tool-use'
+            else if (state.streamingText) mode = 'responding'
+            return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
+          })()}
+
+        {/* Error */}
+        {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
+
+        {/* Input */}
+        <ChatInput
+          onSubmit={handleSubmit}
+          disabled={state.isLoading || !!state.pendingPermission || !!state.pendingQuestion}
+          commands={SLASH_COMMANDS}
         />
-      )}
-
-      {/* askUser dialog */}
-      {state.pendingQuestion && (
-        <SelectOptions
-          question={state.pendingQuestion.question}
-          options={state.pendingQuestion.options}
-          onSelect={resolveQuestion}
-        />
-      )}
-
-      {/* Loading spinner — always visible during isLoading, arrow changes by phase */}
-      {state.isLoading &&
-        (() => {
-          let mode: SpinnerMode = 'requesting'
-          if (state.currentToolCall) mode = 'tool-use'
-          else if (state.streamingText) mode = 'responding'
-          return <Spinner totalTokens={state.usage.totalTokens} mode={mode} />
-        })()}
-
-      {/* Error */}
-      {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
-
-      {/* Input */}
-      <ChatInput
-        onSubmit={handleSubmit}
-        disabled={state.isLoading || !!state.pendingPermission || !!state.pendingQuestion}
-        commands={SLASH_COMMANDS}
-      />
-    </Box>
+      </Box>
+    </>
   )
 }

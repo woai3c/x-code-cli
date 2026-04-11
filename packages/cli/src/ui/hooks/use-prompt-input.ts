@@ -1,0 +1,212 @@
+// @x-code-cli/cli — Custom stdin input hook with bracketed-paste support
+// and a time-window fallback for terminals that don't enable it.
+//
+// Two layered paste-detection strategies:
+//
+//   1. **Bracketed paste mode** (primary, fast path)
+//      We send `\x1b[?2004h` on mount. Terminals that support it wrap every
+//      paste in `\x1b[200~ … \x1b[201~`. The state machine below detects
+//      these markers and emits the payload as a single `onPaste` call
+//      regardless of how Node chunks the stdin bytes.
+//
+//   2. **Debounce fallback** (for Windows Terminal / PowerShell / tmux /
+//      ConEmu / VS Code integrated terminal — any environment where
+//      bracketed paste is NOT honored)
+//      When no paste markers are seen, printable text is accumulated into
+//      a buffer and a short (PASTE_DEBOUNCE_MS) timer is (re)set on every
+//      stdin event. Human typing has >100 ms between keystrokes so each
+//      character flushes on its own timer, but a paste burst arrives in
+//      sub-millisecond bursts — the buffer fills in one tick and flushes
+//      as a single atomic chunk, which then gets routed to `onPaste` by
+//      the size heuristic below. This is the same approach Claude Code
+//      takes in its `usePasteHandler` hook.
+//
+// Special keys (Enter, backspace, arrows, tab, escape, Ctrl+C) always
+// force-flush any pending text before they dispatch, so the pasted content
+// is committed BEFORE the key that acts on it.
+
+import { useEffect, useRef } from 'react'
+
+import { useStdin } from 'ink'
+
+const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
+const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
+const PASTE_START = '\x1b[200~'
+const PASTE_END = '\x1b[201~'
+
+// Time window for batching rapid stdin bursts. 30 ms is well below human
+// typing cadence (~100–200 ms between keys) but far above the sub-ms gaps
+// between characters of a paste, so it cleanly separates the two.
+const PASTE_DEBOUNCE_MS = 30
+
+// When the debounce window closes, a buffer of this size or larger — or
+// one containing a newline — is classified as a paste. Smaller buffers
+// are treated as normal typing.
+const PASTE_SIZE_THRESHOLD = 8
+
+export type PromptKey = 'return' | 'backspace' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right'
+
+export interface PromptInputHandlers {
+  /** Normal typed text (may be multi-char if the terminal batched a burst). */
+  onText: (text: string) => void
+  /** Atomic paste — always the full contents of one paste event. */
+  onPaste: (content: string) => void
+  /** Special keys. */
+  onKey: (key: PromptKey) => void
+  /** Turn the listener on/off without unmounting the component. */
+  enabled: boolean
+}
+
+export function usePromptInput({ onText, onPaste, onKey, enabled }: PromptInputHandlers): void {
+  const { stdin, setRawMode } = useStdin()
+
+  // Stash handlers in a ref so the effect doesn't re-subscribe on every
+  // render — each render produces a fresh callback closure, but we want a
+  // stable subscription that always calls through to the latest handlers.
+  const handlersRef = useRef({ onText, onPaste, onKey })
+  handlersRef.current = { onText, onPaste, onKey }
+
+  // Bracketed-paste state persists across stdin chunks so we can stitch a
+  // paste that arrives in multiple data events.
+  const pasteStateRef = useRef<{ inPaste: boolean; buffer: string }>({ inPaste: false, buffer: '' })
+
+  // Debounce buffer + timer for the fallback path.
+  const pendingTextRef = useRef<string>('')
+  const pendingTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  useEffect(() => {
+    if (!enabled) return
+
+    setRawMode(true)
+    process.stdout.write(ENABLE_BRACKETED_PASTE)
+
+    // ── Flush the debounce buffer ──
+    //
+    // Emits one onPaste (or onText for tiny chunks) with all the text that
+    // accumulated during the last burst. We normalize line endings to `\n`
+    // here because Windows terminals tend to send `\r` or `\r\n` for
+    // pasted newlines; downstream code and the terminal's line-rendering
+    // both want `\n`. A bare `\r` in a terminal print means "carriage
+    // return" and overwrites previous characters, which was producing
+    // the "optimizations Claude Managed Agents is currently in beta"
+    // splicing pattern in echoed pastes.
+    const flushPending = (): void => {
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current)
+        pendingTimerRef.current = null
+      }
+      const raw = pendingTextRef.current
+      if (!raw) return
+      pendingTextRef.current = ''
+      const text = raw.replace(/\r\n?/g, '\n')
+
+      const looksLikePaste = text.length >= PASTE_SIZE_THRESHOLD || text.includes('\n')
+      if (looksLikePaste) {
+        handlersRef.current.onPaste(text)
+      } else {
+        handlersRef.current.onText(text)
+      }
+    }
+
+    // Queue text into the debounce buffer and (re)start the flush timer.
+    const queueText = (data: string): void => {
+      pendingTextRef.current += data
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
+      pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
+    }
+
+    // Dispatch a special key. Always force-flushes pending text first so
+    // that, e.g., Enter commits the previously-buffered input BEFORE acting
+    // on the key.
+    const dispatchKey = (key: PromptKey): void => {
+      flushPending()
+      handlersRef.current.onKey(key)
+    }
+
+    // Parse a chunk of non-paste input. Returns immediately for recognized
+    // special keys; otherwise buffers as text.
+    const processNormalInput = (data: string): void => {
+      if (data.length === 0) return
+
+      if (data === '\r' || data === '\n') return dispatchKey('return')
+      if (data === '\x7f' || data === '\b') return dispatchKey('backspace')
+      if (data === '\t') return dispatchKey('tab')
+      if (data === '\x1b') return dispatchKey('escape')
+
+      // Ctrl+C — flush and raise SIGINT so the outer CLI handler cleans up.
+      if (data === '\x03') {
+        flushPending()
+        process.kill(process.pid, 'SIGINT')
+        return
+      }
+
+      // ANSI arrow keys (exact matches)
+      if (data === '\x1b[A') return dispatchKey('up')
+      if (data === '\x1b[B') return dispatchKey('down')
+      if (data === '\x1b[C') return dispatchKey('right')
+      if (data === '\x1b[D') return dispatchKey('left')
+
+      // Unknown escape sequences — drop so they don't show up as literal
+      // "\x1b[…" text in the input.
+      if (data.startsWith('\x1b')) return
+
+      // Printable text — buffer with debounce so a paste burst batches
+      // into a single onPaste call.
+      queueText(data)
+    }
+
+    // Top-level stdin data handler. Walks the chunk looking for bracketed
+    // paste markers; anything outside a paste block goes through
+    // processNormalInput (and thus the debounce buffer for text).
+    const handleData = (data: Buffer | string): void => {
+      let chunk = typeof data === 'string' ? data : data.toString('utf8')
+
+      while (chunk.length > 0) {
+        const state = pasteStateRef.current
+
+        if (state.inPaste) {
+          const endIdx = chunk.indexOf(PASTE_END)
+          if (endIdx === -1) {
+            state.buffer += chunk
+            return
+          }
+          state.buffer += chunk.slice(0, endIdx)
+          // Normalize line endings for the same reason flushPending does —
+          // bare `\r` in pasted content acts as carriage return and
+          // overwrites previous characters when later echoed to the
+          // terminal.
+          const content = state.buffer.replace(/\r\n?/g, '\n')
+          state.buffer = ''
+          state.inPaste = false
+          // Bracketed paste trumps the debounce buffer — flush pending
+          // text first so it doesn't get mixed in with the paste payload.
+          flushPending()
+          handlersRef.current.onPaste(content)
+          chunk = chunk.slice(endIdx + PASTE_END.length)
+          continue
+        }
+
+        const startIdx = chunk.indexOf(PASTE_START)
+        if (startIdx === -1) {
+          processNormalInput(chunk)
+          return
+        }
+        if (startIdx > 0) {
+          processNormalInput(chunk.slice(0, startIdx))
+        }
+        // Flush any pending typing before entering paste mode so we don't
+        // concatenate typed chars with the paste content.
+        flushPending()
+        chunk = chunk.slice(startIdx + PASTE_START.length)
+        state.inPaste = true
+      }
+    }
+
+    stdin.on('data', handleData)
+    return () => {
+      flushPending()
+      stdin.off('data', handleData)
+      process.stdout.write(DISABLE_BRACKETED_PASTE)
+    }
+  }, [enabled, stdin, setRawMode])
+}
