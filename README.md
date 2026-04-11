@@ -223,6 +223,48 @@ At least one provider API key is required:
 | MOONSHOT_API_KEY             | Moonshot (Kimi)              |
 | TAVILY_API_KEY               | Tavily web search (optional) |
 
+### Persisting your API key
+
+Once set persistently in your shell, `xc` works from any directory. Pick the block for your shell:
+
+**bash**
+
+```bash
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**zsh** (macOS default)
+
+```bash
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**fish**
+
+```fish
+set -Ux ANTHROPIC_API_KEY sk-ant-...
+```
+
+**Windows PowerShell** (user-level, persistent)
+
+```powershell
+[Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', 'sk-ant-...', 'User')
+# restart PowerShell for it to take effect
+```
+
+**Windows CMD** (user-level, persistent)
+
+```cmd
+setx ANTHROPIC_API_KEY "sk-ant-..."
+:: restart CMD for it to take effect
+```
+
+> Session-only alternatives like `export X=...` (current shell only) or `$env:X = '...'` (current PowerShell only) evaporate when you close the terminal — use the persistent forms above for a globally-installed `xc`.
+>
+> For per-project overrides you can still drop a `.env` file in your project root; it is loaded from the current working directory upward.
+
 ## CLI Options
 
 ```text

@@ -150,10 +150,7 @@ function loadEnvFile(): void {
 function printNoApiKeyMessage() {
   const isWindows = process.platform === 'win32'
   console.error('Error: No API key found.\n')
-  console.error('Option 1: Create a .env file in your project root:\n')
-  console.error('  cp .env.example .env')
-  console.error('  # Edit .env and fill in your API key\n')
-  console.error('Option 2: Set an environment variable:\n')
+  console.error('Set at least one provider API key via environment variable:\n')
   for (const { envKey } of PROVIDER_DETECTION_ORDER) {
     const provider = envKey
       .replace(/_API_KEY$/, '')
@@ -164,15 +161,26 @@ function printNoApiKeyMessage() {
     console.error(`  ${envKey.padEnd(32)} ${url}`)
   }
   console.error(`\n  OPENAI_COMPATIBLE_API_KEY        (custom OpenAI-compatible endpoint)`)
+
+  console.error('\nPersist it so you do not need to set it every session:\n')
   if (isWindows) {
-    console.error('\nExample (PowerShell):')
-    console.error('  $env:ANTHROPIC_API_KEY="sk-ant-..."')
-    console.error('  xc')
+    console.error('  PowerShell (user-level, persistent):')
+    console.error(`    [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY','sk-ant-...','User')`)
+    console.error('    # restart PowerShell, then run:  xc\n')
+    console.error('  CMD (user-level, persistent):')
+    console.error('    setx ANTHROPIC_API_KEY "sk-ant-..."')
+    console.error('    :: restart CMD, then run:  xc')
   } else {
-    console.error('\nExample:')
-    console.error('  export ANTHROPIC_API_KEY=sk-ant-...')
-    console.error('  xc')
+    console.error('  bash:')
+    console.error(`    echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc`)
+    console.error('    source ~/.bashrc\n')
+    console.error('  zsh (macOS default):')
+    console.error(`    echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc`)
+    console.error('    source ~/.zshrc\n')
+    console.error('  fish:')
+    console.error('    set -Ux ANTHROPIC_API_KEY sk-ant-...')
   }
+  console.error('\nAlternatively, put keys in a project-local .env file (loaded from cwd upward).')
 }
 
 function readStdin(): Promise<string> {
