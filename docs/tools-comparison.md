@@ -2,7 +2,9 @@
 
 > 对比对象：**Claude Code** (Anthropic) / **Gemini CLI** (Google) / **Codex CLI** (OpenAI) / **x-code-cli** (本项目)
 >
-> 分析日期：2026-04-05
+> 第 6 节 Web 工具还额外引入 **OpenCode** 做深入对比（OpenCode 的 web 工具接入方式独特，值得单独分析）。
+>
+> 分析日期：2026-04-05（2026-04-11 扩充 §6 与 §12 web 工具章节）
 
 ---
 
@@ -210,13 +212,71 @@ const edit = tool({
 
 ## 6. Web 工具
 
-| 特性         |              Claude Code              |       Gemini CLI       | Codex CLI  |       x-code-cli        |
-| ------------ | :-----------------------------------: | :--------------------: | :--------: | :---------------------: |
-| Web Search   |      Anthropic 原生 server tool       | Google Web Search API  | **无内置** |       Tavily API        |
-| Web Fetch    |        有 (cheerio + turndown)        | 有 (URL + prompt 参数) | **无内置** | 有 (cheerio + turndown) |
-| 搜索流式进度 | Y（query_update + results_received）  |           -            |     -      |            -            |
-| 域名过滤     | `allowed_domains` / `blocked_domains` |           -            |     -      |            -            |
-| 结果引用要求 |        强制要求 markdown 链接         |           -            |     -      |            -            |
+### 6.1 对比矩阵（含 OpenCode）
+
+| 特性             |              Claude Code               |       Gemini CLI       |   Codex CLI    |        OpenCode        |       x-code-cli (当前)        |
+| ---------------- | :------------------------------------: | :--------------------: | :------------: | :--------------------: | :----------------------------: |
+| **Web Search**   | Anthropic 原生 server tool (beta 2025) | Google Web Search API  |   **无内置**   | Exa（经 MCP JSON-RPC） |           Tavily API           |
+| 成本             |      **$0.01 / 次**（用户付费）        |  计入 Gemini API 用量   |       —        | Exa 账户付费（无免费） | **Tavily 免费 1000 次 / 月**   |
+| 多 Provider 可用 |    ❌ 仅 Anthropic 原生/Vertex/Bedrock   |      ❌ 仅 Gemini       |       —        |        ✅ 任意模型      |           ✅ 任意模型           |
+| 搜索入参         | `query` + `allowed/blocked_domains`    |        `query`         |       —        | 5 参（livecrawl/type/contextMaxCharacters…） |        2 参（query/maxResults）        |
+| 域名过滤         |      allowed / blocked domains         |           —            |       —        |           —            |              ❌                |
+| 流式进度         | Y（`query_update` + `results_received`）|           —            |       —        |       SSE 回传         |              ❌                |
+| 年份注入         |                  ❌                     |           —            |       —        | ✅ (`current year is <y>`) |            ❌                 |
+| 强制引用         |         markdown 链接              |           —            |       —        |           —            |              ❌                |
+| **Web Fetch**    |            axios + turndown            | 有 (URL + prompt 参数) |   **无内置**   |   turndown + HTMLRewriter   | cheerio + turndown |
+| Fetch 大小上限   |                10 MB                    |      约 2 MB           |       —        |         5 MB            |        **30 KB**（偏小）       |
+| Fetch 缓存       |     **15 min LRU**（50 MB）             |           —            |       —        |           ❌            |              ❌                |
+| CF bot 对抗      |                  ❌                     |           —            |       —        | ✅（检测 `cf-mitigated` 后降级 UA 重试）|              ❌                |
+| 预授权域名列表    |      ✅（~160 个常用文档站点）            |           —            |       —        |           ❌            |              ❌                |
+| 域名预检           | `api.anthropic.com/api/web/domain_info` + 5 min 缓存 |  —   |    —    |           ❌            |              ❌                |
+| Fetch 后处理     |  非预授权域名走 Haiku 抽取 + 版权保护    |      直接返回          |       —        |     turndown 后返回     |       cheerio 清洗后 turndown       |
+
+### 6.2 搜索后端对比与"免费 + 高效"选型
+
+用户核心诉求是 **"尽量免费 + 高效"**。对所有可用后端做个横向评估：
+
+| 后端                 | 免费额度           | 质量         | 关键字段                          | 难点/坑                              |
+| -------------------- | ------------------ | ------------ | --------------------------------- | ------------------------------------ |
+| **Tavily**           | 1000 次/月 (API key) | ⭐⭐⭐⭐（LLM 优化，带摘要） | `search_depth` / `topic` / `include_domains` | 免费额度相对小，需注册            |
+| **Brave Search API** | 2000 次/月 (免费套餐, 1 QPS) | ⭐⭐⭐⭐（独立索引） | `q` / `freshness` / `safesearch`   | 免费套餐 QPS 限制                    |
+| **Google CSE**       | 100 次/天 (约 3000/月) | ⭐⭐⭐⭐⭐     | `q` / `cx` / `dateRestrict`       | 需 CSE 配置, API 配额严格            |
+| **SerpAPI / Serper** | 100 次/月（免费）    | ⭐⭐⭐⭐⭐（直接 SERP） | 较丰富                           | 免费额度少，超出即付费              |
+| **Exa** (opencode)   | **无免费套餐**      | ⭐⭐⭐⭐⭐（LLM 原生） | livecrawl/type/contextMax         | 需付费                              |
+| **Anthropic native** | **$0.01 / 次**      | ⭐⭐⭐⭐       | domains                            | 仅 Anthropic / Vertex / Bedrock      |
+| **DuckDuckGo 抓取**  | 真·免费，无需 key   | ⭐⭐         | `q`                                | 非官方，HTML 结构变动即失效          |
+| **SearXNG 自托管**   | 免费（需自己部署）    | ⭐⭐⭐        | 可配置                             | 需运维成本                          |
+
+**结论：Tavily 仍然是我们当前最优解，但应加一个 Brave fallback。**
+
+理由：
+1. **Claude Code 的做法（Anthropic native）无法抄**——它依赖 Anthropic 服务端 `web_search_20250305` beta tool + beta header，对 OpenAI/DeepSeek/Google 等模型全部 `isEnabled()=false`。我们是多 Provider CLI，复制这一路绑定 Anthropic = 自废武功，而且 $0.01/次 不是免费。
+2. **OpenCode 的 Exa 方案无免费套餐**——MCP JSON-RPC 的工程复杂度我们也不必承担。
+3. **Tavily 的 1000 次/月** 对个人开发者基本够用，质量也为 LLM 优化过（不是原始 SERP snippet，而是已清洗摘要），和 Claude Code/Exa 是同一档。
+4. **Brave 2000 次/月免费** 是 Tavily 用尽后的自然补位，而且索引独立，偶发噪声不一样。Tavily 主 / Brave 备 的组合 ≈ 3000 次/月免费额度。
+5. **DDG 抓取**只建议作为 zero-config 演示模式，不作为默认。
+
+### 6.3 x-code-cli 和上述工具的差距
+
+当前 `web-search.ts` 只实现了最朴素的 Tavily 直连（30 行），`web-fetch.ts` 是 cheerio + turndown 的最小闭环（69 行）。对比之后，差距集中在：
+
+**webSearch：**
+1. ❌ 没把 Tavily 已支持的 `search_depth` / `topic` / `include_domains` / `exclude_domains` 透传给模型——这是白送的能力没用上
+2. ❌ 没注入当前年份到工具描述——模型会按训练数据的"当前年"去构造查询（如"2024 最新 xxx"），严重影响召回质量
+3. ❌ 没有 allowed/blocked domains 过滤
+4. ❌ 没有备用后端（Tavily quota 用完就没了）
+
+**webFetch：**
+1. ❌ **30 KB 上限太小**——React/Python/Rust 等官方文档页 markdown 化后很容易突破 30 KB，被强行截断会丢关键内容。Claude Code 是 10 MB，OpenCode 是 5 MB
+2. ❌ **无任何缓存**——模型在同一任务内反复 fetch 同一个 URL 很常见（先看概览，再回来查细节），每次都走完整 HTTP + turndown
+3. ❌ 没有 Cloudflare bot 降级重试（很多技术博客/论坛会被直接 403）
+4. ❌ 没有预授权域名列表，所有站点都走同一路径
+
+### 6.4 要抄的最优先做法
+
+按 "影响 / 工作量" 排序，**最高优先级是年份注入和 webFetch 缓存**——两件事合计 <100 行代码，却能直接解决"搜不到最新内容"和"反复 refetch 浪费"这两个最刺痛用户的问题。
+
+详见第 12 节 P0 的 §12.3 和 §12.4。
 
 ---
 
@@ -357,7 +417,76 @@ NO_SPACE_LEFT // 磁盘满 (Fatal)
 
 ### P0 — 必做（直接影响核心体验）
 
-#### 12.1 Edit 工具 flexible 匹配
+#### 12.1 webSearch / webFetch 注入当前年份
+
+> 借鉴：OpenCode (`tool/websearch.txt` 模板)
+
+模型接训练数据里的"当前年份"去构造搜索 query，容易搜出过时内容。OpenCode 的做法是把当前年份注入到工具 description 里，强制模型使用正确年份。
+
+**实现方案**：构建 webSearch / webFetch 的 description 时动态拼接当前年份。
+
+```typescript
+const year = new Date().getFullYear()
+const description =
+  `Search the web. The current year is ${year}; ` +
+  `use it whenever the user asks for recent/latest/current information.`
+```
+
+几行代码，是所有改进里性价比最高的一项。
+
+预估工作量：~10 行
+
+#### 12.2 webFetch LRU 缓存
+
+> 借鉴：Claude Code (`WebFetchTool` 15 min LRU, 50 MB 上限)
+
+模型在同一任务里反复 fetch 同一 URL 是常态（先看首页，再回来查细节，再用另一个 prompt 重读）。当前每次都走完整 HTTP + turndown，浪费时间 + token + 带宽。
+
+**实现方案**：
+
+```typescript
+import { LRUCache } from 'lru-cache'
+
+const fetchCache = new LRUCache<string, { markdown: string; fetchedAt: number }>({
+  max: 50,                      // 最多 50 条
+  maxSize: 50 * 1024 * 1024,    // 50 MB
+  sizeCalculation: (v) => v.markdown.length * 2,
+  ttl: 15 * 60 * 1000,          // 15 分钟
+})
+
+// execute() 入口：命中缓存直接返回
+const cached = fetchCache.get(url)
+if (cached) return cached.markdown
+```
+
+注意：缓存 key 只用 URL（不含 prompt），因为 prompt 只影响结尾拼接的 "Extract instruction" 文本，不影响主体内容。
+
+预估工作量：~40 行 + `lru-cache` 依赖
+
+#### 12.3 webFetch 扩容 + Cloudflare 降级
+
+> 借鉴：Claude Code (10 MB 上限) / OpenCode (CF 降级 UA)
+
+当前 `MAX_CONTENT_CHARS = 30000` 让很多文档页被强制截断，丢失关键内容。Cloudflare 的 bot 检测也会把技术博客和论坛直接 403 掉。
+
+**实现方案**：
+
+1. `MAX_CONTENT_CHARS` 从 30 KB 提升到 2 MB（字符数）；原始 HTML 上限提升到 10 MB（bytes），防止下载超大页面
+2. 响应 403 且 header `cf-mitigated: challenge` 时，用极简 UA `"x-code-cli"` 重试一次
+
+```typescript
+// 首次 fetch 用伪装 UA
+let res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, ... } })
+if (res.status === 403 && res.headers.get('cf-mitigated') === 'challenge') {
+  res = await fetch(url, { headers: { 'User-Agent': 'x-code-cli' } })
+}
+```
+
+**注意**：扩容后模型一次读的 markdown 可能很长，记得 `estimateTokens` 里也要计入；必要时在返回前按段落智能截断而非暴力 slice。
+
+预估工作量：~50 行
+
+#### 12.4 Edit 工具 flexible 匹配
 
 > 借鉴：Gemini CLI
 
@@ -377,7 +506,7 @@ const searchLines = oldString.split('\n').map(l => l.trim())
 
 预估工作量：~100 行
 
-#### 12.2 先读后写检查 (readFileState)
+#### 12.5 先读后写检查 (readFileState)
 
 > 借鉴：Claude Code + Gemini CLI
 
@@ -391,7 +520,7 @@ const searchLines = oldString.split('\n').map(l => l.trim())
 
 预估工作量：~80 行
 
-#### 12.3 Shell 后台执行
+#### 12.6 Shell 后台执行
 
 > 借鉴：Gemini CLI + Codex CLI
 
@@ -409,7 +538,49 @@ const searchLines = oldString.split('\n').map(l => l.trim())
 
 ### P1 — 应做（显著提升质量）
 
-#### 12.4 结构化错误类型
+#### 12.7 webSearch 丰富入参 + 域名过滤
+
+> 借鉴：Claude Code (`allowed_domains` / `blocked_domains`) + Tavily SDK 已支持字段
+
+Tavily SDK 本身就支持 `searchDepth`（basic/advanced）、`topic`（general/news/finance）、`includeDomains`、`excludeDomains`、`timeRange` 等字段，我们当前全部没透传给模型。
+
+**实现方案**：
+
+```typescript
+inputSchema: z.object({
+  query: z.string().describe('The search query'),
+  maxResults: z.number().optional().describe('Max results (default: 5)'),
+  searchDepth: z.enum(['basic', 'advanced']).optional()
+    .describe('basic = fast/cheap, advanced = thorough (use for research)'),
+  topic: z.enum(['general', 'news', 'finance']).optional(),
+  timeRange: z.enum(['day', 'week', 'month', 'year']).optional()
+    .describe('Restrict results to this time window'),
+  includeDomains: z.array(z.string()).optional()
+    .describe('Only return results from these domains'),
+  excludeDomains: z.array(z.string()).optional(),
+}),
+```
+
+预估工作量：~30 行
+
+#### 12.8 webSearch 多后端 + Brave fallback
+
+> 借鉴：独立调研（无单一竞品完整实现）
+
+Tavily 免费额度用完后，我们应该能自动切到 Brave Search API（2000 次/月免费，独立索引），而不是直接返回错误。同时保留一个 `WEBSEARCH_PROVIDER` env var 让用户手动指定。
+
+**实现方案**：
+
+- 抽象 `SearchBackend` 接口：`{ name, isAvailable(), search(query, opts) }`
+- 内置 `TavilyBackend` / `BraveBackend` / `DuckDuckGoBackend`（后者作为零配置兜底，基于 `duck-duck-scrape`）
+- 选择逻辑：
+  1. 若显式指定 `WEBSEARCH_PROVIDER`，用指定的
+  2. 否则按 `TAVILY_API_KEY` → `BRAVE_API_KEY` → DDG 顺序探测
+  3. 执行时若主 backend 返回 429/quota 错误，自动 fallback 到次级 backend（一次性，不无限重试）
+
+预估工作量：~200 行（含 Brave client + DDG fallback + 后端选择逻辑）
+
+#### 12.9 结构化错误类型
 
 > 借鉴：Gemini CLI
 
@@ -432,7 +603,7 @@ enum ToolErrorType {
 
 预估工作量：~100 行
 
-#### 12.5 结果分离 (llmContent vs displayContent)
+#### 12.10 结果分离 (llmContent vs displayContent)
 
 > 借鉴：Gemini CLI
 
@@ -450,7 +621,7 @@ interface ToolResult {
 
 预估工作量：~120 行（需修改所有工具返回值 + callback）
 
-#### 12.6 Grep 分页支持
+#### 12.11 Grep 分页支持
 
 > 借鉴：Claude Code
 
@@ -464,7 +635,7 @@ interface ToolResult {
 
 预估工作量：~80 行
 
-#### 12.7 AbortController 传播
+#### 12.12 AbortController 传播
 
 > 借鉴：Claude Code + Gemini CLI + Codex CLI
 
@@ -482,7 +653,23 @@ interface ToolResult {
 
 ### P2 — 可做（锦上添花）
 
-#### 12.8 Edit fuzzy 匹配 (Levenshtein)
+#### 12.13 webFetch 预授权域名列表
+
+> 借鉴：Claude Code (`WebFetchTool/preapproved.ts` 约 160 个域名)
+
+Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python docs / MDN / GitHub / Stack Overflow / Rust book / TensorFlow 等 ~160 条），白名单内的站点直接返回 markdown，白名单外的则走 Haiku 摘要 + 版权合规。
+
+对我们来说 Haiku 步骤可以不抄（我们不想绑定 Anthropic），但白名单本身是有价值的：
+
+- 预授权站点可以走更宽松的 size limit（如 5 MB）
+- 可以跳过 Cloudflare 降级逻辑（这些站点不会 bot 拦截我们）
+- 未来加权限系统时，白名单可以默认 always-allow
+
+**实现方案**：`packages/core/src/tools/web-fetch-preapproved.ts` 导出一个 `Set<string>`，fetch 入口处检查 `new URL(url).hostname`。
+
+预估工作量：~50 行 + 域名清单整理
+
+#### 12.14 Edit fuzzy 匹配 (Levenshtein)
 
 > 借鉴：Gemini CLI
 
@@ -490,7 +677,7 @@ interface ToolResult {
 
 预估工作量：~80 行 + `fast-levenshtein` 依赖
 
-#### 12.9 Shell 安全性提升
+#### 12.15 Shell 安全性提升
 
 > 借鉴：Claude Code (AST) + Codex (数组格式)
 
@@ -502,7 +689,7 @@ interface ToolResult {
 
 预估工作量：方案 A ~50 行 / 方案 B ~300 行
 
-#### 12.10 权限确认自动规则
+#### 12.16 权限确认自动规则
 
 > 借鉴：Gemini CLI + Codex CLI
 
@@ -510,7 +697,7 @@ interface ToolResult {
 
 预估工作量：~100 行
 
-#### 12.11 省略占位检测
+#### 12.17 省略占位检测
 
 > 借鉴：Gemini CLI
 
@@ -518,7 +705,7 @@ interface ToolResult {
 
 预估工作量：~40 行
 
-#### 12.12 工具输出路径相对化
+#### 12.18 工具输出路径相对化
 
 > 借鉴：Claude Code + Gemini CLI
 
@@ -530,7 +717,7 @@ interface ToolResult {
 
 ### P3 — 远期（架构升级）
 
-#### 12.13 工具定义重构
+#### 12.19 工具定义重构
 
 > 借鉴：Claude Code buildTool / Gemini Builder+Invocation
 
@@ -549,13 +736,13 @@ interface ToolDef<TInput, TOutput> {
 
 这样每个工具自包含，loop.ts 只做调度。
 
-#### 12.14 沙箱支持
+#### 12.20 沙箱支持
 
 > 借鉴：Codex CLI (Landlock) + Gemini CLI (SandboxManager)
 
 为 shell 工具添加文件系统沙箱，限制写入范围。
 
-#### 12.15 并行工具执行
+#### 12.21 并行工具执行
 
 > 借鉴：Codex CLI (RwLock) + Claude Code (isConcurrencySafe)
 

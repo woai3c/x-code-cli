@@ -3,9 +3,13 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+const YEAR = new Date().getFullYear()
+
 export const webSearch = tool({
   description:
-    'Search the web for information. Useful for looking up documentation, error messages, or current information.',
+    `Search the web for information. Useful for looking up documentation, error messages, or current information. ` +
+    `The current year is ${YEAR} — use it whenever the user asks for recent/latest/current information ` +
+    `(e.g. prefer "React 19 release notes ${YEAR}" over "React latest release notes").`,
   inputSchema: z.object({
     query: z.string().describe('The search query'),
     maxResults: z.number().optional().describe('Max results (default: 5)'),
