@@ -1,14 +1,14 @@
 // @x-code-cli/cli — Root App component
 import React, { useEffect } from 'react'
 
-import { Box, Text, useApp, useInput } from 'ink'
+import { Box, Text, useApp } from 'ink'
 
 import { MODEL_ALIASES, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code-cli/core'
 import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
-import { ACCENT, ERROR, WARNING } from '../theme.js'
+import { ERROR } from '../theme.js'
 import { ChatInput } from './ChatInput.js'
 import { MessageList } from './MessageList.js'
 import { Permission } from './Permission.js'
@@ -57,7 +57,6 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
     compact,
     switchModel,
     saveCurrentSession,
-    dismissSession,
     addInfoMessage,
     addUserMessage,
   } = useAgent(model, options)
@@ -85,26 +84,6 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
       cleanup().then(() => exit())
     }
   }, [state.isLoading, state.messages.length, options.printMode]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Handle session continuation Y/N
-  useInput(
-    (input) => {
-      if (!state.latestSession) return
-      if (input.toLowerCase() === 'y') {
-        const session = state.latestSession
-        dismissSession()
-        const pendingList = session.pendingWork.map((w) => `- ${w}`).join('\n')
-        submit(
-          `Continue from previous session "${session.title}".\nPending work:\n${pendingList}\n\nPlease continue where we left off.`,
-        )
-      } else if (input.toLowerCase() === 'n' || input === '\r') {
-        dismissSession()
-      }
-    },
-    {
-      isActive: !!state.latestSession && !state.isLoading && !state.pendingPermission && !state.pendingQuestion,
-    },
-  )
 
   /** Echo a slash command to the message history (so the user can see what they typed) */
   function echoCommand(text: string) {
@@ -252,26 +231,6 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
 
   return (
     <Box flexDirection="column" padding={1}>
-      {/* Session continuation prompt */}
-      {state.latestSession && !state.isLoading && (
-        <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} marginBottom={1}>
-          <Text color={ACCENT} bold>
-            Previous session: &quot;{state.latestSession.title}&quot; ({state.latestSession.status})
-          </Text>
-          {state.latestSession.pendingWork.length > 0 && (
-            <Box flexDirection="column" marginLeft={2}>
-              <Text dimColor>Pending work:</Text>
-              {state.latestSession.pendingWork.map((w, i) => (
-                <Text key={i} dimColor>
-                  - {w}
-                </Text>
-              ))}
-            </Box>
-          )}
-          <Text color={WARNING}>Continue previous session? (y/n)</Text>
-        </Box>
-      )}
-
       {/* Message history (tool calls appear here progressively as they complete) */}
       <MessageList messages={state.messages} />
 
@@ -317,13 +276,11 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
       {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
 
       {/* Input */}
-      {!state.latestSession && (
-        <ChatInput
-          onSubmit={handleSubmit}
-          disabled={state.isLoading || !!state.pendingPermission || !!state.pendingQuestion}
-          commands={SLASH_COMMANDS}
-        />
-      )}
+      <ChatInput
+        onSubmit={handleSubmit}
+        disabled={state.isLoading || !!state.pendingPermission || !!state.pendingQuestion}
+        commands={SLASH_COMMANDS}
+      />
     </Box>
   )
 }

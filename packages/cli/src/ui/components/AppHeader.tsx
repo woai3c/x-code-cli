@@ -6,9 +6,12 @@
 import { Chalk } from 'chalk'
 
 import { VERSION } from '../../version.js'
-import { ACCENT } from '../theme.js'
 
 const c = new Chalk({ level: 3 })
+
+/** Logo color — kept as the original soft sky-blue (`#89b4fa`) on purpose,
+ *  independent of the main ACCENT which follows Claude Code's orange. */
+const LOGO_COLOR = '#89b4fa'
 
 // ── ASCII logos for different terminal widths ──
 
@@ -49,8 +52,8 @@ export function printHeader(modelId: string): void {
   const modelName = modelParts.join(':') || modelId
 
   const lines = [
-    c.hex(ACCENT).bold(logo),
-    ` ${c.dim(`v${VERSION}`)} ${c.dim('│')} ${c.hex(ACCENT)(provider)} ${c.dim('/')} ${c.hex(ACCENT).bold(modelName)}`,
+    c.hex(LOGO_COLOR).bold(logo),
+    ` ${c.dim(`v${VERSION}`)} ${c.dim('│')} ${c.hex(LOGO_COLOR)(provider)} ${c.dim('/')} ${c.hex(LOGO_COLOR).bold(modelName)}`,
     ` ${c.dim('Type /help for commands, Ctrl+C to abort')}`,
     '', // blank line after header
   ]

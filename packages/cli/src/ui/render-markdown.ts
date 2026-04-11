@@ -33,8 +33,8 @@ marked.use({
 })
 
 // ── Theme colours (keep in sync with theme.ts) ──
-const ACCENT = '#89b4fa'
-const WARNING = '#f9e2af'
+const ACCENT = '#d77757'
+const WARNING = '#ffc107'
 
 // Newline constant for joining blocks
 const NL = '\n'

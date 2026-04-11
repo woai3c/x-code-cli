@@ -15,7 +15,7 @@ import { Box, Static, Text } from 'ink'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderMarkdown } from '../render-markdown.js'
-import { ACCENT, DIM, ERROR, SUCCESS } from '../theme.js'
+import { DIM, ERROR, PROMPT_BORDER, SUCCESS } from '../theme.js'
 import { getToolInputPreview, getToolLabel, getToolResultSummary } from '../tool-display.js'
 
 interface MessageListProps {
@@ -81,12 +81,10 @@ export function MessageList({ messages }: MessageListProps) {
       {(msg) => (
         <Box key={msg.id} flexDirection="column" marginBottom={0}>
           {msg.role === 'user' ? (
-            // User message: ❯ input
+            // User message: ❯ input — matches the ChatInput prompt glyph
             <Box marginBottom={1}>
               <Text>
-                <Text color={ACCENT} bold>
-                  {'❯ '}
-                </Text>
+                <Text color={PROMPT_BORDER}>{'❯ '}</Text>
                 {msg.content}
               </Text>
             </Box>

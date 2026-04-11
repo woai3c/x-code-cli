@@ -1,27 +1,29 @@
 // @x-code-cli/cli — Shared UI colour tokens
 //
-// Soft colour palette inspired by Claude Code's dark theme.
-// All colours are hex values so they render consistently across terminals
-// that support 24-bit colour (most modern terminals).
-// Ink <Text color={...}> accepts hex strings natively.
+// Palette mirrors Claude Code's dark theme (`src/utils/theme.ts` darkTheme).
+// All values are hex strings so Ink <Text color={...}> renders them on any
+// modern 24-bit terminal.
 
-/** Primary accent — soft sky-blue */
-export const ACCENT = '#89b4fa'
+/** Primary accent — Claude brand orange (`rgb(215,119,87)`) */
+export const ACCENT = '#d77757'
 
-/** Muted / dimmed accent — for unselected or less prominent items */
-export const ACCENT_DIM = '#6a8fc7'
+/** Muted accent — medium gray, used for secondary labels in the status bar */
+export const ACCENT_DIM = '#999999'
 
-/** Success / completed / diff-added — soft green */
-export const SUCCESS = '#a6e3a1'
+/** System spinner blue (`claudeBlue_FOR_SYSTEM_SPINNER = rgb(147,165,255)`) */
+export const SPINNER_BLUE = '#93a5ff'
 
-/** Warning / permission prompt / pending — warm yellow */
-export const WARNING = '#f9e2af'
+/** Success / completed / diff-added (`success = rgb(78,186,101)`) */
+export const SUCCESS = '#4eba65'
 
-/** Error / denied / diff-removed — soft red-pink */
-export const ERROR = '#f38ba8'
+/** Warning / permission prompt / pending (`warning = rgb(255,193,7)`) */
+export const WARNING = '#ffc107'
+
+/** Error / denied / diff-removed (`error = rgb(255,107,128)`) */
+export const ERROR = '#ff6b80'
 
 /** Muted elements — uses named ANSI gray for broad compatibility */
 export const DIM = 'gray'
 
-/** Prompt input top/bottom rules — medium gray matching Claude Code's `promptBorder` */
-export const PROMPT_BORDER = '#999999'
+/** Prompt input top/bottom rules (`promptBorder = rgb(136,136,136)`) */
+export const PROMPT_BORDER = '#888888'

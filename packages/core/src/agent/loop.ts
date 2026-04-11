@@ -8,12 +8,7 @@ import { generateText, streamText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import { buildKnowledgeContext, loadRuleFiles } from '../knowledge/loader.js'
-import {
-  formatSessionForPrompt,
-  generateSessionSummary,
-  loadLatestSession,
-  saveSessionSummary,
-} from '../knowledge/session.js'
+import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
 import { checkPermission } from '../permissions/index.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { getShellConfig } from '../tools/shell-utils.js'
@@ -418,9 +413,11 @@ export async function agentLoop(
     }
   }
 
-  const sessionSummary = await loadLatestSession()
-  const sessionContext = sessionSummary ? formatSessionForPrompt(sessionSummary) : undefined
-  const knowledgeContext = await buildKnowledgeContext({ sessionContext, rules })
+  // Session continuation is handled explicitly by the UI: if the user accepts
+  // the resume prompt, the pending work is embedded directly in their first
+  // user message. Auto-injecting it into every system prompt made the model
+  // treat trivial greetings as "continue exploring", so we no longer do that.
+  const knowledgeContext = await buildKnowledgeContext({ rules })
   const fullKnowledgeContext = knowledgeContext + extraRuleContext
 
   const tokenBudget = getTokenBudget(options.modelId)

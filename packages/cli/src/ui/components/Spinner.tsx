@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from 'react'
 
 import { Text } from 'ink'
 
-import { ACCENT, DIM } from '../theme.js'
+import { DIM, SPINNER_BLUE } from '../theme.js'
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
@@ -61,8 +61,8 @@ export function Spinner({ label = 'Thinking', totalTokens, mode = 'requesting' }
 
   return (
     <Text>
-      <Text color={ACCENT}> {FRAMES[frame]} </Text>
-      <Text color={ACCENT}>{label}...</Text>
+      <Text color={SPINNER_BLUE}> {FRAMES[frame]} </Text>
+      <Text color={SPINNER_BLUE}>{label}...</Text>
       {showMeta && <Text color={DIM}> ({metaStr})</Text>}
     </Text>
   )
