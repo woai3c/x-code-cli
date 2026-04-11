@@ -222,12 +222,12 @@ const edit = tool({
 | 搜索入参         | `query` + `allowed/blocked_domains`    |        `query`         |       —        | 5 参（livecrawl/type/contextMaxCharacters…） |        2 参（query/maxResults）        |
 | 域名过滤         |      allowed / blocked domains         |           —            |       —        |           —            |              ❌                |
 | 流式进度         | Y（`query_update` + `results_received`）|           —            |       —        |       SSE 回传         |              ❌                |
-| 年份注入         |                  ❌                     |           —            |       —        | ✅ (`current year is <y>`) |            ❌                 |
+| 年份注入         |                  ❌                     |           —            |       —        | ✅ (`current year is <y>`) |      ✅（description 拼接） |
 | 强制引用         |         markdown 链接              |           —            |       —        |           —            |              ❌                |
 | **Web Fetch**    |            axios + turndown            | 有 (URL + prompt 参数) |   **无内置**   |   turndown + HTMLRewriter   | cheerio + turndown |
-| Fetch 大小上限   |                10 MB                    |      约 2 MB           |       —        |         5 MB            |        **30 KB**（偏小）       |
-| Fetch 缓存       |     **15 min LRU**（50 MB）             |           —            |       —        |           ❌            |              ❌                |
-| CF bot 对抗      |                  ❌                     |           —            |       —        | ✅（检测 `cf-mitigated` 后降级 UA 重试）|              ❌                |
+| Fetch 大小上限   |                10 MB                    |      约 2 MB           |       —        |         5 MB            |       100 KB（送回 model context）   |
+| Fetch 缓存       |     **15 min LRU**（50 MB）             |           —            |       —        |           ❌            |    **15 min LRU**（50 条 Map） |
+| CF bot 对抗      |                  ❌                     |           —            |       —        | ✅（检测 `cf-mitigated` 后降级 UA 重试）| ✅（同 OpenCode 做法） |
 | 预授权域名列表    |      ✅（~160 个常用文档站点）            |           —            |       —        |           ❌            |              ❌                |
 | 域名预检           | `api.anthropic.com/api/web/domain_info` + 5 min 缓存 |  —   |    —    |           ❌            |              ❌                |
 | Fetch 后处理     |  非预授权域名走 Haiku 抽取 + 版权保护    |      直接返回          |       —        |     turndown 后返回     |       cheerio 清洗后 turndown       |
@@ -256,27 +256,30 @@ const edit = tool({
 4. **Brave 2000 次/月免费** 是 Tavily 用尽后的自然补位，而且索引独立，偶发噪声不一样。Tavily 主 / Brave 备 的组合 ≈ 3000 次/月免费额度。
 5. **DDG 抓取**只建议作为 zero-config 演示模式，不作为默认。
 
-### 6.3 x-code-cli 和上述工具的差距
+### 6.3 x-code-cli 当前状态
 
-当前 `web-search.ts` 只实现了最朴素的 Tavily 直连（30 行），`web-fetch.ts` 是 cheerio + turndown 的最小闭环（69 行）。对比之后，差距集中在：
+`web-search.ts` 仍然是 Tavily 直连（~30 行）；`web-fetch.ts` 在近期迭代后加了缓存和反爬降级（~150 行）。当前能力和剩余差距：
 
-**webSearch：**
-1. ❌ 没把 Tavily 已支持的 `search_depth` / `topic` / `include_domains` / `exclude_domains` 透传给模型——这是白送的能力没用上
-2. ❌ 没注入当前年份到工具描述——模型会按训练数据的"当前年"去构造查询（如"2024 最新 xxx"），严重影响召回质量
-3. ❌ 没有 allowed/blocked domains 过滤
-4. ❌ 没有备用后端（Tavily quota 用完就没了）
+**webSearch（已做 / 待做）：**
+- ✅ 工具描述注入当前年份，纠正模型按训练年份构造查询
+- ❌ Tavily 已支持的 `search_depth` / `topic` / `include_domains` / `exclude_domains` 还没透传给模型
+- ❌ 没有 allowed / blocked domains 过滤
+- ❌ 没有备用后端（Tavily quota 用完就没了）
 
-**webFetch：**
-1. ❌ **30 KB 上限太小**——React/Python/Rust 等官方文档页 markdown 化后很容易突破 30 KB，被强行截断会丢关键内容。Claude Code 是 10 MB，OpenCode 是 5 MB
-2. ❌ **无任何缓存**——模型在同一任务内反复 fetch 同一个 URL 很常见（先看概览，再回来查细节），每次都走完整 HTTP + turndown
-3. ❌ 没有 Cloudflare bot 降级重试（很多技术博客/论坛会被直接 403）
-4. ❌ 没有预授权域名列表，所有站点都走同一路径
+**webFetch（已做 / 待做）：**
+- ✅ **上限 100 KB**（~25 K tokens，约 Sonnet 上下文的 12%；从 30 KB 提上来；没做到 10 MB 因为 auto-executed tool 的返回会进 model context，10 MB 会直接炸）
+- ✅ **50 条 / 15 分钟 LRU 缓存**（Map-based，没加依赖；命中即重新 insert 实现 MRU）
+- ✅ **Cloudflare 降级**：响应 `403 + cf-mitigated` 时降级到 `x-code-cli/0.1` 简单 UA 重试一次
+- ✅ 工具描述注入当前年份 + 声明"结果会缓存 15 分钟"
+- ❌ 没有预授权域名列表（Claude Code 有 ~160 个热门文档站点白名单，走更宽松的 size limit + 跳过 CF 降级）
 
-### 6.4 要抄的最优先做法
+### 6.4 后续要抄的最优先做法
 
-按 "影响 / 工作量" 排序，**最高优先级是年份注入和 webFetch 缓存**——两件事合计 <100 行代码，却能直接解决"搜不到最新内容"和"反复 refetch 浪费"这两个最刺痛用户的问题。
+当前缺的都是锦上添花项。最有价值的下一步按 "影响 / 工作量" 排序：
 
-详见第 12 节 P0 的 §12.3 和 §12.4。
+1. **§12.4 webSearch 丰富入参**（~30 行）：把 Tavily SDK 已有的 `searchDepth` / `topic` / `timeRange` / `includeDomains` / `excludeDomains` 透传出去，零后端改动拿到更精准的检索控制
+2. **§12.5 Brave 多后端 fallback**（~200 行）：Tavily 用尽后自动切 Brave Search API（2k/月免费，独立索引），组合 ≈ 3k/月免费额度
+3. **§12.10 webFetch 预授权域名白名单**（~50 行）：React / Python / Rust / MDN / Stack Overflow 等站点直接走宽松路径，不用跑 CF 降级
 
 ---
 
@@ -417,76 +420,7 @@ NO_SPACE_LEFT // 磁盘满 (Fatal)
 
 ### P0 — 必做（直接影响核心体验）
 
-#### 12.1 webSearch / webFetch 注入当前年份
-
-> 借鉴：OpenCode (`tool/websearch.txt` 模板)
-
-模型接训练数据里的"当前年份"去构造搜索 query，容易搜出过时内容。OpenCode 的做法是把当前年份注入到工具 description 里，强制模型使用正确年份。
-
-**实现方案**：构建 webSearch / webFetch 的 description 时动态拼接当前年份。
-
-```typescript
-const year = new Date().getFullYear()
-const description =
-  `Search the web. The current year is ${year}; ` +
-  `use it whenever the user asks for recent/latest/current information.`
-```
-
-几行代码，是所有改进里性价比最高的一项。
-
-预估工作量：~10 行
-
-#### 12.2 webFetch LRU 缓存
-
-> 借鉴：Claude Code (`WebFetchTool` 15 min LRU, 50 MB 上限)
-
-模型在同一任务里反复 fetch 同一 URL 是常态（先看首页，再回来查细节，再用另一个 prompt 重读）。当前每次都走完整 HTTP + turndown，浪费时间 + token + 带宽。
-
-**实现方案**：
-
-```typescript
-import { LRUCache } from 'lru-cache'
-
-const fetchCache = new LRUCache<string, { markdown: string; fetchedAt: number }>({
-  max: 50,                      // 最多 50 条
-  maxSize: 50 * 1024 * 1024,    // 50 MB
-  sizeCalculation: (v) => v.markdown.length * 2,
-  ttl: 15 * 60 * 1000,          // 15 分钟
-})
-
-// execute() 入口：命中缓存直接返回
-const cached = fetchCache.get(url)
-if (cached) return cached.markdown
-```
-
-注意：缓存 key 只用 URL（不含 prompt），因为 prompt 只影响结尾拼接的 "Extract instruction" 文本，不影响主体内容。
-
-预估工作量：~40 行 + `lru-cache` 依赖
-
-#### 12.3 webFetch 扩容 + Cloudflare 降级
-
-> 借鉴：Claude Code (10 MB 上限) / OpenCode (CF 降级 UA)
-
-当前 `MAX_CONTENT_CHARS = 30000` 让很多文档页被强制截断，丢失关键内容。Cloudflare 的 bot 检测也会把技术博客和论坛直接 403 掉。
-
-**实现方案**：
-
-1. `MAX_CONTENT_CHARS` 从 30 KB 提升到 2 MB（字符数）；原始 HTML 上限提升到 10 MB（bytes），防止下载超大页面
-2. 响应 403 且 header `cf-mitigated: challenge` 时，用极简 UA `"x-code-cli"` 重试一次
-
-```typescript
-// 首次 fetch 用伪装 UA
-let res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, ... } })
-if (res.status === 403 && res.headers.get('cf-mitigated') === 'challenge') {
-  res = await fetch(url, { headers: { 'User-Agent': 'x-code-cli' } })
-}
-```
-
-**注意**：扩容后模型一次读的 markdown 可能很长，记得 `estimateTokens` 里也要计入；必要时在返回前按段落智能截断而非暴力 slice。
-
-预估工作量：~50 行
-
-#### 12.4 Edit 工具 flexible 匹配
+#### 12.1 Edit 工具 flexible 匹配
 
 > 借鉴：Gemini CLI
 
@@ -506,7 +440,7 @@ const searchLines = oldString.split('\n').map(l => l.trim())
 
 预估工作量：~100 行
 
-#### 12.5 先读后写检查 (readFileState)
+#### 12.2 先读后写检查 (readFileState)
 
 > 借鉴：Claude Code + Gemini CLI
 
@@ -520,7 +454,7 @@ const searchLines = oldString.split('\n').map(l => l.trim())
 
 预估工作量：~80 行
 
-#### 12.6 Shell 后台执行
+#### 12.3 Shell 后台执行
 
 > 借鉴：Gemini CLI + Codex CLI
 
@@ -538,7 +472,7 @@ const searchLines = oldString.split('\n').map(l => l.trim())
 
 ### P1 — 应做（显著提升质量）
 
-#### 12.7 webSearch 丰富入参 + 域名过滤
+#### 12.4 webSearch 丰富入参 + 域名过滤
 
 > 借鉴：Claude Code (`allowed_domains` / `blocked_domains`) + Tavily SDK 已支持字段
 
@@ -563,7 +497,7 @@ inputSchema: z.object({
 
 预估工作量：~30 行
 
-#### 12.8 webSearch 多后端 + Brave fallback
+#### 12.5 webSearch 多后端 + Brave fallback
 
 > 借鉴：独立调研（无单一竞品完整实现）
 
@@ -580,7 +514,7 @@ Tavily 免费额度用完后，我们应该能自动切到 Brave Search API（20
 
 预估工作量：~200 行（含 Brave client + DDG fallback + 后端选择逻辑）
 
-#### 12.9 结构化错误类型
+#### 12.6 结构化错误类型
 
 > 借鉴：Gemini CLI
 
@@ -603,7 +537,7 @@ enum ToolErrorType {
 
 预估工作量：~100 行
 
-#### 12.10 结果分离 (llmContent vs displayContent)
+#### 12.7 结果分离 (llmContent vs displayContent)
 
 > 借鉴：Gemini CLI
 
@@ -621,7 +555,7 @@ interface ToolResult {
 
 预估工作量：~120 行（需修改所有工具返回值 + callback）
 
-#### 12.11 Grep 分页支持
+#### 12.8 Grep 分页支持
 
 > 借鉴：Claude Code
 
@@ -635,7 +569,7 @@ interface ToolResult {
 
 预估工作量：~80 行
 
-#### 12.12 AbortController 传播
+#### 12.9 AbortController 传播
 
 > 借鉴：Claude Code + Gemini CLI + Codex CLI
 
@@ -653,7 +587,7 @@ interface ToolResult {
 
 ### P2 — 可做（锦上添花）
 
-#### 12.13 webFetch 预授权域名列表
+#### 12.10 webFetch 预授权域名列表
 
 > 借鉴：Claude Code (`WebFetchTool/preapproved.ts` 约 160 个域名)
 
@@ -669,7 +603,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 预估工作量：~50 行 + 域名清单整理
 
-#### 12.14 Edit fuzzy 匹配 (Levenshtein)
+#### 12.11 Edit fuzzy 匹配 (Levenshtein)
 
 > 借鉴：Gemini CLI
 
@@ -677,7 +611,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 预估工作量：~80 行 + `fast-levenshtein` 依赖
 
-#### 12.15 Shell 安全性提升
+#### 12.12 Shell 安全性提升
 
 > 借鉴：Claude Code (AST) + Codex (数组格式)
 
@@ -689,7 +623,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 预估工作量：方案 A ~50 行 / 方案 B ~300 行
 
-#### 12.16 权限确认自动规则
+#### 12.13 权限确认自动规则
 
 > 借鉴：Gemini CLI + Codex CLI
 
@@ -697,7 +631,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 预估工作量：~100 行
 
-#### 12.17 省略占位检测
+#### 12.14 省略占位检测
 
 > 借鉴：Gemini CLI
 
@@ -705,7 +639,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 预估工作量：~40 行
 
-#### 12.18 工具输出路径相对化
+#### 12.15 工具输出路径相对化
 
 > 借鉴：Claude Code + Gemini CLI
 
@@ -717,7 +651,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 ### P3 — 远期（架构升级）
 
-#### 12.19 工具定义重构
+#### 12.16 工具定义重构
 
 > 借鉴：Claude Code buildTool / Gemini Builder+Invocation
 
@@ -736,13 +670,13 @@ interface ToolDef<TInput, TOutput> {
 
 这样每个工具自包含，loop.ts 只做调度。
 
-#### 12.20 沙箱支持
+#### 12.17 沙箱支持
 
 > 借鉴：Codex CLI (Landlock) + Gemini CLI (SandboxManager)
 
 为 shell 工具添加文件系统沙箱，限制写入范围。
 
-#### 12.21 并行工具执行
+#### 12.18 并行工具执行
 
 > 借鉴：Codex CLI (RwLock) + Claude Code (isConcurrencySafe)
 

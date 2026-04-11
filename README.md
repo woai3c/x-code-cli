@@ -16,10 +16,9 @@ Terminal AI coding assistant -- interact with your codebase through natural lang
                           |  +---------------------------+              |
                           |  | Components                |              |
                           |  | ChatInput / MessageList / |              |
-                          |  | StreamingText / ToolCall / |             |
-                          |  | Permission / ShellOutput / |             |
-                          |  | SelectOptions / Spinner /  |             |
-                          |  | StatusBar                  |             |
+                          |  | ToolCall / ShellOutput /  |              |
+                          |  | Permission / SelectOptions|              |
+                          |  | Spinner / AppHeader       |              |
                           |  +---------------------------+              |
                           +------------------+--------------------------+
                                              | callbacks
@@ -107,7 +106,7 @@ cli/index.ts -> app.tsx -> App.tsx -> useAgent.submit()
 | 13 built-in tools                          | tools/\*.ts                            |
 | 3-level permission model + --trust         | permissions/index.ts                   |
 | Multi-model support (8 providers + custom) | providers/registry.ts, config/index.ts |
-| Streaming text output                      | StreamingText.tsx, use-agent.ts        |
+| Streaming text (buffered → stdout-writer)  | use-agent.ts streamBufferRef, stdout-writer.ts |
 | Context compression                        | agent/loop.ts compressMessages()       |
 | Token usage tracking (input/output/total)  | agent/loop.ts, use-agent.ts            |
 | Knowledge system (7-layer loading)         | knowledge/loader.ts                    |

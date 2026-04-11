@@ -51,19 +51,20 @@ x-code-cli/
 │   │   │   ├── app.tsx             # Ink render 入口
 │   │   │   ├── ui/
 │   │   │   │   ├── components/
-│   │   │   │   │   ├── App.tsx          # 根组件
-│   │   │   │   │   ├── MessageList.tsx  # 消息历史（Static, Claude Code 风格）
-│   │   │   │   │   ├── StreamingText.tsx # 流式 Markdown 渲染
+│   │   │   │   │   ├── App.tsx          # 根组件（Fragment + Ink 动态区 sibling Box）
+│   │   │   │   │   ├── MessageList.tsx  # effect-only，走 useStdout().write 直写 scrollback
 │   │   │   │   │   ├── ToolCall.tsx     # 工具调用展示（进行中, 含 Spinner + 计时）
-│   │   │   │   │   ├── ChatInput.tsx    # 用户输入框
+│   │   │   │   │   ├── ChatInput.tsx    # 用户输入框（多行 textarea + paste 占位符）
 │   │   │   │   │   ├── Spinner.tsx      # 加载动画（支持 mode: requesting/responding/tool-use）
 │   │   │   │   │   ├── Permission.tsx   # 权限确认 UI（含 diff 预览）
 │   │   │   │   │   ├── ShellOutput.tsx  # Shell 命令实时输出
-│   │   │   │   │   ├── StatusBar.tsx    # 底部状态栏（模型 / token 用量）
 │   │   │   │   │   ├── SelectOptions.tsx # askUser 多选交互
-│   │   │   │   │   └── SetupWizard.tsx  # 首次使用引导
+│   │   │   │   │   └── AppHeader.tsx    # printHeader() ASCII banner（Ink 外直写 stdout）
 │   │   │   │   ├── hooks/
-│   │   │   │   │   └── use-agent.ts     # Agent 状态管理 Hook
+│   │   │   │   │   ├── use-agent.ts     # Agent 状态管理 Hook
+│   │   │   │   │   └── use-prompt-input.ts  # 自定义 stdin hook（bracketed paste + debounce）
+│   │   │   │   ├── paste-refs.ts        # [Pasted text #N +M lines] 占位符 helper
+│   │   │   │   ├── stdout-writer.ts     # writeMessageToStdout，绕过 Ink 布局直写终端
 │   │   │   │   ├── tool-display.ts      # 工具显示工具函数（标签/预览/摘要）
 │   │   │   │   ├── render-markdown.ts   # Markdown → ANSI 终端渲染
 │   │   │   │   └── theme.ts             # 主题颜色常量（ACCENT/SUCCESS/WARNING/ERROR）
@@ -625,29 +626,32 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 
 **文件**: `packages/cli/src/ui/components/*.tsx`
 
-基于 Ink 的组件树：
+**渲染架构**：Ink 的 Yoga 布局在 CJK 宽字符 + 长流式文本的组合下会算错视觉行数，导致重绘 rewind 超调、旧内容被覆盖。为了彻底规避这一类 bug，消息历史**完全不走 Ink 布局引擎**——直接用 `useStdout().write` 把格式化好的 ANSI 字符串落到终端 scrollback，让终端自己处理折行和滚动。Ink 只管底部一小块 Dynamic 区（Spinner / ToolCall / Permission / ChatInput 这些短小主要 ASCII 的东西）。
 
 ```
-<App>
-├── <MessageList>          # 已完成的消息（Static，不重渲染）
-│   ├── <UserMessage>      #   用户消息（蓝色）
-│   ├── <AssistantMessage>  #   AI 回复（绿色）
-│   └── <ToolCall>         #   工具调用记录
-├── <StreamingText>         # 当前正在流式输出的文本
-├── <ShellOutput>          # Shell 命令实时输出（流式）
-├── <Permission>           # 权限确认弹窗（Y/N + diff 预览）
-├── <SelectOptions>        # askUser 工具的多选交互 UI
-├── <Spinner>              # "Thinking..." 加载状态
-├── <SetupWizard>          # 首次使用引导（选择提供商、输入 Key、选择模型）
-├── <StatusBar>            # 底部状态栏（模型 / token 用量）
-└── <ChatInput>            # 用户输入框
+App.tsx 的渲染树（React Fragment 作为外层，不是 Box）
+┌─────────────────────────────────────────────────────┐
+│  <MessageList messages={state.messages} />         │
+│     ↑ effect-only 组件，return null                  │
+│       useEffect 监听 messages 数组长度变化           │
+│       对每条新 message 调 writeMessageToStdout       │
+│       → useStdout().write → 终端 scrollback         │
+│                                                      │
+│  <Box flexDirection="column" paddingX={1}>          │
+│    ├── <ToolCall>          # 当前正在执行的工具       │
+│    ├── <ShellOutput>       # Shell 命令实时输出      │
+│    ├── <Permission>        # 权限确认弹窗             │
+│    ├── <SelectOptions>     # askUser 多选交互        │
+│    ├── <Spinner>           # 加载指示                │
+│    ├── <Text>              # Error 错误信息          │
+│    └── <ChatInput>         # 用户输入框               │
+│  </Box>                                              │
+└─────────────────────────────────────────────────────┘
 ```
 
-**关键组件说明**:
+**关键组件说明**：
 
-**`<MessageList>`** — 使用 Ink 的 `<Static items={messages}>` 渲染已完成的消息。Static 组件的特性是：渲染后永不重渲染，性能极好，适合长对话。
-
-**`<StreamingText>`** — 接收 `streamingText` 状态，每次 text-delta 触发 setState 重渲染。Ink 会 diff 终端输出，只更新变化部分。
+**`<MessageList>`** — **不渲染任何 JSX**（`return null`）。通过 `useStdout()` 拿到 Ink 的 log-update-coordinated write 函数，在 `useEffect` 里对比 `writtenCountRef` 和 `messages.length`，只 append 新增的 message。`/clear` 清空 messages 后 ref 重置。由于不走 Ink 布局，宽字符折行由终端处理，CJK 不会触发 Ink 的重绘 bug。
 
 **`<Permission>`** — 当工具需要权限确认时显示。展示工具名 + 参数 + **变更预览**，等待用户按 Y/N。使用 Ink 的 `useInput` hook 捕获键盘输入。在 `--trust` 模式下此组件不渲染。
 
@@ -657,93 +661,128 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 - **writeFile 工具**：如果是覆盖已有文件，显示 diff；如果是新建文件，显示文件内容摘要
 - **shell 工具**：显示完整命令 + 权限级别标识（只读/写入/危险）
 
-**`<SelectOptions>`** — 当 AI 调用 `askUser` 工具时显示。自定义 Ink 组件，基于 `useInput` 实现上下箭头导航 + Enter 确认。自动追加"其他"选项支持自由输入。不使用 `@clack/prompts`（与 Ink 的 stdin 管理冲突）。
+**`<SelectOptions>`** — 当 AI 调用 `askUser` 工具时显示。自定义 Ink 组件，基于 `useInput` 实现上下箭头导航 + Enter 确认。自动追加"其他"选项支持自由输入。
 
-**`<SetupWizard>`** — 首次使用时渲染。引导用户选择提供商 → 输入 API Key → 选择默认模型。配置完成后切换到正常对话界面。
+**`<ShellOutput>`** — Shell 工具执行时的实时输出展示。逐行渲染 stdout/stderr，让用户看到 `npm install`、`pnpm build` 等长命令的实时进度，而非等执行完才一次性展示。为避免撑爆动态区，只显示最近 15 行。
 
-**`<ShellOutput>`** — Shell 工具执行时的实时输出展示。逐行渲染 stdout/stderr，让用户看到 `npm install`、`pnpm build` 等长命令的实时进度，而非等执行完才一次性展示。
+**`<ChatInput>`** — 多行输入框，**不使用** Ink 的 `useInput`，改用自定义 `usePromptInput` hook（见下文）。支持 paste 占位符、多行 textarea、智能 backspace、斜杠命令补全。输入框高度硬顶 6 行（`MAX_VISIBLE_LINES`），超出时显示前 5 行 + `… +N more lines`，避免 paste 检测异常时撑爆动态区。
 
-**`<StatusBar>`** — 终端底部状态栏，显示：当前模型名、本次会话 token 累计用量、当前工作目录。使用 Ink 的 `<Box position="absolute" bottom={0}>` 固定在底部。
+#### usePromptInput — 自定义 stdin 输入管线
 
-**`<ChatInput>`** — 多行文本输入。使用 Ink 的 `useInput` hook，Enter 提交，Ctrl+C 退出。
+**文件**: `packages/cli/src/ui/hooks/use-prompt-input.ts`
 
-**大文本粘贴预览**：当用户粘贴超过阈值的文本时，输入框不展示全部内容，而是显示截断预览 + 字符数提示，按 Enter 发送时才将完整内容发送给模型。
+Ink 的 `useInput` 不理解 bracketed paste mode（`\x1b[200~ … \x1b[201~`），Windows Terminal 也不保证把粘贴批量打包成一次 stdin data 事件。结果是大粘贴会被拆成多个小 chunk 逐字处理，触发 React setState 闭包竞态 + 字符丢失。ChatInput 因此自己挂 stdin 监听。
 
-```typescript
-const PASTE_PREVIEW_THRESHOLD = 500 // 字符数阈值
-const PASTE_PREVIEW_LINES = 3 // 预览显示的最大行数
+**双层粘贴检测**：
 
-// ChatInput 内部状态
-interface InputState {
-  rawText: string // 用户输入的完整原始文本
-  isPasteTruncated: boolean // 是否处于截断预览模式
-}
+1. **Bracketed paste fast path**：启动时发送 `\x1b[?2004h` 启用，现代终端（Windows Terminal / VS Code / iTerm2 / gnome-terminal 等）会把粘贴用 `\x1b[200~/201~` 包裹，hook 的状态机原子 accumulate 内容然后一次性触发 `onPaste`
+2. **30ms debounce fallback**：老终端（cmd.exe / 老 PowerShell console 等不响应 bracketed paste）走 debounce —— 所有可打印字符先进 `pendingTextRef` + 30ms 定时器，新数据到达就 reset 定时器，30ms 空闲才 flush；人类打字间隔 > 100ms 所以每个字符自己 flush，粘贴 burst 间隔 < 1ms 会全部累积到一个 chunk 里，作为 `onPaste` 触发
 
-// 检测粘贴：单次输入超过阈值视为粘贴
-function isPasteInput(input: string): boolean {
-  return input.length > PASTE_PREVIEW_THRESHOLD
-}
+**行尾归一化**：所有 paste 入口都做 `replace(/\r\n?/g, '\n')`。必须的 —— Windows 剪贴板粘贴到终端 raw mode 时常被翻译成 `\r` 或 `\r\n`，裸 `\r` 在终端里是 carriage return（光标回行首），后续字符会覆盖之前打印的内容，直接导致"内容拼接错乱"bug。
 
-// 生成预览文本
-function getPreviewText(raw: string): string {
-  const lines = raw.split('\n')
-  const previewLines = lines.slice(0, PASTE_PREVIEW_LINES)
-  const preview = previewLines.join('\n')
-  const remaining = raw.length - preview.length
-  if (remaining > 0) {
-    return preview + `\n... (${raw.length} characters)`
-  }
-  return raw
-}
+**特殊键处理**：Enter / Backspace / Tab / Arrow keys / Ctrl+C 在 dispatch 前强制 flush pending，保证先后顺序正确。Ctrl+C 通过 `process.kill(process.pid, 'SIGINT')` 上交给外层 signal handler。
+
+#### paste-refs.ts — 占位符流
+
+**文件**: `packages/cli/src/ui/paste-refs.ts`
+
+类似 Claude Code 的做法：大粘贴不在输入框里显示全文，而是显示 `[Pasted text #N +M lines]` 占位符，完整内容存到 ChatInput 的 `pastedContents` map。
+
+```
+onPaste(content):
+  lineCount = content.split(/\r\n|\r|\n/).length
+  isLarge  = lineCount >= 3 || content.length >= 400
+    ├─ true  → 存 map，setText(text + [Pasted text #id +lineCount lines])
+    └─ false → setText(text + content) 内联显示
+
+onKey('return'):
+  expanded = expandPasteRefs(text, pastedContents)  // 用存的完整内容替换所有占位符
+  onSubmit(expanded)                                  // agent 看到完整文本
+
+onKey('backspace'):
+  stripTrailingRef(text):
+    ├─ 若末尾是 [Pasted text #N ...] → 整体剥离 + 从 map 删除 id
+    └─ 否则                           → text.slice(0, -1)
 ```
 
-**交互流程**：
+#### stdout-writer.ts — 消息写出管线
 
-1. 用户粘贴大段文本 → 检测到 `isPasteInput` → 设置 `isPasteTruncated = true`
-2. 输入框显示：前 3 行 + `... (12345 characters)` 灰色提示
-3. 用户可以继续正常输入/编辑（追加内容到 `rawText` 末尾）
-4. 按 Enter 发送 → 使用 `rawText` 完整内容发送，同时在消息历史中展示完整内容
-5. 发送后重置 `isPasteTruncated = false`
+**文件**: `packages/cli/src/ui/stdout-writer.ts`
+
+```
+writeMessageToStdout(write: InkWrite, msg: DisplayMessage)
+  │
+  ├─ 归一化 msg.content: \r\n / \r → \n
+  │   （防止裸 \r 在终端里触发 carriage return）
+  │
+  ├─ user message:
+  │    write(`❯ <first>\n  <line 2>\n  <line 3>...\n\n`)
+  │    （一次 write 整块 body，Ink 的 log-update 只跑一次 clear/write/redraw）
+  │
+  ├─ assistant with toolCalls:
+  │    每个 tc 格式化为: ` ● ToolName(preview)\n   ⎿  result_summary (duration)`
+  │
+  └─ assistant with content:
+       renderMarkdown → ANSI → 每行加 2 空格缩进 → write(indented + '\n\n')
+```
+
+**诊断 log 开关**：设 `X_CODE_DEBUG=1` 环境变量时，每次 `writeMessageToStdout` 调用会把 message 内容 append 到 `~/.xcode/x-code-debug.log`，便于对比 React state 与实际屏幕输出。默认关闭，不会创建文件或目录。
 
 ### 4.6 状态管理
 
 **文件**: `packages/cli/src/ui/hooks/use-agent.ts`
 
-使用 React Hook 管理全部 Agent 状态：
+使用 React Hook 管理全部 Agent 状态。注意：**streaming 文本不在 React state 里**，避免每个 delta 触发重渲染。
 
 ```typescript
 interface AgentState {
-  messages: DisplayMessage[] // 已完成的消息列表（驱动 Static）
-  streamingText: string // 当前流式文本
-  isLoading: boolean // 是否等待 LLM 响应
-  pendingPermission: {
-    // 待确认的权限请求
-    toolName: string
-    input: Record<string, unknown>
-    resolve: (approved: boolean) => void
-  } | null
-  pendingQuestion: {
-    // 待回答的 askUser 请求
-    question: string
-    options: { label: string; description: string }[]
-    resolve: (answer: string) => void
-  } | null
+  messages: DisplayMessage[] // 完成的 user/assistant/tool 条目（驱动 MessageList useEffect）
+  isLoading: boolean         // 是否等待 LLM 响应
+  currentToolCall: { toolName: string; input: Record<string, unknown> } | null
+  shellOutput: string        // Shell 实时输出
+  pendingPermission: { toolName; input; resolve: (approved: boolean) => void } | null
+  pendingQuestion: { question; options; resolve: (answer: string) => void } | null
+  usage: TokenUsage          // { inputTokens, outputTokens, totalTokens }
+  error: string | null
 }
+
+// 流式文本累积在 ref 里，不触发重渲染
+const streamBufferRef = useRef<string>('')
+const FLUSH_CHAR_THRESHOLD = 300
+const FLUSH_LINE_THRESHOLD = 5
 ```
 
-数据流方向：
+**数据流方向**：
 
 ```
 用户输入
-  → useAgent.submit(text)
+  → ChatInput.handleSubmit(text)
+  → App.handleSubmit → useAgent.submit(text)
+    → setState({ messages: [...prev, { role: 'user', content: text }] })
+       └─ MessageList useEffect → writeMessageToStdout → scrollback
     → agentLoop(text, callbacks)
-      → callbacks.onTextDelta      → setState({ streamingText })    → UI 重渲染
-      → callbacks.onToolCall       → setState({ ... })              → UI 展示工具调用
-      → callbacks.onAskPermission  → setState({ pendingPermission }) → UI 弹出 Y/N 确认
-      → callbacks.onAskUser        → setState({ pendingQuestion })   → UI 弹出多选题
+       ├─ callbacks.onTextDelta(delta)
+       │    → streamBufferRef.current += delta
+       │    → 命中 flush 条件（\n\n / ≥ 300 chars / > 5 lines）即 flushBuffer()
+       │       → setState({ messages: [...prev, { role: 'assistant', content: buf }] })
+       │          └─ MessageList useEffect → writeMessageToStdout → scrollback
+       ├─ callbacks.onToolCall  → flushBuffer()（先 drain 文本）+ setState({ currentToolCall })
+       ├─ callbacks.onToolResult → push DisplayToolCall 到 messages
+       ├─ callbacks.onAskPermission → setState({ pendingPermission }) → Permission 组件弹出
+       ├─ callbacks.onAskUser       → setState({ pendingQuestion }) → SelectOptions 弹出
+       ├─ callbacks.onShellOutput   → setState({ shellOutput: prev + chunk })
+       └─ callbacks.onUsageUpdate   → setState({ usage })
     → loop 结束
-      → setState({ messages: [..., finalMessage], isLoading: false })
+       ├─ flushBuffer() 把 buffer 最后一段残留 flush 到 messages
+       ├─ 安全网：若 sawTextDelta=false，从 loopState.messages 兜底抽取文本
+       └─ setState({ isLoading: false, currentToolCall: null })
 ```
+
+**为什么 streaming 文本用 ref 而不是 state**：
+
+- React state 里每个 delta 触发重渲染 → Ink 重绘动态区 → Ink 的 Yoga 对 CJK 宽字符算错视觉行数 → 光标 rewind 超调 → 新旧内容 splice
+- 走 ref + effect-based flush 到 scrollback：**动态区内永远没有长内容**，Ink 重绘永远只是短小 spinner + 输入框，根本不会触发宽字符布局 bug
+- UX 上用户看到的是每个 flush 间隔（300 字 / 段落断）打出一段，接近 Claude Code 的段落流风格，不是逐字打字机
 
 ### 4.7 Plan Mode（计划模式）
 
@@ -1028,51 +1067,18 @@ export function createModelRegistry() {
 // registry.languageModel('custom:doubao-1.5-pro')
 ```
 
-### 6.5 首次使用引导
+### 6.5 启动时的 Provider 选择
 
-当启动时没有检测到任何 API Key 时，不直接退出，而是启动交互式引导（使用 Ink 组件渲染）：
+启动时按以下顺序解析要使用的模型：
 
-```
-$ xc
+1. 命令行 `--model <alias>` / `-m <alias>`（最高优先级）
+2. `X_CODE_MODEL` 环境变量
+3. `~/.xcode/config.json` 里的 `model` 字段
+4. **自动选择**：按顺序扫描环境变量 / config 里已配置的 API Key（Anthropic → OpenAI → DeepSeek → Alibaba → Google → xAI → Zhipu → Moonshot → Custom），第一个有 key 的 Provider 即为默认
 
-  ┌ Welcome to X-Code! ─────────────────────────┐
-  │                                               │
-  │  未检测到 API Key，请先配置一个模型提供商。       │
-  │                                               │
-  │  ? 选择提供商:                                  │
-  │    > Anthropic (Claude)                         │
-  │      OpenAI (GPT)                              │
-  │      Google (Gemini)                           │
-  │      xAI (Grok)                                │
-  │      DeepSeek                                  │
-  │      Alibaba Qwen（通义千问）                    │
-  │      Zhipu AI（智谱 GLM）                       │
-  │      Moonshot AI（Kimi）                        │
-  │      自定义 OpenAI 兼容 API                     │
-  │                                               │
-  │  ? 输入你的 DeepSeek API Key:                   │
-  │    > sk-***                                    │
-  │    获取地址: https://platform.deepseek.com      │
-  │                                               │
-  │  ? 选择默认模型:                                │
-  │    > deepseek-chat (推荐)                       │
-  │      deepseek-reasoner                         │
-  │                                               │
-  │  ✓ 配置已保存到 ~/.xcode/config.json            │
-  │    提示: 也可通过环境变量 DEEPSEEK_API_KEY 配置   │
-  │                                               │
-  └───────────────────────────────────────────────┘
+如果**一个 Provider 的 API Key 都没有**，启动时直接报错并打印所有支持的环境变量名和各提供商 Key 获取地址。用户自行设置环境变量或 `~/.xcode/config.json` 后重新启动即可。
 
-  Ready! 输入你的第一个问题开始...
-```
-
-引导流程逻辑：
-
-1. 检测环境变量中是否有任何已知的 API Key（按顺序扫描所有支持的环境变量）
-2. 如果有 → 自动选择该提供商，直接进入对话
-3. 如果没有 → 启动引导 UI：选择提供商 → 输入 Key → 选择模型 → 保存配置
-4. Key 保存到 `~/.xcode/config.json`（文件权限 600），不写入环境变量
-5. 选择"自定义 OpenAI 兼容 API"→ 额外要求输入 API 端点 URL + 模型名
+> 交互式配置向导不在 MVP 范围内——多数用户在开发环境里设一次环境变量就够了，做一整套 Wizard 是过度工程。
 
 **各提供商 API Key 获取地址**：
 
@@ -1394,7 +1400,6 @@ export default defineConfig({
 - [x] 权限确认（写操作、命令执行前询问）+ `--trust` / `-t` 信任模式
 - [x] Agent Loop（工具调用 → 结果反馈 → 继续推理）
 - [x] 多模型支持（Anthropic / OpenAI / Google / xAI / DeepSeek / 通义千问 / 智谱 / Moonshot + 自定义 OpenAI 兼容，通过 AI SDK Provider Registry）
-- [x] 首次使用引导（交互式选择提供商、输入 Key、选择模型）
 - [x] 跨平台支持（Windows 原生 PowerShell / macOS / Linux，不依赖 WSL）
 - [x] 交互式询问（AI 可向用户提出多选题，获取偏好）
 - [x] 项目知识系统（`.x-code/` 目录，手动知识 + 自动提炼 + 4 种规则加载模式）
@@ -2262,67 +2267,100 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 
 ---
 
-## 十三、开发计划
+## 十三、实现状态
 
-### 阶段零：Monorepo 搭建（Day 0）
+当前已落地的功能。下面的清单以源码为准——任何被移除或后续重写的设计细节都不在这里出现。
 
-1. 初始化 pnpm monorepo（pnpm-workspace.yaml、根 package.json）
-2. 创建 `packages/core` 和 `packages/cli` 骨架（package.json、tsconfig.json、vitest.config.ts）
-3. 配置共享 TypeScript（tsconfig.base.json + 项目引用）
-4. 配置 ESLint + Prettier + Husky + lint-staged
-5. 验证：`pnpm install && pnpm typecheck && pnpm lint && pnpm format:check` 全部通过
+### 13.1 基础设施 & 构建
 
-### 阶段一：骨架搭建 + 多模型配置（Day 1）
+- ✅ pnpm monorepo（`packages/core` + `packages/cli`）+ 共享 TypeScript 项目引用
+- ✅ ESLint + Prettier + Husky + lint-staged
+- ✅ esbuild 单文件打包（`packages/cli/esbuild.config.js`）
+- ✅ Vitest 测试套件（75+ tests，9 test files）
 
-1. 实现 CLI 入口（`packages/cli/src/index.ts`）+ yargs 参数解析（`--model`、`--trust`、`--print`、`--max-turns`、`--version`）
-2. 实现 Ink 渲染 + 基本 App 组件
-3. 实现多模型配置（Provider Registry + 环境变量 + `--model` 参数 + 智能默认选择）
-4. 注册所有内置提供商（8 家）+ 自定义 OpenAI 兼容提供商
-5. 实现首次使用引导（`<SetupWizard>`：选择提供商 → 输入 Key → 选择模型）
-6. 实现 ChatInput 组件（能输入文本 + 提交 + stdin 管道输入检测）
-7. 配置 esbuild 打包（`packages/cli/esbuild.config.js`）
-8. 验证：首次启动能完成引导流程，`pnpm build` 后能看到输入框
+### 13.2 CLI 入口 & 启动
 
-### 阶段二：Agent Loop + 上下文管理（Day 2）
+- ✅ `packages/cli/src/index.ts`：Node 版本检查 + `.env` 自动加载 + yargs 参数解析（`--model` / `--trust` / `--print` / `--max-turns` / `--version`）
+- ✅ `packages/cli/src/app.tsx`：Ink render 入口 + `printExitSummary`（退出时打印 token 用量）
+- ✅ `AppHeader.printHeader()`：ASCII Logo + 版本 + 模型信息（Ink 外直写 stdout）
 
-1. 在 `@x-code/core` 中实现 `streamText` 调用（先不带工具）
-2. 在 `@x-code/cli` 中实现 StreamingText 组件（流式渲染 LLM 输出）
-3. 实现 MessageList（对话历史）
-4. 实现上下文压缩（token 估算 + 阈值检测 + 摘要压缩）
-5. 实现 token 用量统计（累计输入/输出 token）+ StatusBar 组件
-6. 实现错误恢复策略（API 限流重试、网络超时、认证失败提示）
-7. 验证：能和 LLM 对话，流式显示回复，长对话自动压缩
+### 13.3 多 Provider 支持
 
-### 阶段三：核心工具（Day 3-4）
+- ✅ 8 家内置 Provider：Anthropic / OpenAI / Google / xAI / DeepSeek / Alibaba / Moonshot / Zhipu
+- ✅ OpenAI 兼容接口（自定义 provider via base URL）
+- ✅ 模型别名映射 + 智能默认选择 + 启动时检测可用 Provider
+- ✅ 运行时 `/model` 切换命令
 
-1. 在 `@x-code/core` 中实现 readFile / writeFile / edit / shell（跨平台）
-2. 实现 shell-utils 跨平台抽象层（Windows → PowerShell，Unix → bash/zsh）
-3. 实现 shell 流式输出（`execa` streaming + ShellOutput 组件）
-4. 实现权限检查（子命令拆分 + 分别检测）+ Permission 组件（含 diff 预览）+ `--trust` 信任模式
-5. 实现工具结果截断（MAX_TOOL_RESULT_CHARS = 30000）
-6. 在 Agent Loop 中接入工具调用 + 最大轮次限制
-7. 实现 glob / grep / listDir
-8. 验证：让 AI 读一个文件并修改它（在 Windows 和 Mac 上分别测试）
+### 13.4 Agent Loop
 
-### 阶段四：增强工具 + 知识系统（Day 5-7）
+- ✅ `agentLoop()`：streamText + 工具调用 + while 循环
+- ✅ `handleToolCalls()`：顺序执行、权限检查、结果收集
+- ✅ 上下文压缩（token 超阈值时 `compressMessages()` 生成摘要替换旧消息）
+- ✅ Token 用量统计（累计 input/output token，不做自动计费——汇率和价格会变，内置单价表很快过时）
+- ✅ 错误分类 `classifyApiError()`（401/403/429/503/timeout）+ 非可重试错误 break
+- ✅ 最大轮次限制（`--max-turns`）+ AbortController（Ctrl+C 中断）
+- ✅ `extractLastAssistantText()` 安全网：某些推理模型把全部文本放在 response.messages 最后 part 的兜底
 
-1. 实现 webSearch（Tavily API）/ webFetch（HTTP + HTML→Markdown）
-2. 实现 askUser 工具 + `<SelectOptions>` 组件
-3. 实现项目知识系统：
-   - knowledge loader（分层加载、4 种规则加载模式）
-   - AutoMemory 类（key-based CRUD + 冲突检测 + 90 天 TTL 淘汰）
-   - saveKnowledge 工具（模型驱动知识提炼）
-   - 启动时项目扫描（读配置文件注入基础上下文）
-   - 启动时知识淘汰（`evict(90)`）+ 配置文件校验
-4. 实现 `xc init` 命令（自动分析项目，预填充 `.x-code/knowledge.md` + `memory/auto.md`）
-5. 实现规则系统（`.x-code/rules/*.md`，支持 Always / Path Match / Agent Requested / Manual）
-6. 实现会话记忆（上下文压缩时 / 退出时自动生成摘要，启动时询问是否继续）
-7. 实现 Plan Mode（enterPlanMode / exitPlanMode 工具 + system prompt overlay + 计划文件管理）
-8. 实现内置斜杠命令（/help、/model、/plan、/compact、/usage、/clear、/init、/exit）
-9. 实现非交互模式（`--print` + stdin 管道检测）
-10. Ctrl+C 处理（保存会话摘要后退出）
-11. ToolCall 组件（展示工具调用过程）+ Spinner 加载动画
-12. 基础测试编写
+### 13.5 工具（13 个）
+
+- ✅ `readFile` / `writeFile` / `edit` / `listDir` / `glob` / `grep`（跨平台，ripgrep 基础）
+- ✅ `shell`：execa + 跨平台（Windows PowerShell / Unix bash/zsh）+ 流式输出 + 智能权限分级
+- ✅ `webSearch`：Tavily API，工具描述注入当前年份
+- ✅ `webFetch`：HTTP + cheerio + turndown，100 KB 上限，50 条 / 15 min LRU 缓存，Cloudflare bot-challenge 降级重试
+- ✅ `askUser`：配合 `<SelectOptions>` UI
+- ✅ `saveKnowledge`：模型驱动知识提炼
+- ✅ `enterPlanMode` / `exitPlanMode`
+- ✅ 全局 `truncateToolResult()`（30 KB 上限，头尾各半保留）
+
+### 13.6 权限系统
+
+- ✅ 三级 `PermissionLevel`: `always-allow` / `ask` / `deny`
+- ✅ Shell 命令智能分级：拆分 `&&` / `||` / `;` 链式命令后分别判定；`isReadOnly` 放行，`isDestructive` 拒绝，混合 → `ask`
+- ✅ `--trust` 模式跳过所有 `ask` 确认
+- ✅ `Permission` 组件带 diff 预览（edit / writeFile）
+
+### 13.7 知识系统
+
+- ✅ 分层知识加载（全局 `~/.xcode/` / 项目 `.x-code/` / 本地 `.x-code/local/preferences.md`）
+- ✅ `AutoMemory` 类（key-based CRUD + 冲突检测 + 90 天 TTL 淘汰）
+- ✅ 4 种规则加载模式（Always / Path Match / Agent Requested / Manual）
+- ✅ 启动时项目扫描（包管理器 / package.json / tsconfig.json 检测）
+- ✅ `/init` 命令自动分析项目并预填充 `.x-code/knowledge.md`
+- ✅ 会话持久化（`saveSession` + `saveSessionSummary`；上下文压缩时也写一次）；**启动时不自动恢复**，预留给后续 history 功能
+
+### 13.8 UI & 渲染管线
+
+- ✅ Ink 6 + React 19
+- ✅ `useAgent` hook 管理 AgentState（messages / isLoading / currentToolCall / shellOutput / pending… / usage / error）
+- ✅ streaming 文本走 `streamBufferRef` + effect-based flush（段落 / 300 字 / 5 行），不进 React state
+- ✅ `MessageList`：effect-only 组件，`useStdout().write` 直写 scrollback，绕过 Ink 布局
+- ✅ `stdout-writer.ts`：user/assistant/tool 格式化 + ANSI + `\r\n → \n` 归一化
+- ✅ `ChatInput` + `usePromptInput`：自定义 stdin 处理，bracketed paste + 30ms debounce 双路径，paste 占位符，多行 textarea + 6 行硬顶
+- ✅ `paste-refs.ts`：`[Pasted text #N +M lines]` 占位符 + expand 辅助
+- ✅ `Spinner` 三态（requesting / responding / tool-use）
+- ✅ `ToolCall` / `ShellOutput` / `Permission` / `SelectOptions`
+- ✅ `renderMarkdown`（marked.lexer + chalk）Markdown → ANSI
+- ✅ 可选诊断 log（`X_CODE_DEBUG=1` → `~/.xcode/x-code-debug.log`）
+
+### 13.9 斜杠命令
+
+- ✅ `/help` / `/model` / `/usage` / `/clear` / `/compact` / `/init` / `/session save` / `/plan` / `/exit`
+- ✅ Tab 补全（模糊匹配）
+
+### 13.10 Plan Mode
+
+- ✅ `enterPlanMode` / `exitPlanMode` 工具
+- ✅ System prompt overlay（Plan 模式下禁用所有写入工具）
+- ✅ 计划文件管理（`.x-code/plans/` 目录 + 自动生成的 plan ID）
+
+### 13.11 非交互模式 & CI 集成
+
+- ✅ `--print` / 管道输入（stdin 检测）
+- ✅ Ctrl+C 优雅退出（保存会话摘要）
+
+### 13.12 未实现 / 后续功能
+
+参考 `docs/tools-comparison.md` 第 12 节优化路线图——剩余 P0/P1/P2 改进项（先读后写检查、结构化错误类型、Grep 分页、webSearch 丰富入参、Brave 多后端 fallback 等）均在其中。
 
 ---
 
@@ -2332,4 +2370,4 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 | --------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | **Gemini CLI**  | 技术栈完全一致（TS + esbuild + Ink + Vitest），架构最值得参考 | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
 | **AI SDK 文档** | streamText / tool 调用 / Agent Loop 的权威参考                | [ai-sdk.dev/docs](https://ai-sdk.dev/docs)                                         |
-| **Ink 文档**    | 组件 API、hooks、Static 等                                    | [github.com/vadimdemedes/ink](https://github.com/vadimdemedes/ink)                 |
+| **Ink 文档**    | 组件 API、hooks、`useStdout` 等                               | [github.com/vadimdemedes/ink](https://github.com/vadimdemedes/ink)                 |
