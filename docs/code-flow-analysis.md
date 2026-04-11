@@ -75,9 +75,6 @@ packages/
  |                |                  | 9. useAgent() 初始化                    |                    |                  |
  |                |                  |---> 状态初始化      |                    |                    |                  |
  |                |                  |                    |                    |                    |                  |
- |                |                  | 10. 检查 latestSession                  |                    |                  |
- |                |                  |    (有则显示继续提示)  |                    |                    |                  |
- |                |                  |                    |                    |                    |                  |
  |  > 输入提示符   |                  | <ChatInput> 渲染    |                    |                    |                  |
  |<------------------------------------                  |                    |                    |                  |
  |                |                  |                    |                    |                    |                  |
@@ -111,9 +108,9 @@ packages/
  |                |                  |                    |                    |                    |                  |
  |                |                  |                    | text-delta →       |                    |                  |
  |                |                  |                    | callbacks.onTextDelta()                 |                  |
- |                |                  |                    |---> streamingBuffer                     |                  |
- |                |                  |  (每50ms flush)     |                    |                    |                  |
- |  <StreamingText>|<------- setState(streamingText)      |                    |                    |                  |
+ |                |                  |                    |---> appendTextDelta() (直接 setState)   |                  |
+ |                |                  |  (React 18 自动批处理，无定时器)           |                    |                  |
+ |  <StreamingText>|<------- setState(streamingText += delta)                   |                    |                  |
  |                |                  |                    |                    |                    |                  |
  |                |                  |                    | tool-call →        |                    |                  |
  |                |                  |                    | callbacks.onToolCall()                  |                  |
@@ -272,9 +269,8 @@ startApp()
   shellOutput: '',                 // Shell 输出
   pendingPermission: null,         // 待确认权限
   pendingQuestion: null,           // 待回答问题
-  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
+  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
   error: null,                     // 错误信息
-  latestSession: null,             // 上次会话
 }
 ```
 
@@ -284,36 +280,33 @@ App 组件的 JSX 结构决定了终端显示布局：
 
 ```
 <Box flexDirection="column" padding={1}>
-  {/* 1. 上次会话继续提示 (如有) */}
-  {state.latestSession && <SessionContinuePrompt />}
-
-  {/* 2. 消息历史 — Ink Static，写入滚动缓冲区，不重绘 */}
+  {/* 1. 消息历史 — Ink Static，写入滚动缓冲区，不重绘 */}
   <MessageList messages={state.messages} />
 
-  {/* 3. 当前流式文本 — 动态区域 */}
+  {/* 2. 当前流式文本 — 动态区域 */}
   {state.streamingText && <StreamingText text={state.streamingText} />}
 
-  {/* 4. 当前工具调用显示 (Claude Code 风格: ● ToolName(preview) + ⎿ Running...) */}
+  {/* 3. 当前工具调用显示 (Claude Code 风格: ● ToolName(preview) + ⎿ Running...) */}
   {state.currentToolCall && !state.pendingPermission && <ToolCall ... />}
 
-  {/* 5. Shell 输出 */}
+  {/* 4. Shell 输出 */}
   {state.shellOutput && <ShellOutput output={state.shellOutput} />}
 
-  {/* 6. 权限确认对话框 */}
+  {/* 5. 权限确认对话框 */}
   {state.pendingPermission && <Permission ... />}
 
-  {/* 7. 用户选择对话框 */}
+  {/* 6. 用户选择对话框 */}
   {state.pendingQuestion && <SelectOptions ... />}
 
-  {/* 8. 加载 Spinner — 始终在 isLoading 时可见，箭头方向根据阶段变化 */}
-  {/*    ↑ = requesting (等待 API 响应), ↓ = responding/thinking/tool-use */}
+  {/* 7. 加载 Spinner — isLoading 时始终可见，根据阶段切换模式
+         mode = 'requesting' (等待 API) / 'responding' (流式文本) / 'tool-use' (工具执行) */}
   {state.isLoading && <Spinner totalTokens={state.usage.totalTokens} mode={mode} />}
 
-  {/* 9. 错误信息 */}
+  {/* 8. 错误信息 */}
   {state.error && <Text color="red">Error: {state.error}</Text>}
 
-  {/* 10. 输入框 — 非加载时显示 */}
-  {!state.latestSession && <ChatInput onSubmit={handleSubmit} ... />}
+  {/* 9. 输入框 — 始终渲染，isLoading/pending 时 disabled */}
+  <ChatInput onSubmit={handleSubmit} disabled={...} commands={SLASH_COMMANDS} />
 </Box>
 ```
 
@@ -347,7 +340,7 @@ ChatInput 组件
 > /█                          ← 用户正在输入
   /help            Show this help message
   /model           Switch model or list available models
-  /usage           Show token usage and cost
+  /usage           Show token usage
   /clear           Clear conversation history
   ...
 ```
@@ -391,13 +384,10 @@ submit(text)
   │    │    ├─ globalMemory.evict(90)   // 清除 90 天前的记忆
   │    │    └─ projectMemory.evict(90)
   │    │
-  │    ├─ scanProject(cwd)        // 扫描项目基本信息
-  │    │    ├─ 检测包管理器 (pnpm/yarn/npm lock 文件)
-  │    │    ├─ 读取 package.json → 记录 scripts, deps
-  │    │    └─ 读取 tsconfig.json → 记录 strict mode, module 等
-  │    │
-  │    └─ loadLatestSession()     // 读取 .x-code/sessions/latest.json
-  │         └─ 如有未完成会话 → setState({ latestSession })
+  │    └─ scanProject(cwd)        // 扫描项目基本信息
+  │         ├─ 检测包管理器 (pnpm/yarn/npm lock 文件)
+  │         ├─ 读取 package.json → 记录 scripts, deps
+  │         └─ 读取 tsconfig.json → 记录 strict mode, module 等
   │
   ├─ 2. 更新 UI 状态
   │    setState({
@@ -409,11 +399,12 @@ submit(text)
   │
   ├─ 3. 创建 AbortController (用于 Ctrl+C 取消)
   │
-  ├─ 4. 启动流式文本刷新定时器 (每 50ms flush buffer → setState)
-  │
-  ├─ 5. 构建 AgentCallbacks (React State ←→ Core Agent 桥接)
+  ├─ 4. 构建 AgentCallbacks (React State ←→ Core Agent 桥接)
   │    {
-  │      onTextDelta:       delta → streamingBuffer 累积
+  │      onTextDelta:       delta → appendTextDelta() → setState 直接追加到 streamingText
+  │                                   (React 18 自动批处理连续 setState，无需定时器 / buffer 层)
+  │                                   → 若累计行数 > FLUSH_THRESHOLD(16)，整段推入 messages (Static)
+  │                                     并清空 streamingText，防止动态区域高度超过终端
   │      onToolCall:        (name, input) → flushStreamingToMessages() 先将已有文本 flush 到 Static
   │                                       → 记录 toolCallStartRef 起始时间
   │                                       → setState({ currentToolCall })
@@ -429,7 +420,14 @@ submit(text)
   │      onError:           error → setState({ error })
   │    }
   │
-  └─ 6. 调用 agentLoop(text, model, options, callbacks, existingState)
+  ├─ 5. 调用 agentLoop(text, model, options, callbacks, loopStateRef.current ?? undefined)
+  │    └─ 第五个参数 existingState 复用上一次 submit 的 LoopState，使同一次 CLI 会话内
+  │       多轮提问共享同一个 state.messages / tokenUsage / planMode / sessionId。
+  │       (不是启动时自动恢复历史会话 —— 启动时 loopStateRef 为 null。)
+  │
+  └─ 6. 安全网：如果本轮 onTextDelta 从未触发 (如某些推理模型把全部文本放在 response.messages 的
+       最终 part 里)，使用 extractLastAssistantText(loopState.messages) 兜底取文本，
+       追加为 assistant message，确保用户一定能看到回复。
 ```
 
 ### 步骤 10: agentLoop() — 核心循环
@@ -450,10 +448,10 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   ├─ 2. state.messages.push({ role: 'user', content: userMessage })
   │
   ├─ 3. 加载知识上下文
-  │    ├─ loadRuleFiles()         // .x-code/rules/*.md
-  │    ├─ 解析 @rule-name 引用    // 用户消息中的 @xxx 引用
-  │    ├─ loadLatestSession()     // 上次会话摘要
-  │    └─ buildKnowledgeContext() // 组装完整知识上下文
+  │    ├─ loadRuleFiles()                       // .x-code/rules/*.md，一次加载后复用
+  │    ├─ 解析用户消息中的 @rule-name 引用       // 匹配 /@([\w-]+)/g，命中则把整条规则内容
+  │    │                                         //   以 "### Rule: <name>" 追加到知识上下文
+  │    └─ buildKnowledgeContext({ rules })      // 组装完整知识上下文
   │         ├─ 全局偏好      ~/.xcode/knowledge.md
   │         ├─ 全局自动记忆  ~/.xcode/memory/auto.md
   │         ├─ 项目知识      .x-code/knowledge.md
@@ -461,8 +459,12 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   │         ├─ 本地偏好      .x-code/local/preferences.md
   │         ├─ 规则 (alwaysApply=true 的自动加载)
   │         ├─ 规则 (paths 匹配的自动加载)
-  │         ├─ 可用规则列表 (供 AI 按需引用)
-  │         └─ 上次会话上下文
+  │         └─ 可用规则列表 (供 AI 按需引用)
+  │
+  │    注：早期版本会在此处调用 loadLatestSession() 并把上次未完成会话的摘要自动注入
+  │    system prompt，但该行为已移除 —— 模型会把普通打招呼也当作"继续上次工作"，导致体验糟糕。
+  │    loadLatestSession / saveSession 仍然存在（会话上下文压缩时仍会持久化），预留给后续
+  │    history 功能使用，但当前启动路径不再自动读取或注入。
   │
   ├─ 4. 计算 Token 预算
   │    getTokenBudget(modelId)
@@ -498,14 +500,20 @@ agentLoop(userMessage, model, options, callbacks, existingState)
        │      abortSignal,
        │    })
        │
+       │    try/catch 包裹：抛错时调用 classifyApiError(err) 将 HTTP 错误映射为
+       │    人类可读消息 (401/403 授权、429 限流、503 服务不可用、timeout 等)，
+       │    通过 callbacks.onError 上报；非可重试错误直接 break 退出循环。
+       │
        ├─ 流式处理 (for await chunk of fullStream)
        │    ├─ text-delta  → callbacks.onTextDelta(text)
        │    ├─ tool-call   → callbacks.onToolCall(name, input)
        │    └─ tool-result → callbacks.onToolResult(id, truncated)
        │
+       │    stream 循环同样被 try/catch 包裹，错误经 classifyApiError() 分类后上报。
+       │
        ├─ 收集响应
        │    ├─ response.messages → push 到 state.messages
-       │    ├─ usage → 累加 token 用量 + estimateCost()
+       │    ├─ usage → 累加 token 用量 (inputTokens/outputTokens/totalTokens)
        │    └─ finishReason → 决定是否继续循环
        │
        ├─ if finishReason === 'tool-calls'
@@ -558,9 +566,8 @@ buildSystemPrompt()
      ### Project Knowledge
      ### Project Auto Memory
      ### Local Preferences
-     ### Rule: xxx
-     ### Available Rules
-     ### Previous Session
+     ### Rule: xxx           (alwaysApply / paths 命中 / @rule-name 显式引用)
+     ### Available Rules     (按需引用的规则索引)
 ```
 
 ### 工具注册表
@@ -720,18 +727,21 @@ StreamingText 组件 (cli/src/ui/components/StreamingText.tsx)
   ├─ 接收 text prop → useMemo(() => renderMarkdown(text))
   └─ 渲染: <Box marginLeft={2}><Text>{rendered}</Text></Box>
 
-  行数控制 (use-agent.ts — FLUSH_THRESHOLD):
-  ├─ 当 streamingText 超过 FLUSH_THRESHOLD (16 行) 时
-  │   → 自动将全部文本 flush 到 Static <MessageList>
-  │   → 清空 streamingText，动态区域重新开始
-  └─ 这样保持非 Static 区域很小，避免 Ink 闪烁/跳动
+  追加策略 (use-agent.ts — appendTextDelta):
+  ├─ onTextDelta → setState 直接把 delta 拼到 streamingText 末尾
+  ├─ React 18 自动批处理同一 macrotask 内的多次 setState，不再需要额外的
+  │   streamingBufferRef + setInterval 定时器层
+  └─ 旧版的 50ms flush 定时器已移除：之前在极快的单轮中，stream 可能在第一次
+      flush tick 之前就结束，导致细微的顺序 bug
 
-  节流策略 (use-agent.ts):
-  ├─ onTextDelta → 累积到 streamingBufferRef (不触发 re-render)
-  └─ 每 50ms setInterval → flush buffer → setState(streamingText)
+  行数控制 (use-agent.ts — FLUSH_THRESHOLD = 16):
+  ├─ appendTextDelta 中，若拼接后 streamingText.split('\n').length > 16
+  │   → 将整段文本作为一条 assistant message 推入 messages (Static)
+  │   → 清空 streamingText，动态区域重新从 0 开始
+  └─ 这样保持非 Static 区域始终 ≤ 16 行，避免 Ink 尝试重绘比终端还高的动态区
 
   工具调用时文本 flush (use-agent.ts — flushStreamingToMessages):
-  ├─ onToolCall 触发时，先将已有 streamingText flush 到 Static
+  ├─ onToolCall 触发时，先把已有 streamingText 作为完整 assistant message flush 到 Static
   └─ 确保文本在工具调用指示器之前显示，视觉顺序正确
 ```
 
@@ -774,10 +784,13 @@ MessageList 组件 (cli/src/ui/components/MessageList.tsx)
   │              ├─ .x-code/sessions/latest.json    // 最新会话
   │              └─ .x-code/sessions/{id}.json      // 归档
   │
+  │   注：持久化仍然会发生（上下文压缩时也会写一次），预留给后续 history 功能。
+  │       但下次启动 CLI 时不会再自动读取 latest.json 并注入到 system prompt。
+  │
   ├─ exit() (Ink unmount)
   │
   └─ printExitSummary() (app.tsx)
-       → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345) | cost: $0.0456"
+       → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
 ```
 
 ### SIGINT (Ctrl+C) 处理
@@ -809,8 +822,7 @@ process.on('SIGINT')  (cli/src/index.ts)
 4. useAgent.submit()
    ├─ initialize() (首次)
    │    ├─ 加载 AutoMemory (全局 + 项目)
-   │    ├─ scanProject() → 检测到 pnpm, TypeScript, React, Ink, Vitest 等
-   │    └─ loadLatestSession() → 检查是否有未完成会话
+   │    └─ scanProject() → 检测到 pnpm, TypeScript, React, Ink, Vitest 等
    │
    ├─ setState
    │    → messages 追加用户消息
@@ -827,7 +839,7 @@ process.on('SIGINT')  (cli/src/index.ts)
    ├─ messages: [{ role: 'user', content: '帮忙分析一下项目产品功能以及优化点' }]
    │
    ├─ buildKnowledgeContext()
-   │    → 加载项目知识、规则、记忆、上次会话等
+   │    → 加载全局/项目 knowledge.md、auto memory、rules
    │
    ├─ buildSystemPrompt()
    │    → 完整 system prompt (约 2000-3000 tokens)
@@ -880,8 +892,8 @@ process.on('SIGINT')  (cli/src/index.ts)
    │
    ├─ 流式输出过程:
    │    ├─ text-delta: "## 项目产品功能分析\n\n"
-   │    │    → callbacks.onTextDelta() → streamingBuffer 累积
-   │    │    → 50ms 后 flush → setState({ streamingText })
+   │    │    → callbacks.onTextDelta() → appendTextDelta()
+   │    │    → setState({ streamingText: prev + delta })  (React 18 批处理)
    │    │
    │    │  [终端显示 — StreamingText 组件，只显示尾部 N 行]
    │    │  ## 项目产品功能分析
@@ -1017,7 +1029,7 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
                                         v               v
                               ┌──────────────────────────────────┐
                               │          useAgent (Hook)           │
-                              │  onTextDelta → streamingBuffer    │
+                              │  onTextDelta → streamingText++    │
                               │  onToolCall  → currentToolCall    │
                               │  onAskPermission → pendingPerm    │
                               │  onUsageUpdate → usage            │
@@ -1048,16 +1060,17 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 | Ink 渲染      | `cli/src/app.tsx`                         | `startApp()`, `printExitSummary()`                                 |
 | 根组件        | `cli/src/ui/components/App.tsx`           | `App`, `handleSubmit()`, `SLASH_COMMANDS`                          |
 | Agent Hook    | `cli/src/ui/hooks/use-agent.ts`           | `useAgent()`, `submit()`, `AgentState`                             |
-| Agent 循环    | `core/src/agent/loop.ts`                  | `agentLoop()`, `handleToolCalls()`, `compressMessages()`           |
+| Agent 循环    | `core/src/agent/loop.ts`                  | `agentLoop()`, `handleToolCalls()`, `compressMessages()`, `classifyApiError()` |
 | System Prompt | `core/src/agent/system-prompt.ts`         | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                          |
 | 消息处理      | `core/src/agent/messages.ts`              | `estimateTokens()`, `toolResultMessage()`                          |
-| 定价          | `core/src/agent/pricing.ts`               | `estimateCost()`, `MODEL_PRICING`                                  |
+| 计划模式      | `core/src/agent/plan-mode.ts`             | `ensurePlansDir()`, `generatePlanId()`, `getPlanPath()`            |
 | 工具注册      | `core/src/tools/index.ts`                 | `toolRegistry`, `truncateToolResult()`                             |
 | 权限系统      | `core/src/permissions/index.ts`           | `checkPermission()`, `getPermissionLevel()`                        |
 | 知识加载      | `core/src/knowledge/loader.ts`            | `buildKnowledgeContext()`, `loadRuleFiles()`                       |
-| 会话管理      | `core/src/knowledge/session.ts`           | `loadLatestSession()`, `saveSession()`, `generateSessionSummary()` |
+| 会话持久化    | `core/src/knowledge/session.ts`           | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history) |
 | 自动记忆      | `core/src/knowledge/auto-memory.ts`       | `AutoMemory`, `initMemories()`                                     |
 | 项目扫描      | `core/src/knowledge/hooks.ts`             | `scanProject()`                                                    |
+| 项目初始化    | `core/src/knowledge/init.ts`              | `initProject()` — `/init` 命令入口                                 |
 | 配置          | `core/src/config/index.ts`                | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`      |
 | Provider      | `core/src/providers/registry.ts`          | `createModelRegistry()`                                            |
 | 输入组件      | `cli/src/ui/components/ChatInput.tsx`     | `ChatInput`, 模糊匹配补全                                          |

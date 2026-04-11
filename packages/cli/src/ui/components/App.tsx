@@ -30,7 +30,7 @@ interface AppProps {
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   { name: '/model', description: 'Switch model or list available models' },
-  { name: '/usage', description: 'Show token usage and cost' },
+  { name: '/usage', description: 'Show token usage' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
   { name: '/init', description: 'Initialize project knowledge' },
@@ -188,14 +188,11 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
 
   function handleUsage() {
     const { usage } = state
-    const symbol = usage.costCurrency === 'CNY' ? '¥' : '$'
-    const costStr = usage.estimatedCost > 0 ? `${symbol}${usage.estimatedCost.toFixed(4)}` : 'N/A'
     addInfoMessage(
       `Token Usage\n` +
         `  Input:    ${usage.inputTokens.toLocaleString()} tokens\n` +
         `  Output:   ${usage.outputTokens.toLocaleString()} tokens\n` +
         `  Total:    ${usage.totalTokens.toLocaleString()} tokens\n` +
-        `  Cost:     ${costStr}\n` +
         `  Model:    ${options.modelId}`,
     )
   }

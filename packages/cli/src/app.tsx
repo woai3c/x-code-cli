@@ -25,12 +25,9 @@ export function getCleanupFn(): (() => Promise<void>) | null {
 export function printExitSummary(): void {
   if (!latestUsage || latestUsage.totalTokens === 0) return
   const usage = latestUsage
-  const symbol = usage.costCurrency === 'CNY' ? '¥' : '$'
-  const costStr = usage.estimatedCost > 0 ? `${symbol}${usage.estimatedCost.toFixed(4)}` : ''
-  const costPart = costStr ? ` | cost: ${costStr}` : ''
   const modelPart = latestModelId ? `${latestModelId} | ` : ''
   console.log(
-    `\n${modelPart}${usage.totalTokens.toLocaleString()} tokens (in: ${usage.inputTokens.toLocaleString()}, out: ${usage.outputTokens.toLocaleString()})${costPart}`,
+    `\n${modelPart}${usage.totalTokens.toLocaleString()} tokens (in: ${usage.inputTokens.toLocaleString()}, out: ${usage.outputTokens.toLocaleString()})`,
   )
 }
 

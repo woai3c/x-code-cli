@@ -59,7 +59,7 @@ x-code-cli/
 │   │   │   │   │   ├── Spinner.tsx      # 加载动画（支持 mode: requesting/responding/tool-use）
 │   │   │   │   │   ├── Permission.tsx   # 权限确认 UI（含 diff 预览）
 │   │   │   │   │   ├── ShellOutput.tsx  # Shell 命令实时输出
-│   │   │   │   │   ├── StatusBar.tsx    # 底部状态栏（模型/token/费用）
+│   │   │   │   │   ├── StatusBar.tsx    # 底部状态栏（模型 / token 用量）
 │   │   │   │   │   ├── SelectOptions.tsx # askUser 多选交互
 │   │   │   │   │   └── SetupWizard.tsx  # 首次使用引导
 │   │   │   │   ├── hooks/
@@ -292,16 +292,17 @@ interface TokenUsage {
   inputTokens: number // 输入 token 总数（AI SDK v6 命名）
   outputTokens: number // 输出 token 总数（AI SDK v6 命名）
   totalTokens: number // 合计
-  estimatedCost: number // 估算费用（基于模型单价）
 }
 ```
+
+> 只统计 token 数量，不做自动计费。不同 Provider 价格会调整、汇率会浮动，内置单价表很快就会过时，给用户一个不准的"费用"反而误导；真要看账单请去 Provider 控制台。
 
 **UI 展示**：在终端底部状态栏显示，或通过 `/usage` 命令查看：
 
 ```
 > /usage
   本次会话: 12,450 prompt + 3,200 completion = 15,650 tokens
-  估算费用: $0.08 (anthropic:claude-sonnet-4-5)
+  模型: anthropic:claude-sonnet-4-5
 ```
 
 ### 4.3 工具系统
@@ -638,7 +639,7 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 ├── <SelectOptions>        # askUser 工具的多选交互 UI
 ├── <Spinner>              # "Thinking..." 加载状态
 ├── <SetupWizard>          # 首次使用引导（选择提供商、输入 Key、选择模型）
-├── <StatusBar>            # 底部状态栏（模型 / token / 费用）
+├── <StatusBar>            # 底部状态栏（模型 / token 用量）
 └── <ChatInput>            # 用户输入框
 ```
 
@@ -662,7 +663,7 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 
 **`<ShellOutput>`** — Shell 工具执行时的实时输出展示。逐行渲染 stdout/stderr，让用户看到 `npm install`、`pnpm build` 等长命令的实时进度，而非等执行完才一次性展示。
 
-**`<StatusBar>`** — 终端底部状态栏，显示：当前模型名、本次会话 token 消耗和估算费用、当前工作目录。使用 Ink 的 `<Box position="absolute" bottom={0}>` 固定在底部。
+**`<StatusBar>`** — 终端底部状态栏，显示：当前模型名、本次会话 token 累计用量、当前工作目录。使用 Ink 的 `<Box position="absolute" bottom={0}>` 固定在底部。
 
 **`<ChatInput>`** — 多行文本输入。使用 Ink 的 `useInput` hook，Enter 提交，Ctrl+C 退出。
 
@@ -1140,7 +1141,7 @@ $ xc
 | `/model [name]` | 切换模型 / 查看可用模型 | `/model opus`、`/model deepseek`                          |
 | `/plan`         | 进入 Plan Mode          | 只读探索 + 生成实施计划，需用户审核通过后执行（详见 4.7） |
 | `/compact`      | 手动触发上下文压缩      | 不等自动阈值，立即压缩旧消息                              |
-| `/usage`        | 查看 token 用量和费用   | 本次会话的累计统计                                        |
+| `/usage`        | 查看 token 用量         | 本次会话的累计 token 统计（不含自动计费）                 |
 | `/clear`        | 清空对话历史            | 不退出程序，重新开始新对话（保留知识上下文）              |
 | `/init`         | 初始化项目知识          | 分析项目结构，生成 `.x-code/knowledge.md` 等              |
 | `/session save` | 手动保存会话摘要        | 不退出程序，保存当前进度                                  |
@@ -1402,7 +1403,7 @@ export default defineConfig({
 - [x] `xc init` 初始化命令（自动分析项目，预填充知识文件）
 - [x] 上下文压缩（token 超阈值时自动压缩旧消息，支持长对话）
 - [x] Shell 流式输出（长命令实时显示进度，如 npm install）
-- [x] Token 用量统计（累计消耗 + 估算费用，`/usage` 命令查看）
+- [x] Token 用量统计（累计输入/输出 token，`/usage` 命令查看；不做自动计费）
 - [x] 权限 diff 预览（edit/writeFile 确认时显示变更内容）
 - [x] 错误恢复（API 限流重试、网络超时恢复、工具错误自修正）
 - [x] Ctrl+C 优雅退出（保存会话摘要后退出）
@@ -1523,7 +1524,6 @@ description: Create a well-formatted git commit following project conventions.
 | P1     | **Subagent（子 Agent）** | 独立上下文的子 LLM 实例。内置 Explore（只读，用便宜模型搜索代码库）和 General（全工具）子 Agent，支持自定义子 Agent（YAML frontmatter），支持并行执行。通过 `task` 工具在主 Agent 中调用 |
 | P1     | **任务追踪**             | todoWrite 工具，进度管理，复杂任务自动拆解为 checklist                                                                                                                                   |
 | P1     | **对话历史浏览**         | `xc --resume` 继续上次会话、`/sessions` 查看历史会话列表、选择历史会话继续                                                                                                               |
-| P2     | **费用预算限制**         | `--max-cost 1.0` 控制单次会话最大花费，超出自动暂停                                                                                                                                      |
 | P2     | **Git 集成**             | 内置 git 操作（不依赖 shell 调用）                                                                                                                                                       |
 | P2     | **图片/PDF 支持**        | 多模态输入（截图分析、文档阅读）                                                                                                                                                         |
 | P2     | **浏览器自动化**         | Playwright 集成（截图、交互测试）                                                                                                                                                        |
@@ -2289,7 +2289,7 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 2. 在 `@x-code/cli` 中实现 StreamingText 组件（流式渲染 LLM 输出）
 3. 实现 MessageList（对话历史）
 4. 实现上下文压缩（token 估算 + 阈值检测 + 摘要压缩）
-5. 实现 token 用量统计（累计消耗 + 估算费用）+ StatusBar 组件
+5. 实现 token 用量统计（累计输入/输出 token）+ StatusBar 组件
 6. 实现错误恢复策略（API 限流重试、网络超时、认证失败提示）
 7. 验证：能和 LLM 对话，流式显示回复，长对话自动压缩
 

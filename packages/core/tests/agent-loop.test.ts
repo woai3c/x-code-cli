@@ -126,31 +126,6 @@ describe('agent loop', () => {
     expect(state.turnCount).toBe(1)
   })
 
-  it('tracks cost estimation for known models', async () => {
-    vi.mocked(streamText).mockReturnValue({
-      fullStream: {
-        async *[Symbol.asyncIterator]() {
-          yield { type: 'text-delta', text: 'test' }
-        },
-      },
-      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'test' }] }),
-      usage: Promise.resolve({ inputTokens: 10000, outputTokens: 2000 }),
-      finishReason: Promise.resolve('stop'),
-      toolCalls: Promise.resolve([]),
-    } as any)
-
-    await agentLoop(
-      'test',
-      {} as any,
-      { modelId: 'anthropic:claude-sonnet-4-5', trustMode: false, maxTurns: 1, printMode: false },
-      mockCallbacks,
-    )
-
-    const usageArg = vi.mocked(mockCallbacks.onUsageUpdate).mock.calls[0][0] as TokenUsage
-    // Sonnet: 10K * $3/M + 2K * $15/M = $0.03 + $0.03 = $0.06
-    expect(usageArg.estimatedCost).toBeCloseTo(0.06, 3)
-  })
-
   it('reports error when max turns exceeded', async () => {
     // Force tool-calls finish reason to keep looping
     vi.mocked(streamText).mockReturnValue({

@@ -70,7 +70,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     shellOutput: '',
     pendingPermission: null,
     pendingQuestion: null,
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     error: null,
   })
 
@@ -358,7 +358,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       shellOutput: '',
       pendingPermission: null,
       pendingQuestion: null,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       error: null,
     })
   }, [])

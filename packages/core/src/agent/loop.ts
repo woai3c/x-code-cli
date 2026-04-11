@@ -15,7 +15,6 @@ import { getShellConfig } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../types/index.js'
 import { estimateTokens, toolResultMessage } from './messages.js'
 import { ensurePlansDir, generatePlanId, getPlanPath } from './plan-mode.js'
-import { estimateCost } from './pricing.js'
 import { buildSystemPrompt } from './system-prompt.js'
 
 /** Minimal shape of what we use from streamText() result — avoids complex generic propagation */
@@ -386,7 +385,7 @@ export async function agentLoop(
 ): Promise<LoopState> {
   const state: LoopState = existingState ?? {
     messages: [],
-    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, costCurrency: 'USD' },
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     planMode: false,
     planId: null,
     sessionId: Date.now().toString(36),
@@ -501,9 +500,6 @@ export async function agentLoop(
         state.tokenUsage.inputTokens += usage.inputTokens ?? 0
         state.tokenUsage.outputTokens += usage.outputTokens ?? 0
         state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
-        const costEstimate = estimateCost(options.modelId, state.tokenUsage.inputTokens, state.tokenUsage.outputTokens)
-        state.tokenUsage.estimatedCost = costEstimate.cost
-        state.tokenUsage.costCurrency = costEstimate.currency
         callbacks.onUsageUpdate(state.tokenUsage)
       }
 

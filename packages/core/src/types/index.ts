@@ -11,8 +11,6 @@ export interface TokenUsage {
   inputTokens: number
   outputTokens: number
   totalTokens: number
-  estimatedCost: number
-  costCurrency: 'USD' | 'CNY'
 }
 
 // ─── Display messages ───

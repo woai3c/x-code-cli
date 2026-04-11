@@ -109,7 +109,7 @@ cli/index.ts -> app.tsx -> App.tsx -> useAgent.submit()
 | Multi-model support (8 providers + custom) | providers/registry.ts, config/index.ts |
 | Streaming text output                      | StreamingText.tsx, use-agent.ts        |
 | Context compression                        | agent/loop.ts compressMessages()       |
-| Token usage tracking + cost estimation     | agent/pricing.ts, StatusBar.tsx        |
+| Token usage tracking (input/output/total)  | agent/loop.ts, use-agent.ts            |
 | Knowledge system (7-layer loading)         | knowledge/loader.ts                    |
 | Auto memory (CRUD + TTL eviction)          | knowledge/auto-memory.ts               |
 | 4 rule loading modes                       | knowledge/loader.ts                    |
@@ -148,7 +148,6 @@ cli/index.ts -> app.tsx -> App.tsx -> useAgent.submit()
 | P1       | Subagent           | Independent child LLM instances for parallel work  |
 | P1       | Task Tracking      | todoWrite tool, checklist management               |
 | P1       | Session History    | --resume, /sessions list                           |
-| P2       | Cost Budget        | --max-cost per session                             |
 | P2       | Image/PDF          | Multimodal input                                   |
 | P2       | Browser Automation | Playwright integration                             |
 | P3       | Plugin System      | Third-party extensions                             |
