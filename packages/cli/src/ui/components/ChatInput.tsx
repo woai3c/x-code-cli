@@ -92,6 +92,36 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     setCompletionIndex(0)
   }
 
+  const MAX_VISIBLE_LINES = 6
+
+  /** Move cursor up (delta < 0) or down (delta > 0) by |delta| lines,
+   *  preserving the column position (clamped to the target line's length). */
+  const moveCursorVertically = (delta: number) => {
+    const lines = text.split('\n')
+    // Find current line and column
+    let line = 0
+    let col = cursorRef.current
+    let charsSoFar = 0
+    for (let i = 0; i < lines.length; i++) {
+      if (charsSoFar + lines[i].length >= cursorRef.current && cursorRef.current >= charsSoFar) {
+        line = i
+        col = cursorRef.current - charsSoFar
+        break
+      }
+      charsSoFar += lines[i].length + 1
+    }
+    const targetLine = Math.max(0, Math.min(lines.length - 1, line + delta))
+    if (targetLine === line) return
+    const targetCol = Math.min(col, lines[targetLine].length)
+    // Compute absolute cursor position
+    let newPos = 0
+    for (let i = 0; i < targetLine; i++) {
+      newPos += lines[i].length + 1
+    }
+    newPos += targetCol
+    syncCursor(newPos)
+  }
+
   usePromptInput({
     enabled: !disabled,
     onInterrupt,
@@ -187,12 +217,30 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         return
       }
 
-      if (key === 'up' && matches.length > 0) {
-        setCompletionIndex((prev) => (prev - 1 + matches.length) % matches.length)
+      // Up/Down: completion navigation takes priority; otherwise move cursor vertically
+      if (key === 'up') {
+        if (matches.length > 0) {
+          setCompletionIndex((prev) => (prev - 1 + matches.length) % matches.length)
+        } else {
+          moveCursorVertically(-1)
+        }
         return
       }
-      if (key === 'down' && matches.length > 0) {
-        setCompletionIndex((prev) => (prev + 1) % matches.length)
+      if (key === 'down') {
+        if (matches.length > 0) {
+          setCompletionIndex((prev) => (prev + 1) % matches.length)
+        } else {
+          moveCursorVertically(1)
+        }
+        return
+      }
+
+      if (key === 'pageup') {
+        moveCursorVertically(-MAX_VISIBLE_LINES)
+        return
+      }
+      if (key === 'pagedown') {
+        moveCursorVertically(MAX_VISIBLE_LINES)
         return
       }
     },
@@ -211,8 +259,6 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   // block when it's at end-of-line.
   const PROMPT_WIDTH = 2
   const viewportWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
-
-  const MAX_VISIBLE_LINES = 6
 
   const rawLines = text.length === 0 ? [''] : text.split('\n')
 

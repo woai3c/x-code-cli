@@ -44,7 +44,7 @@ const PASTE_DEBOUNCE_MS = 30
 // are treated as normal typing.
 const PASTE_SIZE_THRESHOLD = 8
 
-export type PromptKey = 'return' | 'backspace' | 'delete' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right' | 'home' | 'end'
+export type PromptKey = 'return' | 'backspace' | 'delete' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pageup' | 'pagedown'
 
 export interface PromptInputHandlers {
   /** Normal typed text (may be multi-char if the terminal batched a burst). */
@@ -177,6 +177,8 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       if (data === '\x1b[H' || data === '\x1b[1~') return dispatchKey('home')
       if (data === '\x1b[F' || data === '\x1b[4~') return dispatchKey('end')
       if (data === '\x1b[3~') return dispatchKey('delete')
+      if (data === '\x1b[5~') return dispatchKey('pageup')
+      if (data === '\x1b[6~') return dispatchKey('pagedown')
 
       // Unknown escape sequences — drop so they don't show up as literal
       // "\x1b[…" text in the input.
