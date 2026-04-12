@@ -55,30 +55,48 @@ const ESU = '\x1b[?2026l'
 
 function patchStdoutForCJK(): () => void {
   const origWrite = process.stdout.write
-  // Match Ink's eraseLines pattern: \x1b[1A\x1b[2K repeated N times
-  // (cursor up 1 + erase line, repeated for each line to clear)
-  const erasePattern = /^(\x1b\[1A\x1b\[2K)+/
+
+  // ansi-escapes eraseLines(N) generates:
+  //   (\x1b[2K\x1b[A){N-1} \x1b[2K \x1b[G
+  //   = (eraseLine + cursorUp) × (N-1) + eraseLine + cursorToCol1
+  //
+  // We detect this by checking if the write starts with \x1b[2K (eraseLine).
+  // Then count all \x1b[2K occurrences in the leading erase block to get N.
+  const ERASE_LINE = '\x1b[2K'
+  const CURSOR_UP = '\x1b[A'
+  const CURSOR_COL1 = '\x1b[G'
 
   process.stdout.write = function (
     data: string | Uint8Array,
     ...args: unknown[]
   ): boolean {
-    if (typeof data === 'string') {
-      const match = data.match(erasePattern)
-      if (match) {
-        // Count how many lines the original eraseLines wanted to clear
-        const lineCount = match[0].length / 8 // each "\x1b[1A\x1b[2K" = 8 chars
-        // Replace with: move up (lineCount) lines + erase to end of screen
-        // This clears all visual lines regardless of CJK wrapping
-        const moveUp = lineCount > 0 ? `\x1b[${lineCount}A` : ''
-        const eraseBelow = '\x1b[0J' // Erase from cursor to end of screen
-        const rest = data.slice(match[0].length)
-        return origWrite.call(process.stdout, BSU + moveUp + eraseBelow + rest + ESU, ...args as [])
+    if (typeof data === 'string' && data.startsWith(ERASE_LINE)) {
+      // Count how many lines the eraseLines sequence clears by counting
+      // the erase+cursorUp pairs plus the final eraseLine.
+      let pos = 0
+      let lineCount = 0
+      while (data.startsWith(ERASE_LINE, pos)) {
+        lineCount++
+        pos += ERASE_LINE.length
+        if (data.startsWith(CURSOR_UP, pos)) {
+          pos += CURSOR_UP.length
+        }
       }
-      // Non-erase writes: just wrap in BSU/ESU if they contain ANSI
-      if (data.includes('\x1b[')) {
-        return origWrite.call(process.stdout, BSU + data + ESU, ...args as [])
+      // Skip the trailing \x1b[G (cursor to column 1)
+      if (data.startsWith(CURSOR_COL1, pos)) {
+        pos += CURSOR_COL1.length
       }
+
+      // Replace eraseLines with: move up N-1 lines + erase to end of screen.
+      // \x1b[0J clears all visual lines below regardless of CJK wrapping.
+      const moveUp = lineCount > 1 ? `\x1b[${lineCount - 1}A` : ''
+      const eraseBelow = '\x1b[0J'
+      const rest = data.slice(pos)
+      return origWrite.call(process.stdout, BSU + moveUp + eraseBelow + rest + ESU, ...args as [])
+    }
+    // Non-erase writes: wrap in BSU/ESU if they contain ANSI
+    if (typeof data === 'string' && data.includes('\x1b[')) {
+      return origWrite.call(process.stdout, BSU + data + ESU, ...args as [])
     }
     return origWrite.call(process.stdout, data, ...args as [])
   } as typeof process.stdout.write
