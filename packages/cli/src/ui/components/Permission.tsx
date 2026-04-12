@@ -1,4 +1,9 @@
-// @x-code-cli/cli — Permission confirmation component (Y/N + diff preview)
+// @x-code-cli/cli — Permission confirmation component
+//
+// Architecture aligned with Claude Code's PermissionDialog + PermissionPrompt:
+//   - Top-only border (no left/right/bottom) to minimise dynamic-region height
+//   - Select-based options instead of raw y/n keypresses
+//   - Diff preview for writeFile / edit tools
 import { diffLines } from 'diff'
 
 import fs from 'node:fs/promises'
@@ -9,7 +14,9 @@ import { Box, Text, useInput } from 'ink'
 
 import { getPermissionLevel } from '@x-code-cli/core'
 
-import { ACCENT, ERROR, SUCCESS, WARNING } from '../theme.js'
+import { ACCENT, DIM, ERROR, SUCCESS, WARNING } from '../theme.js'
+
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 interface PermissionProps {
   toolName: string
@@ -23,7 +30,9 @@ const PERMISSION_LABELS: Record<string, { label: string; color: string }> = {
   deny: { label: 'dangerous', color: ERROR },
 }
 
-/** Build a human-readable title for the permission request */
+// ─── Title helpers ──────────────────────────────────────────────────────────
+
+/** Human-readable title for each tool */
 function getPermissionTitle(toolName: string): string {
   switch (toolName) {
     case 'shell':
@@ -37,10 +46,44 @@ function getPermissionTitle(toolName: string): string {
   }
 }
 
+/** Short subtitle describing the target */
+function getPermissionSubtitle(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName === 'shell') return (input.command as string) ?? null
+  if (toolName === 'writeFile' || toolName === 'edit') return (input.filePath as string) ?? null
+  return null
+}
+
+// ─── Select options ─────────────────────────────────────────────────────────
+
+interface SelectOption {
+  label: string
+  value: boolean
+  color: string
+}
+
+const OPTIONS: SelectOption[] = [
+  { label: 'Yes', value: true, color: SUCCESS },
+  { label: 'No', value: false, color: ERROR },
+]
+
+// ─── Main component ─────────────────────────────────────────────────────────
+
 export function Permission({ toolName, input, onResolve }: PermissionProps) {
-  useInput((inputKey) => {
-    if (inputKey.toLowerCase() === 'y') onResolve(true)
-    else if (inputKey.toLowerCase() === 'n') onResolve(false)
+  const [selected, setSelected] = useState(0)
+
+  useInput((_input, key) => {
+    if (key.upArrow) {
+      setSelected((prev) => (prev > 0 ? prev - 1 : OPTIONS.length - 1))
+    } else if (key.downArrow) {
+      setSelected((prev) => (prev < OPTIONS.length - 1 ? prev + 1 : 0))
+    } else if (key.return) {
+      onResolve(OPTIONS[selected].value)
+    } else {
+      // Quick-keys: y / n
+      const ch = _input.toLowerCase()
+      if (ch === 'y') onResolve(true)
+      else if (ch === 'n') onResolve(false)
+    }
   })
 
   // Tool-specific preview
@@ -50,7 +93,7 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
     const level = getPermissionLevel('shell', input)
     const info = PERMISSION_LABELS[level] ?? PERMISSION_LABELS.ask
     preview = (
-      <Box flexDirection="column" marginLeft={2}>
+      <Box flexDirection="column" marginLeft={1}>
         <Box gap={1}>
           <Text color={ACCENT}>$ {input.command as string}</Text>
           <Text color={info.color}>[{info.label}]</Text>
@@ -64,32 +107,59 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
     const oldStr = input.oldString as string
     const newStr = input.newString as string
     preview = (
-      <Box flexDirection="column" marginLeft={2}>
+      <Box flexDirection="column" marginLeft={1}>
         <Text color={ACCENT}>{filePath}</Text>
         <DiffView oldText={oldStr} newText={newStr} />
       </Box>
     )
   }
 
+  const subtitle = getPermissionSubtitle(toolName, input)
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={WARNING} paddingX={1}>
-      <Text color={WARNING} bold>
-        {getPermissionTitle(toolName)}
-      </Text>
-      {preview}
-      <Box marginTop={0} gap={1}>
-        <Text dimColor>Allow?</Text>
-        <Text color={SUCCESS} bold>
-          (y)es
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={WARNING}
+      borderLeft={false}
+      borderRight={false}
+      borderBottom={false}
+      marginTop={1}
+    >
+      {/* Title bar */}
+      <Box paddingX={1} flexDirection="column">
+        <Text color={WARNING} bold>
+          {getPermissionTitle(toolName)}
         </Text>
-        <Text dimColor>/</Text>
-        <Text color={ERROR} bold>
-          (n)o
-        </Text>
+        {subtitle && (
+          <Text color={DIM} wrap="truncate-end">
+            {subtitle}
+          </Text>
+        )}
+      </Box>
+
+      {/* Content */}
+      <Box flexDirection="column" paddingX={1}>
+        {preview}
+
+        {/* Select options */}
+        <Box marginTop={1} flexDirection="column">
+          {OPTIONS.map((opt, i) => (
+            <Box key={opt.label}>
+              <Text color={i === selected ? opt.color : DIM}>
+                {i === selected ? '> ' : '  '}
+                {opt.label}
+              </Text>
+            </Box>
+          ))}
+          <Text dimColor>  ↑↓ Navigate  Enter Confirm  y/n Quick-key</Text>
+        </Box>
       </Box>
     </Box>
   )
 }
+
+// ─── writeFile preview ──────────────────────────────────────────────────────
 
 /** writeFile preview — shows diff if file already exists, else shows content summary */
 function WriteFilePreview({ filePath, content }: { filePath: string; content: string }) {
@@ -110,7 +180,7 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
 
   if (!loaded) {
     return (
-      <Box marginLeft={2}>
+      <Box marginLeft={1}>
         <Text dimColor>Loading...</Text>
       </Box>
     )
@@ -119,7 +189,7 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
   // Existing file — show diff
   if (existingContent !== null) {
     return (
-      <Box flexDirection="column" marginLeft={2}>
+      <Box flexDirection="column" marginLeft={1}>
         <Text color={ACCENT}>{filePath} (overwrite)</Text>
         <DiffView oldText={existingContent} newText={content} />
       </Box>
@@ -128,7 +198,7 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
 
   // New file — show content summary
   return (
-    <Box flexDirection="column" marginLeft={2}>
+    <Box flexDirection="column" marginLeft={1}>
       <Text color={ACCENT}>{filePath} (new file)</Text>
       <Text dimColor>
         {content.slice(0, 300)}
@@ -137,6 +207,8 @@ function WriteFilePreview({ filePath, content }: { filePath: string; content: st
     </Box>
   )
 }
+
+// ─── Diff view ──────────────────────────────────────────────────────────────
 
 /** Render a unified diff with red/green coloring */
 function DiffView({ oldText, newText }: { oldText: string; newText: string }) {

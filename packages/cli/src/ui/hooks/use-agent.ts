@@ -37,7 +37,8 @@ function extractLastAssistantText(messages: ModelMessage[]): string {
   return ''
 }
 
-interface PendingPermission {
+export interface PendingPermission {
+  toolCallId: string
   toolName: string
   input: Record<string, unknown>
   resolve: (approved: boolean) => void
@@ -54,7 +55,7 @@ export interface AgentState {
   isLoading: boolean
   currentToolCall: { toolName: string; input: Record<string, unknown> } | null
   shellOutput: string
-  pendingPermission: PendingPermission | null
+  permissionQueue: PendingPermission[]
   pendingQuestion: PendingQuestion | null
   usage: TokenUsage
   error: string | null
@@ -66,7 +67,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     isLoading: false,
     currentToolCall: null,
     shellOutput: '',
-    pendingPermission: null,
+    permissionQueue: [],
     pendingQuestion: null,
     usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     error: null,
@@ -226,9 +227,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         },
         onAskPermission: (toolCall) => {
           return new Promise<boolean>((resolve) => {
+            const entry: PendingPermission = {
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              input: toolCall.input,
+              resolve,
+            }
             setState((prev) => ({
               ...prev,
-              pendingPermission: { ...toolCall, resolve },
+              permissionQueue: [...prev.permissionQueue, entry],
             }))
           })
         },
@@ -298,15 +305,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     [options, initialize, appendTextDelta, flushStreamingToMessages, flushBuffer],
   )
 
-  /** Resolve a pending permission request */
+  /** Resolve the first pending permission request and pop it from the queue */
   const resolvePermission = useCallback((approved: boolean) => {
     setState((prev) => {
-      if (prev.pendingPermission) {
+      const [head, ...tail] = prev.permissionQueue
+      if (head) {
         // Defer the side-effect outside the setState updater to avoid
         // double-invocation under React 18 Strict Mode.
-        queueMicrotask(() => prev.pendingPermission!.resolve(approved))
+        queueMicrotask(() => head.resolve(approved))
       }
-      return { ...prev, pendingPermission: null }
+      return { ...prev, permissionQueue: tail }
     })
   }, [])
 
@@ -351,7 +359,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       isLoading: false,
       currentToolCall: null,
       shellOutput: '',
-      pendingPermission: null,
+      permissionQueue: [],
       pendingQuestion: null,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       error: null,

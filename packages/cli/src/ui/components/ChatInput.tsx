@@ -36,11 +36,12 @@ export interface SlashCommand {
 
 interface ChatInputProps {
   onSubmit: (text: string) => void
+  onInterrupt: () => void
   disabled?: boolean
   commands?: readonly SlashCommand[]
 }
 
-export function ChatInput({ onSubmit, disabled, commands = [] }: ChatInputProps) {
+export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: ChatInputProps) {
   const [text, setText] = useState('')
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
@@ -79,6 +80,7 @@ export function ChatInput({ onSubmit, disabled, commands = [] }: ChatInputProps)
 
   usePromptInput({
     enabled: !disabled,
+    onInterrupt,
     onText: (chunk) => {
       // Functional setState so rapid bursts (terminal keypress batching)
       // concatenate correctly instead of racing on a stale closure.

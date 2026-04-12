@@ -37,6 +37,38 @@ function checkNodeVersion(): void {
   }
 }
 
+// ── Graceful shutdown (aligned with Claude Code's pattern) ──────────────
+//
+// Claude Code's approach: SIGINT sets process.exitCode=0 as a safety net,
+// then Ink unmounts → waitUntilExit() resolves → gracefulShutdown() runs
+// cleanup → process.exit(0). There's no race between competing exit paths.
+//
+// We follow the same pattern: the SIGINT handler only marks the exit code
+// and (on double Ctrl+C) forces exit. The normal path is:
+//   waitUntilExit() → cleanup → printExitSummary → process.exit(0)
+let shutdownInProgress = false
+
+async function gracefulShutdown(exitCode: number): Promise<never> {
+  if (shutdownInProgress) return undefined as never
+  shutdownInProgress = true
+
+  // Safety net — guarantee exit even if cleanup hangs
+  const failsafeTimer = setTimeout(() => process.exit(exitCode), 5000)
+  failsafeTimer.unref()
+
+  process.exitCode = exitCode
+
+  try {
+    const cleanup = getCleanupFn()
+    if (cleanup) await cleanup()
+  } catch {
+    // Don't crash on cleanup failure
+  }
+
+  printExitSummary()
+  process.exit(exitCode)
+}
+
 async function main() {
   checkNodeVersion()
   loadEnvFile()
@@ -120,12 +152,12 @@ async function main() {
   // Combine prompt with stdin
   const fullPrompt = [stdinContent, prompt].filter(Boolean).join('\n\n')
 
-  // Start the app
+  // Start the app — waitUntilExit resolves when Ink unmounts (including on Ctrl+C)
   const waitUntilExit = startApp(model, options, fullPrompt || undefined)
   await waitUntilExit()
 
-  // Print session usage summary after Ink unmounts
-  printExitSummary()
+  // Normal exit path (including Ctrl+C which unmounts Ink first)
+  await gracefulShutdown(0)
 }
 
 /** Load .env file from cwd (walk up to find it, like dotenv convention) */
@@ -198,31 +230,25 @@ function readStdin(): Promise<string> {
   })
 }
 
-// Handle Ctrl+C gracefully — save session before exit
+// ── SIGINT handler ──────────────────────────────────────────────────────
+// Only a safety net: sets exitCode=0 so if the process exits before
+// gracefulShutdown() runs, the exit code is still 0. On double Ctrl+C,
+// force-exits immediately.
 let sigintCount = 0
 process.on('SIGINT', () => {
   sigintCount++
+  process.exitCode = 0
   if (sigintCount >= 2) {
-    // Force exit on second Ctrl+C
-    process.exit(1)
-  }
-  const cleanup = getCleanupFn()
-  if (cleanup) {
-    cleanup()
-      .catch(() => {
-        // Don't crash on cleanup failure
-      })
-      .finally(() => {
-        printExitSummary()
-        process.exit(0)
-      })
-  } else {
-    printExitSummary()
     process.exit(0)
   }
 })
 
 main().catch((err) => {
+  // If we're shutting down (Ctrl+C unmounted Ink, waitUntilExit rejected),
+  // don't treat it as a fatal error — gracefulShutdown handles it.
+  if (sigintCount > 0 || shutdownInProgress) {
+    return
+  }
   console.error('Fatal error:', err)
   process.exit(1)
 })

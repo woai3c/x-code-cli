@@ -239,21 +239,31 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
       {/* Dynamic region — repainted each render; kept deliberately small.
           Streaming text does NOT live here — it accumulates in
           useAgent's streamBufferRef and flushes into messages (which
-          MessageList's useEffect echoes to stdout via writeMessageToStdout). */}
-      <Box flexDirection="column" paddingX={1}>
+          MessageList's useEffect echoes to stdout via writeMessageToStdout).
+
+          IMPORTANT: No paddingX on this container. Each child manages its
+          own horizontal spacing so the dynamic region's left edge is always
+          column 0. A parent paddingX causes Ink's Yoga layout to produce
+          1-column jitter during repaints when content width changes (typing
+          near wrap boundary, components mounting/unmounting). */}
+      <Box flexDirection="column">
         {/* Current tool call (in-progress) */}
-        {state.currentToolCall && !state.pendingPermission && (
+        {state.currentToolCall && state.permissionQueue.length === 0 && (
           <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
         )}
 
         {/* Shell output */}
         {state.shellOutput && <ShellOutput output={state.shellOutput} />}
 
-        {/* Permission dialog */}
-        {state.pendingPermission && (
+        {/* Permission dialog — renders only the first item in the queue.
+            key={toolCallId} forces a full remount when advancing to the
+            next request, giving the new Permission component fresh state
+            (matches Claude Code's key-based approach). */}
+        {state.permissionQueue.length > 0 && (
           <Permission
-            toolName={state.pendingPermission.toolName}
-            input={state.pendingPermission.input}
+            key={state.permissionQueue[0].toolCallId}
+            toolName={state.permissionQueue[0].toolName}
+            input={state.permissionQueue[0].input}
             onResolve={resolvePermission}
           />
         )}
@@ -267,11 +277,13 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
           />
         )}
 
-        {/* Loading spinner — always visible during isLoading, arrow changes by phase.
-            We can't know from React state whether streaming text is in flight
-            (the buffer lives in a ref), so we only distinguish "tool-use" from
-            the default "requesting" state here. */}
-        {state.isLoading && (
+        {/* Loading spinner — visible during isLoading, but hidden when an
+            interactive dialog (permission / question) is active. Hiding the
+            spinner prevents its 80ms frame-timer from triggering constant
+            re-renders of the dynamic region, which on some terminals causes
+            Ink's log-update to append rather than repaint — flooding the
+            screen with duplicate permission boxes. */}
+        {state.isLoading && state.permissionQueue.length === 0 && !state.pendingQuestion && (
           <Spinner
             totalTokens={state.usage.totalTokens}
             mode={state.currentToolCall ? 'tool-use' : 'requesting'}
@@ -279,12 +291,17 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
         )}
 
         {/* Error */}
-        {state.error && <Text color={ERROR}>Error: {state.error}</Text>}
+        {state.error && (
+          <Box paddingX={1}>
+            <Text color={ERROR}>Error: {state.error}</Text>
+          </Box>
+        )}
 
         {/* Input */}
         <ChatInput
           onSubmit={handleSubmit}
-          disabled={state.isLoading || !!state.pendingPermission || !!state.pendingQuestion}
+          onInterrupt={exit}
+          disabled={state.isLoading || state.permissionQueue.length > 0 || !!state.pendingQuestion}
           commands={SLASH_COMMANDS}
         />
       </Box>

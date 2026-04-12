@@ -58,7 +58,7 @@ export function SelectOptions({ question, options, onSelect }: SelectOptionsProp
   })
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
+    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} borderLeft={false} borderRight={false} borderBottom={false} marginTop={1}>
       <Text color={ACCENT} bold>
         ? {question}
       </Text>

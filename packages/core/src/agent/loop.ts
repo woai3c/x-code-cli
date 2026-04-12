@@ -41,12 +41,24 @@ interface StreamResult {
 
 const KEEP_RECENT = 6
 /**
- * Compress context when the previous turn's real input-token count (reported
- * by the model API) exceeds this fraction of the model's context window. We
- * intentionally use real usage, not a char-based estimate, because estimates
- * drift badly — tool output and non-ASCII text blow them up.
+ * Compress context when usage exceeds this fraction of the model's context
+ * window. Two checks use this:
+ *   1. After each turn — based on the **real** input-token count reported by
+ *      the API, which is the most reliable signal.
+ *   2. Before each API call — based on a **character-based estimate** as a
+ *      safety net. Estimates drift (tool output, non-ASCII), so we use a
+ *      conservative multiplier. The estimate catches cases where a single
+ *      turn (e.g. reading a huge file) pushes context past the limit before
+ *      the real count is available.
  */
 const COMPRESSION_TRIGGER_RATIO = 0.8
+
+/**
+ * Rough chars-per-token ratio for pre-call estimation. Most English text is
+ * ~4 chars/token; CJK and code can be lower. We use 3.0 (aggressive) so the
+ * estimate over-counts slightly, making the safety net trigger earlier.
+ */
+const CHARS_PER_TOKEN_ESTIMATE = 3.0
 
 /** Count occurrences of a substring without creating intermediate arrays */
 function countOccurrences(content: string, search: string): number {
@@ -106,7 +118,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'google:gemini-2.5-flash': 1000000,
   // DeepSeek
   'deepseek:deepseek-chat': 64000,
-  'deepseek:deepseek-reasoner': 64000,
+  'deepseek:deepseek-reasoner': 131072,
   // Alibaba
   'alibaba:qwen-max': 128000,
   'alibaba:qwen-plus': 128000,
@@ -237,12 +249,41 @@ export async function compressMessages(messages: ModelMessage[], model: Language
   return [{ role: 'user', content: `[Previous conversation summary]\n${summary}` }, ...recent]
 }
 
+/**
+ * Estimate total token count from messages using character length.
+ * This is intentionally conservative (over-counting) to serve as a safety net
+ * that fires before the real API limit is hit.
+ */
+function estimateTokenCount(messages: ModelMessage[]): number {
+  let chars = 0
+  for (const msg of messages) {
+    if (typeof msg.content === 'string') {
+      chars += msg.content.length
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content as Array<{ type: string; text?: string }>) {
+        if (typeof part.text === 'string') chars += part.text.length
+      }
+    }
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE)
+}
+
 /** Classify API error and return a user-friendly recovery message */
 function classifyApiError(err: unknown): { message: string; retryable: boolean } {
   const msg = err instanceof Error ? err.message : String(err)
-  const statusMatch = msg.match(/(\d{3})/)
+  // Extract HTTP status from patterns like "status code 400" or "(400)" or
+  // leading "400 " — avoid matching arbitrary numbers embedded in prose
+  // (e.g. "131072 tokens" previously mis-matched as status 131).
+  const statusMatch = msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
   const status = statusMatch ? Number(statusMatch[1]) : 0
 
+  // Context / token limit exceeded (400 from most providers)
+  if (msg.includes('maximum context length') || msg.includes('context_length_exceeded') || msg.includes('token limit')) {
+    return {
+      message: 'Context too long — the conversation exceeded the model\'s token limit. Try /compact to compress context, or /clear to start fresh.',
+      retryable: false,
+    }
+  }
   if (msg.includes('Missing `reasoning_content`') || msg.includes('reasoning_content')) {
     return {
       message:
@@ -291,6 +332,18 @@ function classifyApiError(err: unknown): { message: string; retryable: boolean }
     }
   }
   return { message: msg, retryable: false }
+}
+
+/** Silently consume all pending promises on a StreamResult to prevent
+ *  unhandled rejections after a stream error. The AI SDK's internal
+ *  flush() rejects these with NoOutputGeneratedError when no steps
+ *  completed — without draining them Node.js dumps the full error to stderr. */
+function drainStreamResult(result: StreamResult): void {
+  const noop = () => {}
+  Promise.resolve(result.response).catch(noop)
+  Promise.resolve(result.finishReason).catch(noop)
+  Promise.resolve(result.usage).catch(noop)
+  Promise.resolve(result.toolCalls).catch(noop)
 }
 
 /** Helper to push a tool result to state and notify the UI */
@@ -355,7 +408,7 @@ async function handleToolCalls(
 
     // ── Permission check for write tools and shell ──
     if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
-      const approved = await checkPermission({ toolName, input }, options.trustMode, callbacks.onAskPermission)
+      const approved = await checkPermission({ toolCallId, toolName, input }, options.trustMode, callbacks.onAskPermission)
 
       if (!approved) {
         pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
@@ -435,10 +488,14 @@ export async function agentLoop(
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
 
-    // Context compression check — driven by real input-token count from the
-    // previous turn, not a char-based estimate. Also saves session summary
-    // before compressing.
-    if (state.lastInputTokens > compressionThreshold) {
+    // ── Proactive context compression ──
+    // Two-tier check: real token count from previous turn (reliable) +
+    // character-based estimate (safety net for the first turn / big tool outputs).
+    const needsCompression =
+      state.lastInputTokens > compressionThreshold ||
+      estimateTokenCount(state.messages) > compressionThreshold
+
+    if (needsCompression && state.messages.length > KEEP_RECENT) {
       try {
         const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
           ...state.filesModified,
@@ -491,11 +548,35 @@ export async function agentLoop(
         }
       }
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const isContextTooLong =
+        errMsg.includes('maximum context length') ||
+        errMsg.includes('context_length_exceeded') ||
+        errMsg.includes('token limit') ||
+        errMsg.includes('prompt is too long') ||
+        errMsg.includes('prompt_too_long')
+
+      // Silently drain all pending AI SDK promises to prevent unhandled
+      // rejections. When the stream errors, the SDK's internal flush()
+      // rejects result.response / finishReason / usage / toolCalls with
+      // NoOutputGeneratedError — if nobody awaits them, Node prints the
+      // full error object to stderr.
+      drainStreamResult(result)
+
+      // ── Reactive compact: auto-compress and retry on context-too-long ──
+      // Mirrors Claude Code's reactiveCompact — when the proactive check
+      // under-estimates or a single turn pushes context past the limit,
+      // compress and re-attempt the same turn instead of giving up.
+      if (isContextTooLong && state.messages.length > KEEP_RECENT) {
+        state.messages = await compressMessages(state.messages, model)
+        state.lastInputTokens = 0
+        callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
+        state.turnCount-- // don't count the failed attempt
+        continue // retry the current turn with compressed context
+      }
+
       const classified = classifyApiError(err)
       callbacks.onError(new Error(classified.message))
-      if (!classified.retryable) break
-      // For retryable errors, AI SDK maxRetries already handles retry;
-      // if we still get here, the retries were exhausted — break
       break
     }
 
@@ -522,6 +603,7 @@ export async function agentLoop(
     } catch (err) {
       const classified = classifyApiError(err)
       callbacks.onError(new Error(classified.message))
+      drainStreamResult(result)
       break
     }
 

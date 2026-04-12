@@ -40,9 +40,9 @@ export function getPermissionLevel(toolName: string, input: PermissionInput): Pe
 
 /** Check permission with trust mode support */
 export async function checkPermission(
-  toolCall: { toolName: string; input: PermissionInput },
+  toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
   trustMode: boolean,
-  onAskPermission: (toolCall: { toolName: string; input: PermissionInput }) => Promise<boolean>,
+  onAskPermission: (toolCall: { toolCallId: string; toolName: string; input: PermissionInput }) => Promise<boolean>,
 ): Promise<boolean> {
   const level = getPermissionLevel(toolCall.toolName, toolCall.input)
   if (level === 'deny') return false

@@ -53,11 +53,13 @@ export interface PromptInputHandlers {
   onPaste: (content: string) => void
   /** Special keys. */
   onKey: (key: PromptKey) => void
+  /** Called on Ctrl+C — should trigger clean Ink unmount via useApp().exit(). */
+  onInterrupt: () => void
   /** Turn the listener on/off without unmounting the component. */
   enabled: boolean
 }
 
-export function usePromptInput({ onText, onPaste, onKey, enabled }: PromptInputHandlers): void {
+export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }: PromptInputHandlers): void {
   const { stdin, setRawMode } = useStdin()
 
   // Stash handlers in a ref so the effect doesn't re-subscribe on every
@@ -69,9 +71,9 @@ export function usePromptInput({ onText, onPaste, onKey, enabled }: PromptInputH
   // concurrent-mode rules — it could cause Strict Mode double-invocation
   // to see mismatched state. An effect with no dep array runs after every
   // commit, which is exactly the "latest value" semantics we want.
-  const handlersRef = useRef({ onText, onPaste, onKey })
+  const handlersRef = useRef({ onText, onPaste, onKey, onInterrupt })
   useEffect(() => {
-    handlersRef.current = { onText, onPaste, onKey }
+    handlersRef.current = { onText, onPaste, onKey, onInterrupt }
   })
 
   // Bracketed-paste state persists across stdin chunks so we can stitch a
@@ -141,10 +143,13 @@ export function usePromptInput({ onText, onPaste, onKey, enabled }: PromptInputH
       if (data === '\t') return dispatchKey('tab')
       if (data === '\x1b') return dispatchKey('escape')
 
-      // Ctrl+C — flush and raise SIGINT so the outer CLI handler cleans up.
+      // Ctrl+C — flush and call the interrupt handler (which triggers Ink's
+      // clean unmount via useApp().exit()). We do NOT send SIGINT because on
+      // Windows, signal-exit re-raises it after running callbacks, causing
+      // the process to exit with code 1 before our gracefulShutdown runs.
       if (data === '\x03') {
         flushPending()
-        process.kill(process.pid, 'SIGINT')
+        handlersRef.current.onInterrupt()
         return
       }
 
