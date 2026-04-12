@@ -253,11 +253,11 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
             <Box key={i}>
               <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
               {showCursorOnThisLine ? (
-                <Text>
-                  {line.slice(0, cursorCol)}
+                <>
+                  <Text>{line.slice(0, cursorCol)}</Text>
                   <Text inverse>{cursorCol < line.length ? line[cursorCol] : ' '}</Text>
-                  {cursorCol < line.length ? line.slice(cursorCol + 1) : ''}
-                </Text>
+                  {cursorCol < line.length && <Text>{line.slice(cursorCol + 1)}</Text>}
+                </>
               ) : (
                 <Text>{line}</Text>
               )}
