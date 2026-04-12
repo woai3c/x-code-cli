@@ -1,9 +1,10 @@
-// @x-code-cli/cli — User text input component with slash command completion
-// and Claude Code-style paste placeholders.
+// @x-code-cli/cli — User text input component with cursor navigation,
+// slash command completion, and Claude Code-style paste placeholders.
 //
 // Behavior:
 //   * Input box is a vertical textarea — it grows with line count, wraps
-//     long lines, and shows a cursor on the last line.
+//     long lines, and shows a cursor at the current position.
+//   * Left/right arrow keys move the cursor. Home/End jump to start/end.
 //   * Large pastes (>= 3 lines OR >= 400 chars) are stored in a map and
 //     displayed as `[Pasted text #N +M lines]`. Smaller pastes are inlined.
 //   * Backspace at the tail of a ref removes the whole ref atomically.
@@ -43,6 +44,18 @@ interface ChatInputProps {
 
 export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: ChatInputProps) {
   const [text, setText] = useState('')
+  const [cursor, setCursor] = useState(0)
+  // Synchronous cursor ref — used inside onText/onKey callbacks so that
+  // rapid keystrokes within the same render frame read the up-to-date
+  // position instead of a stale closure capture.
+  const cursorRef = useRef(0)
+  const syncCursor = (pos: number | ((prev: number) => number)) => {
+    setCursor((prev) => {
+      const next = typeof pos === 'function' ? pos(prev) : pos
+      cursorRef.current = next
+      return next
+    })
+  }
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
   const nextPasteIdRef = useRef(1)
@@ -74,6 +87,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     const expanded = expandPasteRefs(text, pastedContents)
     onSubmit(expanded)
     setText('')
+    syncCursor(0)
     setPastedContents({})
     setCompletionIndex(0)
   }
@@ -82,21 +96,26 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     enabled: !disabled,
     onInterrupt,
     onText: (chunk) => {
-      // Functional setState so rapid bursts (terminal keypress batching)
-      // concatenate correctly instead of racing on a stale closure.
-      setText((prev) => prev + chunk)
+      // Insert at cursor position (read from ref for accurate position)
+      const pos = cursorRef.current
+      setText((prev) => prev.slice(0, pos) + chunk + prev.slice(pos))
+      syncCursor(pos + chunk.length)
       setCompletionIndex(0)
     },
     onPaste: (content) => {
       const lineCount = content.split(/\r\n|\r|\n/).length
       const isLarge = lineCount >= PASTE_REF_MIN_LINES || content.length >= PASTE_REF_MIN_CHARS
+      const pos = cursorRef.current
 
       if (isLarge) {
         const id = nextPasteIdRef.current++
         setPastedContents((prev) => ({ ...prev, [id]: { id, content, lineCount } }))
-        setText((prev) => prev + formatPasteRef(id, lineCount))
+        const ref = formatPasteRef(id, lineCount)
+        setText((prev) => prev.slice(0, pos) + ref + prev.slice(pos))
+        syncCursor(pos + ref.length)
       } else {
-        setText((prev) => prev + content)
+        setText((prev) => prev.slice(0, pos) + content + prev.slice(pos))
+        syncCursor(pos + content.length)
       }
       setCompletionIndex(0)
     },
@@ -107,26 +126,62 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       }
 
       if (key === 'backspace') {
-        // Smart delete: if text ends with a paste ref, remove the whole ref.
+        const pos = cursorRef.current
+        if (pos === 0) return
+        // Smart delete: if a paste ref ends right before cursor, remove the whole ref.
         setText((prev) => {
-          const stripped = stripTrailingRef(prev)
+          const before = prev.slice(0, pos)
+          const stripped = stripTrailingRef(before)
           if (stripped) {
             setPastedContents((prevContents) => {
               const next = { ...prevContents }
               delete next[stripped.id]
               return next
             })
-            return stripped.without
+            const removed = before.length - stripped.without.length
+            syncCursor(pos - removed)
+            return stripped.without + prev.slice(pos)
           }
-          return prev.slice(0, -1)
+          syncCursor(pos - 1)
+          return prev.slice(0, pos - 1) + prev.slice(pos)
         })
         setCompletionIndex(0)
+        return
+      }
+
+      if (key === 'delete') {
+        const pos = cursorRef.current
+        setText((prev) => {
+          if (pos >= prev.length) return prev
+          return prev.slice(0, pos) + prev.slice(pos + 1)
+        })
+        return
+      }
+
+      if (key === 'left') {
+        syncCursor((prev) => Math.max(0, prev - 1))
+        return
+      }
+
+      if (key === 'right') {
+        syncCursor((prev) => Math.min(text.length, prev + 1))
+        return
+      }
+
+      if (key === 'home') {
+        syncCursor(0)
+        return
+      }
+
+      if (key === 'end') {
+        syncCursor(text.length)
         return
       }
 
       if (key === 'tab') {
         if (currentMatch) {
           setText(currentMatch.name)
+          syncCursor(currentMatch.name.length)
           setCompletionIndex(0)
         }
         return
@@ -164,6 +219,22 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   // Pad command names so descriptions line up nicely
   const maxNameLen = matches.reduce((max, c) => Math.max(max, c.name.length), 0)
 
+  // Compute which display line the cursor is on, and the offset within that line
+  let cursorLine = 0
+  let cursorCol = cursor
+  {
+    let charsSoFar = 0
+    for (let i = 0; i < rawLines.length; i++) {
+      const lineLen = rawLines[i].length
+      if (charsSoFar + lineLen >= cursor && cursor >= charsSoFar) {
+        cursorLine = i
+        cursorCol = cursor - charsSoFar
+        break
+      }
+      charsSoFar += lineLen + 1 // +1 for the '\n'
+    }
+  }
+
   return (
     <Box flexDirection="column">
       {/* Input box — framed by top + bottom rules (borderLeft/Right disabled),
@@ -177,12 +248,19 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         width="100%"
       >
         {displayLines.map((line, i) => {
-          const isLast = i === displayLines.length - 1
+          const showCursorOnThisLine = i === cursorLine && !overflow
           return (
             <Box key={i}>
               <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
-              <Text>{line}</Text>
-              {isLast && <Text dimColor>█</Text>}
+              {showCursorOnThisLine ? (
+                <Text>
+                  {line.slice(0, cursorCol)}
+                  <Text inverse>{cursorCol < line.length ? line[cursorCol] : ' '}</Text>
+                  {cursorCol < line.length ? line.slice(cursorCol + 1) : ''}
+                </Text>
+              ) : (
+                <Text>{line}</Text>
+              )}
             </Box>
           )
         })}
