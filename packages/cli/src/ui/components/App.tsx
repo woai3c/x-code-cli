@@ -1,7 +1,7 @@
 // @x-code-cli/cli — Root App component
 import React, { useEffect } from 'react'
 
-import { Box, Text, useApp } from 'ink'
+import { Box, Text, useApp, useStdout } from 'ink'
 
 import { MODEL_ALIASES, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code-cli/core'
 import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
@@ -46,6 +46,8 @@ const HELP_TEXT =
 
 export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpdate }: AppProps) {
   const { exit } = useApp()
+  const { stdout } = useStdout()
+  const termWidth = stdout?.columns ?? 80
   const {
     state,
     submit,
@@ -246,7 +248,7 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
           column 0. A parent paddingX causes Ink's Yoga layout to produce
           1-column jitter during repaints when content width changes (typing
           near wrap boundary, components mounting/unmounting). */}
-      <Box flexDirection="column">
+      <Box flexDirection="column" width={termWidth}>
         {/* Current tool call (in-progress) */}
         {state.currentToolCall && state.permissionQueue.length === 0 && (
           <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
