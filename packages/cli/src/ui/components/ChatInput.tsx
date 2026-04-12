@@ -26,6 +26,73 @@ import {
 } from '../paste-refs.js'
 import { ACCENT, PROMPT_BORDER } from '../theme.js'
 
+// ── CJK / full-width character width helpers ────────────────────────────
+// Needed for viewport slicing: Chinese/Japanese/Korean characters occupy
+// 2 terminal columns but count as 1 in String.prototype.slice().
+
+/** Check if a code point is a CJK / full-width character (2 terminal cells). */
+function isWide(cp: number): boolean {
+  return (
+    // CJK Unified Ideographs + Extension A
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    // CJK Compatibility Ideographs
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    // Hangul Syllables
+    (cp >= 0xac00 && cp <= 0xd7af) ||
+    // Full-width forms
+    (cp >= 0xff01 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    // CJK Extension B+
+    (cp >= 0x20000 && cp <= 0x2fa1f) ||
+    // Common CJK punctuation
+    (cp >= 0x3000 && cp <= 0x303f) ||
+    // Hiragana + Katakana
+    (cp >= 0x3040 && cp <= 0x30ff) ||
+    // Bopomofo
+    (cp >= 0x3100 && cp <= 0x312f) ||
+    // Enclosed CJK
+    (cp >= 0x3200 && cp <= 0x32ff) ||
+    // CJK Compatibility
+    (cp >= 0x3300 && cp <= 0x33ff)
+  )
+}
+
+/** Visual width of a string in terminal columns. */
+function visualWidth(str: string): number {
+  let w = 0
+  for (const ch of str) {
+    w += isWide(ch.codePointAt(0)!) ? 2 : 1
+  }
+  return w
+}
+
+/** Slice a string to fit within `maxCols` terminal columns.
+ *  Returns [sliced, charCount] where charCount is the number of JS characters consumed. */
+function sliceByWidth(str: string, maxCols: number): [string, number] {
+  let w = 0
+  let i = 0
+  for (const ch of str) {
+    const cw = isWide(ch.codePointAt(0)!) ? 2 : 1
+    if (w + cw > maxCols) break
+    w += cw
+    i += ch.length // handle surrogate pairs
+  }
+  return [str.slice(0, i), i]
+}
+
+/** Skip `skipCols` terminal columns, return the char index where the remainder starts. */
+function skipByWidth(str: string, skipCols: number): number {
+  let w = 0
+  let i = 0
+  for (const ch of str) {
+    if (w >= skipCols) break
+    w += isWide(ch.codePointAt(0)!) ? 2 : 1
+    i += ch.length
+  }
+  return i
+}
+
 // Pastes this big get stored as `[Pasted text #N …]` placeholders.
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -59,6 +126,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
   const nextPasteIdRef = useRef(1)
+  const lastEscRef = useRef(0)
 
   // ── Fuzzy matching: filter commands whose name contains the typed chars in order ──
   const matches = useMemo(() => {
@@ -152,6 +220,19 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     onKey: (key) => {
       if (key === 'return') {
         handleSubmit()
+        return
+      }
+
+      if (key === 'escape') {
+        const now = Date.now()
+        if (now - lastEscRef.current < 500 && text.length > 0) {
+          // Double-ESC: clear input
+          setText('')
+          syncCursor(0)
+          setPastedContents({})
+          setCompletionIndex(0)
+        }
+        lastEscRef.current = now
         return
       }
 
@@ -322,35 +403,62 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         {displayLines.map((line, i) => {
           const showCursorOnThisLine = i === cursorLine && cursorLine >= 0
 
-          // Apply viewport: if a line is longer than the terminal width,
+          // Apply viewport: if a line's visual width exceeds the terminal,
           // show a sliding window around the cursor so the visible text
-          // never wraps. This prevents Ink's log-update from
-          // miscounting visual lines and leaving border artifacts.
-          let visibleLine = line
-          let visibleCursorCol = cursorCol
+          // never wraps. Uses visual-width-aware slicing so CJK characters
+          // (2 columns each) are accounted for correctly.
+          const lineWidth = visualWidth(line)
+          let beforeCursor = ''
+          let cursorChar = ''
+          let afterCursor = ''
 
-          if (showCursorOnThisLine && line.length > viewportWidth) {
-            // Centre the viewport on the cursor, clamped to line bounds
-            let start = cursorCol - Math.floor(viewportWidth / 2)
-            start = Math.max(0, Math.min(start, line.length - viewportWidth))
-            visibleLine = line.slice(start, start + viewportWidth)
-            visibleCursorCol = cursorCol - start
-          } else if (!showCursorOnThisLine && line.length > viewportWidth) {
-            visibleLine = line.slice(0, viewportWidth)
+          if (showCursorOnThisLine) {
+            const before = line.slice(0, cursorCol)
+            const beforeWidth = visualWidth(before)
+            cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
+            const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
+
+            if (lineWidth <= viewportWidth) {
+              // Fits — render as-is
+              beforeCursor = before
+              afterCursor = after
+            } else {
+              // Viewport: centre on cursor
+              const halfVP = Math.floor(viewportWidth / 2)
+              let skipCols = Math.max(0, beforeWidth - halfVP)
+              // Don't skip past the end
+              const totalWidth = lineWidth + (cursorCol >= line.length ? 1 : 0)
+              if (skipCols + viewportWidth > totalWidth) {
+                skipCols = Math.max(0, totalWidth - viewportWidth)
+              }
+              const startIdx = skipByWidth(line, skipCols)
+              const visibleBefore = line.slice(startIdx, cursorCol)
+              const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
+              const remainingCols = viewportWidth - visualWidth(visibleBefore) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
+              const [visibleAfter] = sliceByWidth(line.slice(afterStart), Math.max(0, remainingCols))
+              beforeCursor = visibleBefore
+              afterCursor = visibleAfter
+            }
+          }
+
+          if (!showCursorOnThisLine) {
+            const [truncated] = lineWidth > viewportWidth
+              ? sliceByWidth(line, viewportWidth)
+              : [line]
+            return (
+              <Box key={i}>
+                <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
+                <Text>{truncated}</Text>
+              </Box>
+            )
           }
 
           return (
             <Box key={i}>
               <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
-              {showCursorOnThisLine ? (
-                <>
-                  <Text>{visibleLine.slice(0, visibleCursorCol)}</Text>
-                  <Text inverse>{visibleCursorCol < visibleLine.length ? visibleLine[visibleCursorCol] : ' '}</Text>
-                  {visibleCursorCol < visibleLine.length && <Text>{visibleLine.slice(visibleCursorCol + 1)}</Text>}
-                </>
-              ) : (
-                <Text>{visibleLine}</Text>
-              )}
+              <Text>{beforeCursor}</Text>
+              <Text inverse>{cursorChar}</Text>
+              {afterCursor.length > 0 && <Text>{afterCursor}</Text>}
             </Box>
           )
         })}
