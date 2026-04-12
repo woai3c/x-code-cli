@@ -15,7 +15,7 @@
 // fixes the Windows character-drop bug where large pastes arrived mangled.
 import React, { useMemo, useRef, useState } from 'react'
 
-import { Box, Text } from 'ink'
+import { Box, Text, useStdout } from 'ink'
 
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import {
@@ -198,18 +198,20 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     },
   })
 
+  const { stdout } = useStdout()
+  const termWidth = stdout?.columns ?? 80
+
   if (disabled) return null
 
-  // Hard cap on how tall the input box is allowed to get. Even if some
-  // upstream paste-detection failure lets a huge string land in `text`,
-  // the visible box is always bounded — we never let Ink's dynamic region
-  // grow beyond what the terminal can safely repaint.
+  // ── Viewport computation ──
+  // The prompt prefix "❯ " takes 2 chars. The border takes no horizontal
+  // space (borderLeft/Right disabled). We reserve 1 char for the cursor
+  // block when it's at end-of-line.
+  const PROMPT_WIDTH = 2
+  const viewportWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
+
   const MAX_VISIBLE_LINES = 6
 
-  // Multi-line rendering: split the full text by newlines and render one Box
-  // per row inside the bordered container. The container grows vertically
-  // with content automatically, up to MAX_VISIBLE_LINES. Anything beyond
-  // gets truncated with a trailing "… +N more" indicator.
   const rawLines = text.length === 0 ? [''] : text.split('\n')
   const overflow = rawLines.length > MAX_VISIBLE_LINES
   const displayLines = overflow
@@ -249,17 +251,35 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       >
         {displayLines.map((line, i) => {
           const showCursorOnThisLine = i === cursorLine && !overflow
+
+          // Apply viewport: if a line is longer than the terminal width,
+          // show a sliding window around the cursor so the visible text
+          // never wraps. This prevents Ink's log-update from
+          // miscounting visual lines and leaving border artifacts.
+          let visibleLine = line
+          let visibleCursorCol = cursorCol
+
+          if (showCursorOnThisLine && line.length > viewportWidth) {
+            // Centre the viewport on the cursor, clamped to line bounds
+            let start = cursorCol - Math.floor(viewportWidth / 2)
+            start = Math.max(0, Math.min(start, line.length - viewportWidth))
+            visibleLine = line.slice(start, start + viewportWidth)
+            visibleCursorCol = cursorCol - start
+          } else if (!showCursorOnThisLine && line.length > viewportWidth) {
+            visibleLine = line.slice(0, viewportWidth)
+          }
+
           return (
             <Box key={i}>
               <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
               {showCursorOnThisLine ? (
                 <>
-                  <Text>{line.slice(0, cursorCol)}</Text>
-                  <Text inverse>{cursorCol < line.length ? line[cursorCol] : ' '}</Text>
-                  {cursorCol < line.length && <Text>{line.slice(cursorCol + 1)}</Text>}
+                  <Text>{visibleLine.slice(0, visibleCursorCol)}</Text>
+                  <Text inverse>{visibleCursorCol < visibleLine.length ? visibleLine[visibleCursorCol] : ' '}</Text>
+                  {visibleCursorCol < visibleLine.length && <Text>{visibleLine.slice(visibleCursorCol + 1)}</Text>}
                 </>
               ) : (
-                <Text>{line}</Text>
+                <Text>{visibleLine}</Text>
               )}
             </Box>
           )
