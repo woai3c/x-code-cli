@@ -395,7 +395,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const separator = '─'.repeat(Math.max(0, termWidth - 1))
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width={termWidth}>
       <Text color={PROMPT_BORDER}>{separator}</Text>
       {displayLines.map((line, i) => {
         const showCursorOnThisLine = i === cursorLine && cursorLine >= 0
