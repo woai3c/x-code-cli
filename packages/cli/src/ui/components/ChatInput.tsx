@@ -2,24 +2,17 @@
 // slash command completion, and Claude Code-style paste placeholders.
 //
 // RENDERING STRATEGY:
-//   The input box is rendered **directly to stdout** via ANSI escape codes,
-//   bypassing Ink's Yoga layout + log-update pipeline. This eliminates the
-//   CJK jitter bug: standard Ink miscounts visual line heights because its
-//   Yoga layout doesn't account for double-width CJK characters, so
-//   log-update clears the wrong number of lines on each repaint.
-//
-//   By writing ANSI ourselves we control exactly how many lines to clear
-//   (a fixed count we track), achieving the same stability as Claude Code's
-//   custom Ink fork (cell-level screen buffer + CJK stringWidth) without
-//   forking Ink.
-//
-//   The component returns null to Ink — the dynamic region is kept empty
-//   (or minimal) so Ink never miscounts.
+//   The input box is pre-rendered into a single ANSI string (via chalk),
+//   then handed to Ink as ONE <Text> node. Ink's Yoga layout sees it as
+//   an opaque blob — no per-character width measurement, no multi-node
+//   flex calculation. This avoids the CJK jitter bug where Yoga
+//   miscounts double-width characters, causing log-update to clear the
+//   wrong number of lines on each repaint.
 import { Chalk } from 'chalk'
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
 
-import { useStdout } from 'ink'
+import { Text, useStdout } from 'ink'
 
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import {
@@ -119,7 +112,6 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const [completionIndex, setCompletionIndex] = useState(0)
   const nextPasteIdRef = useRef(1)
   const lastEscRef = useRef(0)
-  const prevLinesWrittenRef = useRef(0)
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
@@ -207,10 +199,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       if (key === 'escape') {
         const now = Date.now()
         if (now - lastEscRef.current < 500 && text.length > 0) {
-          setText('')
-          syncCursor(0)
-          setPastedContents({})
-          setCompletionIndex(0)
+          setText(''); syncCursor(0); setPastedContents({}); setCompletionIndex(0)
         }
         lastEscRef.current = now
         return
@@ -223,13 +212,8 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
           const before = prev.slice(0, pos)
           const stripped = stripTrailingRef(before)
           if (stripped) {
-            setPastedContents((prevContents) => {
-              const next = { ...prevContents }
-              delete next[stripped.id]
-              return next
-            })
-            const removed = before.length - stripped.without.length
-            syncCursor(pos - removed)
+            setPastedContents((pc) => { const n = { ...pc }; delete n[stripped.id]; return n })
+            syncCursor(pos - (before.length - stripped.without.length))
             return stripped.without + prev.slice(pos)
           }
           syncCursor(pos - 1)
@@ -269,144 +253,108 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     },
   })
 
-  // ── Direct ANSI rendering (bypasses Ink's Yoga/log-update) ──
+  // ── Pre-render to a single ANSI string ──
 
-  useLayoutEffect(() => {
-    if (disabled) {
-      // Clear any previously drawn input lines
-      if (prevLinesWrittenRef.current > 0) {
-        const up = `\x1b[${prevLinesWrittenRef.current}A`
-        const clear = (`\x1b[2K\n`).repeat(prevLinesWrittenRef.current)
-        process.stdout.write(up + clear + `\x1b[${prevLinesWrittenRef.current}A`)
-        prevLinesWrittenRef.current = 0
+  if (disabled) return null
+
+  const PROMPT_WIDTH = 2
+  const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
+  const separator = c.hex(PROMPT_BORDER)('─'.repeat(Math.max(0, termWidth - 1)))
+
+  const rawLines = text.length === 0 ? [''] : text.split('\n')
+
+  // Cursor position in rawLines
+  let rawCursorLine = 0
+  let cursorCol = cursor
+  {
+    let charsSoFar = 0
+    for (let i = 0; i < rawLines.length; i++) {
+      const lineLen = rawLines[i].length
+      if (charsSoFar + lineLen >= cursor && cursor >= charsSoFar) {
+        rawCursorLine = i
+        cursorCol = cursor - charsSoFar
+        break
       }
-      return
+      charsSoFar += lineLen + 1
     }
+  }
 
-    const PROMPT_WIDTH = 2
-    const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
-    const separator = c.hex(PROMPT_BORDER)('─'.repeat(Math.max(0, termWidth - 1)))
-
-    const rawLines = text.length === 0 ? [''] : text.split('\n')
-
-    // Cursor position in rawLines
-    let rawCursorLine = 0
-    let cursorCol = cursor
-    {
-      let charsSoFar = 0
-      for (let i = 0; i < rawLines.length; i++) {
-        const lineLen = rawLines[i].length
-        if (charsSoFar + lineLen >= cursor && cursor >= charsSoFar) {
-          rawCursorLine = i
-          cursorCol = cursor - charsSoFar
-          break
-        }
-        charsSoFar += lineLen + 1
-      }
+  // Display lines window
+  let displayLines: string[]
+  let cursorLine: number
+  if (rawLines.length <= MAX_VISIBLE_LINES) {
+    displayLines = rawLines
+    cursorLine = rawCursorLine
+  } else {
+    let start = rawCursorLine - Math.floor(MAX_VISIBLE_LINES / 2)
+    start = Math.max(0, Math.min(start, rawLines.length - MAX_VISIBLE_LINES))
+    displayLines = rawLines.slice(start, start + MAX_VISIBLE_LINES)
+    cursorLine = rawCursorLine - start
+    if (start > 0) {
+      displayLines[0] = `… (+${start} lines above)`
+      if (cursorLine === 0) cursorLine = -1
     }
-
-    // Display lines window
-    let displayLines: string[]
-    let cursorLine: number
-    if (rawLines.length <= MAX_VISIBLE_LINES) {
-      displayLines = rawLines
-      cursorLine = rawCursorLine
-    } else {
-      let start = rawCursorLine - Math.floor(MAX_VISIBLE_LINES / 2)
-      start = Math.max(0, Math.min(start, rawLines.length - MAX_VISIBLE_LINES))
-      displayLines = rawLines.slice(start, start + MAX_VISIBLE_LINES)
-      cursorLine = rawCursorLine - start
-      if (start > 0) {
-        displayLines[0] = `… (+${start} lines above)`
-        if (cursorLine === 0) cursorLine = -1
-      }
-      if (start + MAX_VISIBLE_LINES < rawLines.length) {
-        const hidden = rawLines.length - start - MAX_VISIBLE_LINES
-        displayLines[displayLines.length - 1] = `… (+${hidden} lines below)`
-        if (cursorLine === displayLines.length - 1) cursorLine = -1
-      }
+    if (start + MAX_VISIBLE_LINES < rawLines.length) {
+      const hidden = rawLines.length - start - MAX_VISIBLE_LINES
+      displayLines[displayLines.length - 1] = `… (+${hidden} lines below)`
+      if (cursorLine === displayLines.length - 1) cursorLine = -1
     }
+  }
 
-    // Build content lines
-    const outputLines: string[] = [separator]
+  // Build output lines
+  const outputLines: string[] = [separator]
 
-    for (let i = 0; i < displayLines.length; i++) {
-      const line = displayLines[i]
-      const prompt = c.hex(PROMPT_BORDER)(i === 0 ? '> ' : '  ')
-      const showCursor = i === cursorLine && cursorLine >= 0
+  for (let i = 0; i < displayLines.length; i++) {
+    const line = displayLines[i]
+    const prompt = c.hex(PROMPT_BORDER)(i === 0 ? '> ' : '  ')
+    const showCursor = i === cursorLine && cursorLine >= 0
 
-      if (!showCursor) {
-        const lw = visualWidth(line)
-        const [truncated] = lw > vpWidth ? sliceByWidth(line, vpWidth) : [line]
-        outputLines.push(prompt + truncated)
-        continue
-      }
-
-      // Viewport + cursor rendering
+    if (!showCursor) {
       const lw = visualWidth(line)
-      const before = line.slice(0, cursorCol)
-      const cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
-      const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
-
-      if (lw <= vpWidth) {
-        outputLines.push(prompt + before + c.inverse(cursorChar) + after)
-      } else {
-        const beforeWidth = visualWidth(before)
-        const halfVP = Math.floor(vpWidth / 2)
-        let skipCols = Math.max(0, beforeWidth - halfVP)
-        const totalWidth = lw + (cursorCol >= line.length ? 1 : 0)
-        if (skipCols + vpWidth > totalWidth) skipCols = Math.max(0, totalWidth - vpWidth)
-        const startIdx = skipByWidth(line, skipCols)
-        const visibleBefore = line.slice(startIdx, cursorCol)
-        const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
-        const remainingCols = vpWidth - visualWidth(visibleBefore) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
-        const [visibleAfter] = sliceByWidth(line.slice(afterStart), Math.max(0, remainingCols))
-        outputLines.push(prompt + visibleBefore + c.inverse(cursorChar) + visibleAfter)
-      }
+      const [truncated] = lw > vpWidth ? sliceByWidth(line, vpWidth) : [line]
+      outputLines.push(prompt + truncated)
+      continue
     }
 
-    outputLines.push(separator)
+    const before = line.slice(0, cursorCol)
+    const cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
+    const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
+    const lw = visualWidth(line)
 
-    // Completion suggestions
-    if (matches.length > 0) {
-      const maxNameLen = matches.reduce((max, cmd) => Math.max(max, cmd.name.length), 0)
-      for (let i = 0; i < matches.length; i++) {
-        const cmd = matches[i]
-        const sel = i === safeIndex
-        const name = sel ? c.hex(ACCENT).bold(cmd.name.padEnd(maxNameLen + 2)) : c.gray(cmd.name.padEnd(maxNameLen + 2))
-        const desc = sel ? cmd.description : c.gray(cmd.description)
-        outputLines.push('  ' + name + desc)
-      }
+    if (lw <= vpWidth) {
+      outputLines.push(prompt + before + c.inverse(cursorChar) + after)
+    } else {
+      const beforeWidth = visualWidth(before)
+      const halfVP = Math.floor(vpWidth / 2)
+      let skipCols = Math.max(0, beforeWidth - halfVP)
+      const totalWidth = lw + (cursorCol >= line.length ? 1 : 0)
+      if (skipCols + vpWidth > totalWidth) skipCols = Math.max(0, totalWidth - vpWidth)
+      const startIdx = skipByWidth(line, skipCols)
+      const visibleBefore = line.slice(startIdx, cursorCol)
+      const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
+      const remainingCols = vpWidth - visualWidth(visibleBefore) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
+      const [visibleAfter] = sliceByWidth(line.slice(afterStart), Math.max(0, remainingCols))
+      outputLines.push(prompt + visibleBefore + c.inverse(cursorChar) + visibleAfter)
     }
+  }
 
-    // Clear previous frame, write new frame
-    const prev = prevLinesWrittenRef.current
-    const newLineCount = outputLines.length
+  outputLines.push(separator)
 
-    let ansi = ''
-    // Move up to start of previous frame
-    if (prev > 0) {
-      ansi += `\x1b[${prev}A\r`
+  // Completion suggestions
+  if (matches.length > 0) {
+    const maxNameLen = matches.reduce((max, cmd) => Math.max(max, cmd.name.length), 0)
+    for (let i = 0; i < matches.length; i++) {
+      const cmd = matches[i]
+      const sel = i === safeIndex
+      const name = sel ? c.hex(ACCENT).bold(cmd.name.padEnd(maxNameLen + 2)) : c.gray(cmd.name.padEnd(maxNameLen + 2))
+      const desc = sel ? cmd.description : c.gray(cmd.description)
+      outputLines.push('  ' + name + desc)
     }
-    // Write each line: clear line + content + newline
-    for (let i = 0; i < newLineCount; i++) {
-      ansi += `\x1b[2K${outputLines[i]}\n`
-    }
-    // Clear any leftover lines from a taller previous frame
-    for (let i = newLineCount; i < prev; i++) {
-      ansi += `\x1b[2K\n`
-    }
-    // Move cursor back to the end of our output (after last newline)
-    const extraCleared = Math.max(0, prev - newLineCount)
-    if (extraCleared > 0) {
-      ansi += `\x1b[${extraCleared}A`
-    }
+  }
 
-    process.stdout.write(ansi)
-    prevLinesWrittenRef.current = newLineCount
-  })
+  // Single pre-rendered string — Ink sees ONE <Text> node,
+  // Yoga has no per-character width to miscalculate.
+  const rendered = outputLines.join('\n')
 
-  // Return null — input box is rendered directly to stdout above.
-  // Ink's dynamic region stays empty, so log-update has nothing to miscount.
-  return null
+  return <Text>{rendered}</Text>
 }
