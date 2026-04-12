@@ -392,7 +392,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   // of using Ink's borderStyle because Yoga's width calculation doesn't
   // account for CJK / ambiguous-width characters, causing the border to
   // jitter on every re-render when the content contains such characters.
-  const separator = '─'.repeat(termWidth)
+  const separator = '─'.repeat(Math.max(0, termWidth - 1))
 
   return (
     <Box flexDirection="column">

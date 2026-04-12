@@ -95,7 +95,7 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
 
   // Manual separator — avoids Ink border Box which causes Yoga width
   // jitter with CJK/ambiguous-width characters.
-  const separator = '─'.repeat(termWidth)
+  const separator = '─'.repeat(Math.max(0, termWidth - 1))
 
   return (
     <Box flexDirection="column">
