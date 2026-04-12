@@ -388,81 +388,78 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   // Pad command names so descriptions line up nicely
   const maxNameLen = matches.reduce((max, c) => Math.max(max, c.name.length), 0)
 
+  // Pre-render a fixed-width separator line. We draw it ourselves instead
+  // of using Ink's borderStyle because Yoga's width calculation doesn't
+  // account for CJK / ambiguous-width characters, causing the border to
+  // jitter on every re-render when the content contains such characters.
+  const separator = '─'.repeat(termWidth)
+
   return (
     <Box flexDirection="column">
-      {/* Input box — framed by top + bottom rules (borderLeft/Right disabled),
-          matching the Claude Code PromptInput visual. */}
-      <Box
-        borderStyle="round"
-        borderLeft={false}
-        borderRight={false}
-        borderColor={PROMPT_BORDER}
-        flexDirection="column"
-        width="100%"
-      >
-        {displayLines.map((line, i) => {
-          const showCursorOnThisLine = i === cursorLine && cursorLine >= 0
+      <Text color={PROMPT_BORDER}>{separator}</Text>
+      {displayLines.map((line, i) => {
+        const showCursorOnThisLine = i === cursorLine && cursorLine >= 0
 
-          // Apply viewport: if a line's visual width exceeds the terminal,
-          // show a sliding window around the cursor so the visible text
-          // never wraps. Uses visual-width-aware slicing so CJK characters
-          // (2 columns each) are accounted for correctly.
-          const lineWidth = visualWidth(line)
-          let beforeCursor = ''
-          let cursorChar = ''
-          let afterCursor = ''
+        // Apply viewport: if a line's visual width exceeds the terminal,
+        // show a sliding window around the cursor so the visible text
+        // never wraps. Uses visual-width-aware slicing so CJK characters
+        // (2 columns each) are accounted for correctly.
+        const lineWidth = visualWidth(line)
+        let beforeCursor = ''
+        let cursorChar = ''
+        let afterCursor = ''
 
-          if (showCursorOnThisLine) {
-            const before = line.slice(0, cursorCol)
-            const beforeWidth = visualWidth(before)
-            cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
-            const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
+        if (showCursorOnThisLine) {
+          const before = line.slice(0, cursorCol)
+          const beforeWidth = visualWidth(before)
+          cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
+          const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
 
-            if (lineWidth <= viewportWidth) {
-              // Fits — render as-is
-              beforeCursor = before
-              afterCursor = after
-            } else {
-              // Viewport: centre on cursor
-              const halfVP = Math.floor(viewportWidth / 2)
-              let skipCols = Math.max(0, beforeWidth - halfVP)
-              // Don't skip past the end
-              const totalWidth = lineWidth + (cursorCol >= line.length ? 1 : 0)
-              if (skipCols + viewportWidth > totalWidth) {
-                skipCols = Math.max(0, totalWidth - viewportWidth)
-              }
-              const startIdx = skipByWidth(line, skipCols)
-              const visibleBefore = line.slice(startIdx, cursorCol)
-              const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
-              const remainingCols = viewportWidth - visualWidth(visibleBefore) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
-              const [visibleAfter] = sliceByWidth(line.slice(afterStart), Math.max(0, remainingCols))
-              beforeCursor = visibleBefore
-              afterCursor = visibleAfter
+          if (lineWidth <= viewportWidth) {
+            // Fits — render as-is
+            beforeCursor = before
+            afterCursor = after
+          } else {
+            // Viewport: centre on cursor
+            const halfVP = Math.floor(viewportWidth / 2)
+            let skipCols = Math.max(0, beforeWidth - halfVP)
+            // Don't skip past the end
+            const totalWidth = lineWidth + (cursorCol >= line.length ? 1 : 0)
+            if (skipCols + viewportWidth > totalWidth) {
+              skipCols = Math.max(0, totalWidth - viewportWidth)
             }
+            const startIdx = skipByWidth(line, skipCols)
+            const visibleBefore = line.slice(startIdx, cursorCol)
+            const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
+            const remainingCols = viewportWidth - visualWidth(visibleBefore) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
+            const [visibleAfter] = sliceByWidth(line.slice(afterStart), Math.max(0, remainingCols))
+            beforeCursor = visibleBefore
+            afterCursor = visibleAfter
           }
+        }
 
-          if (!showCursorOnThisLine) {
-            const [truncated] = lineWidth > viewportWidth
-              ? sliceByWidth(line, viewportWidth)
-              : [line]
-            return (
-              <Box key={i}>
-                <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
-                <Text>{truncated}</Text>
-              </Box>
-            )
-          }
-
+        if (!showCursorOnThisLine) {
+          const [truncated] = lineWidth > viewportWidth
+            ? sliceByWidth(line, viewportWidth)
+            : [line]
           return (
             <Box key={i}>
-              <Text color={PROMPT_BORDER}>{i === 0 ? '❯ ' : '  '}</Text>
-              <Text>{beforeCursor}</Text>
-              <Text inverse>{cursorChar}</Text>
-              {afterCursor.length > 0 && <Text>{afterCursor}</Text>}
+              <Text color={PROMPT_BORDER}>{i === 0 ? '> ' : '  '}</Text>
+              <Text>{truncated}</Text>
             </Box>
           )
-        })}
-      </Box>
+        }
+
+        return (
+          <Box key={i}>
+            <Text color={PROMPT_BORDER}>{i === 0 ? '> ' : '  '}</Text>
+            <Text>{beforeCursor}</Text>
+            <Text inverse>{cursorChar}</Text>
+            {afterCursor.length > 0 && <Text>{afterCursor}</Text>}
+          </Box>
+        )
+      })}
+      <Text color={PROMPT_BORDER}>{separator}</Text>
 
       {/* Completion suggestions — rendered BELOW the input (like Claude Code) */}
       {matches.length > 0 && (
