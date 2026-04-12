@@ -31,28 +31,54 @@ export function printExitSummary(): void {
   )
 }
 
-// ── Synchronized Updates (DEC 2026) ─────────────────────────────────────
-// Wrap all stdout writes in BSU/ESU so the terminal renders each frame
-// atomically — no intermediate "cleared but not yet repainted" state is
-// visible. This is the same technique Claude Code uses in its custom Ink
-// fork (terminal.ts writeDiffToTerminal).
+// ── Patch Ink's log-update to fix CJK line-count miscalculation ──────────
 //
-// Supported: Windows Terminal, iTerm2, kitty, WezTerm, VS Code terminal,
-// foot, and most modern terminals. Unsupported terminals silently ignore
-// the escape sequences.
-const BSU = '\x1b[?2026h' // Begin Synchronized Update
-const ESU = '\x1b[?2026l' // End Synchronized Update
+// Standard Ink's log-update uses `eraseLines(previousLineCount)` to clear
+// the previous frame, where previousLineCount = output.split('\n').length.
+// This counts LOGICAL newlines, not VISUAL lines. When CJK characters
+// (2 terminal columns each) cause a line to wrap, the visual line count
+// is higher than the logical count. eraseLines clears too few lines,
+// leaving stale content → visible jitter.
+//
+// Claude Code fixes this in its custom Ink fork with a cell-level screen
+// buffer. We take a simpler approach: replace eraseLines(N) with
+// "move cursor up N-1 lines, then erase from cursor to end of screen"
+// (CSI J). This clears EVERYTHING below the cursor regardless of how
+// many visual lines the terminal actually used. The only requirement is
+// that nothing important exists below the dynamic region — which is true
+// because the dynamic region is always at the bottom of the terminal.
+//
+// Also wraps output in BSU/ESU (DEC 2026 Synchronized Updates) for
+// atomic rendering on supported terminals.
+const BSU = '\x1b[?2026h'
+const ESU = '\x1b[?2026l'
 
-function enableSynchronizedOutput(): () => void {
+function patchStdoutForCJK(): () => void {
   const origWrite = process.stdout.write
+  // Match Ink's eraseLines pattern: \x1b[1A\x1b[2K repeated N times
+  // (cursor up 1 + erase line, repeated for each line to clear)
+  const erasePattern = /^(\x1b\[1A\x1b\[2K)+/
+
   process.stdout.write = function (
     data: string | Uint8Array,
     ...args: unknown[]
   ): boolean {
-    // Only wrap string writes that contain ANSI escapes (Ink render frames).
-    // Raw text (user messages via write()) passes through unwrapped.
-    if (typeof data === 'string' && data.includes('\x1b[')) {
-      return origWrite.call(process.stdout, BSU + data + ESU, ...args as [])
+    if (typeof data === 'string') {
+      const match = data.match(erasePattern)
+      if (match) {
+        // Count how many lines the original eraseLines wanted to clear
+        const lineCount = match[0].length / 8 // each "\x1b[1A\x1b[2K" = 8 chars
+        // Replace with: move up (lineCount) lines + erase to end of screen
+        // This clears all visual lines regardless of CJK wrapping
+        const moveUp = lineCount > 0 ? `\x1b[${lineCount}A` : ''
+        const eraseBelow = '\x1b[0J' // Erase from cursor to end of screen
+        const rest = data.slice(match[0].length)
+        return origWrite.call(process.stdout, BSU + moveUp + eraseBelow + rest + ESU, ...args as [])
+      }
+      // Non-erase writes: just wrap in BSU/ESU if they contain ANSI
+      if (data.includes('\x1b[')) {
+        return origWrite.call(process.stdout, BSU + data + ESU, ...args as [])
+      }
     }
     return origWrite.call(process.stdout, data, ...args as [])
   } as typeof process.stdout.write
@@ -65,8 +91,8 @@ export function startApp(model: LanguageModel, options: AgentOptions, initialPro
   // Print header ONCE before Ink starts — avoids Static re-render duplication
   printHeader(options.modelId)
 
-  // Enable synchronized output BEFORE Ink starts rendering
-  const disableSyncOutput = enableSynchronizedOutput()
+  // Patch stdout BEFORE Ink starts rendering
+  const restoreStdout = patchStdoutForCJK()
 
   const { waitUntilExit } = render(
     <App
@@ -85,6 +111,6 @@ export function startApp(model: LanguageModel, options: AgentOptions, initialPro
   )
   return async () => {
     await waitUntilExit()
-    disableSyncOutput()
+    restoreStdout()
   }
 }
