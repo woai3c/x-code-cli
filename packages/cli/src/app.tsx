@@ -87,12 +87,13 @@ function patchStdoutForCJK(): () => void {
         pos += CURSOR_COL1.length
       }
 
-      // Replace eraseLines with: move up N-1 lines + erase to end of screen.
+      // Replace eraseLines with: move up N-1 lines + column 0 + erase below.
       // \x1b[0J clears all visual lines below regardless of CJK wrapping.
+      // \r (CR) ensures cursor is at column 0 — the original eraseLines
+      // ended with \x1b[G (cursor to column 1) for this purpose.
       const moveUp = lineCount > 1 ? `\x1b[${lineCount - 1}A` : ''
-      const eraseBelow = '\x1b[0J'
       const rest = data.slice(pos)
-      return origWrite.call(process.stdout, BSU + moveUp + eraseBelow + rest + ESU, ...args as [])
+      return origWrite.call(process.stdout, BSU + moveUp + '\r\x1b[0J' + rest + ESU, ...args as [])
     }
     // Non-erase writes: wrap in BSU/ESU if they contain ANSI
     if (typeof data === 'string' && data.includes('\x1b[')) {
