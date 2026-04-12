@@ -29,7 +29,7 @@ import { GLOBAL_XCODE_DIR } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderMarkdown } from './render-markdown.js'
-import { ACCENT_DIM, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
+import { ACCENT_DIM, BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
 import { getToolInputPreview, getToolLabel, getToolResultSummary } from './tool-display.js'
 
 const c = new Chalk({ level: 3 })
@@ -91,7 +91,7 @@ function formatToolCall(tc: DisplayToolCall): string {
   const durationStr = tc.durationMs != null ? formatDuration(tc.durationMs) : null
 
   const dotColor = isDenied ? ERROR : SUCCESS
-  const previewSuffix = inputPreview ? c.hex(ACCENT_DIM)(`(${inputPreview})`) : ''
+  const previewSuffix = inputPreview ? c.hex(BLUE_PURPLE)(`(${inputPreview})`) : ''
   const line1 = ` ${c.hex(dotColor)('●')} ${c.bold(label)}${previewSuffix}`
 
   if (!resultSummary) return line1

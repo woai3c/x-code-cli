@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react'
 
 import { Box, Text } from 'ink'
 
-import { ACCENT, DIM, WARNING } from '../theme.js'
+import { ACCENT, BLUE_PURPLE, DIM, WARNING } from '../theme.js'
 import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -41,7 +41,7 @@ export function ToolCall({ toolName, input }: ToolCallProps) {
       <Text>
         <Text color={WARNING}>{'● '}</Text>
         <Text bold>{label}</Text>
-        <Text dimColor>({inputPreview})</Text>
+        <Text color={BLUE_PURPLE}>({inputPreview})</Text>
       </Text>
       <Text>
         <Text color={DIM}>{'  ⎿  '}</Text>

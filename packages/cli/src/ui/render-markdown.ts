@@ -33,8 +33,12 @@ marked.use({
 })
 
 // ── Theme colours (keep in sync with theme.ts) ──
-const ACCENT = '#d77757'
-const WARNING = '#ffc107'
+const HEADING = '#d77757' // Claude orange — h1 headings
+const CODE_INLINE = '#b1b9f9' // Blue-purple — inline code spans
+const CODE_BLOCK = '#b1b9f9' // Blue-purple — fenced code blocks
+const CODE_LANG = '#999999' // Muted gray — language label
+const LINK = '#93a5ff' // Spinner blue — links
+const BLOCKQUOTE = '#888888' // Prompt border gray — blockquotes
 
 // Newline constant for joining blocks
 const NL = '\n'
@@ -59,9 +63,9 @@ function renderToken(
       const content = renderTokens(token.tokens ?? [], depth)
       switch (token.depth) {
         case 1:
-          return c.hex(ACCENT).bold.underline(content) + NL
+          return c.hex(HEADING).bold.underline(content) + NL
         case 2:
-          return c.bold(content) + NL
+          return c.hex(HEADING).bold(content) + NL
         default:
           return c.bold(content) + NL
       }
@@ -74,21 +78,20 @@ function renderToken(
 
     case 'blockquote': {
       const content = renderTokens(token.tokens ?? [], depth)
-      // Indent each line with a dim vertical bar
       return (
         content
           .split(NL)
-          .map((line) => (line.trim() ? c.dim.italic(`  │ ${line}`) : ''))
+          .map((line) => (line.trim() ? c.hex(BLOCKQUOTE).italic(`  │ ${line}`) : ''))
           .filter(Boolean)
           .join(NL) + NL
       )
     }
 
     case 'code': {
-      const langLabel = token.lang ? c.dim(`  [${token.lang}]`) : ''
+      const langLabel = token.lang ? c.hex(CODE_LANG)(`  [${token.lang}]`) : ''
       const codeLines = (token.text ?? '')
         .split(NL)
-        .map((line: string) => `  ${c.hex(WARNING)(line)}`)
+        .map((line: string) => `  ${c.hex(CODE_BLOCK)(line)}`)
         .join(NL)
       return (langLabel ? langLabel + NL : '') + codeLines + NL
     }
@@ -194,7 +197,7 @@ function renderToken(
       return c.italic(renderTokens(token.tokens ?? [], depth))
 
     case 'codespan':
-      return c.hex(ACCENT)(token.text ?? '')
+      return c.hex(CODE_INLINE)(token.text ?? '')
 
     case 'br':
       return NL
@@ -206,7 +209,7 @@ function renderToken(
       if (token.href?.startsWith('mailto:')) {
         return token.href.replace(/^mailto:/, '')
       }
-      return `${c.hex(ACCENT).underline(renderTokens(token.tokens ?? [], depth))} (${c.dim(token.href ?? '')})`
+      return `${c.hex(LINK).underline(renderTokens(token.tokens ?? [], depth))} (${c.dim(token.href ?? '')})`
 
     case 'image':
       return token.text || token.href || '[image]'
