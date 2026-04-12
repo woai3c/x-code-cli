@@ -42,7 +42,7 @@ const HELP_TEXT =
   `X-Code CLI v${VERSION}\n\n` +
   SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
   `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
-  `\nKeyboard: Ctrl+C to abort current operation`
+  `\nKeyboard: ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} to abort current operation`
 
 export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpdate }: AppProps) {
   const { exit } = useApp()

@@ -54,7 +54,7 @@ export function printHeader(modelId: string): void {
   const lines = [
     c.hex(LOGO_COLOR).bold(logo),
     ` ${c.dim(`v${VERSION}`)} ${c.dim('│')} ${c.hex(LOGO_COLOR)(provider)} ${c.dim('/')} ${c.hex(LOGO_COLOR).bold(modelName)}`,
-    ` ${c.dim('Type /help for commands, Ctrl+C to abort')}`,
+    ` ${c.dim(`Type /help for commands, ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} to abort`)}`,
     '', // blank line after header
   ]
 

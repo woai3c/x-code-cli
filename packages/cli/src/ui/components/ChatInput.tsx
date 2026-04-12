@@ -201,6 +201,8 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
 
+  // Don't return null here — hooks above must always run in the same order.
+  // Instead, render nothing visible when disabled.
   if (disabled) return null
 
   // ── Viewport computation ──
@@ -213,29 +215,51 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const MAX_VISIBLE_LINES = 6
 
   const rawLines = text.length === 0 ? [''] : text.split('\n')
-  const overflow = rawLines.length > MAX_VISIBLE_LINES
-  const displayLines = overflow
-    ? [...rawLines.slice(0, MAX_VISIBLE_LINES - 1), `… +${rawLines.length - (MAX_VISIBLE_LINES - 1)} more lines`]
-    : rawLines
 
-  // Pad command names so descriptions line up nicely
-  const maxNameLen = matches.reduce((max, c) => Math.max(max, c.name.length), 0)
-
-  // Compute which display line the cursor is on, and the offset within that line
-  let cursorLine = 0
+  // Compute which raw line the cursor is on, and the offset within that line
+  let rawCursorLine = 0
   let cursorCol = cursor
   {
     let charsSoFar = 0
     for (let i = 0; i < rawLines.length; i++) {
       const lineLen = rawLines[i].length
       if (charsSoFar + lineLen >= cursor && cursor >= charsSoFar) {
-        cursorLine = i
+        rawCursorLine = i
         cursorCol = cursor - charsSoFar
         break
       }
       charsSoFar += lineLen + 1 // +1 for the '\n'
     }
   }
+
+  // Build display lines: window around the cursor line so it's always visible.
+  let displayLines: string[]
+  let cursorLine: number // cursor's index within displayLines
+
+  if (rawLines.length <= MAX_VISIBLE_LINES) {
+    displayLines = rawLines
+    cursorLine = rawCursorLine
+  } else {
+    // Centre the window on the cursor line
+    let start = rawCursorLine - Math.floor(MAX_VISIBLE_LINES / 2)
+    start = Math.max(0, Math.min(start, rawLines.length - MAX_VISIBLE_LINES))
+    displayLines = rawLines.slice(start, start + MAX_VISIBLE_LINES)
+    cursorLine = rawCursorLine - start
+
+    // Add overflow indicators
+    if (start > 0) {
+      displayLines[0] = `… (+${start} lines above)`
+      if (cursorLine === 0) cursorLine = -1 // cursor is in hidden area
+    }
+    if (start + MAX_VISIBLE_LINES < rawLines.length) {
+      const hidden = rawLines.length - start - MAX_VISIBLE_LINES
+      displayLines[displayLines.length - 1] = `… (+${hidden} lines below)`
+      if (cursorLine === displayLines.length - 1) cursorLine = -1
+    }
+  }
+
+  // Pad command names so descriptions line up nicely
+  const maxNameLen = matches.reduce((max, c) => Math.max(max, c.name.length), 0)
 
   return (
     <Box flexDirection="column">
@@ -250,7 +274,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         width="100%"
       >
         {displayLines.map((line, i) => {
-          const showCursorOnThisLine = i === cursorLine && !overflow
+          const showCursorOnThisLine = i === cursorLine && cursorLine >= 0
 
           // Apply viewport: if a line is longer than the terminal width,
           // show a sliding window around the cursor so the visible text

@@ -84,8 +84,24 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
   const pendingTextRef = useRef<string>('')
   const pendingTimerRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Ctrl+C must work even when the input is disabled (e.g. during loading).
+  // We always listen on stdin for \x03 and route it to onInterrupt.
+  // When enabled=false, all other input is ignored.
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      // Minimal listener: only Ctrl+C, ignore everything else.
+      setRawMode(true)
+      const handleCtrlC = (data: Buffer | string): void => {
+        const chunk = typeof data === 'string' ? data : data.toString('utf8')
+        if (chunk.includes('\x03')) {
+          handlersRef.current.onInterrupt()
+        }
+      }
+      stdin.on('data', handleCtrlC)
+      return () => {
+        stdin.off('data', handleCtrlC)
+      }
+    }
 
     setRawMode(true)
     process.stdout.write(ENABLE_BRACKETED_PASTE)
