@@ -356,5 +356,9 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   // Yoga has no per-character width to miscalculate.
   const rendered = outputLines.join('\n')
 
-  return <Text>{rendered}</Text>
+  // wrap="truncate-end" prevents Ink's wrap-ansi from inserting extra
+  // line breaks when it measures CJK characters differently from our
+  // viewport calculation. We already clip each line to fit the terminal
+  // via sliceByWidth — Ink must not re-wrap.
+  return <Text wrap="truncate-end">{rendered}</Text>
 }
