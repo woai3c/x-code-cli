@@ -18,7 +18,7 @@ export const saveKnowledge = tool({
         'A short unique identifier for this fact, e.g. "package-manager", "test-framework". Same key = same fact.',
       ),
     fact: z.string().describe('The fact value, e.g. "pnpm (workspace mode)", "Vitest 4"'),
-    scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.xcode/)'),
+    scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.x-code/)'),
     category: z.enum(['tech-stack', 'commands', 'conventions', 'preferences', 'context']),
   }),
   execute: ({ action, key, fact, scope, category }) => {

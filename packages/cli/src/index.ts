@@ -22,7 +22,7 @@ import { VERSION } from './version.js'
 const MIN_NODE_VERSION = [20, 19, 0]
 
 function checkNodeVersion(): void {
-  const [major, minor, patch] = process.versions.node.split('.').map(Number)
+  const [major, minor, patch] = process.versions.node.split('.').map((v) => parseInt(v, 10))
   const [reqMajor, reqMinor, reqPatch] = MIN_NODE_VERSION
   if (
     major < reqMajor ||

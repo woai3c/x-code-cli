@@ -192,8 +192,10 @@ async function executeShell(command: string, timeout: number, callbacks: AgentCa
   // [Console]::OutputEncoding only takes effect after parsing completes.
   let proc
   if (type === 'powershell') {
-    // Build as a single string for cmd.exe /c so redirections like >nul work
-    const psCmd = `chcp 65001 >nul && ${executable} ${args.join(' ')} ${command}`
+    // Build as a single string for cmd.exe /c so redirections like >nul work.
+    // Escape embedded double quotes so the command survives cmd.exe parsing.
+    const escapedCommand = command.replace(/"/g, '\\"')
+    const psCmd = `chcp 65001 >nul && ${executable} ${args.join(' ')} "${escapedCommand}"`
     proc = execa('cmd.exe', ['/c', psCmd], {
       timeout,
       reject: false,

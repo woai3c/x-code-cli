@@ -21,11 +21,11 @@
 // mostly ASCII, so Ink's own measurement is good enough.
 
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 
 import { Chalk } from 'chalk'
 
+import { GLOBAL_XCODE_DIR } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderMarkdown } from './render-markdown.js'
@@ -54,13 +54,13 @@ function normalizeLineEndings(s: string): string {
 
 // ── Debug logging ────────────────────────────────────────────────────────
 // Turn on with `X_CODE_DEBUG=1`. Appends every message handed to
-// writeMessageToStdout to `~/.xcode/x-code-debug.log` so we can compare
-// what React sees vs what lands on screen. Using the global `.xcode`
+// writeMessageToStdout to `~/.x-code/x-code-debug.log` so we can compare
+// what React sees vs what lands on screen. Using the global `.x-code`
 // directory matches the knowledge / auto-memory layout and keeps the
-// file easy to find (~/.xcode on macOS/Linux, C:\Users\<user>\.xcode on
+// file easy to find (~/.x-code on macOS/Linux, C:\Users\<user>\.x-code on
 // Windows) instead of hiding it under the OS temp directory.
 const DEBUG = process.env.X_CODE_DEBUG === '1'
-const DEBUG_DIR = path.join(os.homedir(), '.xcode')
+const DEBUG_DIR = GLOBAL_XCODE_DIR
 const DEBUG_LOG = path.join(DEBUG_DIR, 'x-code-debug.log')
 
 function debugDump(tag: string, content: string): void {

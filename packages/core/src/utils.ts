@@ -1,8 +1,13 @@
 // @x-code-cli/core — Shared utilities and constants
 import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 /** Project-local config directory name */
 export const XCODE_DIR = '.x-code'
+
+/** Global config directory (~/.x-code) */
+export const GLOBAL_XCODE_DIR = path.join(os.homedir(), '.x-code')
 
 /** Check if a file exists */
 export async function fileExists(filePath: string): Promise<boolean> {

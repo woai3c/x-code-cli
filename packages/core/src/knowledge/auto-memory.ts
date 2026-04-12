@@ -1,9 +1,9 @@
 // @x-code-cli/core — AutoMemory class (key-based CRUD + conflict detection + TTL eviction)
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 
 import type { KnowledgeFact } from '../types/index.js'
+import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 const MAX_LOAD_LINES = 200
 
@@ -150,12 +150,12 @@ let globalMemory: AutoMemory | null = null
 export function getAutoMemory(scope: 'project' | 'global'): AutoMemory {
   if (scope === 'project') {
     if (!projectMemory) {
-      projectMemory = new AutoMemory(path.join(process.cwd(), '.x-code', 'memory', 'auto.md'))
+      projectMemory = new AutoMemory(path.join(process.cwd(), XCODE_DIR, 'memory', 'auto.md'))
     }
     return projectMemory
   } else {
     if (!globalMemory) {
-      globalMemory = new AutoMemory(path.join(os.homedir(), '.xcode', 'memory', 'auto.md'))
+      globalMemory = new AutoMemory(path.join(GLOBAL_XCODE_DIR, 'memory', 'auto.md'))
     }
     return globalMemory
   }

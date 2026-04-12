@@ -1,7 +1,5 @@
 // @x-code-cli/core — Public API exports
 
-export const VERSION = '0.1.0'
-
 // Types
 export type {
   PermissionLevel,
@@ -45,6 +43,9 @@ export { getShellConfig } from './tools/shell-utils.js'
 
 // Permissions
 export { checkPermission, getPermissionLevel } from './permissions/index.js'
+
+// Utils
+export { GLOBAL_XCODE_DIR, XCODE_DIR } from './utils.js'
 
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'

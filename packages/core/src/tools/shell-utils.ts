@@ -11,6 +11,13 @@ export interface ShellConfig {
 
 export function getShellConfig(): ShellConfig {
   if (os.platform() === 'win32') {
+    // Git Bash / MSYS2 / Cygwin set SHELL to a Unix-style path (e.g. /usr/bin/bash).
+    // Prefer that shell when available so the Unix tool ecosystem works as expected.
+    const shell = process.env.SHELL
+    if (shell && /\b(bash|zsh)$/i.test(shell)) {
+      const type: ShellType = shell.endsWith('zsh') ? 'zsh' : 'bash'
+      return { executable: shell, args: ['-c'], type }
+    }
     return { executable: 'powershell.exe', args: ['-NoProfile', '-Command'], type: 'powershell' }
   }
   const userShell = process.env.SHELL ?? '/bin/bash'

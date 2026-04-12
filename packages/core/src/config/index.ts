@@ -1,15 +1,15 @@
 // @x-code-cli/core — Configuration loading (env vars for API keys, config file for model preference)
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 
 import type { AppConfig } from '../types/index.js'
 import { MODEL_ALIASES, PROVIDER_DETECTION_ORDER } from '../types/index.js'
+import { GLOBAL_XCODE_DIR } from '../utils.js'
 
-const CONFIG_DIR = path.join(os.homedir(), '.xcode')
+const CONFIG_DIR = GLOBAL_XCODE_DIR
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
 
-/** Load config from ~/.xcode/config.json (model preference only) */
+/** Load config from ~/.x-code/config.json (model preference only) */
 export async function loadConfig(): Promise<AppConfig> {
   try {
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8')
