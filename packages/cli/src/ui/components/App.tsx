@@ -286,10 +286,7 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
             Ink's log-update to append rather than repaint — flooding the
             screen with duplicate permission boxes. */}
         {state.isLoading && state.permissionQueue.length === 0 && !state.pendingQuestion && (
-          <Spinner
-            totalTokens={state.usage.totalTokens}
-            mode={state.currentToolCall ? 'tool-use' : 'requesting'}
-          />
+          <Spinner totalTokens={state.usage.totalTokens} mode={state.currentToolCall ? 'tool-use' : 'requesting'} />
         )}
 
         {/* Error */}

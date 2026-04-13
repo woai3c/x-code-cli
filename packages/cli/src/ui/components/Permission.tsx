@@ -2,12 +2,9 @@
 //
 // Pre-rendered as a single ANSI string (same strategy as ChatInput)
 // to avoid Ink's Yoga/wrap-ansi CJK width miscalculation.
-import { diffLines } from 'diff'
 import { Chalk } from 'chalk'
 
-import fs from 'node:fs/promises'
-
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 
 import { Text, useInput, useStdout } from 'ink'
 
@@ -39,10 +36,14 @@ const PERMISSION_LABELS: Record<string, { label: string; color: string }> = {
 
 function getPermissionTitle(toolName: string): string {
   switch (toolName) {
-    case 'shell': return 'X-Code wants to run a shell command'
-    case 'writeFile': return 'X-Code wants to write a file'
-    case 'edit': return 'X-Code wants to edit a file'
-    default: return `X-Code wants to use ${toolName}`
+    case 'shell':
+      return 'X-Code wants to run a shell command'
+    case 'writeFile':
+      return 'X-Code wants to write a file'
+    case 'edit':
+      return 'X-Code wants to edit a file'
+    default:
+      return `X-Code wants to use ${toolName}`
   }
 }
 
@@ -79,12 +80,8 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
   const separator = c.hex(CLR.border)('─'.repeat(Math.max(0, termWidth - 1)))
   const title = `  ${c.hex(CLR.warning).bold(getPermissionTitle(toolName))}`
 
-  const yesLine = selected === 0
-    ? `    ${c.hex(CLR.success).bold('❯ Yes')}`
-    : `      ${c.hex(CLR.dim)('Yes')}`
-  const noLine = selected === 1
-    ? `    ${c.hex(CLR.error).bold('❯ No')}`
-    : `      ${c.hex(CLR.dim)('No')}`
+  const yesLine = selected === 0 ? `    ${c.hex(CLR.success).bold('❯ Yes')}` : `      ${c.hex(CLR.dim)('Yes')}`
+  const noLine = selected === 1 ? `    ${c.hex(CLR.error).bold('❯ No')}` : `      ${c.hex(CLR.dim)('No')}`
 
   const lines = [separator, title]
   if (contentStr) lines.push(contentStr)

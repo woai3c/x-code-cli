@@ -741,12 +741,12 @@ writeMessageToStdout(write: InkWrite, msg: DisplayMessage)
 ```typescript
 interface AgentState {
   messages: DisplayMessage[] // 完成的 user/assistant/tool 条目（驱动 MessageList useEffect）
-  isLoading: boolean         // 是否等待 LLM 响应
+  isLoading: boolean // 是否等待 LLM 响应
   currentToolCall: { toolName: string; input: Record<string, unknown> } | null
-  shellOutput: string        // Shell 实时输出
+  shellOutput: string // Shell 实时输出
   pendingPermission: { toolName; input; resolve: (approved: boolean) => void } | null
   pendingQuestion: { question; options; resolve: (answer: string) => void } | null
-  usage: TokenUsage          // { inputTokens, outputTokens, totalTokens }
+  usage: TokenUsage // { inputTokens, outputTokens, totalTokens }
   error: string | null
 }
 

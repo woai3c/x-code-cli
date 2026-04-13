@@ -24,7 +24,6 @@
 // Special keys (Enter, backspace, arrows, tab, escape, Ctrl+C) always
 // force-flush any pending text before they dispatch, so the pasted content
 // is committed BEFORE the key that acts on it.
-
 import { useEffect, useRef } from 'react'
 
 import { useStdin } from 'ink'
@@ -44,7 +43,20 @@ const PASTE_DEBOUNCE_MS = 30
 // are treated as normal typing.
 const PASTE_SIZE_THRESHOLD = 8
 
-export type PromptKey = 'return' | 'backspace' | 'delete' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pageup' | 'pagedown'
+export type PromptKey =
+  | 'return'
+  | 'backspace'
+  | 'delete'
+  | 'tab'
+  | 'escape'
+  | 'up'
+  | 'down'
+  | 'left'
+  | 'right'
+  | 'home'
+  | 'end'
+  | 'pageup'
+  | 'pagedown'
 
 export interface PromptInputHandlers {
   /** Normal typed text (may be multi-char if the terminal batched a burst). */

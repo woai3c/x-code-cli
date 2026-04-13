@@ -274,13 +274,19 @@ function classifyApiError(err: unknown): { message: string; retryable: boolean }
   // Extract HTTP status from patterns like "status code 400" or "(400)" or
   // leading "400 " — avoid matching arbitrary numbers embedded in prose
   // (e.g. "131072 tokens" previously mis-matched as status 131).
-  const statusMatch = msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
+  const statusMatch =
+    msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
   const status = statusMatch ? Number(statusMatch[1]) : 0
 
   // Context / token limit exceeded (400 from most providers)
-  if (msg.includes('maximum context length') || msg.includes('context_length_exceeded') || msg.includes('token limit')) {
+  if (
+    msg.includes('maximum context length') ||
+    msg.includes('context_length_exceeded') ||
+    msg.includes('token limit')
+  ) {
     return {
-      message: 'Context too long — the conversation exceeded the model\'s token limit. Try /compact to compress context, or /clear to start fresh.',
+      message:
+        "Context too long — the conversation exceeded the model's token limit. Try /compact to compress context, or /clear to start fresh.",
       retryable: false,
     }
   }
@@ -408,7 +414,11 @@ async function handleToolCalls(
 
     // ── Permission check for write tools and shell ──
     if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
-      const approved = await checkPermission({ toolCallId, toolName, input }, options.trustMode, callbacks.onAskPermission)
+      const approved = await checkPermission(
+        { toolCallId, toolName, input },
+        options.trustMode,
+        callbacks.onAskPermission,
+      )
 
       if (!approved) {
         pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
@@ -492,8 +502,7 @@ export async function agentLoop(
     // Two-tier check: real token count from previous turn (reliable) +
     // character-based estimate (safety net for the first turn / big tool outputs).
     const needsCompression =
-      state.lastInputTokens > compressionThreshold ||
-      estimateTokenCount(state.messages) > compressionThreshold
+      state.lastInputTokens > compressionThreshold || estimateTokenCount(state.messages) > compressionThreshold
 
     if (needsCompression && state.messages.length > KEEP_RECENT) {
       try {

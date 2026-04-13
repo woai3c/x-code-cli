@@ -19,17 +19,16 @@
 // Ink still owns the bottom-of-screen dynamic region (spinner, in-progress
 // tool call, permission dialog, chat input). That region is short and
 // mostly ASCII, so Ink's own measurement is good enough.
+import { Chalk } from 'chalk'
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-
-import { Chalk } from 'chalk'
 
 import { GLOBAL_XCODE_DIR } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderMarkdown } from './render-markdown.js'
-import { ACCENT_DIM, BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
+import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
 import { getToolInputPreview, getToolLabel, getToolResultSummary } from './tool-display.js'
 
 const c = new Chalk({ level: 3 })

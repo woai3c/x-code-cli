@@ -100,32 +100,32 @@ cli/index.ts -> app.tsx -> App.tsx -> useAgent.submit()
 
 ### Fully Implemented
 
-| Feature                                    | Files                                  |
-| ------------------------------------------ | -------------------------------------- |
-| Agent Loop (stream + tool calls + loop)    | agent/loop.ts                          |
-| 13 built-in tools                          | tools/\*.ts                            |
-| 3-level permission model + --trust         | permissions/index.ts                   |
-| Multi-model support (8 providers + custom) | providers/registry.ts, config/index.ts |
+| Feature                                    | Files                                          |
+| ------------------------------------------ | ---------------------------------------------- |
+| Agent Loop (stream + tool calls + loop)    | agent/loop.ts                                  |
+| 13 built-in tools                          | tools/\*.ts                                    |
+| 3-level permission model + --trust         | permissions/index.ts                           |
+| Multi-model support (8 providers + custom) | providers/registry.ts, config/index.ts         |
 | Streaming text (buffered → stdout-writer)  | use-agent.ts streamBufferRef, stdout-writer.ts |
-| Context compression                        | agent/loop.ts compressMessages()       |
-| Token usage tracking (input/output/total)  | agent/loop.ts, use-agent.ts            |
-| Knowledge system (7-layer loading)         | knowledge/loader.ts                    |
-| Auto memory (CRUD + TTL eviction)          | knowledge/auto-memory.ts               |
-| 4 rule loading modes                       | knowledge/loader.ts                    |
-| Session memory (summary + continuation)    | knowledge/session.ts                   |
-| xc init project initialization             | knowledge/init.ts                      |
-| Plan Mode (enterPlanMode/exitPlanMode)     | agent/loop.ts, agent/plan-mode.ts      |
-| Slash commands (/help /model /plan etc.)   | components/App.tsx                     |
-| Cross-platform shell (PowerShell/bash/zsh) | tools/shell-utils.ts                   |
-| Shell streaming output                     | ShellOutput.tsx                        |
-| askUser interactive tool                   | SelectOptions.tsx                      |
-| Error recovery (429 retry, 401/403/503)    | agent/loop.ts classifyApiError()       |
-| Ctrl+C graceful exit + session save        | cli/index.ts, app.tsx                  |
-| Non-interactive mode (--print + pipe)      | cli/index.ts                           |
-| Tool result truncation (30KB limit)        | tools/index.ts                         |
-| Max turns limit (--max-turns)              | agent/loop.ts                          |
-| DeepSeek Reasoner workaround               | agent/loop.ts                          |
-| Tab completion for slash commands          | ChatInput.tsx                          |
+| Context compression                        | agent/loop.ts compressMessages()               |
+| Token usage tracking (input/output/total)  | agent/loop.ts, use-agent.ts                    |
+| Knowledge system (7-layer loading)         | knowledge/loader.ts                            |
+| Auto memory (CRUD + TTL eviction)          | knowledge/auto-memory.ts                       |
+| 4 rule loading modes                       | knowledge/loader.ts                            |
+| Session memory (summary + continuation)    | knowledge/session.ts                           |
+| xc init project initialization             | knowledge/init.ts                              |
+| Plan Mode (enterPlanMode/exitPlanMode)     | agent/loop.ts, agent/plan-mode.ts              |
+| Slash commands (/help /model /plan etc.)   | components/App.tsx                             |
+| Cross-platform shell (PowerShell/bash/zsh) | tools/shell-utils.ts                           |
+| Shell streaming output                     | ShellOutput.tsx                                |
+| askUser interactive tool                   | SelectOptions.tsx                              |
+| Error recovery (429 retry, 401/403/503)    | agent/loop.ts classifyApiError()               |
+| Ctrl+C graceful exit + session save        | cli/index.ts, app.tsx                          |
+| Non-interactive mode (--print + pipe)      | cli/index.ts                                   |
+| Tool result truncation (30KB limit)        | tools/index.ts                                 |
+| Max turns limit (--max-turns)              | agent/loop.ts                                  |
+| DeepSeek Reasoner workaround               | agent/loop.ts                                  |
+| Tab completion for slash commands          | ChatInput.tsx                                  |
 
 ### Not Yet Implemented (Designed in MVP but not coded)
 
@@ -280,14 +280,14 @@ xc [options] [prompt]
 
 ## Slash Commands
 
-| Command        | Description                    |
-| -------------- | ------------------------------ |
-| /help          | Show available commands        |
-| /model [alias] | Switch model or list available |
+| Command        | Description                           |
+| -------------- | ------------------------------------- |
+| /help          | Show available commands               |
+| /model [alias] | Switch model or list available        |
 | /usage         | Show token usage (input/output/total) |
-| /clear         | Clear conversation             |
-| /compact       | Manually compress context      |
-| /init          | Initialize project knowledge   |
-| /session save  | Save session without exiting   |
-| /plan          | Enter plan mode                |
-| /exit          | Save session and exit          |
+| /clear         | Clear conversation                    |
+| /compact       | Manually compress context             |
+| /init          | Initialize project knowledge          |
+| /session save  | Save session without exiting          |
+| /plan          | Enter plan mode                       |
+| /exit          | Save session and exit                 |

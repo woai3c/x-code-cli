@@ -12,17 +12,12 @@
 //   without any erase command. No erase = no flash = no jitter.
 import { Chalk } from 'chalk'
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useStdout } from 'ink'
 
 import { usePromptInput } from '../hooks/use-prompt-input.js'
-import {
-  type PastedContents,
-  expandPasteRefs,
-  formatPasteRef,
-  stripTrailingRef,
-} from '../paste-refs.js'
+import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { ACCENT, PROMPT_BORDER } from '../theme.js'
 
 const c = new Chalk({ level: 3 })
@@ -34,12 +29,18 @@ const PASTE_REF_MIN_CHARS = 400
 
 function isWide(cp: number): boolean {
   return (
-    (cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf) ||
-    (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xac00 && cp <= 0xd7af) ||
-    (cp >= 0xff01 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) ||
-    (cp >= 0x20000 && cp <= 0x2fa1f) || (cp >= 0x3000 && cp <= 0x303f) ||
-    (cp >= 0x3040 && cp <= 0x30ff) || (cp >= 0x3100 && cp <= 0x312f) ||
-    (cp >= 0x3200 && cp <= 0x32ff) || (cp >= 0x3300 && cp <= 0x33ff)
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xac00 && cp <= 0xd7af) ||
+    (cp >= 0xff01 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x20000 && cp <= 0x2fa1f) ||
+    (cp >= 0x3000 && cp <= 0x303f) ||
+    (cp >= 0x3040 && cp <= 0x30ff) ||
+    (cp >= 0x3100 && cp <= 0x312f) ||
+    (cp >= 0x3200 && cp <= 0x32ff) ||
+    (cp >= 0x3300 && cp <= 0x33ff)
   )
 }
 
@@ -50,20 +51,24 @@ function visualWidth(str: string): number {
 }
 
 function sliceByWidth(str: string, maxCols: number): string {
-  let w = 0, i = 0
+  let w = 0,
+    i = 0
   for (const ch of str) {
     const cw = isWide(ch.codePointAt(0)!) ? 2 : 1
     if (w + cw > maxCols) break
-    w += cw; i += ch.length
+    w += cw
+    i += ch.length
   }
   return str.slice(0, i)
 }
 
 function skipByWidth(str: string, skipCols: number): number {
-  let w = 0, i = 0
+  let w = 0,
+    i = 0
   for (const ch of str) {
     if (w >= skipCols) break
-    w += isWide(ch.codePointAt(0)!) ? 2 : 1; i += ch.length
+    w += isWide(ch.codePointAt(0)!) ? 2 : 1
+    i += ch.length
   }
   return i
 }
@@ -77,7 +82,10 @@ function padLine(ansiStr: string, plainStr: string, cols: number): string {
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-export interface SlashCommand { name: string; description: string }
+export interface SlashCommand {
+  name: string
+  description: string
+}
 
 interface ChatInputProps {
   onSubmit: (text: string) => void
@@ -141,10 +149,14 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
 
   const moveCursorVertically = (delta: number) => {
     const lines = text.split('\n')
-    let line = 0, col = cursorRef.current, charsSoFar = 0
+    let line = 0,
+      col = cursorRef.current,
+      charsSoFar = 0
     for (let i = 0; i < lines.length; i++) {
       if (charsSoFar + lines[i].length >= cursorRef.current && cursorRef.current >= charsSoFar) {
-        line = i; col = cursorRef.current - charsSoFar; break
+        line = i
+        col = cursorRef.current - charsSoFar
+        break
       }
       charsSoFar += lines[i].length + 1
     }
@@ -183,13 +195,20 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       setCompletionIndex(0)
     },
     onKey: (key) => {
-      if (key === 'return') { handleSubmit(); return }
+      if (key === 'return') {
+        handleSubmit()
+        return
+      }
       if (key === 'escape') {
         const now = Date.now()
         if (now - lastEscRef.current < 500 && text.length > 0) {
-          setText(''); syncCursor(0); setPastedContents({}); setCompletionIndex(0)
+          setText('')
+          syncCursor(0)
+          setPastedContents({})
+          setCompletionIndex(0)
         }
-        lastEscRef.current = now; return
+        lastEscRef.current = now
+        return
       }
       if (key === 'backspace') {
         const pos = cursorRef.current
@@ -198,37 +217,67 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
           const before = prev.slice(0, pos)
           const stripped = stripTrailingRef(before)
           if (stripped) {
-            setPastedContents((pc) => { const n = { ...pc }; delete n[stripped.id]; return n })
+            setPastedContents((pc) => {
+              const n = { ...pc }
+              delete n[stripped.id]
+              return n
+            })
             syncCursor(pos - (before.length - stripped.without.length))
             return stripped.without + prev.slice(pos)
           }
           syncCursor(pos - 1)
           return prev.slice(0, pos - 1) + prev.slice(pos)
         })
-        setCompletionIndex(0); return
+        setCompletionIndex(0)
+        return
       }
       if (key === 'delete') {
         const pos = cursorRef.current
-        setText((prev) => pos >= prev.length ? prev : prev.slice(0, pos) + prev.slice(pos + 1)); return
+        setText((prev) => (pos >= prev.length ? prev : prev.slice(0, pos) + prev.slice(pos + 1)))
+        return
       }
-      if (key === 'left') { syncCursor((p) => Math.max(0, p - 1)); return }
-      if (key === 'right') { syncCursor((p) => Math.min(text.length, p + 1)); return }
-      if (key === 'home') { syncCursor(0); return }
-      if (key === 'end') { syncCursor(text.length); return }
+      if (key === 'left') {
+        syncCursor((p) => Math.max(0, p - 1))
+        return
+      }
+      if (key === 'right') {
+        syncCursor((p) => Math.min(text.length, p + 1))
+        return
+      }
+      if (key === 'home') {
+        syncCursor(0)
+        return
+      }
+      if (key === 'end') {
+        syncCursor(text.length)
+        return
+      }
       if (key === 'tab') {
-        if (currentMatch) { setText(currentMatch.name); syncCursor(currentMatch.name.length); setCompletionIndex(0) }
+        if (currentMatch) {
+          setText(currentMatch.name)
+          syncCursor(currentMatch.name.length)
+          setCompletionIndex(0)
+        }
         return
       }
       if (key === 'up') {
         if (matches.length > 0) setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
-        else moveCursorVertically(-1); return
+        else moveCursorVertically(-1)
+        return
       }
       if (key === 'down') {
         if (matches.length > 0) setCompletionIndex((p) => (p + 1) % matches.length)
-        else moveCursorVertically(1); return
+        else moveCursorVertically(1)
+        return
       }
-      if (key === 'pageup') { moveCursorVertically(-MAX_VISIBLE_LINES); return }
-      if (key === 'pagedown') { moveCursorVertically(MAX_VISIBLE_LINES); return }
+      if (key === 'pageup') {
+        moveCursorVertically(-MAX_VISIBLE_LINES)
+        return
+      }
+      if (key === 'pagedown') {
+        moveCursorVertically(MAX_VISIBLE_LINES)
+        return
+      }
     },
   })
 
@@ -256,11 +305,15 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
 
     const rawLines = text.length === 0 ? [''] : text.split('\n')
 
-    let rawCursorLine = 0, cursorCol = cursor
-    { let charsSoFar = 0
+    let rawCursorLine = 0,
+      cursorCol = cursor
+    {
+      let charsSoFar = 0
       for (let i = 0; i < rawLines.length; i++) {
         if (charsSoFar + rawLines[i].length >= cursor && cursor >= charsSoFar) {
-          rawCursorLine = i; cursorCol = cursor - charsSoFar; break
+          rawCursorLine = i
+          cursorCol = cursor - charsSoFar
+          break
         }
         charsSoFar += rawLines[i].length + 1
       }
@@ -268,13 +321,17 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
 
     let displayLines: string[], cursorLine: number
     if (rawLines.length <= MAX_VISIBLE_LINES) {
-      displayLines = rawLines; cursorLine = rawCursorLine
+      displayLines = rawLines
+      cursorLine = rawCursorLine
     } else {
       let start = rawCursorLine - Math.floor(MAX_VISIBLE_LINES / 2)
       start = Math.max(0, Math.min(start, rawLines.length - MAX_VISIBLE_LINES))
       displayLines = rawLines.slice(start, start + MAX_VISIBLE_LINES)
       cursorLine = rawCursorLine - start
-      if (start > 0) { displayLines[0] = `… (+${start} above)`; if (cursorLine === 0) cursorLine = -1 }
+      if (start > 0) {
+        displayLines[0] = `… (+${start} above)`
+        if (cursorLine === 0) cursorLine = -1
+      }
       if (start + MAX_VISIBLE_LINES < rawLines.length) {
         displayLines[displayLines.length - 1] = `… (+${rawLines.length - start - MAX_VISIBLE_LINES} below)`
         if (cursorLine === displayLines.length - 1) cursorLine = -1
@@ -305,10 +362,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       const lw = visualWidth(line)
 
       if (lw <= vpWidth) {
-        lines.push([
-          promptA + before + c.inverse(cursorChar) + after,
-          promptP + before + cursorChar + after,
-        ])
+        lines.push([promptA + before + c.inverse(cursorChar) + after, promptP + before + cursorChar + after])
       } else {
         const beforeWidth = visualWidth(before)
         const halfVP = Math.floor(vpWidth / 2)
@@ -320,10 +374,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
         const remaining = vpWidth - visualWidth(vb) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
         const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
-        lines.push([
-          promptA + vb + c.inverse(cursorChar) + va,
-          promptP + vb + cursorChar + va,
-        ])
+        lines.push([promptA + vb + c.inverse(cursorChar) + va, promptP + vb + cursorChar + va])
       }
     }
 

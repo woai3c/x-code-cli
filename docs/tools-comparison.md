@@ -214,42 +214,43 @@ const edit = tool({
 
 ### 6.1 对比矩阵（含 OpenCode）
 
-| 特性             |              Claude Code               |       Gemini CLI       |   Codex CLI    |        OpenCode        |       x-code-cli (当前)        |
-| ---------------- | :------------------------------------: | :--------------------: | :------------: | :--------------------: | :----------------------------: |
-| **Web Search**   | Anthropic 原生 server tool (beta 2025) | Google Web Search API  |   **无内置**   | Exa（经 MCP JSON-RPC） |           Tavily API           |
-| 成本             |      **$0.01 / 次**（用户付费）        |  计入 Gemini API 用量   |       —        | Exa 账户付费（无免费） | **Tavily 免费 1000 次 / 月**   |
-| 多 Provider 可用 |    ❌ 仅 Anthropic 原生/Vertex/Bedrock   |      ❌ 仅 Gemini       |       —        |        ✅ 任意模型      |           ✅ 任意模型           |
-| 搜索入参         | `query` + `allowed/blocked_domains`    |        `query`         |       —        | 5 参（livecrawl/type/contextMaxCharacters…） |        2 参（query/maxResults）        |
-| 域名过滤         |      allowed / blocked domains         |           —            |       —        |           —            |              ❌                |
-| 流式进度         | Y（`query_update` + `results_received`）|           —            |       —        |       SSE 回传         |              ❌                |
-| 年份注入         |                  ❌                     |           —            |       —        | ✅ (`current year is <y>`) |      ✅（description 拼接） |
-| 强制引用         |         markdown 链接              |           —            |       —        |           —            |              ❌                |
-| **Web Fetch**    |            axios + turndown            | 有 (URL + prompt 参数) |   **无内置**   |   turndown + HTMLRewriter   | cheerio + turndown |
-| Fetch 大小上限   |                10 MB                    |      约 2 MB           |       —        |         5 MB            |       100 KB（送回 model context）   |
-| Fetch 缓存       |     **15 min LRU**（50 MB）             |           —            |       —        |           ❌            |    **15 min LRU**（50 条 Map） |
-| CF bot 对抗      |                  ❌                     |           —            |       —        | ✅（检测 `cf-mitigated` 后降级 UA 重试）| ✅（同 OpenCode 做法） |
-| 预授权域名列表    |      ✅（~160 个常用文档站点）            |           —            |       —        |           ❌            |              ❌                |
-| 域名预检           | `api.anthropic.com/api/web/domain_info` + 5 min 缓存 |  —   |    —    |           ❌            |              ❌                |
-| Fetch 后处理     |  非预授权域名走 Haiku 抽取 + 版权保护    |      直接返回          |       —        |     turndown 后返回     |       cheerio 清洗后 turndown       |
+| 特性             |                     Claude Code                      |       Gemini CLI       | Codex CLI  |                   OpenCode                   |      x-code-cli (当前)       |
+| ---------------- | :--------------------------------------------------: | :--------------------: | :--------: | :------------------------------------------: | :--------------------------: |
+| **Web Search**   |        Anthropic 原生 server tool (beta 2025)        | Google Web Search API  | **无内置** |            Exa（经 MCP JSON-RPC）            |          Tavily API          |
+| 成本             |              **$0.01 / 次**（用户付费）              |  计入 Gemini API 用量  |     —      |            Exa 账户付费（无免费）            | **Tavily 免费 1000 次 / 月** |
+| 多 Provider 可用 |         ❌ 仅 Anthropic 原生/Vertex/Bedrock          |      ❌ 仅 Gemini      |     —      |                 ✅ 任意模型                  |         ✅ 任意模型          |
+| 搜索入参         |         `query` + `allowed/blocked_domains`          |        `query`         |     —      | 5 参（livecrawl/type/contextMaxCharacters…） |   2 参（query/maxResults）   |
+| 域名过滤         |              allowed / blocked domains               |           —            |     —      |                      —                       |              ❌              |
+| 流式进度         |       Y（`query_update` + `results_received`）       |           —            |     —      |                   SSE 回传                   |              ❌              |
+| 年份注入         |                          ❌                          |           —            |     —      |          ✅ (`current year is <y>`)          |    ✅（description 拼接）    |
+| 强制引用         |                    markdown 链接                     |           —            |     —      |                      —                       |              ❌              |
+| **Web Fetch**    |                   axios + turndown                   | 有 (URL + prompt 参数) | **无内置** |           turndown + HTMLRewriter            |      cheerio + turndown      |
+| Fetch 大小上限   |                        10 MB                         |        约 2 MB         |     —      |                     5 MB                     | 100 KB（送回 model context） |
+| Fetch 缓存       |               **15 min LRU**（50 MB）                |           —            |     —      |                      ❌                      | **15 min LRU**（50 条 Map）  |
+| CF bot 对抗      |                          ❌                          |           —            |     —      |   ✅（检测 `cf-mitigated` 后降级 UA 重试）   |    ✅（同 OpenCode 做法）    |
+| 预授权域名列表   |              ✅（~160 个常用文档站点）               |           —            |     —      |                      ❌                      |              ❌              |
+| 域名预检         | `api.anthropic.com/api/web/domain_info` + 5 min 缓存 |           —            |     —      |                      ❌                      |              ❌              |
+| Fetch 后处理     |         非预授权域名走 Haiku 抽取 + 版权保护         |        直接返回        |     —      |               turndown 后返回                |   cheerio 清洗后 turndown    |
 
 ### 6.2 搜索后端对比与"免费 + 高效"选型
 
 用户核心诉求是 **"尽量免费 + 高效"**。对所有可用后端做个横向评估：
 
-| 后端                 | 免费额度           | 质量         | 关键字段                          | 难点/坑                              |
-| -------------------- | ------------------ | ------------ | --------------------------------- | ------------------------------------ |
-| **Tavily**           | 1000 次/月 (API key) | ⭐⭐⭐⭐（LLM 优化，带摘要） | `search_depth` / `topic` / `include_domains` | 免费额度相对小，需注册            |
-| **Brave Search API** | 2000 次/月 (免费套餐, 1 QPS) | ⭐⭐⭐⭐（独立索引） | `q` / `freshness` / `safesearch`   | 免费套餐 QPS 限制                    |
-| **Google CSE**       | 100 次/天 (约 3000/月) | ⭐⭐⭐⭐⭐     | `q` / `cx` / `dateRestrict`       | 需 CSE 配置, API 配额严格            |
-| **SerpAPI / Serper** | 100 次/月（免费）    | ⭐⭐⭐⭐⭐（直接 SERP） | 较丰富                           | 免费额度少，超出即付费              |
-| **Exa** (opencode)   | **无免费套餐**      | ⭐⭐⭐⭐⭐（LLM 原生） | livecrawl/type/contextMax         | 需付费                              |
-| **Anthropic native** | **$0.01 / 次**      | ⭐⭐⭐⭐       | domains                            | 仅 Anthropic / Vertex / Bedrock      |
-| **DuckDuckGo 抓取**  | 真·免费，无需 key   | ⭐⭐         | `q`                                | 非官方，HTML 结构变动即失效          |
-| **SearXNG 自托管**   | 免费（需自己部署）    | ⭐⭐⭐        | 可配置                             | 需运维成本                          |
+| 后端                 | 免费额度                     | 质量                         | 关键字段                                     | 难点/坑                         |
+| -------------------- | ---------------------------- | ---------------------------- | -------------------------------------------- | ------------------------------- |
+| **Tavily**           | 1000 次/月 (API key)         | ⭐⭐⭐⭐（LLM 优化，带摘要） | `search_depth` / `topic` / `include_domains` | 免费额度相对小，需注册          |
+| **Brave Search API** | 2000 次/月 (免费套餐, 1 QPS) | ⭐⭐⭐⭐（独立索引）         | `q` / `freshness` / `safesearch`             | 免费套餐 QPS 限制               |
+| **Google CSE**       | 100 次/天 (约 3000/月)       | ⭐⭐⭐⭐⭐                   | `q` / `cx` / `dateRestrict`                  | 需 CSE 配置, API 配额严格       |
+| **SerpAPI / Serper** | 100 次/月（免费）            | ⭐⭐⭐⭐⭐（直接 SERP）      | 较丰富                                       | 免费额度少，超出即付费          |
+| **Exa** (opencode)   | **无免费套餐**               | ⭐⭐⭐⭐⭐（LLM 原生）       | livecrawl/type/contextMax                    | 需付费                          |
+| **Anthropic native** | **$0.01 / 次**               | ⭐⭐⭐⭐                     | domains                                      | 仅 Anthropic / Vertex / Bedrock |
+| **DuckDuckGo 抓取**  | 真·免费，无需 key            | ⭐⭐                         | `q`                                          | 非官方，HTML 结构变动即失效     |
+| **SearXNG 自托管**   | 免费（需自己部署）           | ⭐⭐⭐                       | 可配置                                       | 需运维成本                      |
 
 **结论：Tavily 仍然是我们当前最优解，但应加一个 Brave fallback。**
 
 理由：
+
 1. **Claude Code 的做法（Anthropic native）无法抄**——它依赖 Anthropic 服务端 `web_search_20250305` beta tool + beta header，对 OpenAI/DeepSeek/Google 等模型全部 `isEnabled()=false`。我们是多 Provider CLI，复制这一路绑定 Anthropic = 自废武功，而且 $0.01/次 不是免费。
 2. **OpenCode 的 Exa 方案无免费套餐**——MCP JSON-RPC 的工程复杂度我们也不必承担。
 3. **Tavily 的 1000 次/月** 对个人开发者基本够用，质量也为 LLM 优化过（不是原始 SERP snippet，而是已清洗摘要），和 Claude Code/Exa 是同一档。
@@ -261,12 +262,14 @@ const edit = tool({
 `web-search.ts` 仍然是 Tavily 直连（~30 行）；`web-fetch.ts` 在近期迭代后加了缓存和反爬降级（~150 行）。当前能力和剩余差距：
 
 **webSearch（已做 / 待做）：**
+
 - ✅ 工具描述注入当前年份，纠正模型按训练年份构造查询
 - ❌ Tavily 已支持的 `search_depth` / `topic` / `include_domains` / `exclude_domains` 还没透传给模型
 - ❌ 没有 allowed / blocked domains 过滤
 - ❌ 没有备用后端（Tavily quota 用完就没了）
 
 **webFetch（已做 / 待做）：**
+
 - ✅ **上限 100 KB**（~25 K tokens，约 Sonnet 上下文的 12%；从 30 KB 提上来；没做到 10 MB 因为 auto-executed tool 的返回会进 model context，10 MB 会直接炸）
 - ✅ **50 条 / 15 分钟 LRU 缓存**（Map-based，没加依赖；命中即重新 insert 实现 MRU）
 - ✅ **Cloudflare 降级**：响应 `403 + cf-mitigated` 时降级到 `x-code-cli/0.1` 简单 UA 重试一次

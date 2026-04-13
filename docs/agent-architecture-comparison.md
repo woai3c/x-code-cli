@@ -58,12 +58,12 @@ while (未结束) {
 
 ## 二、AI API 调用位置
 
-| 项目            | API 调用位置                                                                | 调用方式            |
-| --------------- | --------------------------------------------------------------------------- | ------------------- |
+| 项目            | API 调用位置                                                             | 调用方式            |
+| --------------- | ------------------------------------------------------------------------ | ------------------- |
 | **x-code-cli**  | `loop.ts:453` (streamText) + `loop.ts:226` / `session.ts` (generateText) | Vercel AI SDK       |
-| **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`                  | Anthropic SDK 原生  |
-| **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                             | Rust HTTP/WebSocket |
-| **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                             | Google GenAI SDK    |
+| **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`               | Anthropic SDK 原生  |
+| **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                          | Rust HTTP/WebSocket |
+| **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                          | Google GenAI SDK    |
 
 x-code-cli 的 AI 调用只在 agentLoop 里：
 
