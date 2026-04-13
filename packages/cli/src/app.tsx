@@ -31,87 +31,9 @@ export function printExitSummary(): void {
   )
 }
 
-// ── Patch Ink's log-update to fix CJK line-count miscalculation ──────────
-//
-// Standard Ink's log-update uses `eraseLines(previousLineCount)` to clear
-// the previous frame, where previousLineCount = output.split('\n').length.
-// This counts LOGICAL newlines, not VISUAL lines. When CJK characters
-// (2 terminal columns each) cause a line to wrap, the visual line count
-// is higher than the logical count. eraseLines clears too few lines,
-// leaving stale content → visible jitter.
-//
-// Claude Code fixes this in its custom Ink fork with a cell-level screen
-// buffer. We take a simpler approach: replace eraseLines(N) with
-// "move cursor up N-1 lines, then erase from cursor to end of screen"
-// (CSI J). This clears EVERYTHING below the cursor regardless of how
-// many visual lines the terminal actually used. The only requirement is
-// that nothing important exists below the dynamic region — which is true
-// because the dynamic region is always at the bottom of the terminal.
-//
-// Also wraps output in BSU/ESU (DEC 2026 Synchronized Updates) for
-// atomic rendering on supported terminals.
-const BSU = '\x1b[?2026h'
-const ESU = '\x1b[?2026l'
-
-function patchStdoutForCJK(): () => void {
-  const origWrite = process.stdout.write
-
-  // ansi-escapes eraseLines(N) generates:
-  //   (\x1b[2K\x1b[A){N-1} \x1b[2K \x1b[G
-  //   = (eraseLine + cursorUp) × (N-1) + eraseLine + cursorToCol1
-  //
-  // We detect this by checking if the write starts with \x1b[2K (eraseLine).
-  // Then count all \x1b[2K occurrences in the leading erase block to get N.
-  const ERASE_LINE = '\x1b[2K'
-  const CURSOR_UP = '\x1b[A'
-  const CURSOR_COL1 = '\x1b[G'
-
-  process.stdout.write = function (
-    data: string | Uint8Array,
-    ...args: unknown[]
-  ): boolean {
-    if (typeof data === 'string' && data.startsWith(ERASE_LINE)) {
-      // Count how many lines the eraseLines sequence clears by counting
-      // the erase+cursorUp pairs plus the final eraseLine.
-      let pos = 0
-      let lineCount = 0
-      while (data.startsWith(ERASE_LINE, pos)) {
-        lineCount++
-        pos += ERASE_LINE.length
-        if (data.startsWith(CURSOR_UP, pos)) {
-          pos += CURSOR_UP.length
-        }
-      }
-      // Skip the trailing \x1b[G (cursor to column 1)
-      if (data.startsWith(CURSOR_COL1, pos)) {
-        pos += CURSOR_COL1.length
-      }
-
-      // Replace eraseLines with: move up N-1 lines + column 0 + erase below.
-      // \x1b[0J clears all visual lines below regardless of CJK wrapping.
-      // \r (CR) ensures cursor is at column 0 — the original eraseLines
-      // ended with \x1b[G (cursor to column 1) for this purpose.
-      const moveUp = lineCount > 1 ? `\x1b[${lineCount - 1}A` : ''
-      const rest = data.slice(pos)
-      return origWrite.call(process.stdout, BSU + moveUp + '\r\x1b[0J' + rest + ESU, ...args as [])
-    }
-    // Non-erase writes: wrap in BSU/ESU if they contain ANSI
-    if (typeof data === 'string' && data.includes('\x1b[')) {
-      return origWrite.call(process.stdout, BSU + data + ESU, ...args as [])
-    }
-    return origWrite.call(process.stdout, data, ...args as [])
-  } as typeof process.stdout.write
-  return () => {
-    process.stdout.write = origWrite
-  }
-}
-
 export function startApp(model: LanguageModel, options: AgentOptions, initialPrompt?: string) {
   // Print header ONCE before Ink starts — avoids Static re-render duplication
   printHeader(options.modelId)
-
-  // Patch stdout BEFORE Ink starts rendering
-  const restoreStdout = patchStdoutForCJK()
 
   const { waitUntilExit } = render(
     <App
@@ -128,8 +50,5 @@ export function startApp(model: LanguageModel, options: AgentOptions, initialPro
     />,
     { exitOnCtrlC: false },
   )
-  return async () => {
-    await waitUntilExit()
-    restoreStdout()
-  }
+  return waitUntilExit
 }

@@ -116,11 +116,28 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     // return" and overwrites previous characters, which was producing
     // the "optimizations Claude Managed Agents is currently in beta"
     // splicing pattern in echoed pastes.
+    // Pending backspace count — batched with the debounce timer so rapid
+    // IME correction sequences (multiple backspaces + committed char) merge
+    // into a single render instead of flashing through intermediate states.
+    const pendingBackspacesRef = { count: 0 }
+
+    const flushBackspaces = (): void => {
+      const n = pendingBackspacesRef.count
+      if (n === 0) return
+      pendingBackspacesRef.count = 0
+      for (let i = 0; i < n; i++) {
+        handlersRef.current.onKey('backspace')
+      }
+    }
+
     const flushPending = (): void => {
       if (pendingTimerRef.current) {
         clearTimeout(pendingTimerRef.current)
         pendingTimerRef.current = null
       }
+      // Flush queued backspaces FIRST, then text — this is the order they
+      // arrived (IME: backspaces to delete pinyin, then committed chars).
+      flushBackspaces()
       const raw = pendingTextRef.current
       if (!raw) return
       pendingTextRef.current = ''
@@ -141,6 +158,12 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
     }
 
+    const queueBackspace = (): void => {
+      pendingBackspacesRef.count++
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
+      pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
+    }
+
     // Dispatch a special key. Always force-flushes pending text first so
     // that, e.g., Enter commits the previously-buffered input BEFORE acting
     // on the key.
@@ -155,7 +178,18 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       if (data.length === 0) return
 
       if (data === '\r' || data === '\n') return dispatchKey('return')
-      if (data === '\x7f' || data === '\b') return dispatchKey('backspace')
+      if (data === '\x7f' || data === '\b') {
+        // If the debounce buffer has pending text, absorb the backspace by
+        // trimming the buffer instead of flushing + dispatching.
+        if (pendingTextRef.current.length > 0) {
+          pendingTextRef.current = pendingTextRef.current.slice(0, -1)
+          return
+        }
+        // Queue backspace with the same debounce timer so IME correction
+        // sequences (rapid backspaces + committed char) batch into one render.
+        queueBackspace()
+        return
+      }
       if (data === '\t') return dispatchKey('tab')
       if (data === '\x1b') return dispatchKey('escape')
 
