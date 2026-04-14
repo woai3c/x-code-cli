@@ -1,26 +1,18 @@
-// @x-code-cli/cli — User text input component
+// @x-code-cli/cli — User text input component (multi-line textarea)
 //
-// RENDERING STRATEGY — OVERWRITE, NEVER ERASE:
-//   Standard Ink clears the dynamic region before each repaint, causing a
-//   brief flash visible as jitter (especially with CJK IME input). Claude
-//   Code avoids this with cell-level diffing that patches only changed cells.
-//
-//   We achieve the same effect without forking Ink: ChatInput returns null
-//   to Ink (empty dynamic region = nothing to clear/redraw), and writes
-//   directly to stdout using ANSI cursor movement + overwrite. Each line is
-//   right-padded with spaces to terminal width, so old content is covered
-//   without any erase command. No erase = no flash = no jitter.
-import { Chalk } from 'chalk'
-
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+// RENDERING STRATEGY — MULTI-LINE CELL-LEVEL DIFF:
+//   Renders a multi-line textarea with top/bottom separators directly to
+//   stdout.  Each frame is a 2D grid of cells.  The renderer diffs against
+//   the previous frame cell-by-cell, line-by-line, and writes ALL changes
+//   in a SINGLE process.stdout.write() call.  Unchanged CJK characters are
+//   never re-written, eliminating jitter on ConHost.
+import React, { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 
 import { useStdout } from 'ink'
 
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { ACCENT, PROMPT_BORDER } from '../theme.js'
-
-const c = new Chalk({ level: 3 })
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -44,9 +36,13 @@ function isWide(cp: number): boolean {
   )
 }
 
+function charWidth(ch: string): number {
+  return isWide(ch.codePointAt(0)!) ? 2 : 1
+}
+
 function visualWidth(str: string): number {
   let w = 0
-  for (const ch of str) w += isWide(ch.codePointAt(0)!) ? 2 : 1
+  for (const ch of str) w += charWidth(ch)
   return w
 }
 
@@ -54,7 +50,7 @@ function sliceByWidth(str: string, maxCols: number): string {
   let w = 0,
     i = 0
   for (const ch of str) {
-    const cw = isWide(ch.codePointAt(0)!) ? 2 : 1
+    const cw = charWidth(ch)
     if (w + cw > maxCols) break
     w += cw
     i += ch.length
@@ -67,17 +63,10 @@ function skipByWidth(str: string, skipCols: number): number {
     i = 0
   for (const ch of str) {
     if (w >= skipCols) break
-    w += isWide(ch.codePointAt(0)!) ? 2 : 1
+    w += charWidth(ch)
     i += ch.length
   }
   return i
-}
-
-/** Pad a visual-width-aware string to exactly `cols` terminal columns with spaces. */
-function padLine(ansiStr: string, plainStr: string, cols: number): string {
-  const vw = visualWidth(plainStr)
-  if (vw >= cols) return ansiStr
-  return ansiStr + ' '.repeat(cols - vw)
 }
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -96,25 +85,96 @@ interface ChatInputProps {
 
 const MAX_VISIBLE_LINES = 6
 
+// ── Reducer for atomic text + cursor updates ──────────────────────────
+
+interface InputState {
+  text: string
+  cursor: number
+}
+
+type InputAction =
+  | { type: 'INSERT'; pos: number; chunk: string }
+  | { type: 'BACKSPACE_REF'; pos: number; deleteCount: number }
+  | { type: 'DELETE'; pos: number }
+  | { type: 'SET_CURSOR'; cursor: number }
+  | { type: 'SET_TEXT'; text: string; cursor: number }
+  | { type: 'RESET' }
+
+function inputReducer(state: InputState, action: InputAction): InputState {
+  switch (action.type) {
+    case 'INSERT': {
+      const { pos, chunk } = action
+      return {
+        text: state.text.slice(0, pos) + chunk + state.text.slice(pos),
+        cursor: pos + chunk.length,
+      }
+    }
+    case 'BACKSPACE_REF': {
+      const { pos, deleteCount } = action
+      if (pos === 0) return state
+      return {
+        text: state.text.slice(0, pos - deleteCount) + state.text.slice(pos),
+        cursor: pos - deleteCount,
+      }
+    }
+    case 'DELETE': {
+      const { pos } = action
+      if (pos >= state.text.length) return state
+      return { text: state.text.slice(0, pos) + state.text.slice(pos + 1), cursor: state.cursor }
+    }
+    case 'SET_CURSOR':
+      return state.cursor === action.cursor ? state : { ...state, cursor: action.cursor }
+    case 'SET_TEXT':
+      return { text: action.text, cursor: action.cursor }
+    case 'RESET':
+      return { text: '', cursor: 0 }
+    default:
+      return state
+  }
+}
+
+// ── Cell representation ─────────────────────────────────────────────────
+
+interface Cell {
+  char: string
+  style: string
+  width: number
+}
+
+function cellsEqual(a: Cell, b: Cell): boolean {
+  return a.char === b.char && a.style === b.style
+}
+
+const S_GRAY = '\x1b[38;2;136;136;136m'
+const S_ACCENT = `\x1b[38;2;215;119;87m`
+const S_ACCENT_BOLD = `\x1b[38;2;215;119;87;1m`
+const S_DIM = '\x1b[2m'
+const S_BOLD_OFF = '\x1b[22m'
+const S_RESET = '\x1b[39m'
+const S_INV = '\x1b[7m'
+const S_INV_OFF = '\x1b[27m'
+const S_NONE = ''
+
+function textToCells(text: string, style: string): Cell[] {
+  const cells: Cell[] = []
+  for (const ch of text) cells.push({ char: ch, style, width: charWidth(ch) })
+  return cells
+}
+
 // ── Component ───────────────────────────────────────────────────────────
 
 export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: ChatInputProps) {
-  const [text, setText] = useState('')
-  const [cursor, setCursor] = useState(0)
+  const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const cursorRef = useRef(0)
-  const syncCursor = (pos: number | ((prev: number) => number)) => {
-    setCursor((prev) => {
-      const next = typeof pos === 'function' ? pos(prev) : pos
-      cursorRef.current = next
-      return next
-    })
-  }
+  useLayoutEffect(() => {
+    cursorRef.current = cursor
+  })
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
   const nextPasteIdRef = useRef(1)
   const lastEscRef = useRef(0)
-  const prevLinesRef = useRef(0)
-  const mountedRef = useRef(false)
+  const activeRef = useRef(false)
+  const prevFrameRef = useRef<Cell[][]>([])
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
@@ -141,8 +201,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     if (!text.trim()) return
     const expanded = expandPasteRefs(text, pastedContents)
     onSubmit(expanded)
-    setText('')
-    syncCursor(0)
+    dispatch({ type: 'RESET' })
     setPastedContents({})
     setCompletionIndex(0)
   }
@@ -166,32 +225,18 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     let newPos = 0
     for (let i = 0; i < targetLine; i++) newPos += lines[i].length + 1
     newPos += targetCol
-    syncCursor(newPos)
+    dispatch({ type: 'SET_CURSOR', cursor: newPos })
   }
 
   usePromptInput({
     enabled: !disabled,
     onInterrupt,
     onText: (chunk) => {
-      const pos = cursorRef.current
-      setText((prev) => prev.slice(0, pos) + chunk + prev.slice(pos))
-      syncCursor(pos + chunk.length)
+      dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
       setCompletionIndex(0)
     },
     onPaste: (content) => {
-      const lineCount = content.split(/\r\n|\r|\n/).length
-      const isLarge = lineCount >= PASTE_REF_MIN_LINES || content.length >= PASTE_REF_MIN_CHARS
-      const pos = cursorRef.current
-      if (isLarge) {
-        const id = nextPasteIdRef.current++
-        setPastedContents((prev) => ({ ...prev, [id]: { id, content, lineCount } }))
-        const ref = formatPasteRef(id, lineCount)
-        setText((prev) => prev.slice(0, pos) + ref + prev.slice(pos))
-        syncCursor(pos + ref.length)
-      } else {
-        setText((prev) => prev.slice(0, pos) + content + prev.slice(pos))
-        syncCursor(pos + content.length)
-      }
+      dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: content })
       setCompletionIndex(0)
     },
     onKey: (key) => {
@@ -202,8 +247,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       if (key === 'escape') {
         const now = Date.now()
         if (now - lastEscRef.current < 500 && text.length > 0) {
-          setText('')
-          syncCursor(0)
+          dispatch({ type: 'RESET' })
           setPastedContents({})
           setCompletionIndex(0)
         }
@@ -213,49 +257,45 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       if (key === 'backspace') {
         const pos = cursorRef.current
         if (pos === 0) return
-        setText((prev) => {
-          const before = prev.slice(0, pos)
-          const stripped = stripTrailingRef(before)
-          if (stripped) {
-            setPastedContents((pc) => {
-              const n = { ...pc }
-              delete n[stripped.id]
-              return n
-            })
-            syncCursor(pos - (before.length - stripped.without.length))
-            return stripped.without + prev.slice(pos)
-          }
-          syncCursor(pos - 1)
-          return prev.slice(0, pos - 1) + prev.slice(pos)
-        })
+        const before = text.slice(0, pos)
+        const stripped = stripTrailingRef(before)
+        if (stripped) {
+          setPastedContents((pc) => {
+            const n = { ...pc }
+            delete n[stripped.id]
+            return n
+          })
+          const deleteCount = before.length - stripped.without.length
+          dispatch({ type: 'BACKSPACE_REF', pos, deleteCount })
+        } else {
+          dispatch({ type: 'BACKSPACE_REF', pos, deleteCount: 1 })
+        }
         setCompletionIndex(0)
         return
       }
       if (key === 'delete') {
-        const pos = cursorRef.current
-        setText((prev) => (pos >= prev.length ? prev : prev.slice(0, pos) + prev.slice(pos + 1)))
+        dispatch({ type: 'DELETE', pos: cursorRef.current })
         return
       }
       if (key === 'left') {
-        syncCursor((p) => Math.max(0, p - 1))
+        dispatch({ type: 'SET_CURSOR', cursor: Math.max(0, cursorRef.current - 1) })
         return
       }
       if (key === 'right') {
-        syncCursor((p) => Math.min(text.length, p + 1))
+        dispatch({ type: 'SET_CURSOR', cursor: Math.min(text.length, cursorRef.current + 1) })
         return
       }
       if (key === 'home') {
-        syncCursor(0)
+        dispatch({ type: 'SET_CURSOR', cursor: 0 })
         return
       }
       if (key === 'end') {
-        syncCursor(text.length)
+        dispatch({ type: 'SET_CURSOR', cursor: text.length })
         return
       }
       if (key === 'tab') {
         if (currentMatch) {
-          setText(currentMatch.name)
-          syncCursor(currentMatch.name.length)
+          dispatch({ type: 'SET_TEXT', text: currentMatch.name, cursor: currentMatch.name.length })
           setCompletionIndex(0)
         }
         return
@@ -281,28 +321,35 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     },
   })
 
-  // ── Direct ANSI overwrite rendering (no erase, no flash) ──────────
+  // ── Multi-line frame rendering with cell-level diff ──────────────────
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (disabled) {
-      // Clear our lines by overwriting with spaces
-      if (prevLinesRef.current > 0) {
-        let out = `\x1b[${prevLinesRef.current}A`
-        for (let i = 0; i < prevLinesRef.current; i++) {
-          out += '\r' + ' '.repeat(termWidth) + '\n'
+      if (activeRef.current) {
+        // Erase our region
+        const prevH = prevFrameRef.current.length
+        if (prevH > 1) {
+          let buf = `\x1b[${prevH - 1}A` // move to top of region
+          for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
+          buf += `\x1b[${prevH - 1}A` // move back to top
+          process.stdout.write(buf)
+        } else if (prevH === 1) {
+          process.stdout.write('\r\x1b[K')
         }
-        out += `\x1b[${prevLinesRef.current}A`
-        process.stdout.write(out)
-        prevLinesRef.current = 0
+        activeRef.current = false
+        prevFrameRef.current = []
       }
       return
     }
 
+    activeRef.current = true
+
     const PROMPT_WIDTH = 2
     const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
-    const separatorPlain = '─'.repeat(Math.max(0, termWidth - 1))
-    const separatorAnsi = c.hex(PROMPT_BORDER)(separatorPlain)
+    const sepChar = '\u2500'
+    const sepText = sepChar.repeat(Math.max(0, termWidth - 1))
 
+    // ── Build display lines (with visible windowing) ──
     const rawLines = text.length === 0 ? [''] : text.split('\n')
 
     let rawCursorLine = 0,
@@ -310,7 +357,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     {
       let charsSoFar = 0
       for (let i = 0; i < rawLines.length; i++) {
-        if (charsSoFar + rawLines[i].length >= cursor && cursor >= charsSoFar) {
+        if (cursor >= charsSoFar && cursor <= charsSoFar + rawLines[i].length) {
           rawCursorLine = i
           cursorCol = cursor - charsSoFar
           break
@@ -319,7 +366,8 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       }
     }
 
-    let displayLines: string[], cursorLine: number
+    let displayLines: string[]
+    let cursorLine: number
     if (rawLines.length <= MAX_VISIBLE_LINES) {
       displayLines = rawLines
       cursorLine = rawCursorLine
@@ -329,112 +377,199 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       displayLines = rawLines.slice(start, start + MAX_VISIBLE_LINES)
       cursorLine = rawCursorLine - start
       if (start > 0) {
-        displayLines[0] = `… (+${start} above)`
+        displayLines[0] = `\u2026 (+${start} above)`
         if (cursorLine === 0) cursorLine = -1
       }
       if (start + MAX_VISIBLE_LINES < rawLines.length) {
-        displayLines[displayLines.length - 1] = `… (+${rawLines.length - start - MAX_VISIBLE_LINES} below)`
+        displayLines[displayLines.length - 1] = `\u2026 (+${rawLines.length - start - MAX_VISIBLE_LINES} below)`
         if (cursorLine === displayLines.length - 1) cursorLine = -1
       }
     }
 
-    // Build lines as [ansiString, plainString] pairs for pad calculation
-    const lines: Array<[string, string]> = []
+    // ── Build 2D cell frame ──
+    const frame: Cell[][] = []
 
-    lines.push([separatorAnsi, separatorPlain])
+    // Top separator
+    frame.push(textToCells(sepText, S_GRAY))
 
+    // Input lines
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
-      const promptA = c.hex(PROMPT_BORDER)(i === 0 ? '> ' : '  ')
-      const promptP = i === 0 ? '> ' : '  '
+      const prompt = i === 0 ? '> ' : '  '
       const showCursor = i === cursorLine && cursorLine >= 0
+      const cells: Cell[] = []
+
+      // Prompt
+      cells.push({ char: prompt[0], style: S_GRAY, width: 1 })
+      cells.push({ char: prompt[1], style: S_NONE, width: 1 })
 
       if (!showCursor) {
         const lw = visualWidth(line)
         const truncated = lw > vpWidth ? sliceByWidth(line, vpWidth) : line
-        lines.push([promptA + truncated, promptP + truncated])
-        continue
-      }
-
-      const before = line.slice(0, cursorCol)
-      const cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
-      const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
-      const lw = visualWidth(line)
-
-      if (lw <= vpWidth) {
-        lines.push([promptA + before + c.inverse(cursorChar) + after, promptP + before + cursorChar + after])
+        cells.push(...textToCells(truncated, S_RESET))
       } else {
-        const beforeWidth = visualWidth(before)
-        const halfVP = Math.floor(vpWidth / 2)
-        let skipCols = Math.max(0, beforeWidth - halfVP)
-        const totalWidth = lw + (cursorCol >= line.length ? 1 : 0)
-        if (skipCols + vpWidth > totalWidth) skipCols = Math.max(0, totalWidth - vpWidth)
-        const startIdx = skipByWidth(line, skipCols)
-        const vb = line.slice(startIdx, cursorCol)
-        const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
-        const remaining = vpWidth - visualWidth(vb) - (isWide(cursorChar.codePointAt(0)!) ? 2 : 1)
-        const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
-        lines.push([promptA + vb + c.inverse(cursorChar) + va, promptP + vb + cursorChar + va])
+        const before = line.slice(0, cursorCol)
+        const cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
+        const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
+        const lw = visualWidth(line)
+
+        if (lw <= vpWidth) {
+          cells.push(...textToCells(before, S_RESET))
+          cells.push({ char: cursorChar, style: S_INV, width: charWidth(cursorChar) })
+          cells.push(...textToCells(after, S_RESET))
+        } else {
+          const beforeWidth = visualWidth(before)
+          const halfVP = Math.floor(vpWidth / 2)
+          let skipCols = Math.max(0, beforeWidth - halfVP)
+          const totalWidth = lw + (cursorCol >= line.length ? 1 : 0)
+          if (skipCols + vpWidth > totalWidth) skipCols = Math.max(0, totalWidth - vpWidth)
+          const startIdx = skipByWidth(line, skipCols)
+          const vb = line.slice(startIdx, cursorCol)
+          const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
+          const remaining = vpWidth - visualWidth(vb) - charWidth(cursorChar)
+          const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
+          cells.push(...textToCells(vb, S_RESET))
+          cells.push({ char: cursorChar, style: S_INV, width: charWidth(cursorChar) })
+          cells.push(...textToCells(va, S_RESET))
+        }
       }
+      frame.push(cells)
     }
 
-    lines.push([separatorAnsi, separatorPlain])
+    // Bottom separator
+    frame.push(textToCells(sepText, S_GRAY))
 
+    // Completion menu
     if (matches.length > 0) {
       const maxNameLen = matches.reduce((max, cmd) => Math.max(max, cmd.name.length), 0)
       for (let i = 0; i < matches.length; i++) {
         const cmd = matches[i]
         const sel = i === safeIndex
-        const name = sel ? c.hex(ACCENT).bold(cmd.name.padEnd(maxNameLen + 2)) : c.gray(cmd.name.padEnd(maxNameLen + 2))
-        const desc = sel ? cmd.description : c.gray(cmd.description)
-        const plain = '  ' + cmd.name.padEnd(maxNameLen + 2) + cmd.description
-        lines.push(['  ' + name + desc, plain])
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        const nameStr = cmd.name.padEnd(maxNameLen + 2)
+        if (sel) {
+          cells.push(...textToCells(nameStr, S_ACCENT_BOLD))
+          cells.push(...textToCells(cmd.description, S_RESET))
+        } else {
+          cells.push(...textToCells(nameStr + cmd.description, S_DIM))
+        }
+        frame.push(cells)
       }
     }
 
-    // Build ANSI output: move up to start, overwrite each line (padded to termWidth)
-    const prevLines = prevLinesRef.current
-    const newLines = lines.length
+    // ── Diff with previous frame and build output buffer ──
+    const prevFrame = prevFrameRef.current
+    const prevH = prevFrame.length
+    const nextH = frame.length
+    const maxH = Math.max(prevH, nextH)
 
-    let out = ''
-    // Move cursor up to start of our region
-    if (prevLines > 0) {
-      out += `\x1b[${prevLines}A`
-    }
-    // Write each line: CR + padded content + LF
-    for (const [ansi, plain] of lines) {
-      out += '\r' + padLine(ansi, plain, termWidth) + '\n'
-    }
-    // If previous frame had more lines, overwrite extras with blank lines
-    for (let i = newLines; i < prevLines; i++) {
-      out += '\r' + ' '.repeat(termWidth) + '\n'
-    }
-    // Move back up past the extra blank lines so cursor is right after our content
-    if (newLines < prevLines) {
-      out += `\x1b[${prevLines - newLines}A`
+    let buf = ''
+
+    // Move cursor to top of region.
+    // After the previous render the cursor sits on the LAST row (prevH-1),
+    // so we move up by (prevH - 1) rows to reach row 0.
+    if (prevH > 1) {
+      buf += `\x1b[${prevH - 1}A`
     }
 
-    process.stdout.write(out)
-    prevLinesRef.current = Math.max(newLines, prevLines)
+    for (let row = 0; row < maxH; row++) {
+      const prevRow = row < prevH ? prevFrame[row] : []
+      const nextRow = row < nextH ? frame[row] : []
 
-    if (!mountedRef.current) mountedRef.current = true
+      if (row < nextH) {
+        // Find first diff cell
+        let diffIdx = 0
+        const minCells = Math.min(prevRow.length, nextRow.length)
+        while (diffIdx < minCells && cellsEqual(prevRow[diffIdx], nextRow[diffIdx])) {
+          diffIdx++
+        }
+
+        if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
+          // Calculate column at diffIdx
+          let col = 0
+          for (let c = 0; c < diffIdx; c++) col += nextRow[c].width
+
+          // Move to the diff column
+          buf += `\x1b[${col + 1}G`
+
+          // Write changed cells
+          let lastStyle = ''
+          for (let c = diffIdx; c < nextRow.length; c++) {
+            const cell = nextRow[c]
+            if (cell.style !== lastStyle) {
+              buf += cell.style
+              lastStyle = cell.style
+            }
+            buf += cell.char
+            if (cell.style === S_INV) {
+              buf += S_INV_OFF
+              lastStyle = S_NONE
+            }
+          }
+          buf += S_RESET
+
+          // Pad/erase if old row was wider
+          let oldTailW = 0
+          for (let c = diffIdx; c < prevRow.length; c++) oldTailW += prevRow[c].width
+          let newTailW = 0
+          for (let c = diffIdx; c < nextRow.length; c++) newTailW += nextRow[c].width
+          if (oldTailW > newTailW) {
+            buf += ' '.repeat(oldTailW - newTailW)
+          }
+        }
+        // else: row unchanged, skip
+      } else {
+        // Extra old row — erase it
+        buf += '\r\x1b[K'
+      }
+
+      // Move to next row (except after last row)
+      if (row < maxH - 1) {
+        if (row < prevH - 1) {
+          // Line below already exists — cursor down (no scroll, no new line)
+          buf += '\x1b[1B'
+        } else {
+          // Line below doesn't exist yet — line feed to create it
+          buf += '\n'
+        }
+      }
+    }
+
+    // After the loop, cursor is on the last row we touched (row maxH-1).
+    // We want it on the last row of the NEW frame (row nextH-1).
+    // Move up by (maxH-1) - (nextH-1) = maxH - nextH.
+    if (maxH > nextH) {
+      buf += `\x1b[${maxH - nextH}A`
+    }
+
+    if (buf) {
+      process.stdout.write(buf)
+    }
+
+    prevFrameRef.current = frame
   })
 
-  // Cleanup on unmount — clear our lines
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (prevLinesRef.current > 0) {
-        let out = `\x1b[${prevLinesRef.current}A`
-        for (let i = 0; i < prevLinesRef.current; i++) {
-          out += '\r' + ' '.repeat(termWidth) + '\n'
+      if (activeRef.current) {
+        const prevH = prevFrameRef.current.length
+        if (prevH > 1) {
+          let buf = `\x1b[${prevH - 1}A`
+          for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
+          buf += `\x1b[${prevH - 1}A`
+          process.stdout.write(buf)
+        } else if (prevH === 1) {
+          process.stdout.write('\r\x1b[K')
         }
-        out += `\x1b[${prevLinesRef.current}A`
-        process.stdout.write(out)
+        activeRef.current = false
+        prevFrameRef.current = []
       }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Return null — Ink's dynamic region is empty, so log-update has nothing
-  // to clear/redraw. Our rendering is pure overwrite, no erase, no flash.
+  // Return null — everything is rendered via direct stdout writes
   return null
 }

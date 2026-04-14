@@ -48,7 +48,7 @@ export function startApp(model: LanguageModel, options: AgentOptions, initialPro
         latestModelId = modelId
       }}
     />,
-    { exitOnCtrlC: false },
+    { exitOnCtrlC: false, incrementalRendering: true, maxFps: 120 },
   )
   return waitUntilExit
 }

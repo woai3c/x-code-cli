@@ -90,7 +90,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
 
   // Bracketed-paste state persists across stdin chunks so we can stitch a
   // paste that arrives in multiple data events.
-  const pasteStateRef = useRef<{ inPaste: boolean; buffer: string }>({ inPaste: false, buffer: '' })
+  const pasteStateRef = useRef<{ inPaste: boolean; buffer: string; timer: NodeJS.Timeout | null }>({
+    inPaste: false,
+    buffer: '',
+    timer: null,
+  })
 
   // Debounce buffer + timer for the fallback path.
   const pendingTextRef = useRef<string>('')
@@ -117,6 +121,7 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
 
     setRawMode(true)
     process.stdout.write(ENABLE_BRACKETED_PASTE)
+    const useBracketedPaste = true
 
     // ── Flush the debounce buffer ──
     //
@@ -251,6 +256,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
             return
           }
           state.buffer += chunk.slice(0, endIdx)
+          // Clear the safety timeout
+          if (state.timer) {
+            clearTimeout(state.timer)
+            state.timer = null
+          }
           // Normalize line endings for the same reason flushPending does —
           // bare `\r` in pasted content acts as carriage return and
           // overwrites previous characters when later echoed to the
@@ -279,14 +289,37 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         flushPending()
         chunk = chunk.slice(startIdx + PASTE_START.length)
         state.inPaste = true
+        // Safety timeout: if PASTE_END is never received (ConHost bug),
+        // force-flush the buffer after 1 second so input doesn't freeze.
+        state.timer = setTimeout(() => {
+          const s = pasteStateRef.current
+          if (!s.inPaste) return
+          const content = s.buffer.replace(/\r\n?/g, '\n')
+          s.buffer = ''
+          s.inPaste = false
+          s.timer = null
+          if (content) {
+            handlersRef.current.onPaste(content)
+          }
+        }, 1000)
       }
     }
 
     stdin.on('data', handleData)
     return () => {
       flushPending()
+      // Clear paste safety timeout
+      const ps = pasteStateRef.current
+      if (ps.timer) {
+        clearTimeout(ps.timer)
+        ps.timer = null
+      }
+      ps.inPaste = false
+      ps.buffer = ''
       stdin.off('data', handleData)
-      process.stdout.write(DISABLE_BRACKETED_PASTE)
+      if (useBracketedPaste) {
+        process.stdout.write(DISABLE_BRACKETED_PASTE)
+      }
     }
   }, [enabled, stdin, setRawMode])
 }
