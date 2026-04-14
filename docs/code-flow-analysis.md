@@ -198,7 +198,7 @@ main()
 
 ```
 main()
-  ├─ loadConfig()                  // 读取 ~/.xcode/config.json
+  ├─ loadConfig()                  // 读取 ~/.x-code/config.json
   ├─ getAvailableProviders()       // 检测哪些 Provider 有 API Key
   ├─ resolveModelId(argv.model, config)
   │    ├─ 优先级: --model 参数 > X_CODE_MODEL 环境变量 > config.json > 自动检测
@@ -458,7 +458,7 @@ submit(text)
   │
   ├─ 1. initialize() (仅首次调用)
   │    ├─ initMemories()          // 加载全局 + 项目 AutoMemory
-  │    │    ├─ globalMemory.load()   // ~/.xcode/memory/auto.md
+  │    │    ├─ globalMemory.load()   // ~/.x-code/memory/auto.md
   │    │    ├─ projectMemory.load()  // .x-code/memory/auto.md
   │    │    ├─ globalMemory.evict(90)   // 清除 90 天前的记忆
   │    │    └─ projectMemory.evict(90)
@@ -543,8 +543,8 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   │    ├─ 解析用户消息中的 @rule-name 引用       // 匹配 /@([\w-]+)/g，命中则把整条规则内容
   │    │                                         //   以 "### Rule: <name>" 追加到知识上下文
   │    └─ buildKnowledgeContext({ rules })      // 组装完整知识上下文
-  │         ├─ 全局偏好      ~/.xcode/knowledge.md
-  │         ├─ 全局自动记忆  ~/.xcode/memory/auto.md
+  │         ├─ 全局偏好      ~/.x-code/knowledge.md
+  │         ├─ 全局自动记忆  ~/.x-code/memory/auto.md
   │         ├─ 项目知识      .x-code/knowledge.md
   │         ├─ 项目自动记忆  .x-code/memory/auto.md
   │         ├─ 本地偏好      .x-code/local/preferences.md
@@ -560,8 +560,9 @@ agentLoop(userMessage, model, options, callbacks, existingState)
        │
        ├─ turnCount++
        │
-       ├─ 上下文压缩检查
-       │    if (state.lastInputTokens > compressionThreshold)
+       ├─ 上下文压缩检查（双重检查，满足任一即触发）
+       │    if (state.lastInputTokens > compressionThreshold
+       │        || estimateTokenCount(messages) > compressionThreshold)
        │      ├─ generateSessionSummary() → saveSessionSummary()
        │      ├─ compressMessages()
        │      │    ├─ 保留最近 6 条消息

@@ -195,9 +195,10 @@ async function agentLoop(userMessage, callbacks) {
   messages.push({ role: 'user', content: userMessage })
 
   while (true) {
-    // 上下文压缩检查：用上一轮 API 返回的真实 inputTokens 触发，
-    // 不做字符数估算——估算在工具输出 / 非 ASCII 文本下误差极大
-    if (lastInputTokens > COMPRESSION_THRESHOLD) {
+    // 上下文压缩检查（双重检查）：
+    // 1. 上一轮 API 返回的真实 inputTokens（最可靠）
+    // 2. 字符数估算安全网（chars / 3.0，偏保守，防止单轮大文件读取撑爆上下文）
+    if (lastInputTokens > COMPRESSION_THRESHOLD || estimateTokenCount(messages) > COMPRESSION_THRESHOLD) {
       const summary = await compressMessages(messages, model)
       await saveSessionSummary(summary) // 同时保存会话摘要
       callbacks.onContextCompressed(summary)
@@ -248,8 +249,8 @@ async function agentLoop(userMessage, callbacks) {
 
 - **手动循环**而非 `ToolLoopAgent`：需要在工具执行前插入权限检查
 - **callbacks 模式**：Loop 不直接操作 UI，通过回调通知状态变化
-- **消息累积 + 自动压缩**：消息持续追加，上一轮真实 inputTokens 超过模型上下文窗口 80% 时自动压缩旧消息
-- **token 用量追踪**：每轮累计 `inputTokens` + `outputTokens`（API 返回的真实数字，不做估算，不做费用换算），通过 callback 推送给 UI
+- **消息累积 + 自动压缩**：消息持续追加，双重检查触发压缩——上一轮真实 inputTokens 超过模型上下文窗口 80%，或字符估算安全网（`chars / 3.0`）超阈值时自动压缩旧消息
+- **token 用量追踪**：每轮累计 `inputTokens` + `outputTokens`（API 返回的真实数字，不做费用换算），通过 callback 推送给 UI
 
 #### 上下文压缩
 
@@ -281,11 +282,14 @@ async function compressMessages(messages: Message[], model): Promise<Message[]> 
 }
 ```
 
-**触发条件**：`lastInputTokens > contextWindow * 0.8`
+**触发条件**（双重检查，满足任一即触发）：
 
-- `lastInputTokens` 来自上一轮 API 响应的 `usage.inputTokens`，是模型已经实际收到的 token 数
-- `contextWindow` 根据模型设置（如 Claude Sonnet: 200k，GPT-4o: 128k）
-- **故意不做字符数估算**：`text.length / 4` 类粗估在工具输出 / 中文 / 代码场景下误差巨大，宁可用上一轮的真实数字晚一格触发，也不让估算误判
+1. `lastInputTokens > contextWindow * 0.8` — 上一轮 API 响应的真实 token 数，最可靠的信号
+2. `estimateTokenCount(messages) > contextWindow * 0.8` — 字符估算安全网（`总字符数 / 3.0`）
+
+- `contextWindow` 根据模型设置（如 Claude Sonnet: 200k，GPT-4.1: 1M）
+- 字符估算使用保守的 3.0 chars/token 比率（英文通常 ~4，CJK 和代码更低），故意让估算偏高，宁早不晚
+- 字符估算的作用是**安全网**：当单轮工具输出（如读取大文件）一次性把上下文推过限制时，真实 token 数还没来得及更新，估算能提前拦截
 - 压缩时同时触发**会话记忆保存**（10.8 节），一石二鸟
 
 #### Token 用量统计
@@ -730,7 +734,7 @@ writeMessageToStdout(write: InkWrite, msg: DisplayMessage)
        renderMarkdown → ANSI → 每行加 2 空格缩进 → write(indented + '\n\n')
 ```
 
-**诊断 log 开关**：设 `X_CODE_DEBUG=1` 环境变量时，每次 `writeMessageToStdout` 调用会把 message 内容 append 到 `~/.xcode/x-code-debug.log`，便于对比 React state 与实际屏幕输出。默认关闭，不会创建文件或目录。
+**诊断 log 开关**：设 `X_CODE_DEBUG=1` 环境变量时，每次 `writeMessageToStdout` 调用会把 message 内容 append 到 `~/.x-code/x-code-debug.log`，便于对比 React state 与实际屏幕输出。默认关闭，不会创建文件或目录。
 
 ### 4.6 状态管理
 
@@ -990,7 +994,7 @@ xc --model custom:doubao-1.5-pro
 
 1. **CLI 参数**：`xc --model anthropic:claude-sonnet-4-5`
 2. **环境变量**：`X_CODE_MODEL=anthropic:claude-sonnet-4-5`
-3. **用户配置文件**：`~/.xcode/config.json` 中的 `model` 字段
+3. **用户配置文件**：`~/.x-code/config.json` 中的 `model` 字段
 4. **智能默认**：扫描已配置的 API Key，按以下顺序选择第一个可用的提供商：
    - `ANTHROPIC_API_KEY` → `anthropic:claude-sonnet-4-5`
    - `OPENAI_API_KEY` → `openai:gpt-4.1`
@@ -998,7 +1002,7 @@ xc --model custom:doubao-1.5-pro
    - `ALIBABA_API_KEY` → `alibaba:qwen-max`
    - `GOOGLE_GENERATIVE_AI_API_KEY` → `google:gemini-2.5-pro`
    - 其他已配置的提供商...
-   - 全部未配置 → 启动引导流程
+   - 全部未配置 → 报错并打印所有支持的环境变量名
 
 **模型 ID 格式**：`提供商:模型名`，如 `anthropic:claude-sonnet-4-5`、`openai:gpt-4.1`
 
@@ -1077,10 +1081,10 @@ export function createModelRegistry() {
 
 1. 命令行 `--model <alias>` / `-m <alias>`（最高优先级）
 2. `X_CODE_MODEL` 环境变量
-3. `~/.xcode/config.json` 里的 `model` 字段
+3. `~/.x-code/config.json` 里的 `model` 字段
 4. **自动选择**：按顺序扫描环境变量 / config 里已配置的 API Key（Anthropic → OpenAI → DeepSeek → Alibaba → Google → xAI → Zhipu → Moonshot → Custom），第一个有 key 的 Provider 即为默认
 
-如果**一个 Provider 的 API Key 都没有**，启动时直接报错并打印所有支持的环境变量名和各提供商 Key 获取地址。用户自行设置环境变量或 `~/.xcode/config.json` 后重新启动即可。
+如果**一个 Provider 的 API Key 都没有**，启动时直接报错并打印所有支持的环境变量名和各提供商 Key 获取地址。用户自行设置环境变量或 `~/.x-code/config.json` 后重新启动即可。
 
 > 交互式配置向导不在 MVP 范围内——多数用户在开发环境里设一次环境变量就够了，做一整套 Wizard 是过度工程。
 
@@ -1100,26 +1104,13 @@ export function createModelRegistry() {
 ### 6.6 配置文件格式
 
 ```json
-// ~/.xcode/config.json
+// ~/.x-code/config.json
 {
-  "model": "deepseek",
-  "providers": {
-    "anthropic": { "apiKey": "sk-ant-xxx" },
-    "openai": { "apiKey": "sk-xxx" },
-    "deepseek": { "apiKey": "sk-xxx" },
-    "alibaba": { "apiKey": "sk-xxx", "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1" },
-    "zhipu": { "apiKey": "xxx.xxx" },
-    "moonshotai": { "apiKey": "sk-xxx" },
-    "custom": {
-      "apiKey": "your-key",
-      "baseURL": "https://ark.cn-beijing.volces.com/api/v3",
-      "name": "doubao"
-    }
-  }
+  "model": "deepseek"
 }
 ```
 
-**安全注意**：配置文件中的 API Key 仅作为环境变量不方便时的备选方案。推荐优先使用环境变量。
+配置文件**仅存储模型偏好**（`model` 字段），API Key **只能通过环境变量配置**，不支持写在配置文件中。
 
 **完整环境变量清单**：
 
@@ -1216,6 +1207,13 @@ export type ShellType = 'powershell' | 'bash' | 'zsh'
 
 export function getShellConfig(): { executable: string; args: string[]; type: ShellType } {
   if (os.platform() === 'win32') {
+    // Git Bash / MSYS2 / Cygwin set SHELL to a Unix-style path (e.g. /usr/bin/bash).
+    // Prefer that shell when available so the Unix tool ecosystem works as expected.
+    const shell = process.env.SHELL
+    if (shell && /\b(bash|zsh)$/i.test(shell)) {
+      const type: ShellType = shell.endsWith('zsh') ? 'zsh' : 'bash'
+      return { executable: shell, args: ['-c'], type }
+    }
     return { executable: 'powershell.exe', args: ['-NoProfile', '-Command'], type: 'powershell' }
   }
   const userShell = process.env.SHELL ?? '/bin/bash'
@@ -1229,7 +1227,7 @@ export function getShellConfig(): { executable: string; args: string[]; type: Sh
 | 层面              | 设计决策                                                 |
 | ----------------- | -------------------------------------------------------- |
 | **工具命名**      | `shell`（非 `bash`），语义上不绑定特定 shell             |
-| **命令执行**      | 运行时检测：Windows → PowerShell，macOS/Linux → bash/zsh |
+| **命令执行**      | 运行时检测：Windows → 优先 Git Bash/MSYS2（如有 $SHELL），否则 PowerShell；macOS/Linux → bash/zsh |
 | **System Prompt** | 注入 `{shell}` 变量，模型据此生成对应语法的命令          |
 | **路径处理**      | 全部用 Node.js `path` 模块（自动处理 `\` vs `/`）        |
 | **进程管理**      | 使用 `execa` 库（跨平台进程管理，自动处理信号/编码）     |
@@ -1442,7 +1440,7 @@ X-Code（MCP 客户端）
 ```
 
 - **协议**：JSON-RPC 2.0，支持 stdio + Streamable HTTP 两种传输
-- **配置**：项目级 `.x-code/mcp.json` + 全局 `~/.xcode/mcp.json`
+- **配置**：项目级 `.x-code/mcp.json` + 全局 `~/.x-code/mcp.json`
 - **发现**：启动时连接所有配置的 MCP Server，握手协商能力，获取可用工具列表
 - **注入**：MCP 工具与内置工具合并注册到 Agent Loop，模型统一调用
 - **权限**：MCP 工具默认走 `ask` 级别，`--trust` 模式下自动放行
@@ -1497,7 +1495,7 @@ MCP  （连接）= 工具能力   — "连接 GitHub 创建 PR"
     └── scripts/
         └── check-env.sh   # 部署前检查脚本
 
-~/.xcode/skills/           # 全局 Skills（所有项目可用）
+~/.x-code/skills/           # 全局 Skills（所有项目可用）
 └── code-style/
     └── SKILL.md
 ```
@@ -1574,7 +1572,7 @@ AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构
 │   └── local/                 # 个人本地配置（自动 gitignore）
 │       └── preferences.md     # 个人偏好
 │
-~/.xcode/
+~/.x-code/
 ├── knowledge.md               # 全局个人知识（所有项目共用，手动编写）
 ├── memory/
 │   └── auto.md                # 全局自动记忆（用户偏好，AI 自动提炼）
@@ -1585,8 +1583,8 @@ AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构
 
 | 层级         | 文件                           | 编写者                      | Git      | 加载时机          |
 | ------------ | ------------------------------ | --------------------------- | -------- | ----------------- |
-| 全局偏好     | `~/.xcode/knowledge.md`        | 用户手动                    | N/A      | 始终加载          |
-| 全局自动记忆 | `~/.xcode/memory/auto.md`      | **AI 自动**                 | N/A      | 前 200 行加载     |
+| 全局偏好     | `~/.x-code/knowledge.md`        | 用户手动                    | N/A      | 始终加载          |
+| 全局自动记忆 | `~/.x-code/memory/auto.md`      | **AI 自动**                 | N/A      | 前 200 行加载     |
 | 项目知识     | `.x-code/knowledge.md`         | 团队手动 / `xc init` 预填充 | 追踪     | 始终加载          |
 | 路径规则     | `.x-code/rules/*.md`           | 团队手动                    | 追踪     | 按 paths 条件加载 |
 | 项目自动记忆 | `.x-code/memory/auto.md`       | **AI 自动**                 | 建议追踪 | 前 200 行加载     |
@@ -1596,7 +1594,7 @@ AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构
 自动记忆分两个维度：
 
 - **项目自动记忆**（`.x-code/memory/auto.md`）— 项目级事实（技术栈、构建命令、代码约定），跟随仓库
-- **全局自动记忆**（`~/.xcode/memory/auto.md`）— 用户级偏好（代码风格、交互习惯），跨项目生效
+- **全局自动记忆**（`~/.x-code/memory/auto.md`）— 用户级偏好（代码风格、交互习惯），跨项目生效
 
 ### 10.4 知识内容分类
 
@@ -1739,7 +1737,7 @@ export const saveKnowledge = tool({
         'A short unique identifier for this fact, e.g. "包管理器", "测试框架", "构建命令". Same key = same fact, used for conflict detection',
       ),
     fact: z.string().describe('The fact value, e.g. "pnpm (workspace 模式)", "Vitest 3", "pnpm build"'),
-    scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.xcode/)'),
+    scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.x-code/)'),
     category: z.enum(['tech-stack', 'commands', 'conventions', 'preferences', 'context']),
   }),
 })
@@ -1878,7 +1876,7 @@ class AutoMemory {
 | 维度     | 写入文件                  | 来源                                                                                |
 | -------- | ------------------------- | ----------------------------------------------------------------------------------- |
 | 项目记忆 | `.x-code/memory/auto.md`  | 启动扫描（基础配置）+ 模型 `saveKnowledge(scope:'project')`（代码约定、技术选型等） |
-| 全局记忆 | `~/.xcode/memory/auto.md` | 仅模型 `saveKnowledge(scope:'global')`（用户偏好、交互习惯，跨项目生效）            |
+| 全局记忆 | `~/.x-code/memory/auto.md` | 仅模型 `saveKnowledge(scope:'global')`（用户偏好、交互习惯，跨项目生效）            |
 
 #### 存储格式
 
@@ -2004,7 +2002,7 @@ $ xc
 
 - 如果一个知识在 90 天内被模型重新 add（哪怕值不变），日期会刷新，不会被淘汰
 - 项目扫描检测到的事实（包管理器、框架版本等）每次启动都会刷新日期
-- 90 天阈值可在 `~/.xcode/config.json` 中配置（`memoryEvictDays`）
+- 90 天阈值可在 `~/.x-code/config.json` 中配置（`memoryEvictDays`）
 
 #### ② 模型主动清理
 
@@ -2076,10 +2074,10 @@ $ xc init
 ## Project Knowledge
 
 ### Global Preferences
-{~/.xcode/knowledge.md 的内容}
+{~/.x-code/knowledge.md 的内容}
 
 ### Global Auto Memory
-{~/.xcode/memory/auto.md 前 200 行}
+{~/.x-code/memory/auto.md 前 200 行}
 
 ### Project Knowledge
 {.x-code/knowledge.md 的内容}
@@ -2106,7 +2104,7 @@ $ xc init
 | 特性         | X-Code                   | Claude Code           | Copilot                           | Windsurf               | Cursor                | Gemini CLI            | Codex CLI            |
 | ------------ | ------------------------ | --------------------- | --------------------------------- | ---------------------- | --------------------- | --------------------- | -------------------- |
 | 项目知识     | `.x-code/knowledge.md`   | `CLAUDE.md`（6 层）   | `.github/copilot-instructions.md` | `.windsurf/rules/*.md` | `.cursor/rules/*.mdc` | `GEMINI.md`           | `AGENTS.md`          |
-| 全局配置     | `~/.xcode/knowledge.md`  | `~/.claude/CLAUDE.md` | 用户级文件                        | `global_rules.md`      | User Rules (UI)       | `~/.gemini/GEMINI.md` | `~/.codex/AGENTS.md` |
+| 全局配置     | `~/.x-code/knowledge.md`  | `~/.claude/CLAUDE.md` | 用户级文件                        | `global_rules.md`      | User Rules (UI)       | `~/.gemini/GEMINI.md` | `~/.codex/AGENTS.md` |
 | 路径规则     | **4 种加载模式**         | paths frontmatter     | applyTo frontmatter               | 4 种激活模式           | 4 种规则类型          | 子目录文件            | 子目录文件           |
 | 项目自动记忆 | **结构化 CRUD**          | 模型自由读写文件      | **Agentic Memory**                | 模型自动提炼           | 无                    | 无                    | 早期阶段             |
 | 全局自动记忆 | **模型工具 (跨项目)**    | 无                    | 无                                | 无                     | 无                    | `/memory add`         | 无                   |
@@ -2325,7 +2323,7 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 
 ### 13.7 知识系统
 
-- ✅ 分层知识加载（全局 `~/.xcode/` / 项目 `.x-code/` / 本地 `.x-code/local/preferences.md`）
+- ✅ 分层知识加载（全局 `~/.x-code/` / 项目 `.x-code/` / 本地 `.x-code/local/preferences.md`）
 - ✅ `AutoMemory` 类（key-based CRUD + 冲突检测 + 90 天 TTL 淘汰）
 - ✅ 4 种规则加载模式（Always / Path Match / Agent Requested / Manual）
 - ✅ 启动时项目扫描（包管理器 / package.json / tsconfig.json 检测）
@@ -2344,7 +2342,7 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 - ✅ `Spinner` 三态（requesting / responding / tool-use）
 - ✅ `ToolCall` / `ShellOutput` / `Permission` / `SelectOptions`
 - ✅ `renderMarkdown`（marked.lexer + chalk）Markdown → ANSI
-- ✅ 可选诊断 log（`X_CODE_DEBUG=1` → `~/.xcode/x-code-debug.log`）
+- ✅ 可选诊断 log（`X_CODE_DEBUG=1` → `~/.x-code/x-code-debug.log`）
 
 ### 13.9 斜杠命令
 
