@@ -137,9 +137,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       streamBufferRef.current += delta
       const buf = streamBufferRef.current
       const shouldFlush =
-        buf.includes('\n\n') ||
-        buf.length >= FLUSH_CHAR_THRESHOLD ||
-        buf.split('\n').length > FLUSH_LINE_THRESHOLD
+        buf.includes('\n\n') || buf.length >= FLUSH_CHAR_THRESHOLD || buf.split('\n').length > FLUSH_LINE_THRESHOLD
       if (shouldFlush) flushBuffer()
     },
     [flushBuffer],

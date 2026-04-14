@@ -24,7 +24,6 @@
 // Special keys (Enter, backspace, arrows, tab, escape, Ctrl+C) always
 // force-flush any pending text before they dispatch, so the pasted content
 // is committed BEFORE the key that acts on it.
-
 import { useEffect, useRef } from 'react'
 
 import { useStdin } from 'ink'
@@ -44,7 +43,20 @@ const PASTE_DEBOUNCE_MS = 30
 // are treated as normal typing.
 const PASTE_SIZE_THRESHOLD = 8
 
-export type PromptKey = 'return' | 'backspace' | 'delete' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pageup' | 'pagedown'
+export type PromptKey =
+  | 'return'
+  | 'backspace'
+  | 'delete'
+  | 'tab'
+  | 'escape'
+  | 'up'
+  | 'down'
+  | 'left'
+  | 'right'
+  | 'home'
+  | 'end'
+  | 'pageup'
+  | 'pagedown'
 
 export interface PromptInputHandlers {
   /** Normal typed text (may be multi-char if the terminal batched a burst). */
@@ -78,7 +90,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
 
   // Bracketed-paste state persists across stdin chunks so we can stitch a
   // paste that arrives in multiple data events.
-  const pasteStateRef = useRef<{ inPaste: boolean; buffer: string }>({ inPaste: false, buffer: '' })
+  const pasteStateRef = useRef<{ inPaste: boolean; buffer: string; timer: NodeJS.Timeout | null }>({
+    inPaste: false,
+    buffer: '',
+    timer: null,
+  })
 
   // Debounce buffer + timer for the fallback path.
   const pendingTextRef = useRef<string>('')
@@ -105,6 +121,7 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
 
     setRawMode(true)
     process.stdout.write(ENABLE_BRACKETED_PASTE)
+    const useBracketedPaste = true
 
     // ── Flush the debounce buffer ──
     //
@@ -116,11 +133,28 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     // return" and overwrites previous characters, which was producing
     // the "optimizations Claude Managed Agents is currently in beta"
     // splicing pattern in echoed pastes.
+    // Pending backspace count — batched with the debounce timer so rapid
+    // IME correction sequences (multiple backspaces + committed char) merge
+    // into a single render instead of flashing through intermediate states.
+    const pendingBackspacesRef = { count: 0 }
+
+    const flushBackspaces = (): void => {
+      const n = pendingBackspacesRef.count
+      if (n === 0) return
+      pendingBackspacesRef.count = 0
+      for (let i = 0; i < n; i++) {
+        handlersRef.current.onKey('backspace')
+      }
+    }
+
     const flushPending = (): void => {
       if (pendingTimerRef.current) {
         clearTimeout(pendingTimerRef.current)
         pendingTimerRef.current = null
       }
+      // Flush queued backspaces FIRST, then text — this is the order they
+      // arrived (IME: backspaces to delete pinyin, then committed chars).
+      flushBackspaces()
       const raw = pendingTextRef.current
       if (!raw) return
       pendingTextRef.current = ''
@@ -141,6 +175,12 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
     }
 
+    const queueBackspace = (): void => {
+      pendingBackspacesRef.count++
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
+      pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
+    }
+
     // Dispatch a special key. Always force-flushes pending text first so
     // that, e.g., Enter commits the previously-buffered input BEFORE acting
     // on the key.
@@ -155,7 +195,18 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       if (data.length === 0) return
 
       if (data === '\r' || data === '\n') return dispatchKey('return')
-      if (data === '\x7f' || data === '\b') return dispatchKey('backspace')
+      if (data === '\x7f' || data === '\b') {
+        // If the debounce buffer has pending text, absorb the backspace by
+        // trimming the buffer instead of flushing + dispatching.
+        if (pendingTextRef.current.length > 0) {
+          pendingTextRef.current = pendingTextRef.current.slice(0, -1)
+          return
+        }
+        // Queue backspace with the same debounce timer so IME correction
+        // sequences (rapid backspaces + committed char) batch into one render.
+        queueBackspace()
+        return
+      }
       if (data === '\t') return dispatchKey('tab')
       if (data === '\x1b') return dispatchKey('escape')
 
@@ -205,6 +256,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
             return
           }
           state.buffer += chunk.slice(0, endIdx)
+          // Clear the safety timeout
+          if (state.timer) {
+            clearTimeout(state.timer)
+            state.timer = null
+          }
           // Normalize line endings for the same reason flushPending does —
           // bare `\r` in pasted content acts as carriage return and
           // overwrites previous characters when later echoed to the
@@ -233,14 +289,37 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         flushPending()
         chunk = chunk.slice(startIdx + PASTE_START.length)
         state.inPaste = true
+        // Safety timeout: if PASTE_END is never received (ConHost bug),
+        // force-flush the buffer after 1 second so input doesn't freeze.
+        state.timer = setTimeout(() => {
+          const s = pasteStateRef.current
+          if (!s.inPaste) return
+          const content = s.buffer.replace(/\r\n?/g, '\n')
+          s.buffer = ''
+          s.inPaste = false
+          s.timer = null
+          if (content) {
+            handlersRef.current.onPaste(content)
+          }
+        }, 1000)
       }
     }
 
     stdin.on('data', handleData)
     return () => {
       flushPending()
+      // Clear paste safety timeout
+      const ps = pasteStateRef.current
+      if (ps.timer) {
+        clearTimeout(ps.timer)
+        ps.timer = null
+      }
+      ps.inPaste = false
+      ps.buffer = ''
       stdin.off('data', handleData)
-      process.stdout.write(DISABLE_BRACKETED_PASTE)
+      if (useBracketedPaste) {
+        process.stdout.write(DISABLE_BRACKETED_PASTE)
+      }
     }
   }, [enabled, stdin, setRawMode])
 }

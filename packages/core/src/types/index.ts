@@ -39,7 +39,11 @@ export interface AgentCallbacks {
   onTextDelta: (text: string) => void
   onToolCall: (toolName: string, input: Record<string, unknown>) => void
   onToolResult: (toolCallId: string, result: string) => void
-  onAskPermission: (toolCall: { toolCallId: string; toolName: string; input: Record<string, unknown> }) => Promise<boolean>
+  onAskPermission: (toolCall: {
+    toolCallId: string
+    toolName: string
+    input: Record<string, unknown>
+  }) => Promise<boolean>
   onAskUser: (question: string, options: { label: string; description: string }[]) => Promise<string>
   onShellOutput: (chunk: string) => void
   onUsageUpdate: (usage: TokenUsage) => void
