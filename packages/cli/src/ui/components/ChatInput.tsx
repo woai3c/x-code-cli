@@ -6,13 +6,12 @@
 //   the previous frame cell-by-cell, line-by-line, and writes ALL changes
 //   in a SINGLE process.stdout.write() call.  Unchanged CJK characters are
 //   never re-written, eliminating jitter on ConHost.
-import React, { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 
 import { useStdout } from 'ink'
 
 import { usePromptInput } from '../hooks/use-prompt-input.js'
-import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
-import { ACCENT, PROMPT_BORDER } from '../theme.js'
+import { type PastedContents, expandPasteRefs, stripTrailingRef } from '../paste-refs.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -568,7 +567,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         prevFrameRef.current = []
       }
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // Return null — everything is rendered via direct stdout writes
   return null
