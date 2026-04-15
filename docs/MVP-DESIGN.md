@@ -673,7 +673,7 @@ App.tsx 的渲染树（React Fragment 作为外层，不是 Box）
 
 **`<ShellOutput>`** — Shell 工具执行时的实时输出展示。逐行渲染 stdout/stderr，让用户看到 `npm install`、`pnpm build` 等长命令的实时进度，而非等执行完才一次性展示。为避免撑爆动态区，只显示最近 15 行。
 
-**`<ChatInput>`** — 多行输入框，**不使用** Ink 的 `useInput`，改用自定义 `usePromptInput` hook（见下文）。支持 paste 占位符、多行 textarea、智能 backspace、斜杠命令补全。输入框高度硬顶 6 行（`MAX_VISIBLE_LINES`），超出时显示前 5 行 + `… +N more lines`，避免 paste 检测异常时撑爆动态区。
+**`<ChatInput>`** — 多行输入框，**不使用** Ink 的 `useInput`，改用自定义 `usePromptInput` hook（见下文）。支持 paste 占位符、多行 textarea、智能 backspace、斜杠命令补全。输入框高度硬顶 10 行（`MAX_VISIBLE_LINES`），超出时显示前 9 行 + `… +N more lines`，避免 paste 检测异常时撑爆动态区。
 
 #### usePromptInput — 自定义 stdin 输入管线
 

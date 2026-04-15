@@ -1,9 +1,12 @@
 // @x-code-cli/cli — CLI entry point
+import { Chalk } from 'chalk'
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 
 import fs from 'node:fs'
 import path from 'node:path'
+
+const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
 
 import {
   PROVIDER_DETECTION_ORDER,
@@ -120,7 +123,9 @@ async function main() {
   // If no providers configured, show helpful message and exit
   if (availableProviders.length === 0) {
     printNoApiKeyMessage()
-    process.exit(1)
+    // Exit 0: this is a user-configuration hint, not a crash.
+    // Non-zero would make `pnpm dev` pile on ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL / ELIFECYCLE noise.
+    process.exit(0)
   }
 
   // Resolve model
@@ -132,10 +137,11 @@ async function main() {
       const provider = requested.split(':')[0]
       const envVar = getEnvVarName(provider) ?? `${provider.toUpperCase()}_API_KEY`
       console.error(`Error: ${envVar} is not set. Please set this environment variable to use ${requested}.`)
+      process.exit(1)
     } else {
       printNoApiKeyMessage()
+      process.exit(0)
     }
-    process.exit(1)
   }
 
   // Create registry and get model
@@ -180,8 +186,11 @@ function loadEnvFile(): void {
 }
 
 function printNoApiKeyMessage() {
-  const isWindows = process.platform === 'win32'
-  console.error('Error: No API key found.\n')
+  const code = (s: string) => chalk.cyan(s)
+  const comment = (s: string) => chalk.gray(s)
+  const envName = (s: string) => chalk.yellow(s)
+
+  console.error(chalk.red.bold('Error: No API key found.') + '\n')
   console.error('Set at least one provider API key via environment variable:\n')
   for (const { envKey } of PROVIDER_DETECTION_ORDER) {
     const provider = envKey
@@ -190,29 +199,48 @@ function printNoApiKeyMessage() {
       .replace('MOONSHOT', 'moonshotai')
       .toLowerCase()
     const url = PROVIDER_KEY_URLS[provider] ?? ''
-    console.error(`  ${envKey.padEnd(32)} ${url}`)
+    console.error(`  ${envName(envKey.padEnd(32))} ${chalk.dim(url)}`)
   }
-  console.error(`\n  OPENAI_COMPATIBLE_API_KEY        (custom OpenAI-compatible endpoint)`)
+  console.error(`\n  ${envName('OPENAI_COMPATIBLE_API_KEY'.padEnd(32))} ${chalk.dim('(custom OpenAI-compatible endpoint)')}`)
 
-  console.error('\nPersist it so you do not need to set it every session:\n')
-  if (isWindows) {
-    console.error('  PowerShell (user-level, persistent):')
-    console.error(`    [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY','sk-ant-...','User')`)
-    console.error('    # restart PowerShell, then run:  xc\n')
-    console.error('  CMD (user-level, persistent):')
-    console.error('    setx ANTHROPIC_API_KEY "sk-ant-..."')
-    console.error('    :: restart CMD, then run:  xc')
-  } else {
-    console.error('  bash:')
-    console.error(`    echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc`)
-    console.error('    source ~/.bashrc\n')
-    console.error('  zsh (macOS default):')
-    console.error(`    echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc`)
-    console.error('    source ~/.zshrc\n')
-    console.error('  fish:')
-    console.error('    set -Ux ANTHROPIC_API_KEY sk-ant-...')
+  const shell = detectShell()
+  console.error(`\nDetected shell: ${chalk.bold(shell)}`)
+  console.error('Persist it so you do not need to set it every session:\n')
+  switch (shell) {
+    case 'powershell':
+      console.error(`  ${code(`[Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY','sk-ant-...','User')`)}`)
+      console.error(`  ${comment('# restart PowerShell, then run:')}  ${code('xc')}`)
+      break
+    case 'cmd':
+      console.error(`  ${code('setx ANTHROPIC_API_KEY "sk-ant-..."')}`)
+      console.error(`  ${comment(':: restart CMD, then run:')}  ${code('xc')}`)
+      break
+    case 'zsh':
+      console.error(`  ${code(`echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc && source ~/.zshrc`)}`)
+      break
+    case 'fish':
+      console.error(`  ${code('set -Ux ANTHROPIC_API_KEY sk-ant-...')}`)
+      break
+    case 'bash':
+    default:
+      console.error(`  ${code(`echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc && source ~/.bashrc`)}`)
+      break
   }
-  console.error('\nAlternatively, put keys in a project-local .env file (loaded from cwd upward).')
+  console.error(`\nAlternatively, put keys in a project-local ${chalk.bold('.env')} file (loaded from cwd upward).`)
+}
+
+function detectShell(): 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | 'sh' {
+  if (process.platform === 'win32') {
+    // PowerShell sets PSModulePath; CMD typically doesn't (and no PSHOME).
+    if (process.env.PSModulePath) return 'powershell'
+    return 'cmd'
+  }
+  const shellPath = process.env.SHELL ?? ''
+  const base = shellPath.split('/').pop() ?? ''
+  if (base === 'zsh' || base === 'bash' || base === 'fish' || base === 'sh') return base
+  // macOS defaults to zsh since Catalina
+  if (process.platform === 'darwin') return 'zsh'
+  return 'bash'
 }
 
 function readStdin(): Promise<string> {

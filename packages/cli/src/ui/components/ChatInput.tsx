@@ -82,7 +82,7 @@ interface ChatInputProps {
   commands?: readonly SlashCommand[]
 }
 
-const MAX_VISIBLE_LINES = 6
+const MAX_VISIBLE_LINES = 10
 
 // ── Reducer for atomic text + cursor updates ──────────────────────────
 

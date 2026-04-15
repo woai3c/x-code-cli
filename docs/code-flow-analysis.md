@@ -45,7 +45,13 @@ packages/
 |  │     终端 scrollback, 绕过 Ink 布局               │      |
 |  └────────────────────────────────────────────────┘       |
 |  ┌─ 输入管线 (ChatInput + usePromptInput) ──────────┐      |
-|  │  stdin → bracketed paste / debounce → onPaste   │      |
+|  │  stdin → bracketed paste[^bp] / debounce → onPaste │    |
+|  │                                                  │      |
+|  │  [^bp] bracketed paste mode（括号粘贴模式）：    │      |
+|  │   终端通过 ESC[?2004h 开启后，会在用户粘贴的内容  │      |
+|  │   前后各加一段标记（\x1b[200~ ... \x1b[201~），    │      |
+|  │   应用据此把"粘贴"和"逐键输入"区分开，避免大段   │      |
+|  │   文本被当成按键逐字触发逻辑。                    │      |
 |  │                                    / onText / onKey   │
 |  │  paste-refs → [Pasted text #N +M lines] 占位    │      |
 |  └────────────────────────────────────────────────┘       |
@@ -353,10 +359,10 @@ stdin data 事件
   │         └─ flushPending() → onPaste(normalizedContent)   // \r\n → \n
   │
   └─ 不在 paste 中 → processNormalInput(chunk)
-       ├─ data === '\r' / '\n'  → onKey('return')
-       ├─ data === '\x7f' / '\b' → onKey('backspace')
-       ├─ data === '\t'          → onKey('tab')
-       ├─ data === '\x1b[A/B/C/D' → onKey('up' / 'down' / 'right' / 'left')
+       ├─ data === '\r' / '\n'  → onKey('return')   // 'return' = 回车键（Enter / Return，键盘主区大回车），历史上叫 Return，这里沿用该命名
+       ├─ data === '\x7f' / '\b' → onKey('backspace') // 退格键（删除光标左侧字符的那个键）
+       ├─ data === '\t'          → onKey('tab')       // Tab 键
+       ├─ data === '\x1b[A/B/C/D' → onKey('up' / 'down' / 'right' / 'left')  // 四个方向键
        ├─ data === '\x03'        → process.kill(pid, 'SIGINT')
        └─ 其他可打印文本
             └─ queueText(data) —— 累积到 pendingTextRef + 30ms 定时器
@@ -388,7 +394,7 @@ onText(chunk)
   └─ setText((prev) => prev + chunk)
   //  setCompletionIndex(0)
 
-onKey('return')
+onKey('return')   // 用户按下回车键
   └─ handleSubmit()
        ├─ expandPasteRefs(text, pastedContents) — 把所有 [Pasted text #N +M lines]
        │     替换回 pastedContents 里存的完整原文
@@ -405,7 +411,7 @@ onKey('up/down') → 切换补全候选项
 
 ### 多行渲染 + 硬顶
 
-ChatInput 把 `text` split 成多行，在有上下边框的 Box 里逐行渲染，输入框高度随行数自动伸缩。**硬顶 `MAX_VISIBLE_LINES = 6`**：超过 6 行时显示前 5 行 + `… +N more lines`，完整 text 仍在 state 里，只是显示截断——即使上游 paste 检测失败让大量字符进了 onText，输入框也绝不会膨胀到撑爆 Ink 动态区。
+ChatInput 把 `text` split 成多行，在有上下边框的 Box 里逐行渲染，输入框高度随行数自动伸缩。**硬顶 `MAX_VISIBLE_LINES = 10`**：超过 10 行时显示前 9 行 + `… +N more lines`，完整 text 仍在 state 里，只是显示截断——即使上游 paste 检测失败让大量字符进了 onText，输入框也绝不会膨胀到撑爆 Ink 动态区。
 
 **斜杠命令补全：**
 
