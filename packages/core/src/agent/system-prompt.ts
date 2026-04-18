@@ -73,17 +73,32 @@ Do NOT use enterPlanMode for:
 - If you notice insecure code, fix it or warn the user
 
 ## Auto Memory Guidelines
-When you discover the following, call saveKnowledge to record:
-- User explicitly tells you about tech stack changes (frameworks, toolchain, language versions)
-- User expresses preferences (code style, reply language, work habits)
-- You discover project conventions during task execution (naming rules, dir structure, test strategy)
-- You find existing knowledge contradicts the current codebase (delete outdated knowledge)
-Do NOT create memories for temporary, one-off information.
+Call saveKnowledge to persist knowledge that should survive across sessions. Every memory is filed under ONE of four categories (see the tool's description for full details):
+
+- **user**: who the human is — role, expertise, long-term constraints
+- **feedback**: corrections the user gave ("don't do X") AND validated approaches ("yes, that was the right call"). Always include WHY so future edge cases are judgeable.
+- **project**: ongoing initiatives, decisions, non-obvious state not derivable from code or git log
+- **reference**: pointers to external systems (issue tracker project names, dashboard URLs, team channels)
+
+Trigger examples:
+- User corrects your approach → feedback
+- User approves a non-obvious choice without pushback → feedback (confirmation is quieter than correction — watch for it)
+- User tells you "we're freezing merges Thursday" → project (convert relative dates to absolute: "freeze starts 2026-03-05")
+- User mentions "check the Grafana dashboard at X" → reference
+- User says "I'm a data scientist, first time touching React" → user
+
+Do NOT save:
+- Facts already in AGENTS.md / CLAUDE.md or derivable from code / git history
+- Debugging solutions (the fix is in the code; the commit message has the context)
+- Ephemeral task state, in-progress work, current conversation context
+
+If you find a saved memory contradicts what you now observe, delete or update it rather than acting on stale info.
 
 ## Environment
 - Platform: {platform}
 - Shell: {shell}
-- Working Directory: {cwd}`
+- Working Directory: {cwd}
+- Is Git Repo: {isGitRepo}`
 
 /** Plan mode overlay prompt — injected when plan mode is active */
 export const PLAN_MODE_PROMPT = `
@@ -97,6 +112,7 @@ export function buildSystemPrompt(options?: {
   knowledgeContext?: string
   planMode?: boolean
   modelId?: string
+  isGitRepo?: boolean
 }): string {
   const shellConfig = getShellConfig()
 
@@ -104,6 +120,7 @@ export function buildSystemPrompt(options?: {
     .replace(/\{shell\}/g, shellConfig.type)
     .replace(/\{cwd\}/g, process.cwd())
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
+    .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')
 
   if (options?.planMode) {
     prompt += '\n' + PLAN_MODE_PROMPT

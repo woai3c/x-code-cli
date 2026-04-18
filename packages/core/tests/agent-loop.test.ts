@@ -35,7 +35,6 @@ vi.mock('ai', async () => {
 // Mock knowledge modules to avoid filesystem side effects
 vi.mock('../src/knowledge/loader.js', () => ({
   buildKnowledgeContext: vi.fn().mockResolvedValue(''),
-  loadRuleFiles: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('../src/knowledge/session.js', () => ({

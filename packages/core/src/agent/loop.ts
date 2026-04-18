@@ -7,7 +7,7 @@ import path from 'node:path'
 import { generateText, streamText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
 
-import { buildKnowledgeContext, loadRuleFiles } from '../knowledge/loader.js'
+import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
 import { checkPermission } from '../permissions/index.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
@@ -470,28 +470,17 @@ export async function agentLoop(
 
   state.messages.push({ role: 'user', content: userMessage })
 
-  // Load rules once — shared between @rule-name resolution and buildKnowledgeContext
-  const rules = await loadRuleFiles()
-
-  // Check for @rule-name references in user message
-  const ruleRefs = userMessage.match(/@([\w-]+)/g)
-  let extraRuleContext = ''
-  if (ruleRefs) {
-    for (const ref of ruleRefs) {
-      const ruleName = ref.slice(1) // remove @
-      const rule = rules.find((r) => r.filename === ruleName)
-      if (rule) {
-        extraRuleContext += `\n\n### Rule: ${rule.filename}\n${rule.content}`
-      }
-    }
-  }
-
   // Session continuation is handled explicitly by the UI: if the user accepts
   // the resume prompt, the pending work is embedded directly in their first
   // user message. Auto-injecting it into every system prompt made the model
   // treat trivial greetings as "continue exploring", so we no longer do that.
-  const knowledgeContext = await buildKnowledgeContext({ rules })
-  const fullKnowledgeContext = knowledgeContext + extraRuleContext
+  const fullKnowledgeContext = await buildKnowledgeContext()
+
+  // Detect git repo once — cheap stat, avoids per-turn disk hit
+  const isGitRepo = await fs
+    .stat(path.join(process.cwd(), '.git'))
+    .then(() => true)
+    .catch(() => false)
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
 
@@ -522,6 +511,7 @@ export async function agentLoop(
       knowledgeContext: fullKnowledgeContext,
       planMode: state.planMode,
       modelId: options.modelId,
+      isGitRepo,
     })
 
     let result: StreamResult

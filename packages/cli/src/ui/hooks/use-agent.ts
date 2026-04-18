@@ -1,7 +1,7 @@
 // @x-code-cli/cli — Agent state management hook
 import { useCallback, useRef, useState } from 'react'
 
-import { agentLoop, compressMessages, initMemories, saveSession, scanProject } from '@x-code-cli/core'
+import { agentLoop, compressMessages, initMemories, saveSession } from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,
@@ -146,12 +146,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Back-compat alias: used by onToolCall to drain text before a tool call. */
   const flushStreamingToMessages = flushBuffer
 
-  /** Initialize memories and scan project (once) */
+  /** Initialize memories (once). Project context comes from AGENTS.md at the repo
+   *  root (walked up from cwd, Codex-style), not from language-specific manifest
+   *  scanning, which would bias the tool toward Node/TS projects. */
   const initialize = useCallback(async () => {
     if (initializedRef.current) return
     initializedRef.current = true
     await initMemories()
-    await scanProject(process.cwd())
   }, [])
 
   /** Submit a user message */

@@ -70,10 +70,23 @@ export interface AppConfig {
 
 // ─── Knowledge ───
 
+/**
+ * Category taxonomy for auto memory entries. Categories describe the TYPE of
+ * knowledge (who it's about, how it was learned) rather than the topic —
+ * this mirrors the taxonomy Claude Code uses and produces sharper memories
+ * because each category has distinct trigger conditions for the agent.
+ *
+ * - user:      Facts about the human user — role, expertise, goals, constraints
+ * - feedback:  Corrections or validated approaches ("don't mock the db", "yes, that was right")
+ * - project:   Ongoing work, initiatives, decisions, non-obvious project state
+ * - reference: Pointers to external systems (Linear project, Grafana dashboard, etc.)
+ */
+export type KnowledgeCategory = 'user' | 'feedback' | 'project' | 'reference'
+
 export interface KnowledgeFact {
   key: string
   fact: string
-  category: 'tech-stack' | 'commands' | 'conventions' | 'preferences' | 'context'
+  category: KnowledgeCategory
   date: string
 }
 
@@ -88,20 +101,6 @@ export interface SessionSummary {
   pendingWork: string[]
   filesModified: string[]
   decisions: string[]
-}
-
-// ─── Rule loading modes ───
-
-export interface RuleFrontmatter {
-  alwaysApply?: boolean
-  paths?: string[]
-  description?: string
-}
-
-export interface RuleFile {
-  filename: string
-  frontmatter: RuleFrontmatter
-  content: string
 }
 
 // ─── Model aliases ───

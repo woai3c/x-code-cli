@@ -205,14 +205,14 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
   }
 
   async function handleInit() {
-    addInfoMessage('Analyzing project structure...')
+    addInfoMessage('Initializing project structure...')
     try {
       const result = await initProject()
-      const factLines = result.detectedFacts.map((f) => `  - ${f}`).join('\n')
       const fileLines = result.createdFiles.map((f) => `  - ${f}`).join('\n')
-      addInfoMessage(
-        `**Project initialized**\n\nDetected:\n${factLines}\n\nCreated:\n${fileLines || '  (no new files)'}`,
-      )
+      const body = result.createdFiles.length
+        ? `**Project initialized**\n\nCreated:\n${fileLines}\n\nEdit \`AGENTS.md\` at the project root to describe your project — it is loaded into the agent's context every session.`
+        : '**Project already initialized** — no new files created.'
+      addInfoMessage(body)
     } catch (err) {
       addInfoMessage(`Init failed: ${err instanceof Error ? err.message : String(err)}`)
     }

@@ -9,10 +9,9 @@ export type {
   AgentCallbacks,
   AgentOptions,
   AppConfig,
+  KnowledgeCategory,
   KnowledgeFact,
   SessionSummary,
-  RuleFrontmatter,
-  RuleFile,
   ModelMessage,
   LanguageModel,
 } from './types/index.js'
@@ -51,5 +50,4 @@ export { GLOBAL_XCODE_DIR, XCODE_DIR } from './utils.js'
 export { buildKnowledgeContext } from './knowledge/loader.js'
 export { getAutoMemory, initMemories } from './knowledge/auto-memory.js'
 export { loadLatestSession, saveSessionSummary, formatSessionForPrompt } from './knowledge/session.js'
-export { scanProject } from './knowledge/hooks.js'
 export { initProject } from './knowledge/init.js'
