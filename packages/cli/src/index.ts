@@ -14,7 +14,6 @@ import {
   createModelRegistry,
   getAvailableProviders,
   getEnvVarName,
-  loadConfig,
   resolveModelId,
 } from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
@@ -116,8 +115,6 @@ async function main() {
     stdinContent = await readStdin()
   }
 
-  // Load config (for model preference only; API keys come from env vars)
-  const config = await loadConfig()
   const availableProviders = getAvailableProviders()
 
   // If no providers configured, show helpful message and exit
@@ -129,7 +126,7 @@ async function main() {
   }
 
   // Resolve model
-  const modelId = resolveModelId(argv.model, config)
+  const modelId = resolveModelId(argv.model)
   if (!modelId) {
     // User specified a model whose provider has no key
     const requested = argv.model

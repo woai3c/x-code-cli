@@ -3,7 +3,7 @@ import React, { useEffect } from 'react'
 
 import { Box, Text, useApp, useStdout } from 'ink'
 
-import { MODEL_ALIASES, createModelRegistry, initProject, loadConfig, resolveModelId } from '@x-code-cli/core'
+import { MODEL_ALIASES, createModelRegistry, initProject, resolveModelId } from '@x-code-cli/core'
 import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
@@ -107,7 +107,7 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
 
         case 'model':
           echoCommand(text)
-          await handleModelSwitch(arg)
+          handleModelSwitch(arg)
           return
 
         case 'usage':
@@ -160,10 +160,9 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
     await submit(text)
   }
 
-  async function handleModelSwitch(arg: string) {
+  function handleModelSwitch(arg: string) {
     if (!arg) {
       // List available models
-      const _config = await loadConfig()
       const aliases = Object.entries(MODEL_ALIASES)
         .map(([alias, id]) => `  ${alias} → ${id}`)
         .join('\n')
@@ -172,8 +171,7 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
     }
 
     try {
-      const config = await loadConfig()
-      const newModelId = resolveModelId(arg, config)
+      const newModelId = resolveModelId(arg)
       if (!newModelId) {
         addInfoMessage(`Could not resolve model: ${arg}`)
         return

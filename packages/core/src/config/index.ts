@@ -1,23 +1,10 @@
-// @x-code-cli/core — Configuration loading (env vars for API keys, config file for model preference)
-import fs from 'node:fs/promises'
-import path from 'node:path'
-
-import type { AppConfig } from '../types/index.js'
+// @x-code-cli/core — Configuration resolution
+//
+// Everything comes from environment variables. API keys are mandatory and
+// live in provider-specific env vars; the default model is an optional
+// preference in X_CODE_MODEL. There is no config file — if the user wants
+// to pin a default model, they export X_CODE_MODEL or pass --model each time.
 import { MODEL_ALIASES, PROVIDER_DETECTION_ORDER } from '../types/index.js'
-import { GLOBAL_XCODE_DIR } from '../utils.js'
-
-const CONFIG_DIR = GLOBAL_XCODE_DIR
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
-
-/** Load config from ~/.x-code/config.json (model preference only) */
-export async function loadConfig(): Promise<AppConfig> {
-  try {
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8')
-    return JSON.parse(raw) as AppConfig
-  } catch {
-    return {}
-  }
-}
 
 /** Provider → environment variable mapping */
 const ENV_MAP: Record<string, string> = {
@@ -51,31 +38,26 @@ export function getAvailableProviders(): string[] {
   return providers
 }
 
-/** Resolve model ID from alias/full ID, with smart default fallback */
-export function resolveModelId(input: string | undefined, config: AppConfig): string | null {
-  // 1. Explicit user choice: --model flag or X_CODE_MODEL env var
+/**
+ * Resolve a model ID with three levels of precedence:
+ *   1. Explicit `input` (e.g. --model CLI flag)
+ *   2. `X_CODE_MODEL` environment variable
+ *   3. Smart default: first provider (by PROVIDER_DETECTION_ORDER) with an API key
+ *
+ * Aliases in MODEL_ALIASES (e.g. "sonnet" → "anthropic:claude-sonnet-4-5")
+ * are expanded at all levels. Returns null if no provider is configured.
+ */
+export function resolveModelId(input?: string): string | null {
   const explicit = input ?? process.env.X_CODE_MODEL
   if (explicit) {
-    // Always return explicit choice (will show clear error later if key missing)
     return MODEL_ALIASES[explicit] ?? explicit
   }
 
-  // 2. Config file model preference — only if provider key is available
-  if (config.model) {
-    const resolved = MODEL_ALIASES[config.model] ?? config.model
-    const provider = resolved.split(':')[0]
-    if (provider && getApiKey(provider)) {
-      return resolved
-    }
-    // Provider key not available — fall through to smart default
-  }
-
-  // 3. Smart default: scan for first available API key
   for (const { envKey, defaultModel } of PROVIDER_DETECTION_ORDER) {
     if (process.env[envKey]) return defaultModel
   }
 
-  return null // No provider configured
+  return null
 }
 
 /** Build provider options with API keys from env vars */
@@ -95,5 +77,3 @@ export function getProviderOptions() {
     },
   }
 }
-
-export { CONFIG_DIR, CONFIG_FILE }

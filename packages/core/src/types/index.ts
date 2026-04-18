@@ -62,12 +62,6 @@ export interface AgentOptions {
   abortSignal?: AbortSignal
 }
 
-// ─── Config ───
-
-export interface AppConfig {
-  model?: string // default model preference (e.g. "anthropic:claude-sonnet-4-5")
-}
-
 // ─── Knowledge ───
 
 /**

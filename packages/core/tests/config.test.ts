@@ -1,15 +1,10 @@
 // Tests for config module
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { getAvailableProviders, resolveModelId } from '../src/config/index.js'
-import type { AppConfig } from '../src/types/index.js'
 
 describe('resolveModelId', () => {
-  const emptyConfig: AppConfig = {}
-  const configWithModel: AppConfig = { model: 'anthropic:claude-sonnet-4-5' }
-
   beforeEach(() => {
-    // Clear env vars
     delete process.env.X_CODE_MODEL
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.OPENAI_API_KEY
@@ -24,48 +19,46 @@ describe('resolveModelId', () => {
   })
 
   it('resolves from CLI argument', () => {
-    expect(resolveModelId('anthropic:claude-sonnet-4-5', emptyConfig)).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId('anthropic:claude-sonnet-4-5')).toBe('anthropic:claude-sonnet-4-5')
   })
 
   it('resolves alias from CLI argument', () => {
-    expect(resolveModelId('sonnet', emptyConfig)).toBe('anthropic:claude-sonnet-4-5')
-    expect(resolveModelId('opus', emptyConfig)).toBe('anthropic:claude-opus-4-6')
-    expect(resolveModelId('deepseek', emptyConfig)).toBe('deepseek:deepseek-chat')
+    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-4-6')
+    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-chat')
   })
 
   it('falls back to env var X_CODE_MODEL', () => {
     process.env.X_CODE_MODEL = 'openai:gpt-4.1'
-    expect(resolveModelId(undefined, emptyConfig)).toBe('openai:gpt-4.1')
+    expect(resolveModelId()).toBe('openai:gpt-4.1')
   })
 
-  it('falls back to config file model only if provider key exists', () => {
-    process.env.ANTHROPIC_API_KEY = 'test-key'
-    expect(resolveModelId(undefined, configWithModel)).toBe('anthropic:claude-sonnet-4-5')
+  it('resolves alias from X_CODE_MODEL env var', () => {
+    process.env.X_CODE_MODEL = 'sonnet'
+    expect(resolveModelId()).toBe('anthropic:claude-sonnet-4-5')
   })
 
-  it('skips config file model if provider key missing', () => {
-    // Config has anthropic model but no ANTHROPIC_API_KEY → falls through
-    process.env.OPENAI_API_KEY = 'test-key'
-    expect(resolveModelId(undefined, configWithModel)).toBe('openai:gpt-4.1')
+  it('CLI argument takes precedence over X_CODE_MODEL', () => {
+    process.env.X_CODE_MODEL = 'openai:gpt-4.1'
+    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-5')
   })
 
   it('falls back to smart default from env API key', () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    expect(resolveModelId(undefined, emptyConfig)).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId()).toBe('anthropic:claude-sonnet-4-5')
   })
 
   it('follows provider detection order', () => {
     process.env.OPENAI_API_KEY = 'test-key'
-    expect(resolveModelId(undefined, emptyConfig)).toBe('openai:gpt-4.1')
+    expect(resolveModelId()).toBe('openai:gpt-4.1')
   })
 
   it('returns null when no providers configured', () => {
-    expect(resolveModelId(undefined, emptyConfig)).toBeNull()
+    expect(resolveModelId()).toBeNull()
   })
 
-  it('returns model even if provider key missing when explicitly requested via input', () => {
-    // --model deepseek should return it even without key (will error at runtime)
-    expect(resolveModelId('deepseek', emptyConfig)).toBe('deepseek:deepseek-chat')
+  it('returns model even if provider key missing when explicitly requested', () => {
+    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-chat')
   })
 })
 
@@ -92,11 +85,5 @@ describe('getAvailableProviders', () => {
     const providers = getAvailableProviders()
     expect(providers).toContain('anthropic')
     expect(providers).toContain('openai')
-  })
-
-  it('does not detect providers from config file only', () => {
-    // API keys must come from env vars, not config file
-    const providers = getAvailableProviders()
-    expect(providers).not.toContain('deepseek')
   })
 })

@@ -1,6 +1,5 @@
 // @x-code-cli/cli — CLI-level config helpers
-import { getAvailableProviders, loadConfig, resolveModelId } from '@x-code-cli/core'
-import type { AppConfig } from '@x-code-cli/core'
+import { getAvailableProviders, resolveModelId } from '@x-code-cli/core'
 
 export interface CliOptions {
   model?: string
@@ -10,14 +9,12 @@ export interface CliOptions {
   prompt?: string
 }
 
-/** Resolve all configuration from CLI args + env + config file */
-export async function resolveCliConfig(args: CliOptions) {
-  const config = await loadConfig()
-  const modelId = resolveModelId(args.model, config)
+/** Resolve all configuration from CLI args + env */
+export function resolveCliConfig(args: CliOptions) {
+  const modelId = resolveModelId(args.model)
   const availableProviders = getAvailableProviders()
 
   return {
-    config,
     modelId,
     availableProviders,
     needsSetup: availableProviders.length === 0,
@@ -26,5 +23,3 @@ export async function resolveCliConfig(args: CliOptions) {
     maxTurns: args.maxTurns,
   }
 }
-
-export type { AppConfig }
