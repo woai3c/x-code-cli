@@ -3,6 +3,7 @@
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {
     "source.fixAll": "explicit",
+    "source.removeUnusedImports": "explicit",
     "source.organizeImports": "never"
   },
   "eslint.useFlatConfig": true,
