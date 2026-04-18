@@ -109,10 +109,10 @@ x-code-cli/
 │       │   ├── config/
 │       │   │   └── index.ts        # 配置加载（环境变量、配置文件）
 │       │   ├── knowledge/
-│       │   │   ├── loader.ts       # 知识加载器（分层加载、路径匹配）
-│       │   │   ├── auto-memory.ts  # AutoMemory 类（CRUD + 冲突检测 + 淘汰）
+│       │   │   ├── loader.ts       # 知识加载器（AGENTS.md 向上遍历 + 分层拼接）
+│       │   │   ├── auto-memory.ts  # AutoMemory 类（CRUD + 冲突检测 + 90 天 TTL）
 │       │   │   ├── session.ts      # 会话记忆（自动摘要 + 跨会话延续）
-│       │   │   └── hooks.ts        # 启动时项目扫描
+│       │   │   └── init.ts         # /init 命令：在项目根生成 AGENTS.md 模板
 │       │   └── types/
 │       │       └── index.ts        # 公共类型定义
 │       ├── tests/
@@ -1144,7 +1144,7 @@ export function createModelRegistry() {
 | `/compact`      | 手动触发上下文压缩      | 不等自动阈值，立即压缩旧消息                              |
 | `/usage`        | 查看 token 用量         | 本次会话的累计 token 统计（不含自动计费）                 |
 | `/clear`        | 清空对话历史            | 不退出程序，重新开始新对话（保留知识上下文）              |
-| `/init`         | 初始化项目知识          | 分析项目结构，生成 `.x-code/knowledge.md` 等              |
+| `/init`         | 初始化项目             | 在项目根生成 `AGENTS.md` 模板 + 建 `.x-code/` 目录结构     |
 | `/session save` | 手动保存会话摘要        | 不退出程序，保存当前进度                                  |
 | `/exit`         | 退出（等同 Ctrl+C）     | 自动保存会话摘要后退出                                    |
 
@@ -1407,7 +1407,7 @@ export default defineConfig({
 - [x] 项目知识系统（`.x-code/` 目录，手动知识 + 自动提炼 + 4 种规则加载模式）
 - [x] 知识验证与淘汰（90 天 TTL + 启动校验 + 模型主动清理）
 - [x] 会话记忆（自动摘要 + 跨会话延续）
-- [x] `xc init` 初始化命令（自动分析项目，预填充知识文件）
+- [x] `xc init` 初始化命令（在项目根生成 `AGENTS.md` 模板，建 `.x-code/` 内部目录）
 - [x] 上下文压缩（token 超阈值时自动压缩旧消息，支持长对话）
 - [x] Shell 流式输出（长命令实时显示进度，如 npm install）
 - [x] Token 用量统计（累计输入/输出 token，`/usage` 命令查看；不做自动计费）
@@ -1539,628 +1539,206 @@ description: Create a well-formatted git commit following project conventions.
 
 ---
 
+
 ## 十、项目知识系统
 
-AI 使用得越多，对项目理解越深 — 技术选型、代码约定、构建命令、业务上下文等知识应该被持久化，下次启动时自动加载为上下文。
+**人写的和 AI 写的严格分开**,各自有独立的文件和触发机制。
 
-### 10.1 设计原则
+| 角色 | 写入者 | 目的 | 文件 |
+|---|---|---|---|
+| 项目说明 | 人(团队 / 用户) | 项目是什么、团队约定、业务背景 | `AGENTS.md`(项目根) |
+| 全局偏好 | 人(用户) | 跨项目的个人偏好 | `~/.x-code/AGENTS.md` |
+| 本地覆盖 | 人(用户) | 不提交到 git 的个人项目偏好 | `.x-code/local/preferences.md` |
+| 项目记忆 | AI | 对话中学到的项目相关事实 | `.x-code/memory/auto.md` |
+| 全局记忆 | AI | 学到的用户相关事实(跨项目) | `~/.x-code/memory/auto.md` |
 
-- **手动核心 + 自动补充**：团队手写的规范是基础，AI 自动提炼的知识是补充
-- **与项目绑定**：知识存在项目的 `.x-code/` 目录中，跟随项目 git 仓库
-- **分层加载**：全局偏好 → 项目知识 → 路径规则 → 自动记忆 → 本地偏好
-- **大小可控**：自动记忆有行数限制，防止上下文膨胀
-- **知识会过时**：有验证与淘汰机制，避免知识库无限膨胀、过时知识误导模型
-- **跨会话延续**：会话摘要自动持久化，下次启动时恢复上下文，不丢失工作进度
+项目说明文件用 `AGENTS.md` 并放在**项目根**——对齐 Codex / OpenCode 的行业惯例,供应商中性,发现性高。
 
-### 10.2 存储结构
+### 10.1 文件布局
 
 ```
-项目根目录/
-├── .x-code/
-│   ├── knowledge.md           # 核心项目知识（团队共享，git 追踪）
-│   ├── rules/                 # 按模块/路径拆分的细粒度规则
-│   │   ├── api.md             # paths: ["src/api/**"]
-│   │   ├── testing.md         # paths: ["**/*.test.ts"]
-│   │   └── ...
-│   ├── memory/                # AI 自动提炼的知识
-│   │   └── auto.md            # 自动累积的项目事实（建议 git 追踪）
-│   ├── plans/                 # Plan Mode 生成的计划文件（可选 git 追踪）
-│   │   └── {plan-id}.md      # 实施计划（markdown）
-│   ├── sessions/              # 会话记忆（自动生成，gitignore）
-│   │   ├── latest.json        # 最近一次会话摘要（启动时加载）
-│   │   └── {session-id}.json  # 历史会话摘要（按需查看）
-│   └── local/                 # 个人本地配置（自动 gitignore）
-│       └── preferences.md     # 个人偏好
-│
+项目根/
+├── AGENTS.md                     ← 项目说明(人写,git 追踪)
+└── .x-code/                      ← CLI 内部状态
+    ├── memory/auto.md            ← AI 自动写入的记忆
+    ├── sessions/*.json           ← 会话摘要
+    ├── plans/*.md                ← Plan Mode 产出
+    └── local/
+        ├── .gitignore            ← 内容是 `*`
+        └── preferences.md        ← 个人项目偏好(人写)
+
 ~/.x-code/
-├── knowledge.md               # 全局个人知识（所有项目共用，手动编写）
-├── memory/
-│   └── auto.md                # 全局自动记忆（用户偏好，AI 自动提炼）
-└── config.json                # 全局配置（API Key、默认模型等）
+├── AGENTS.md                     ← 全局用户偏好(人写)
+├── memory/auto.md                ← 全局自动记忆
+└── config.json                   ← API Key、默认模型
 ```
 
-### 10.3 各层职责
+### 10.2 AGENTS.md 加载规则
 
-| 层级         | 文件                           | 编写者                      | Git      | 加载时机          |
-| ------------ | ------------------------------ | --------------------------- | -------- | ----------------- |
-| 全局偏好     | `~/.x-code/knowledge.md`        | 用户手动                    | N/A      | 始终加载          |
-| 全局自动记忆 | `~/.x-code/memory/auto.md`      | **AI 自动**                 | N/A      | 前 200 行加载     |
-| 项目知识     | `.x-code/knowledge.md`         | 团队手动 / `xc init` 预填充 | 追踪     | 始终加载          |
-| 路径规则     | `.x-code/rules/*.md`           | 团队手动                    | 追踪     | 按 paths 条件加载 |
-| 项目自动记忆 | `.x-code/memory/auto.md`       | **AI 自动**                 | 建议追踪 | 前 200 行加载     |
-| 会话记忆     | `.x-code/sessions/latest.json` | **系统自动**                | 忽略     | 仅最近一次会话    |
-| 本地偏好     | `.x-code/local/preferences.md` | 用户手动                    | 忽略     | 始终加载          |
+**单仓**:读项目根的 `AGENTS.md`。
 
-自动记忆分两个维度：
+**Monorepo**:从当前工作目录向上遍历到 `.git` 目录(含)或文件系统根,每层都找 `AGENTS.md`,按 **root-to-leaf** 顺序拼接。子包的 AGENTS.md 排在后面,对模型权重更高,能覆盖根级约定。
 
-- **项目自动记忆**（`.x-code/memory/auto.md`）— 项目级事实（技术栈、构建命令、代码约定），跟随仓库
-- **全局自动记忆**（`~/.x-code/memory/auto.md`）— 用户级偏好（代码风格、交互习惯），跨项目生效
+示例:在 `packages/frontend/` 下启动时:
 
-### 10.4 知识内容分类
+```
+### Project AGENTS.md (.)                  ← 根目录(通用约定)
+### Project AGENTS.md (packages/frontend)  ← 子包(React 特有约定)
+```
 
-**最有价值的六类知识**（按价值排序）：
+实现:`core/src/knowledge/loader.ts::collectAgentsMdChain`。
 
-| 类别              | 示例                                          | 来源                  |
-| ----------------- | --------------------------------------------- | --------------------- |
-| **构建/测试命令** | `pnpm vitest run`、`pnpm build`               | 自动提炼              |
-| **技术选型**      | "用 pnpm 不用 npm"、"用 Vitest 不用 Jest"     | 手动 + 自动           |
-| **架构地图**      | 目录结构、模块关系、关键文件                  | 手动 + `xc init` 生成 |
-| **代码约定**      | "组件用 PascalCase"、"用 named export"        | 手动                  |
-| **注意事项**      | "不要改 `generated/` 目录"、"API Key 在 .env" | 手动 + 自动           |
-| **业务上下文**    | "这是一个电商后台"、"用户体系基于 RBAC"       | 手动                  |
-
-### 10.5 `.x-code/knowledge.md` 示例
+### 10.3 AGENTS.md 模板(`/init` 生成)
 
 ```markdown
-# 项目知识
+# AGENTS.md
 
-## 概述
+## Overview
+<!-- 项目做什么,给谁用 -->
 
-X-Code CLI 是一个终端 AI 编程助手，pnpm monorepo，包含 @x-code/core 和 @x-code/cli 两个包。
+## Tech Stack
+<!-- 语言 / 框架 / 关键依赖 -->
 
-## 技术栈
+## Commands
+<!-- 常用命令(build / test / lint 等) -->
 
-- 语言: TypeScript 5.7+, 严格模式, ESM
-- 运行时: Node.js 20.19+
-- TUI: Ink 6 + React 19
-- AI: Vercel AI SDK 6
-- 测试: Vitest 4
-- 构建: esbuild
+## Conventions
+<!-- 非显而易见的项目约定 -->
 
-## 常用命令
-
-- 安装依赖: `pnpm install`
-- 构建: `pnpm build`
-- 测试: `pnpm test`
-- 类型检查: `pnpm typecheck`
-- Lint: `pnpm lint`
-
-## 代码约定
-
-- 组件用 PascalCase, 文件用 kebab-case
-- 优先用 named export
-- 使用 Prettier 格式化, 不加分号, 单引号
-
-## 注意事项
-
-- 不要手动修改 `dist/` 目录下的文件
-- `.x-code/local/` 不要提交到 git
+## Business Context
+<!-- 领域知识 / 业务约束 / 关键决策 -->
 ```
 
-### 10.6 规则系统（多模式加载）
+用户可自由增删 section、改格式——这个文件是用户主权的,`/init` 只在文件不存在时创建。
 
-`.x-code/rules/` 下的规则文件支持 **4 种加载模式**，通过 frontmatter 控制：
+### 10.4 自动记忆(auto.md)
 
-| 模式                | frontmatter          | 加载时机                       | 适用场景                                 |
-| ------------------- | -------------------- | ------------------------------ | ---------------------------------------- |
-| **Always**          | `alwaysApply: true`  | 始终加载                       | 全局代码风格、安全规范                   |
-| **Path Match**      | `paths: [glob]`      | 操作匹配路径的文件时           | 模块/目录特定约定                        |
-| **Agent Requested** | `description: "..."` | 模型根据描述判断是否需要       | 特定任务的指导（如数据库迁移、性能优化） |
-| **Manual**          | 无 frontmatter       | 用户在对话中 `@rule-name` 引用 | 低频使用的参考规则                       |
+**写入机制**:AI 在对话中判断学到了值得记的事,调用 `saveKnowledge` 工具主动写入。不是后台抽取,是 AI 在当前 turn 里顺手写。
 
-**示例**：
+**Taxonomy(4 分类)**——按"**知识类型**"分,边界清晰、互斥:
+
+| 类别 | 含义 | 典型触发 |
+|---|---|---|
+| `user` | 关于用户本身(角色、专长、长期约束) | "我是十年 Go 工程师,第一次碰 React" |
+| `feedback` | 用户的纠正或认可(都要含原因) | "不要 mock 数据库——上季度 mock 过测试通过但迁移炸了" |
+| `project` | 进行中的工作 / 决策 / 非代码可推导的状态 | "mobile release 冻结从 2026-03-05 开始" |
+| `reference` | 外部系统指针 | "pipeline bug 都在 Linear 的 INGEST 项目" |
+
+**不该写入**(避免记忆膨胀和误导):
+
+- 代码或配置里能直接读到的事实(AI 读 `package.json` 就知道用 React)
+- Git history 里有的内容
+- AGENTS.md 已经说过的
+- 一次性调试解决方案
+
+**冲突检测**:同 category + 同 key 自动替换。不是只追加。
+
+**TTL**:90 天未更新的条目启动时自动驱逐。
+
+**大小限制**:注入 system prompt 时取前 200 行。
+
+**存储格式**(markdown,按 category 分组):
 
 ```markdown
----
-paths: ['packages/core/src/tools/**']
----
+## Auto Memory
 
-# 工具开发约定
+### feedback
+- [2026-04-18] testing-db-policy: 集成测试必须打真库。原因:Q1 migration 事故,mocked 测试通过但生产炸了
+- [2026-04-18] refactor-batching: 重构倾向打成一个 PR——用户验证过减少 churn
 
-- 每个工具一个文件，放在 `packages/core/src/tools/` 下
-- 工具参数用 Zod schema 定义
-- 读操作提供 execute，写操作不提供（在 agent loop 中手动执行）
-- 每个工具必须有对应的测试文件
+### user
+- [2026-04-18] user-stack: 十年 Go 工程师,React 新手,前端例子可类比后端概念
+
+### project
+- [2026-04-18] release-freeze: mobile release 冻结 2026-03-05 起,非 critical PR 要 flag
 ```
 
-```markdown
----
-paths: ['**/*.test.ts', '**/*.test.tsx']
----
-
-# 测试约定
-
-- 使用 Vitest, 开启 globals
-- Mock 文件系统用 memfs
-- Mock LLM 用 vi.mock('ai')
-- 测试文件放在对应包的 tests/ 目录下
-```
-
-```markdown
----
-description: '数据库 schema 变更、迁移文件编写、ORM 配置相关的任务'
----
-
-# 数据库迁移约定
-
-- 迁移文件使用时间戳命名: `YYYYMMDDHHMMSS_description.ts`
-- 每次迁移必须包含 up 和 down
-- 不要在迁移中使用 raw SQL，用 ORM 的 schema builder
-```
-
-**加载逻辑**：
-
-1. **Always** 规则：启动时全部加载到上下文
-2. **Path Match** 规则：AI 读取或修改文件时，扫描 `paths` 字段，匹配的追加到上下文
-3. **Agent Requested** 规则：启动时将所有规则的文件名和 `description` 列表发给模型，模型在需要时请求加载具体规则内容
-4. **Manual** 规则：仅在用户对话中 `@rule-name` 引用时加载
-
-### 10.7 自动知识提炼
-
-#### 核心机制：模型通过 `saveKnowledge` 工具自主提炼（主力）
-
-知识提炼的**主力是模型自己**。在正常对话过程中，模型根据用户的需求和执行结果自主判断是否需要记录知识，通过调用 `saveKnowledge` 工具完成。不需要额外的 LLM 调用 — 模型本来就在对话中，调用工具是自然行为。
-
-**模型能提炼的知识范围**（这些只有模型能理解，程序做不到）：
-
-- 代码约定："这个项目用 PascalCase 命名组件"
-- 架构模式："API 层统一用 RESTful 命名"
-- 用户偏好："用户偏好函数式而非 OOP"
-- 技术选型："用户选择了 PostgreSQL 而非 SQLite"
-- 业务上下文："这是一个电商后台，用户体系基于 RBAC"
-- 过时知识清理："项目从 Jest 迁移到了 Vitest，旧知识需要删除"
-
-**`saveKnowledge` 工具定义**：
+### 10.5 `saveKnowledge` 工具
 
 ```typescript
-// packages/core/src/tools/save-knowledge.ts
-export const saveKnowledge = tool({
-  description:
-    'Save, update, or delete a project/user knowledge fact in persistent memory. Use when you discover project conventions, user preferences, or important facts worth remembering for future sessions.',
-  parameters: z.object({
-    action: z
-      .enum(['add', 'delete'])
-      .describe('add = create or update (auto-replaces conflicting old fact), delete = remove outdated fact'),
-    key: z
-      .string()
-      .describe(
-        'A short unique identifier for this fact, e.g. "包管理器", "测试框架", "构建命令". Same key = same fact, used for conflict detection',
-      ),
-    fact: z.string().describe('The fact value, e.g. "pnpm (workspace 模式)", "Vitest 3", "pnpm build"'),
-    scope: z.enum(['project', 'global']).describe('project = this repo (.x-code/), global = all repos (~/.x-code/)'),
-    category: z.enum(['tech-stack', 'commands', 'conventions', 'preferences', 'context']),
-  }),
+saveKnowledge({
+  action: 'add' | 'delete',
+  key: string,                  // 短唯一 slug,如 "user-role"
+  fact: string,                 // 事实内容
+  scope: 'project' | 'global',
+  category: 'user' | 'feedback' | 'project' | 'reference',
 })
 ```
 
-**对话中的自然调用示例**：
+`add` 同 category + 同 key 自动替换旧值。工具 description 详细告诉 AI 每类该什么时候用,system prompt 的 "Auto Memory Guidelines" 段给具体触发示例。
+
+### 10.6 加载到 System Prompt 的完整顺序
+
+`buildKnowledgeContext()` 按下面顺序拼接(后出现的权重更高):
 
 ```
-用户: "我们把测试框架从 Jest 换成 Vitest 了"
-AI:
-  1. 调用 saveKnowledge({ action:'add', key:'测试框架', fact:'Vitest 3', scope:'project', category:'tech-stack' })
-     → AutoMemory 检测到 key='测试框架' 已存在（旧值 "Jest"）→ 自动替换
-  2. 调用 saveKnowledge({ action:'delete', key:'Jest 测试命令', fact:'npx jest', scope:'project', category:'commands' })
-     → 删除旧的 Jest 命令记录
-  3. 回复用户："好的，已更新项目知识。后续会使用 Vitest 相关的命令和配置。"
+1. Global Preferences     (~/.x-code/AGENTS.md)           人写,跨项目
+2. Global Auto Memory     (~/.x-code/memory/auto.md)      AI 写,跨项目
+3. Project AGENTS.md (.)                                   人写,项目根
+4. Project AGENTS.md (packages/x)                          人写,monorepo 子包(如有)
+5. Project Auto Memory    (.x-code/memory/auto.md)         AI 写,本项目
+6. Local Preferences      (.x-code/local/preferences.md)   人写,gitignored
 ```
 
-```
-用户: "以后回复我都用中文，代码注释也用中文"
-AI:
-  1. 调用 saveKnowledge({ action:'add', key:'语言偏好', fact:'中文回复和中文代码注释', scope:'global', category:'preferences' })
-     → 写入全局自动记忆，所有项目生效
-  2. 回复："好的，已记住。以后所有项目都会用中文回复和注释。"
-```
+整段注入 system prompt 末尾("## Project Knowledge" 段)。
 
-#### 辅助机制：启动时项目扫描（补充）
+### 10.7 会话记忆(跨会话延续)
 
-除了模型主动提炼，启动时还会运行一次**项目扫描**，读取配置文件中的基础信息作为初始上下文。这不是真正的"知识提炼"，只是**读配置文件的字段值塞进上下文**，让模型从第一轮对话就知道项目的基本情况，不需要自己去发现。
+知识系统记的是长期事实(项目约定、用户偏好)。会话记忆记的是**短期工作上下文**(正在做什么、做到哪了)。
 
-```typescript
-// packages/core/src/knowledge/hooks.ts
-
-/** 启动时扫描项目配置文件，写入基础事实 */
-export async function scanProject(projectRoot: string, memory: AutoMemory) {
-  // 读 lock 文件 → 包管理器
-  if (await fileExists(join(projectRoot, 'pnpm-lock.yaml'))) {
-    memory.add({ fact: '包管理器: pnpm', category: 'tech-stack', date: today() })
-  }
-
-  // 读 package.json → scripts 命令、依赖框架
-  const pkg = await readJsonSafe(join(projectRoot, 'package.json'))
-  if (pkg?.scripts?.test) {
-    memory.add({ fact: `测试命令: ${pkg.scripts.test}`, category: 'commands', date: today() })
-  }
-  if (pkg?.scripts?.build) {
-    memory.add({ fact: `构建命令: ${pkg.scripts.build}`, category: 'commands', date: today() })
-  }
-
-  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies }
-  if (deps?.react) memory.add({ fact: `UI 框架: React ${deps.react}`, category: 'tech-stack', date: today() })
-  if (deps?.vitest) memory.add({ fact: `测试框架: Vitest`, category: 'tech-stack', date: today() })
-}
-```
-
-**扫描能做的事情很有限**，只有这些"一眼就能看出来"的配置信息：
-
-| 扫描的文件                                           | 提取的信息                          |
-| ---------------------------------------------------- | ----------------------------------- |
-| `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` | 包管理器类型                        |
-| `package.json` scripts                               | 构建、测试、lint 命令               |
-| `package.json` dependencies                          | 主要框架和版本                      |
-| `tsconfig.json`                                      | TypeScript 配置（严格模式、ESM 等） |
-| `.eslintrc` / `prettierrc`                           | 代码风格工具                        |
-
-**它做不到**理解代码含义、发现架构模式、学习用户习惯 — 这些全部依赖模型通过 `saveKnowledge` 工具在对话中完成。
-
-#### 主次关系总结
+**工作机制**:
 
 ```
-知识提炼 ─┬─ 模型 saveKnowledge 工具（主力，约 80%）
-          │   ├── 理解代码约定、架构模式
-          │   ├── 学习用户偏好和习惯
-          │   ├── 记录业务上下文
-          │   └── 清理过时知识（新旧冲突时删除旧的）
-          │
-          └─ 启动时项目扫描（补充，约 20%）
-              ├── 读配置文件字段值（包管理器、框架、命令）
-              └── 让模型从第一轮就知道项目基本情况
+对话进行中 ─┐
+            │  上下文压缩时 / 会话结束时 / 手动 /session save
+            ▼
+     自动生成会话摘要
+            │
+            ▼
+   .x-code/sessions/{id}.json
 ```
 
-#### 知识 CRUD（新增 / 修改 / 删除）
-
-自动记忆不是只追加的日志，而是一个可维护的知识库。新知识可能与旧知识冲突，需要处理：
-
-| 操作     | 触发方                                            | 示例                                             |
-| -------- | ------------------------------------------------- | ------------------------------------------------ |
-| **新增** | 模型调用 `saveKnowledge(action:'add')` 或项目扫描 | key="包管理器", fact="pnpm (workspace)"          |
-| **修改** | 模型 add 时检测到同 key → 替换旧值                | key="构建命令" 从 `npm run build` → `pnpm build` |
-| **删除** | 模型调用 `saveKnowledge(action:'delete')`         | 迁移到 Vitest 后删除 key="Jest 测试命令"         |
-
-**冲突检测逻辑**（基于 `key` 字段精确匹配，不再靠字符串前缀猜测）：
-
-```typescript
-// packages/core/src/knowledge/auto-memory.ts
-
-interface KnowledgeFact {
-  key: string // 唯一标识（如 "测试框架"、"构建命令"），相同 key = 同一件事
-  fact: string // 事实值（如 "Vitest 3"、"pnpm build"）
-  category: 'tech-stack' | 'commands' | 'conventions' | 'preferences' | 'context'
-  date: string // 最后更新日期，用于淘汰判定
-}
-
-class AutoMemory {
-  private facts: KnowledgeFact[]
-
-  /** 新增或修改：同 category + 同 key → 替换旧的 */
-  add(newFact: KnowledgeFact) {
-    const conflictIndex = this.facts.findIndex(
-      (existing) => existing.category === newFact.category && existing.key === newFact.key,
-    )
-    if (conflictIndex >= 0) {
-      this.facts[conflictIndex] = newFact // 同 key → 替换（= 修改）
-    } else {
-      this.facts.push(newFact) // 新 key → 追加（= 新增）
-    }
-    this.save()
-  }
-
-  /** 删除：按 key 精确移除 */
-  delete(key: string, category?: string) {
-    this.facts = this.facts.filter((f) => !(f.key === key && (!category || f.category === category)))
-    this.save()
-  }
-
-  /** 淘汰：移除超过 N 天未更新的事实 */
-  evict(maxAgeDays: number = 90) {
-    const cutoff = Date.now() - maxAgeDays * 86400_000
-    this.facts = this.facts.filter((f) => new Date(f.date).getTime() > cutoff)
-    this.save()
-  }
-}
-```
-
-#### 全局 vs 项目
-
-| 维度     | 写入文件                  | 来源                                                                                |
-| -------- | ------------------------- | ----------------------------------------------------------------------------------- |
-| 项目记忆 | `.x-code/memory/auto.md`  | 启动扫描（基础配置）+ 模型 `saveKnowledge(scope:'project')`（代码约定、技术选型等） |
-| 全局记忆 | `~/.x-code/memory/auto.md` | 仅模型 `saveKnowledge(scope:'global')`（用户偏好、交互习惯，跨项目生效）            |
-
-#### 存储格式
-
-```markdown
-## 自动记忆
-
-### tech-stack
-
-- [2025-02-08] 包管理器: pnpm (workspace 模式)
-- [2025-02-08] UI 框架: React 19 + Ink 6
-- [2025-02-08] 测试框架: Vitest 3
-
-### commands
-
-- [2025-02-08] 构建命令: pnpm build
-- [2025-02-08] 测试命令: pnpm vitest run
-- [2025-02-08] Lint 命令: pnpm lint
-
-### conventions
-
-- [2025-02-09] 组件命名: PascalCase 组件文件，kebab-case 工具文件
-- [2025-02-09] 导出方式: 公共 API 通过 src/index.ts barrel export
-
-### preferences（仅全局 auto.md）
-
-- [2025-02-09] 语言偏好: 中文回复和中文代码注释
-- [2025-02-09] 编程风格: 函数式风格而非 OOP
-```
-
-按 category 分组存储，每行格式为 `[日期] key: fact`，方便冲突检测（同 key → 替换）和人工审阅。
-
-**加载限制**：启动时只加载前 **200 行**，超出部分不加载。超过 **90 天**未更新的条目在启动时自动淘汰。用户可随时手动编辑。
-
-### 10.8 会话记忆（跨会话延续）
-
-解决的问题：**"昨天做到一半的工作，今天继续时 AI 还记得"**。
-
-知识系统记录的是长期有效的项目事实（技术栈、约定），而会话记忆记录的是**短期工作上下文**（正在做什么、做到哪了、遇到了什么问题）。两者互补。
-
-#### 工作机制
-
-```
-对话进行中 ─────────┐
-                     │  每 N 轮 / 上下文压缩时 / 会话结束时
-                     ▼
-              自动生成会话摘要
-                     │
-                     ▼
-         .x-code/sessions/latest.json   ← 最新一次（启动时加载）
-         .x-code/sessions/{id}.json     ← 历史归档（按需查看）
-```
-
-#### 会话摘要结构
+**摘要结构**:
 
 ```typescript
 interface SessionSummary {
-  id: string // 会话 ID
-  title: string // 自动生成的标题（如 "实现用户认证模块"）
-  startedAt: string // 开始时间
-  endedAt: string // 结束时间
+  id: string
+  title: string
+  startedAt: string
+  endedAt: string
   status: 'completed' | 'in_progress' | 'abandoned'
-  summary: string // 工作内容概要（2-3 句话）
-  keyResults: string[] // 关键成果（完成了什么）
-  pendingWork: string[] // 未完成的工作（下次继续）
-  filesModified: string[] // 本次修改的文件列表
-  decisions: string[] // 重要决策记录（如 "选择了 JWT 而非 session"）
+  summary: string
+  keyResults: string[]
+  pendingWork: string[]
+  filesModified: string[]
+  decisions: string[]
 }
 ```
 
-#### 摘要生成时机
+当前实现仅归档,不自动恢复。未来可以加 `/resume` 之类的命令用。
 
-| 时机             | 触发方式        | 说明                                     |
-| ---------------- | --------------- | ---------------------------------------- |
-| **上下文压缩时** | 自动            | 对话过长需要压缩时，在压缩前生成摘要保存 |
-| **会话结束时**   | 自动            | 用户退出（Ctrl+C / `/exit`）时自动生成   |
-| **手动保存**     | `/session save` | 用户主动保存当前会话状态                 |
+### 10.8 和竞品的位置对比
 
-#### 启动时加载
+| 工具 | 项目说明文件 | 位置 | 自动记忆 | Monorepo 向上遍历 |
+|---|---|---|---|---|
+| **X-Code** | `AGENTS.md` | 项目根 | ✅ auto.md(AI 主动调用) | ✅ 向上到 `.git` |
+| Codex | `AGENTS.md` | 项目根 | ✅ 后台双阶段 pipeline | ✅ 向上到 `.git` |
+| OpenCode | `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` | 项目根 | ❌ | ❌ 只读 cwd |
+| Claude Code | `CLAUDE.md` | 项目根 | ✅ 后台 extractor | ✅ 向上遍历 |
 
-```
-$ xc
-  加载上下文...
-  ✓ 项目知识 (.x-code/knowledge.md)
-  ✓ 自动记忆 (.x-code/memory/auto.md, 42 条)
-  ℹ 上次会话: "实现用户认证模块" (进行中, 2 项未完成)
-    - 未完成: JWT refresh token 逻辑
-    - 未完成: 登录接口的错误处理
-  > 继续上次的工作？(Y/n)
-```
+### 10.9 相关代码位置
 
-如果用户选择继续，将上次会话摘要注入上下文，模型可以无缝接续。
-
-#### 与竞品对比
-
-| 工具        | 会话记忆               | 实现方式                                            |
-| ----------- | ---------------------- | --------------------------------------------------- |
-| **X-Code**  | **结构化摘要（JSON）** | 上下文压缩时 / 退出时自动生成，启动时询问是否继续   |
-| Claude Code | 自动会话摘要           | 后台定时提取（每 ~5000 token），JSON 格式，自动注入 |
-| Windsurf    | 无                     | —                                                   |
-| Cursor      | 无                     | —                                                   |
-| Copilot     | 无                     | —                                                   |
-
-### 10.9 知识验证与淘汰
-
-自动记忆会随时间膨胀，过时的知识反而会误导模型。需要主动清理机制。
-
-#### 三层防腐策略
-
-```
-知识淘汰 ─┬─ ① 自动过期（程序自动）
-          │      90 天未更新的条目 → 启动时自动移除
-          │
-          ├─ ② 模型主动清理（模型驱动）
-          │      对话中发现与代码库不一致 → 调用 saveKnowledge(action:'delete')
-          │
-          └─ ③ 启动时校验（程序自动）
-                 项目扫描发现事实变化 → 更新对应条目的日期和值
-```
-
-#### ① 自动过期
-
-启动时运行 `AutoMemory.evict(90)`，移除超过 90 天未更新的条目。这是最粗粒度的兜底策略：
-
-- 如果一个知识在 90 天内被模型重新 add（哪怕值不变），日期会刷新，不会被淘汰
-- 项目扫描检测到的事实（包管理器、框架版本等）每次启动都会刷新日期
-- 90 天阈值可在 `~/.x-code/config.json` 中配置（`memoryEvictDays`）
-
-#### ② 模型主动清理
-
-模型在对话中发现知识过时时主动删除：
-
-```
-用户: "把项目从 Webpack 迁移到 Vite"
-AI:（完成迁移后）
-  1. saveKnowledge({ action:'add', key:'构建工具', fact:'Vite 6', ... })
-  2. saveKnowledge({ action:'delete', key:'Webpack 配置', ... })
-  3. saveKnowledge({ action:'delete', key:'Webpack loader', ... })
-```
-
-#### ③ 启动时校验
-
-启动时项目扫描（10.7 节）会重新读取配置文件。如果检测到的值与已有记忆不同，直接更新：
-
-```typescript
-// 扫描发现 pnpm-lock.yaml 存在
-const existing = memory.find('包管理器', 'tech-stack')
-if (existing && existing.fact !== 'pnpm') {
-  // 配置文件变了（比如从 npm 换成了 pnpm），更新记忆
-  memory.add({ key: '包管理器', fact: 'pnpm', category: 'tech-stack', date: today() })
-}
-```
-
-#### 与 Copilot Agentic Memory 的对比
-
-GitHub Copilot 的方案更精密（引用验证 + 28 天过期 + 自我修正），但它是**云端方案**，依赖 GitHub 基础设施。X-Code 作为本地 CLI，采用更轻量的方案：
-
-| 维度     | Copilot Agentic Memory             | X-Code                                |
-| -------- | ---------------------------------- | ------------------------------------- |
-| 存储     | GitHub 云端                        | 本地文件                              |
-| 过期     | 28 天固定 TTL                      | 90 天可配置 TTL                       |
-| 验证     | 引用验证（检查代码位置是否还存在） | 启动时配置文件校验 + 模型主动清理     |
-| 自我修正 | 代码与记忆矛盾时自动修正           | 模型在对话中发现矛盾时调用 delete/add |
-| 跨 Agent | 支持（Copilot 内部各 Agent 共享）  | N/A（单 Agent）                       |
-
-### 10.10 初始化命令 `xc init`
-
-提供 `xc init` 命令，自动分析项目并**预填充**知识文件（不是空模板）：
-
-```bash
-$ xc init
-
-  分析项目结构...
-  ✓ 检测到 pnpm monorepo（2 个包: @x-code/core, @x-code/cli）
-  ✓ 检测到 TypeScript 5.7（严格模式, ESM, 项目引用）
-  ✓ 检测到 Vitest 4（全局模式）
-  ✓ 检测到 ESLint 10 flat config + Prettier
-  ✓ 检测到 React 19 + Ink 6
-  ✓ 推断构建命令: pnpm build
-  ✓ 推断测试命令: pnpm vitest run
-
-  已生成:
-    .x-code/knowledge.md    ← 含以上分析结果，可手动补充业务上下文
-    .x-code/memory/auto.md  ← 初始自动记忆（包管理器、框架、命令等）
-    .x-code/rules/          ← 空目录，可按需添加路径规则
-    .x-code/local/          ← 个人配置目录（已添加到 .gitignore）
-```
-
-`xc init` 内部调用 `analyzeProject()`（10.7 节的启动时项目扫描），将检测到的事实同时写入 `knowledge.md`（人可读的概要）和 `memory/auto.md`（结构化的自动记忆）。
-
-### 10.11 加载到 System Prompt 的方式
-
-启动时按优先级从低到高拼接（后加载的优先级更高），注入 System Prompt 末尾：
-
-```
-## Project Knowledge
-
-### Global Preferences
-{~/.x-code/knowledge.md 的内容}
-
-### Global Auto Memory
-{~/.x-code/memory/auto.md 前 200 行}
-
-### Project Knowledge
-{.x-code/knowledge.md 的内容}
-
-### Project Auto Memory
-{.x-code/memory/auto.md 前 200 行}
-
-### Local Preferences
-{.x-code/local/preferences.md 的内容}
-
-### Previous Session（仅当用户选择"继续"时注入）
-{.x-code/sessions/latest.json 的摘要内容}
-```
-
-**规则加载**：
-
-- **Always** 规则：启动时全部加载
-- **Path Match** 规则：AI 操作对应路径的文件时动态追加
-- **Agent Requested** 规则：规则描述列表始终加载，规则正文按模型请求加载
-- **Manual** 规则：用户 `@rule-name` 引用时加载
-
-### 10.12 与各家方案的对比
-
-| 特性         | X-Code                   | Claude Code           | Copilot                           | Windsurf               | Cursor                | Gemini CLI            | Codex CLI            |
-| ------------ | ------------------------ | --------------------- | --------------------------------- | ---------------------- | --------------------- | --------------------- | -------------------- |
-| 项目知识     | `.x-code/knowledge.md`   | `CLAUDE.md`（6 层）   | `.github/copilot-instructions.md` | `.windsurf/rules/*.md` | `.cursor/rules/*.mdc` | `GEMINI.md`           | `AGENTS.md`          |
-| 全局配置     | `~/.x-code/knowledge.md`  | `~/.claude/CLAUDE.md` | 用户级文件                        | `global_rules.md`      | User Rules (UI)       | `~/.gemini/GEMINI.md` | `~/.codex/AGENTS.md` |
-| 路径规则     | **4 种加载模式**         | paths frontmatter     | applyTo frontmatter               | 4 种激活模式           | 4 种规则类型          | 子目录文件            | 子目录文件           |
-| 项目自动记忆 | **结构化 CRUD**          | 模型自由读写文件      | **Agentic Memory**                | 模型自动提炼           | 无                    | 无                    | 早期阶段             |
-| 全局自动记忆 | **模型工具 (跨项目)**    | 无                    | 无                                | 无                     | 无                    | `/memory add`         | 无                   |
-| 知识 CRUD    | **key-based 精确替换**   | 模型自由编辑          | 引用验证 + 自我修正               | 手动管理               | 手动编辑              | 仅追加                | 手动编辑             |
-| 知识淘汰     | **90 天 TTL + 启动校验** | 无                    | **28 天 TTL + 引用验证**          | 无                     | 无                    | 无                    | 无                   |
-| 会话记忆     | **结构化摘要**           | 自动会话摘要          | 无                                | 无                     | 无                    | 无                    | 早期阶段             |
-| 初始化       | **`xc init` (预填充)**   | `/init` (骨架模板)    | 无                                | 无                     | 无                    | 无                    | 无                   |
-| 本地覆盖     | `local/preferences.md`   | `CLAUDE.local.md`     | 无                                | 无                     | 无                    | 无                    | `AGENTS.override.md` |
-| 存储位置     | 本地文件（项目内）       | 本地文件（项目外）    | **云端**                          | 本地加密               | 本地                  | 本地文件              | 本地文件             |
-
-#### X-Code 的差异化亮点
-
-1. **双维度自动记忆**（项目 + 全局）— Claude Code 项目自动记忆存在用户目录不可团队共享，X-Code 存在项目内可 git 追踪
-2. **key-based 结构化 CRUD**（比模型自由编辑文件更可控）— 通过工具 schema 约束格式，冲突检测基于 key 精确匹配而非字符串猜测
-3. **三层防腐机制**（TTL 自动过期 + 启动校验 + 模型主动清理）— 大部分竞品没有知识淘汰，知识库会无限膨胀
-4. **4 种规则加载模式**（Always / Path Match / Agent Requested / Manual）— 对齐 Cursor、Windsurf 的最佳实践
-5. **会话记忆**（结构化摘要 + 跨会话延续）— 对齐 Claude Code，解决"工作做到一半，下次还能继续"
-6. **`xc init` 预填充**（分析结果直接写入）— 比空模板实用得多
-
-#### 坦诚不足（与 Copilot Agentic Memory 相比）
-
-Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
-
-- **引用验证**：每条记忆关联具体代码位置，使用前检查源码是否还存在 — X-Code 靠 TTL + 启动校验替代，精度较低
-- **跨 Agent 共享**：Copilot 内部多个 Agent（coding / review / CLI）共享记忆 — X-Code 是单 Agent，暂不需要
-- **自我修正**：代码与记忆矛盾时自动生成修正版 — X-Code 依赖模型在对话中发现并手动删除
-
-但 Copilot 的方案依赖云端基础设施，而 X-Code 是纯本地方案，数据始终在用户手中。
-
-#### 多模型兼容性注意
-
-`saveKnowledge` 工具的可靠性取决于模型的工具调用能力。不同模型的行为差异：
-
-| 模型                 | 工具调用可靠性 | 注意事项                                         |
-| -------------------- | -------------- | ------------------------------------------------ |
-| Claude (Sonnet/Opus) | 高             | 工具调用倾向性强，通常会主动记录知识             |
-| GPT-4o / o3          | 高             | 需要在 System Prompt 中明确提示何时该调用        |
-| Gemini               | 中             | 工具调用格式偶有偏差，需要更严格的 schema 校验   |
-| DeepSeek (V3/R1)     | 高             | Function calling 能力强，R1 推理模型可能响应较慢 |
-| Qwen (Max/Plus)      | 高             | 通义千问工具调用兼容性好，与 OpenAI 格式一致     |
-| GLM-4 Plus           | 中             | 需测试工具调用格式兼容性                         |
-| Kimi (K2.5)          | 中             | 工具调用支持较新，需关注 schema 复杂度           |
-
-**缓解策略**：在 System Prompt 中增加明确的指导段落，告诉模型何时应该调用 `saveKnowledge`：
-
-```
-## Auto Memory Guidelines
-当你发现以下情况时，请调用 saveKnowledge 工具记录：
-- 用户明确告知技术选型变更（框架、工具链、语言版本）
-- 用户表达了偏好（代码风格、回复语言、工作方式）
-- 你在执行任务中发现了项目约定（命名规则、目录结构、测试策略）
-- 你发现已有知识与当前代码库不一致（需要 delete 旧知识）
-不要为临时性、一次性的信息创建记忆。
-```
+| 功能 | 文件 | 关键函数 |
+|---|---|---|
+| AGENTS.md chain 加载 | `core/src/knowledge/loader.ts` | `collectAgentsMdChain()`, `buildKnowledgeContext()` |
+| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory`, `initMemories()` |
+| saveKnowledge 工具 | `core/src/tools/save-knowledge.ts` | schema + AI 触发指南 |
+| Taxonomy 类型 | `core/src/types/index.ts` | `KnowledgeCategory` |
+| `/init` 命令 | `core/src/knowledge/init.ts` | `initProject()`, AGENTS_TEMPLATE |
+| System prompt memory 指南 | `core/src/agent/system-prompt.ts` | "Auto Memory Guidelines" 段 |
 
 ---
+
 
 ## 十一、依赖清单
 
@@ -2325,9 +1903,8 @@ Copilot 的 Agentic Memory（2026.01）是目前架构上最先进的方案：
 
 - ✅ 分层知识加载（全局 `~/.x-code/` / 项目 `.x-code/` / 本地 `.x-code/local/preferences.md`）
 - ✅ `AutoMemory` 类（key-based CRUD + 冲突检测 + 90 天 TTL 淘汰）
-- ✅ 4 种规则加载模式（Always / Path Match / Agent Requested / Manual）
-- ✅ 启动时项目扫描（包管理器 / package.json / tsconfig.json 检测）
-- ✅ `/init` 命令自动分析项目并预填充 `.x-code/knowledge.md`
+- ✅ `/init` 命令在项目根生成 `AGENTS.md` 模板 + `.x-code/` 内部目录结构
+- ✅ AGENTS.md chain（从 cwd 向上到 `.git`，沿路径收集所有 AGENTS.md，root-to-leaf 拼接，monorepo 子包可覆盖根约定）
 - ✅ 会话持久化（`saveSession` + `saveSessionSummary`；上下文压缩时也写一次）；**启动时不自动恢复**，预留给后续 history 功能
 
 ### 13.8 UI & 渲染管线

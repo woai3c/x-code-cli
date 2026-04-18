@@ -104,7 +104,6 @@ packages/
  |                |                  |                    |                    |                    |                  |
  |                |                  |    12. initialize() (首次)              |                    |                  |
  |                |                  |    | initMemories()                     |                    |                  |
- |                |                  |    | scanProject()                      |                    |                  |
  |                |                  |                    |                    |                    |                  |
  |                |                  |    13. setState → isLoading=true        |                    |                  |
  |                |                  |    14. 添加 user message 到 messages    |                    |                  |
@@ -113,9 +112,8 @@ packages/
  |                |                  |    15. 创建 callbacks                   |                    |                  |
  |                |                  |    16. agentLoop() |                    |                    |                  |
  |                |                  |    |--------------->                    |                    |                  |
- |                |                  |                    | 17. loadRuleFiles()|                    |                  |
- |                |                  |                    | 18. buildKnowledgeContext()             |                  |
- |                |                  |                    | 19. buildSystemPrompt()                 |                  |
+ |                |                  |                    | 17. buildKnowledgeContext()             |                  |
+ |                |                  |                    | 18. buildSystemPrompt()                 |                  |
  |                |                  |                    |                    |                    |                  |
  |                |                  |                    | 20. streamText()   |                    |                  |
  |                |                  |                    |------------------->|                    |                  |
@@ -286,18 +284,20 @@ startApp()
   isLoading: false,                // 加载状态
   currentToolCall: null,           // 当前正在执行的工具
   shellOutput: '',                 // Shell 实时输出
-  pendingPermission: null,         // 待用户确认的权限请求
+  permissionQueue: [],             // 待用户确认的权限请求队列（FIFO，按 toolCallId 去重）
   pendingQuestion: null,           // askUser 待回答的问题
   usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
   error: null,                     // 错误信息
 }
 ```
 
+> 注：权限请求是**队列**而不是单值。同一轮 `handleToolCalls` 里可能触发多次 `onAskPermission`（例如 AI 一次返回多个 edit 调用），UI 逐个弹出、每个 Permission 组件用 `key={toolCallId}` 强制 remount 以拿到干净 state——对齐 Claude Code 的做法。
+
 > 注：streaming 文本不在 React state 里。AI 的 text-delta 累积在 `streamBufferRef`（useRef，不触发重渲染），按"段落 / 300 字 / 5 行 / 工具调用 / 流结束"任一条件 flush 成一条 assistant message 推入 `messages`。
 
 ### 步骤 8: 初始 UI 渲染
 
-App 组件的 JSX 结构——**外层故意不带任何 padding/border**，因为 MessageList 走 stdout 直写绕过 Ink 布局：
+App 组件的 JSX 结构——**外层 Fragment 不带 padding/border，动态区 Box 也不加 paddingX**，padding 交给各子组件自己管理：
 
 ```jsx
 <>
@@ -306,34 +306,53 @@ App 组件的 JSX 结构——**外层故意不带任何 padding/border**，因�
          不在 Ink 布局树中，也不再使用 <Static>。 */}
   <MessageList messages={state.messages} />
 
-  {/* 动态区 — 短小、主要 ASCII、Ink 能正确布局 */}
-  <Box flexDirection="column" paddingX={1}>
-    {/* 2. 当前工具调用显示 (Claude Code 风格: ● ToolName(preview) + ⎿ Running...) */}
-    {state.currentToolCall && !state.pendingPermission && <ToolCall ... />}
+  {/* 动态区 — 短小、主要 ASCII、Ink 能正确布局。
+         不加 paddingX：父容器 paddingX 会让 Yoga 在内容宽度变化时（接近折行边界
+         打字、组件 mount/unmount）产生 1-column 抖动；各子组件自己维护横向间距。 */}
+  <Box flexDirection="column" width={termWidth}>
+    {/* 2. 当前工具调用 — 权限队列空闲时才显示，避免和权限框重叠 */}
+    {state.currentToolCall && state.permissionQueue.length === 0 && <ToolCall ... />}
 
     {/* 3. Shell 输出 */}
     {state.shellOutput && <ShellOutput output={state.shellOutput} />}
 
-    {/* 4. 权限确认对话框 */}
-    {state.pendingPermission && <Permission ... />}
+    {/* 4. 权限确认对话框 — 只渲染 queue[0]，key={toolCallId} 强制 remount */}
+    {state.permissionQueue.length > 0 && (
+      <Permission key={state.permissionQueue[0].toolCallId} ... />
+    )}
 
     {/* 5. 用户选择对话框 */}
     {state.pendingQuestion && <SelectOptions ... />}
 
-    {/* 6. 加载 Spinner — isLoading 时始终可见，根据阶段切换模式
-           mode = 'requesting' (等待 API) / 'responding' (流式文本) / 'tool-use' (工具执行) */}
-    {state.isLoading && <Spinner totalTokens={state.usage.totalTokens} mode={mode} />}
+    {/* 6. 加载 Spinner — isLoading 期间可见，但权限框/问答框激活时隐藏。
+           隐藏 spinner 是为了避免 80ms 帧定时器触发动态区重绘，某些终端上
+           Ink 的 log-update 会 append 而不是 repaint，导致权限框被刷屏重复。
+           mode 实际只取两个值：currentToolCall ? 'tool-use' : 'requesting'
+           （SpinnerMode 类型还定义了 'responding' / 'thinking'，但当前未触发）*/}
+    {state.isLoading
+      && state.permissionQueue.length === 0
+      && !state.pendingQuestion && (
+      <Spinner
+        totalTokens={state.usage.totalTokens}
+        mode={state.currentToolCall ? 'tool-use' : 'requesting'}
+      />
+    )}
 
     {/* 7. 错误信息 */}
     {state.error && <Text color="red">Error: {state.error}</Text>}
 
-    {/* 8. 输入框 — 始终渲染，isLoading/pending 时 disabled */}
-    <ChatInput onSubmit={handleSubmit} disabled={...} commands={SLASH_COMMANDS} />
+    {/* 8. 输入框 — 始终渲染，isLoading / 权限队列非空 / 问答激活时 disabled */}
+    <ChatInput
+      onSubmit={handleSubmit}
+      onInterrupt={exit}
+      disabled={state.isLoading || state.permissionQueue.length > 0 || !!state.pendingQuestion}
+      commands={SLASH_COMMANDS}
+    />
   </Box>
 </>
 ```
 
-**关键点**：外层是 React Fragment，不是 Box。MessageList 自身也不在 Ink 布局树中（它的 useEffect 把 message 推到 stdout）。动态区在一个独立 sibling Box 里，可以安全加 padding —— 不会污染 Static 写入路径。
+**关键点**：外层是 React Fragment，不是 Box。MessageList 自身也不在 Ink 布局树中（它的 useEffect 把 message 推到 stdout）。动态区的 Box **不加 paddingX**——父容器 paddingX 在内容宽度变化时会引入 1-column 的视觉抖动，所以横向间距由每个子组件自行负责。
 
 ---
 
@@ -463,16 +482,11 @@ handleSubmit(text)
 submit(text)
   │
   ├─ 1. initialize() (仅首次调用)
-  │    ├─ initMemories()          // 加载全局 + 项目 AutoMemory
-  │    │    ├─ globalMemory.load()   // ~/.x-code/memory/auto.md
-  │    │    ├─ projectMemory.load()  // .x-code/memory/auto.md
-  │    │    ├─ globalMemory.evict(90)   // 清除 90 天前的记忆
-  │    │    └─ projectMemory.evict(90)
-  │    │
-  │    └─ scanProject(cwd)        // 扫描项目基本信息
-  │         ├─ 检测包管理器 (pnpm/yarn/npm lock 文件)
-  │         ├─ 读取 package.json → 记录 scripts, deps
-  │         └─ 读取 tsconfig.json → 记录 strict mode, module 等
+  │    └─ initMemories()          // 加载全局 + 项目 AutoMemory
+  │         ├─ globalMemory.load()   // ~/.x-code/memory/auto.md
+  │         ├─ projectMemory.load()  // .x-code/memory/auto.md
+  │         ├─ globalMemory.evict(90)   // 清除 90 天前的记忆
+  │         └─ projectMemory.evict(90)
   │
   ├─ 2. 更新 UI 状态
   │    setState({
@@ -545,22 +559,22 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   ├─ 2. state.messages.push({ role: 'user', content: userMessage })
   │
   ├─ 3. 加载知识上下文
-  │    ├─ loadRuleFiles()                       // .x-code/rules/*.md，一次加载后复用
-  │    ├─ 解析用户消息中的 @rule-name 引用       // 匹配 /@([\w-]+)/g，命中则把整条规则内容
-  │    │                                         //   以 "### Rule: <name>" 追加到知识上下文
-  │    └─ buildKnowledgeContext({ rules })      // 组装完整知识上下文
-  │         ├─ 全局偏好      ~/.x-code/knowledge.md
-  │         ├─ 全局自动记忆  ~/.x-code/memory/auto.md
-  │         ├─ 项目知识      .x-code/knowledge.md
-  │         ├─ 项目自动记忆  .x-code/memory/auto.md
-  │         ├─ 本地偏好      .x-code/local/preferences.md
-  │         ├─ 规则 (alwaysApply=true 的自动加载)
-  │         ├─ 规则 (paths 匹配的自动加载)
-  │         └─ 可用规则列表 (供 AI 按需引用)
+  │    └─ buildKnowledgeContext()               // 组装完整知识上下文
+  │         ├─ 全局偏好       ~/.x-code/AGENTS.md           (人写)
+  │         ├─ 全局自动记忆   ~/.x-code/memory/auto.md      (AI 自动写)
+  │         ├─ 项目 AGENTS.md chain              (人写，从 cwd 向上到 .git 根，
+  │         │                                     沿路径每层找 AGENTS.md，
+  │         │                                     root → leaf 顺序拼接，
+  │         │                                     monorepo 子包可用自己的
+  │         │                                     AGENTS.md 覆盖根配置)
+  │         ├─ 项目自动记忆   .x-code/memory/auto.md        (AI 自动写)
+  │         └─ 本地偏好       .x-code/local/preferences.md  (人写，gitignored)
   │
-  ├─ 4. 计算压缩阈值
-  │    compressionThreshold = getCompressionThreshold(modelId)
-  │    └─ contextWindow * 0.8     (如 anthropic 200k * 0.8 = 160k)
+  ├─ 4. 检测 .git 目录一次（用于 system prompt 的 Environment 段）
+  │
+  ├─ 5. 计算压缩阈值
+     compressionThreshold = getCompressionThreshold(modelId)
+     └─ contextWindow * 0.8     (如 anthropic 200k * 0.8 = 160k)
   │
   └─ 5. while (turnCount < maxTurns) 主循环
        │
@@ -651,18 +665,18 @@ buildSystemPrompt()
      Platform: win32 | darwin | linux
      Shell: bash | powershell | cmd
      Working Directory: /path/to/project
+     Is Git Repo: yes | no
 
   6. [可选] Plan Mode 提示
      "Plan mode is active. You MUST NOT make any edits..."
 
   7. [可选] 知识上下文 (buildKnowledgeContext 的输出)
-     ### Global Preferences
+     ### Global Preferences (~/.x-code/AGENTS.md)
      ### Global Auto Memory
-     ### Project Knowledge
+     ### Project AGENTS.md (.)           (repo 根)
+     ### Project AGENTS.md (packages/x)  (monorepo 子包, 如有, 覆盖上层)
      ### Project Auto Memory
      ### Local Preferences
-     ### Rule: xxx           (alwaysApply / paths 命中 / @rule-name 显式引用)
-     ### Available Rules     (按需引用的规则索引)
 ```
 
 ### 工具注册表
@@ -912,15 +926,15 @@ const { write } = useStdout() // Ink 官方 log-update-coordinated writer
 const writtenCountRef = useRef(0)
 │
 useEffect(() => {
-// 追踪已写出的 message 数量，只 append 新条目
-if (messages.length < writtenCountRef.current) {
-writtenCountRef.current = messages.length // /clear 清空后重置
-return
-}
-for (let i = writtenCountRef.current; i < messages.length; i++) {
-writeMessageToStdout(write, messages[i])
-}
-writtenCountRef.current = messages.length
+  // 追踪已写出的 message 数量，只 append 新条目
+  if (messages.length < writtenCountRef.current) {
+  writtenCountRef.current = messages.length // /clear 清空后重置
+  return
+  }
+  for (let i = writtenCountRef.current; i < messages.length; i++) {
+  writeMessageToStdout(write, messages[i])
+  }
+  writtenCountRef.current = messages.length
 }, [messages, write])
 
 ```
@@ -966,21 +980,26 @@ Paragraph text...
 
 /exit 命令 或 Ctrl+C
 │
-├─ cleanup() (use-agent.ts)
-│ └─ saveSession(loopState, model)
-│ ├─ generateSessionSummary() // AI 生成会话摘要
-│ │ → title, summary, keyResults, pendingWork, decisions, status
-│ └─ saveSessionSummary()
-│ ├─ .x-code/sessions/latest.json // 最新会话
-│ └─ .x-code/sessions/{id}.json // 归档
+├─ 触发源
+│    ├─ /exit → App handleSubmit → exit()（Ink unmount）
+│    └─ Ctrl+C → SIGINT handler 只做计数 + 设 exitCode=0
+│                然后 Ink 自己捕获 SIGINT → unmount
 │
-│ 注：持久化仍然会发生（上下文压缩时也会写一次），预留给后续 history 功能。
-│ 但下次启动 CLI 时不会再自动读取 latest.json 并注入到 system prompt。
+├─ Ink unmount → waitUntilExit() 在 main() 里返回
 │
-├─ exit() (Ink unmount)
-│
-└─ printExitSummary() (app.tsx)
-→ "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
+└─ gracefulShutdown() (index.ts) ← 统一收尾
+     ├─ saveSession(loopState, model)
+     │    ├─ generateSessionSummary()  // AI 生成会话摘要
+     │    │   → title, summary, keyResults, pendingWork, decisions, status
+     │    └─ saveSessionSummary()
+     │        ├─ .x-code/sessions/latest.json  // 最新会话
+     │        └─ .x-code/sessions/{id}.json    // 归档
+     │
+     │   注：持久化仍然会发生（上下文压缩时也会写一次），预留给后续 history 功能。
+     │   但下次启动 CLI 时不会再自动读取 latest.json 并注入到 system prompt。
+     │
+     └─ printExitSummary()
+         → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
 
 ```
 
@@ -988,11 +1007,20 @@ Paragraph text...
 
 ```
 
-process.on('SIGINT') (cli/src/index.ts)
-├─ 第一次 Ctrl+C → cleanup() → printExitSummary() → process.exit(0)
-└─ 第二次 Ctrl+C → process.exit(1) // 强制退出
-
+process.on('SIGINT') (cli/src/index.ts)  — 只做安全网，不直接收尾
+├─ 第一次 Ctrl+C
+│    ├─ sigintCount++       // 仅记录计数
+│    └─ process.exitCode = 0 // 若后续直接退出，保证退出码为 0
+│       ↓
+│    随后 Ink 捕获信号 → unmount App → waitUntilExit 返回
+│       ↓
+│    main() 走到 gracefulShutdown() → saveSession() + printExitSummary()
+│       → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
+│
+└─ 第二次 Ctrl+C → process.exit(0)  // 强退，退出码仍是 0
 ```
+
+> 两次 Ctrl+C 退出码都是 `0`。区别在于第二次跳过 gracefulShutdown 的 saveSession / printExitSummary，用于用户等不及收尾想立即返回 shell 的场景。
 
 ---
 
@@ -1015,8 +1043,7 @@ process.on('SIGINT') (cli/src/index.ts)
 
 4. useAgent.submit()
    ├─ initialize() (首次)
-   │ ├─ 加载 AutoMemory (全局 + 项目)
-   │ └─ scanProject() → 检测到 pnpm, TypeScript, React, Ink, Vitest 等
+   │ └─ 加载 AutoMemory (全局 + 项目，驱逐 90 天前条目)
    │
    ├─ setState
    │ → messages 追加用户消息
@@ -1033,7 +1060,7 @@ process.on('SIGINT') (cli/src/index.ts)
    ├─ messages: [{ role: 'user', content: '帮忙分析一下项目产品功能以及优化点' }]
    │
    ├─ buildKnowledgeContext()
-   │ → 加载全局/项目 knowledge.md、auto memory、rules
+   │ → 拼接全局/项目 AGENTS.md chain、auto memory、local preferences
    │
    ├─ buildSystemPrompt()
    │ → 完整 system prompt (约 2000-3000 tokens)
@@ -1273,11 +1300,10 @@ Ink 动态区 (底部固定)
 | 计划模式      | `core/src/agent/plan-mode.ts`           | `ensurePlansDir()`, `generatePlanId()`, `getPlanPath()`                           |
 | 工具注册      | `core/src/tools/index.ts`               | `toolRegistry`, `truncateToolResult()`                                            |
 | 权限系统      | `core/src/permissions/index.ts`         | `checkPermission()`, `getPermissionLevel()`                                       |
-| 知识加载      | `core/src/knowledge/loader.ts`          | `buildKnowledgeContext()`, `loadRuleFiles()`                                      |
+| 知识加载      | `core/src/knowledge/loader.ts`          | `buildKnowledgeContext()`, AGENTS.md 向上遍历                                     |
 | 会话持久化    | `core/src/knowledge/session.ts`         | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history) |
-| 自动记忆      | `core/src/knowledge/auto-memory.ts`     | `AutoMemory`, `initMemories()`                                                    |
-| 项目扫描      | `core/src/knowledge/hooks.ts`           | `scanProject()`                                                                   |
-| 项目初始化    | `core/src/knowledge/init.ts`            | `initProject()` — `/init` 命令入口                                                |
+| 自动记忆      | `core/src/knowledge/auto-memory.ts`     | `AutoMemory`, `initMemories()` — 4 类 taxonomy (user/feedback/project/reference)  |
+| 项目初始化    | `core/src/knowledge/init.ts`            | `initProject()` — `/init` 命令入口，写 AGENTS.md 到项目根                         |
 | 配置          | `core/src/config/index.ts`              | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`                     |
 | Provider      | `core/src/providers/registry.ts`        | `createModelRegistry()`                                                           |
 | 输入组件      | `cli/src/ui/components/ChatInput.tsx`   | `ChatInput`, 多行 textarea 显示 + paste 占位符 + 模糊匹配补全                     |
