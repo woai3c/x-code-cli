@@ -25,7 +25,7 @@
     "@x-code-cli/core": "workspace:*",
     "chalk": "^5.4.0",
     "diff": "^8.0.0",
-    "ink": "^6.6.0",
+    "ink": "npm:@jrichman/ink@6.6.9",
     "marked": "^17.0.1",
     "react": "^19.1.0",
     "yargs": "^18.0.0"

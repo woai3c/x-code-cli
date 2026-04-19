@@ -1,21 +1,16 @@
 // @x-code-cli/cli — Root App component
 import React, { useEffect } from 'react'
 
-import { Box, Text, useApp, useStdout } from 'ink'
+import { Box, useApp, useStdout } from 'ink'
 
 import { MODEL_ALIASES, createModelRegistry, initProject, resolveModelId } from '@x-code-cli/core'
 import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
-import { ERROR } from '../theme.js'
 import { ChatInput } from './ChatInput.js'
-import { MessageList } from './MessageList.js'
 import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
-import { ShellOutput } from './ShellOutput.js'
-import { Spinner } from './Spinner.js'
-import { ToolCall } from './ToolCall.js'
 
 interface AppProps {
   model: LanguageModel
@@ -225,40 +220,27 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
     }
   }
 
+  // RENDERING ARCHITECTURE
+  //
+  // `ChatInput` owns the ENTIRE terminal region below the initial header:
+  //   - scrollback messages are committed via direct stdout writes
+  //   - spinner / input / separators / completions / errors render into a
+  //     single cell-level diff buffer
+  //
+  // Ink's dynamic region stays EMPTY by default — if it ever had any
+  // content (ToolCall, Spinner, Error lines) Ink's own log-update would
+  // shove our stdout cursor around and we'd paint the input frame at the
+  // wrong row, leaving zombie "Thinking..." / separator rows in scrollback.
+  //
+  // The only exceptions are interactive dialogs (`Permission`,
+  // `SelectOptions`) — they DO render via Ink because they need focus +
+  // keypress routing. While one of these is active, ChatInput's
+  // `hidden` prop erases its cell frame and stays out of the way.
+  const blockingDialog = state.permissionQueue.length > 0 || !!state.pendingQuestion
+
   return (
-    // IMPORTANT: <MessageList> uses Ink <Static>, which writes items to stdout
-    // out-of-band. Wrapping it in ANY container (even a plain Box) can cause
-    // scrollback corruption when Ink's dynamic region needs to repaint over
-    // wide-character content. The safest structure is a Fragment at the top
-    // so Static items have no parent at all, with all styling isolated to the
-    // dynamic sibling below.
     <>
-      {/* Message history — Static, permanent scrollback, no parent */}
-      <MessageList messages={state.messages} />
-
-      {/* Dynamic region — repainted each render; kept deliberately small.
-          Streaming text does NOT live here — it accumulates in
-          useAgent's streamBufferRef and flushes into messages (which
-          MessageList's useEffect echoes to stdout via writeMessageToStdout).
-
-          IMPORTANT: No paddingX on this container. Each child manages its
-          own horizontal spacing so the dynamic region's left edge is always
-          column 0. A parent paddingX causes Ink's Yoga layout to produce
-          1-column jitter during repaints when content width changes (typing
-          near wrap boundary, components mounting/unmounting). */}
       <Box flexDirection="column" width={termWidth}>
-        {/* Current tool call (in-progress) */}
-        {state.currentToolCall && state.permissionQueue.length === 0 && (
-          <ToolCall toolName={state.currentToolCall.toolName} input={state.currentToolCall.input} />
-        )}
-
-        {/* Shell output */}
-        {state.shellOutput && <ShellOutput output={state.shellOutput} />}
-
-        {/* Permission dialog — renders only the first item in the queue.
-            key={toolCallId} forces a full remount when advancing to the
-            next request, giving the new Permission component fresh state
-            (matches Claude Code's key-based approach). */}
         {state.permissionQueue.length > 0 && (
           <Permission
             key={state.permissionQueue[0].toolCallId}
@@ -267,8 +249,6 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
             onResolve={resolvePermission}
           />
         )}
-
-        {/* askUser dialog */}
         {state.pendingQuestion && (
           <SelectOptions
             question={state.pendingQuestion.question}
@@ -276,32 +256,26 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
             onSelect={resolveQuestion}
           />
         )}
-
-        {/* Loading spinner — visible during isLoading, but hidden when an
-            interactive dialog (permission / question) is active. Hiding the
-            spinner prevents its 80ms frame-timer from triggering constant
-            re-renders of the dynamic region, which on some terminals causes
-            Ink's log-update to append rather than repaint — flooding the
-            screen with duplicate permission boxes. */}
-        {state.isLoading && state.permissionQueue.length === 0 && !state.pendingQuestion && (
-          <Spinner totalTokens={state.usage.totalTokens} mode={state.currentToolCall ? 'tool-use' : 'requesting'} />
-        )}
-
-        {/* Error */}
-        {state.error && (
-          <Box paddingX={1}>
-            <Text color={ERROR}>Error: {state.error}</Text>
-          </Box>
-        )}
-
-        {/* Input */}
-        <ChatInput
-          onSubmit={handleSubmit}
-          onInterrupt={exit}
-          disabled={state.isLoading || state.permissionQueue.length > 0 || !!state.pendingQuestion}
-          commands={SLASH_COMMANDS}
-        />
       </Box>
+
+      <ChatInput
+        messages={state.messages}
+        onSubmit={handleSubmit}
+        onInterrupt={exit}
+        disabled={state.isLoading || blockingDialog}
+        hidden={blockingDialog}
+        spinner={
+          state.isLoading && !blockingDialog
+            ? {
+                label: 'Thinking',
+                mode: state.currentToolCall ? 'tool-use' : 'requesting',
+                totalTokens: state.usage.totalTokens,
+              }
+            : null
+        }
+        errorMessage={state.error}
+        commands={SLASH_COMMANDS}
+      />
     </>
   )
 }

@@ -1,4 +1,11 @@
-// @x-code-cli/cli — Ink render entry
+// @x-code-cli/cli — Ink render entry.
+//
+// We depend on `@jrichman/ink` (aliased as `ink` in package.json) rather than
+// upstream Ink. The fork ships a cell-level terminal buffer, a string-width
+// / StyledLine based measurer, DEC 2026 Synchronized Updates, and IME-aware
+// cursor positioning — which together eliminate the CJK/IME jitter the
+// original Ink exhibits on long-running chat UIs. Nothing in our codebase
+// changes: the fork is API-compatible with `ink`.
 import React from 'react'
 
 import { render } from 'ink'
@@ -48,7 +55,7 @@ export function startApp(model: LanguageModel, options: AgentOptions, initialPro
         latestModelId = modelId
       }}
     />,
-    { exitOnCtrlC: false, incrementalRendering: true, maxFps: 120 },
+    { exitOnCtrlC: false },
   )
   return waitUntilExit
 }

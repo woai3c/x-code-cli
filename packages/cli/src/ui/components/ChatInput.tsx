@@ -1,20 +1,44 @@
-// @x-code-cli/cli — User text input component (multi-line textarea)
+// @x-code-cli/cli — Bottom dynamic region (spinner + input box).
 //
-// RENDERING STRATEGY — MULTI-LINE CELL-LEVEL DIFF:
-//   Renders a multi-line textarea with top/bottom separators directly to
-//   stdout.  Each frame is a 2D grid of cells.  The renderer diffs against
-//   the previous frame cell-by-cell, line-by-line, and writes ALL changes
-//   in a SINGLE process.stdout.write() call.  Unchanged CJK characters are
-//   never re-written, eliminating jitter on ConHost.
+// RENDERING STRATEGY — CELL-LEVEL DIFF, DIRECT STDOUT:
+//   Ink's Yoga layout and log-update both miscount CJK/IME widths. Even
+//   the @jrichman/ink fork doesn't fully eliminate jitter on Windows
+//   ConHost because terminal-level CJK rendering isn't atomic. To dodge
+//   both engines we render the entire bottom region ourselves:
+//
+//     - Each frame = 2D grid of cells (char + style + visual width)
+//     - Diff against the previous frame cell-by-cell
+//     - Write ALL changes in a single process.stdout.write()
+//     - Unchanged CJK cells are NEVER re-emitted → no redraw jitter
+//
+//   We return `null` to Ink so Ink's dynamic region is empty; we own
+//   everything below MessageList's scrollback.
+//
+// THINGS THIS COMPONENT OWNS (instead of Ink):
+//     - The loading spinner row (when `isLoading` is true)
+//     - Top/bottom separator lines
+//     - Input text with cursor
+//     - Slash-command completion menu
+//
+// COORDINATION WITH MessageList's SCROLLBACK WRITES:
+//   Before `onSubmit` fires, we synchronously eraseRegion() so that when
+//   MessageList's useEffect writes the user-echo via Ink's write(), the
+//   terminal cursor is parked at the top-left of a blank region — the
+//   echo lands cleanly instead of overwriting our bottom separator.
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 
 import { useStdout } from 'ink'
 
+import type { DisplayMessage } from '@x-code-cli/core'
+
 import { usePromptInput } from '../hooks/use-prompt-input.js'
-import { type PastedContents, expandPasteRefs, stripTrailingRef } from '../paste-refs.js'
+import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
+import { writeMessageToStdout } from '../stdout-writer.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
+const MAX_VISIBLE_LINES = 10
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
 // ── CJK width helpers ───────────────────────────────────────────────────
 
@@ -75,14 +99,30 @@ export interface SlashCommand {
   description: string
 }
 
-interface ChatInputProps {
-  onSubmit: (text: string) => void
-  onInterrupt: () => void
-  disabled?: boolean
-  commands?: readonly SlashCommand[]
+export interface SpinnerState {
+  label: string
+  mode: 'requesting' | 'responding' | 'thinking' | 'tool-use'
+  totalTokens?: number
 }
 
-const MAX_VISIBLE_LINES = 10
+interface ChatInputProps {
+  /** All scrollback messages. New entries are committed to the terminal
+   *  scrollback (above our cell frame) via direct stdout writes. We own the
+   *  entire bottom region — Ink must NOT also write scrollback, or its
+   *  log-update will fight us for cursor position. */
+  messages: readonly DisplayMessage[]
+  onSubmit: (text: string) => void
+  onInterrupt: () => void
+  /** Ignore keyboard input (and hide the input cursor). */
+  disabled?: boolean
+  /** Fully hide the region (e.g. while Permission dialog is active). */
+  hidden?: boolean
+  /** If non-null, render a spinner line above the input. */
+  spinner?: SpinnerState | null
+  /** Optional error string shown as a dedicated row above the spinner. */
+  errorMessage?: string | null
+  commands?: readonly SlashCommand[]
+}
 
 // ── Reducer for atomic text + cursor updates ──────────────────────────
 
@@ -145,10 +185,10 @@ function cellsEqual(a: Cell, b: Cell): boolean {
 }
 
 const S_GRAY = '\x1b[38;2;136;136;136m'
-const S_ACCENT = `\x1b[38;2;215;119;87m`
-const S_ACCENT_BOLD = `\x1b[38;2;215;119;87;1m`
+const S_ACCENT = '\x1b[38;2;215;119;87m'
+const S_ACCENT_BOLD = '\x1b[38;2;215;119;87;1m'
+const S_SPINNER = '\x1b[38;2;95;158;250m' // Claude-style blue
 const S_DIM = '\x1b[2m'
-const S_BOLD_OFF = '\x1b[22m'
 const S_RESET = '\x1b[39m'
 const S_INV = '\x1b[7m'
 const S_INV_OFF = '\x1b[27m'
@@ -160,9 +200,31 @@ function textToCells(text: string, style: string): Cell[] {
   return cells
 }
 
+function formatElapsed(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${minutes}m ${secs}s`
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
+  return `${tokens}`
+}
+
 // ── Component ───────────────────────────────────────────────────────────
 
-export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: ChatInputProps) {
+export function ChatInput({
+  messages,
+  onSubmit,
+  onInterrupt,
+  disabled,
+  hidden,
+  spinner,
+  errorMessage,
+  commands = [],
+}: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const cursorRef = useRef(0)
   useLayoutEffect(() => {
@@ -174,6 +236,32 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const lastEscRef = useRef(0)
   const activeRef = useRef(false)
   const prevFrameRef = useRef<Cell[][]>([])
+  /** How many messages we've already committed to scrollback. */
+  const writtenMessageCountRef = useRef(0)
+  const writeStdout = useRef<(data: string) => void>((data) => {
+    process.stdout.write(data)
+  }).current
+
+  // Spinner animation state — self-contained so the parent doesn't have to
+  // re-render 12× per second. Only runs while `spinner` is truthy.
+  const [spinnerFrame, setSpinnerFrame] = useState(0)
+  const loadingStartRef = useRef<number>(0)
+  const [elapsedMs, setElapsedMs] = useState(0)
+
+  useEffect(() => {
+    if (!spinner) {
+      loadingStartRef.current = 0
+      setElapsedMs(0)
+      setSpinnerFrame(0)
+      return
+    }
+    if (loadingStartRef.current === 0) loadingStartRef.current = Date.now()
+    const timer = setInterval(() => {
+      setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length)
+      setElapsedMs(Date.now() - loadingStartRef.current)
+    }, 80)
+    return () => clearInterval(timer)
+  }, [spinner])
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
@@ -196,9 +284,32 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   const safeIndex = matches.length > 0 ? completionIndex % matches.length : 0
   const currentMatch = matches.length > 0 ? matches[safeIndex] : null
 
+  /** Synchronously erase our region and rewind the cursor to its top-left.
+   *  Called before onSubmit so MessageList's echo lands on clean terminal
+   *  rows, and on unmount / when `hidden` flips true. */
+  const eraseRegion = () => {
+    const prevH = prevFrameRef.current.length
+    if (prevH > 1) {
+      let buf = `\x1b[${prevH - 1}A` // up to first row of region
+      for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
+      buf += `\x1b[${prevH - 1}A` // back up to top
+      process.stdout.write(buf)
+    } else if (prevH === 1) {
+      process.stdout.write('\r\x1b[K')
+    }
+    prevFrameRef.current = []
+  }
+
   const handleSubmit = () => {
     if (!text.trim()) return
     const expanded = expandPasteRefs(text, pastedContents)
+    // Wipe our stdout footprint BEFORE triggering state changes. That way
+    // when MessageList's useEffect fires and writes the user-echo via
+    // Ink's coordinated `write`, the terminal cursor is already at the
+    // top of an empty region — the echo doesn't overwrite our bottom
+    // separator, and our next frame draws fresh below the echo.
+    eraseRegion()
+    activeRef.current = false
     onSubmit(expanded)
     dispatch({ type: 'RESET' })
     setPastedContents({})
@@ -228,14 +339,24 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
   }
 
   usePromptInput({
-    enabled: !disabled,
+    enabled: !disabled && !hidden,
     onInterrupt,
     onText: (chunk) => {
       dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
       setCompletionIndex(0)
     },
     onPaste: (content) => {
-      dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: content })
+      const lineCount = content.split(/\r\n|\r|\n/).length
+      const isLarge = lineCount >= PASTE_REF_MIN_LINES || content.length >= PASTE_REF_MIN_CHARS
+      const pos = cursorRef.current
+      if (isLarge) {
+        const id = nextPasteIdRef.current++
+        setPastedContents((prev) => ({ ...prev, [id]: { id, content, lineCount } }))
+        const ref = formatPasteRef(id, lineCount)
+        dispatch({ type: 'INSERT', pos, chunk: ref })
+      } else {
+        dispatch({ type: 'INSERT', pos, chunk: content })
+      }
       setCompletionIndex(0)
     },
     onKey: (key) => {
@@ -320,25 +441,44 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     },
   })
 
-  // ── Multi-line frame rendering with cell-level diff ──────────────────
+  // ── Frame rendering with cell-level diff ─────────────────────────────
 
   useEffect(() => {
-    if (disabled) {
+    if (hidden) {
+      // Don't try to eraseRegion — by the time this effect fires, Ink has
+      // already written the Permission/SelectOptions content below our
+      // frame (its onRender runs before useEffect), so the terminal cursor
+      // isn't at the end of our frame anymore. A blind ANSI "up N + erase"
+      // would corrupt Ink's dialog. Just forget our frame state; the old
+      // frame stays in scrollback for the brief lifetime of the dialog,
+      // and we re-render cleanly below whatever's there once unhidden.
       if (activeRef.current) {
-        // Erase our region
-        const prevH = prevFrameRef.current.length
-        if (prevH > 1) {
-          let buf = `\x1b[${prevH - 1}A` // move to top of region
-          for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
-          buf += `\x1b[${prevH - 1}A` // move back to top
-          process.stdout.write(buf)
-        } else if (prevH === 1) {
-          process.stdout.write('\r\x1b[K')
-        }
-        activeRef.current = false
         prevFrameRef.current = []
+        activeRef.current = false
       }
       return
+    }
+
+    // ── Commit new scrollback messages ───────────────────────────────────
+    // We own the terminal below the header — messages are NOT written via
+    // Ink (MessageList is retired). If new messages arrived since the last
+    // render, erase our current cell frame, emit the messages as plain
+    // scrollback via direct stdout.write, and then redraw the frame fresh
+    // below them. prevFrameRef is cleared so the next cell-diff starts
+    // from zero at the new cursor position.
+    //
+    // A /clear command may shrink messages; detect and reset the counter.
+    if (messages.length < writtenMessageCountRef.current) {
+      writtenMessageCountRef.current = messages.length
+    }
+    if (messages.length > writtenMessageCountRef.current) {
+      if (activeRef.current) {
+        eraseRegion()
+      }
+      for (let i = writtenMessageCountRef.current; i < messages.length; i++) {
+        writeMessageToStdout(writeStdout, messages[i])
+      }
+      writtenMessageCountRef.current = messages.length
     }
 
     activeRef.current = true
@@ -348,7 +488,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     const sepChar = '\u2500'
     const sepText = sepChar.repeat(Math.max(0, termWidth - 1))
 
-    // ── Build display lines (with visible windowing) ──
+    // ── Input display lines (with viewport windowing) ──
     const rawLines = text.length === 0 ? [''] : text.split('\n')
 
     let rawCursorLine = 0,
@@ -388,6 +528,34 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     // ── Build 2D cell frame ──
     const frame: Cell[][] = []
 
+    // Error line (if any)
+    if (errorMessage) {
+      const S_ERR = '\x1b[38;2;244;113;116m' // red-ish
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells(`Error: ${errorMessage}`, S_ERR))
+      frame.push(cells)
+    }
+
+    // Spinner line (only when loading)
+    if (spinner) {
+      const glyph = SPINNER_FRAMES[spinnerFrame]
+      const arrow = spinner.mode === 'requesting' ? '↑' : '↓'
+      const parts: string[] = []
+      if (elapsedMs >= 2000) parts.push(formatElapsed(elapsedMs))
+      if (spinner.totalTokens != null && spinner.totalTokens > 0) {
+        parts.push(`${arrow} ${formatTokens(spinner.totalTokens)} tokens`)
+      }
+      const meta = parts.length > 0 ? ` (${parts.join(' · ')})` : ''
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells(glyph, S_SPINNER))
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells(`${spinner.label}...`, S_SPINNER))
+      if (meta) cells.push(...textToCells(meta, S_DIM))
+      frame.push(cells)
+    }
+
     // Top separator
     frame.push(textToCells(sepText, S_GRAY))
 
@@ -395,10 +563,9 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
       const prompt = i === 0 ? '> ' : '  '
-      const showCursor = i === cursorLine && cursorLine >= 0
+      const showCursor = !disabled && i === cursorLine && cursorLine >= 0
       const cells: Cell[] = []
 
-      // Prompt
       cells.push({ char: prompt[0], style: S_GRAY, width: 1 })
       cells.push({ char: prompt[1], style: S_NONE, width: 1 })
 
@@ -458,7 +625,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       }
     }
 
-    // ── Diff with previous frame and build output buffer ──
+    // ── Diff against previous frame and emit one buffered write ──────────
     const prevFrame = prevFrameRef.current
     const prevH = prevFrame.length
     const nextH = frame.length
@@ -466,9 +633,8 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
 
     let buf = ''
 
-    // Move cursor to top of region.
-    // After the previous render the cursor sits on the LAST row (prevH-1),
-    // so we move up by (prevH - 1) rows to reach row 0.
+    // After the previous render the cursor sits on the LAST row (prevH-1).
+    // Move up to row 0 so we can diff top-down.
     if (prevH > 1) {
       buf += `\x1b[${prevH - 1}A`
     }
@@ -478,7 +644,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
       const nextRow = row < nextH ? frame[row] : []
 
       if (row < nextH) {
-        // Find first diff cell
+        // First cell that differs from prevRow
         let diffIdx = 0
         const minCells = Math.min(prevRow.length, nextRow.length)
         while (diffIdx < minCells && cellsEqual(prevRow[diffIdx], nextRow[diffIdx])) {
@@ -486,14 +652,12 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
         }
 
         if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
-          // Calculate column at diffIdx
+          // Position cursor at diffIdx's visual column
           let col = 0
           for (let c = 0; c < diffIdx; c++) col += nextRow[c].width
-
-          // Move to the diff column
           buf += `\x1b[${col + 1}G`
 
-          // Write changed cells
+          // Emit changed cells
           let lastStyle = ''
           for (let c = diffIdx; c < nextRow.length; c++) {
             const cell = nextRow[c]
@@ -509,7 +673,7 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
           }
           buf += S_RESET
 
-          // Pad/erase if old row was wider
+          // Clear trailing garbage if the old row was wider
           let oldTailW = 0
           for (let c = diffIdx; c < prevRow.length; c++) oldTailW += prevRow[c].width
           let newTailW = 0
@@ -518,27 +682,23 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
             buf += ' '.repeat(oldTailW - newTailW)
           }
         }
-        // else: row unchanged, skip
+        // else: row identical — skip
       } else {
-        // Extra old row — erase it
+        // Extra old row — blank it out
         buf += '\r\x1b[K'
       }
 
-      // Move to next row (except after last row)
+      // Advance to the next row (existing line below → CUD; new line → LF)
       if (row < maxH - 1) {
         if (row < prevH - 1) {
-          // Line below already exists — cursor down (no scroll, no new line)
           buf += '\x1b[1B'
         } else {
-          // Line below doesn't exist yet — line feed to create it
           buf += '\n'
         }
       }
     }
 
-    // After the loop, cursor is on the last row we touched (row maxH-1).
-    // We want it on the last row of the NEW frame (row nextH-1).
-    // Move up by (maxH-1) - (nextH-1) = maxH - nextH.
+    // Park the cursor on the last row of the NEW frame.
     if (maxH > nextH) {
       buf += `\x1b[${maxH - nextH}A`
     }
@@ -550,25 +710,17 @@ export function ChatInput({ onSubmit, onInterrupt, disabled, commands = [] }: Ch
     prevFrameRef.current = frame
   })
 
-  // Cleanup on unmount
+  // Unmount cleanup
   useEffect(() => {
     return () => {
       if (activeRef.current) {
-        const prevH = prevFrameRef.current.length
-        if (prevH > 1) {
-          let buf = `\x1b[${prevH - 1}A`
-          for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
-          buf += `\x1b[${prevH - 1}A`
-          process.stdout.write(buf)
-        } else if (prevH === 1) {
-          process.stdout.write('\r\x1b[K')
-        }
+        eraseRegion()
         activeRef.current = false
-        prevFrameRef.current = []
       }
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Return null — everything is rendered via direct stdout writes
+  // ChatInput renders nothing through Ink — the full bottom region is
+  // owned by direct stdout writes inside the useEffect above.
   return null
 }
