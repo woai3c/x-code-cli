@@ -1,13 +1,13 @@
 ### 1. 什么时候需要压缩上下文，判断条件是什么
 
-**触发点有三个**（都在 `core/src/agent/loop.ts`）：
+**触发点有三个**（都在 `core/src/agent/`）：
 
-- **Proactive 预防式**（`loop.ts:504-519`）：每轮循环开头判断
+- **Proactive 预防式**（`loop.ts` 里的 `checkAndCompressContext()`）：每轮循环开头判断
   `state.lastInputTokens > threshold || estimateTokenCount(messages) > threshold`
   任一命中且 `messages.length > 6` 就压缩。
-  阈值 = `contextWindow * 0.8`（`COMPRESSION_TRIGGER_RATIO = 0.8`，`loop.ts:54`），contextWindow 按模型在 `MODEL_CONTEXT_WINDOWS` 里查（Anthropic 200k，GPT-4.1 约 1M，DeepSeek chat 64k…）。
-- **Reactive 兜底**（`loop.ts:579-585`）：stream 抛错，消息里包含 "maximum context length" / "context_length_exceeded" / "token limit" / "prompt is too long" / "prompt_too_long" 之一，就立即压缩 + 不计这一轮、重试当前 turn。
-- **手动**：用户输入 `/compact` 调 `compressMessages()`（`loop.ts:236`）。
+  阈值 = `contextWindow * 0.8`（`context-window.ts` 的 `COMPRESSION_TRIGGER_RATIO = 0.8` + `getCompressionThreshold()`），contextWindow 按模型在 `MODEL_CONTEXT_WINDOWS` Map 里查（Anthropic 200k，GPT-4.1 约 1M，DeepSeek chat 64k…）。
+- **Reactive 兜底**（`loop.ts` 里的 `handleContextTooLong()`，经 `api-errors.ts::isContextTooLongError` 统一模式匹配）：stream 抛错且匹配 "maximum context length" / "context_length_exceeded" / "token limit" / "prompt is too long" / "prompt_too_long" 之一，就立即压缩 + 不计这一轮、重试当前 turn。
+- **手动**：用户输入 `/compact` 调 `compressMessages()`（`loop.ts`）。
 
 **压缩做什么**：保留最后 6 条消息（`KEEP_RECENT = 6`），把前面的用 `generateText` 做 summary，替换成一条 `[Previous conversation summary]` 系统消息。
 
@@ -22,7 +22,7 @@
 | 项目说明 | 项目根 `AGENTS.md` | 人写 | 每次 session 必加载；monorepo 从 cwd 向上遍历收集 |
 | 全局偏好 | `~/.x-code/AGENTS.md` | 人写 | 每次 session 必加载 |
 | 本地偏好 | `.x-code/local/preferences.md` | 人写（gitignored） | 每次 session 必加载 |
-| 项目记忆 | `.x-code/memory/auto.md` | AI 调 `saveKnowledge` 工具 | 每次加载，90 天 TTL 自动驱逐（`auto-memory.ts:55,169`） |
+| 项目记忆 | `.x-code/memory/auto.md` | AI 调 `saveKnowledge` 工具 | 每次加载，90 天 TTL 自动驱逐（`auto-memory.ts::evict()` + `initMemories()`） |
 | 全局记忆 | `~/.x-code/memory/auto.md` | AI 调 `saveKnowledge` 工具（scope=global） | 同上 |
 
 **加载顺序**（`buildKnowledgeContext` 的拼接顺序，`loader.ts`），后出现的在 prompt 末尾、模型权重更高：
@@ -57,9 +57,9 @@
 
 ### 4. 什么时候执行权限检查，是每次调用工具前先检查吗，如果是写权限就底部用户，同意后才继续执行，否则就一直挂着，这里逻辑在哪
 
-**只有三个工具走权限检查**（`loop.ts:416`）：`writeFile` / `edit` / `shell`。其它 10 个工具（readFile, glob, grep, listDir, webSearch, webFetch, askUser, saveKnowledge, enterPlanMode, exitPlanMode）在 `permissions/index.ts:8-20` 里全是 `always-allow`，根本不问。
+**只有三个工具走权限检查**（`tool-execution.ts::handleToolCall`）：`writeFile` / `edit` / `shell`。其它 10 个工具（readFile, glob, grep, listDir, webSearch, webFetch, askUser, saveKnowledge, enterPlanMode, exitPlanMode）在 `permissions/index.ts` 的 `rules` 表里全是 `always-allow`，根本不问。
 
-**流程**（`loop.ts:415-427`，串行，for 循环一个一个处理）：
+**流程**（`tool-execution.ts::processToolCalls`，串行，for 循环一个一个处理）：
 
 ```
 for each tool call:
@@ -69,26 +69,28 @@ for each tool call:
   execute tool
 ```
 
-`checkPermission`（`permissions/index.ts:42`）三级判定：
+`checkPermission`（`permissions/index.ts`）三级判定：
 
 - `deny` → 直接返回 false（shell 有破坏性子命令，如 `rm -rf`）
 - `always-allow` 或 `trustMode=true` → 直接 true
 - `ask` → `await onAskPermission(toolCall)` 返回一个 Promise
 
+Shell 权限级别按 command 字符串 memoize 在 `shellPermissionCache`（上限 256，FIFO 淘汰），相同命令重复调用时跳过 regex 判定。
+
 **"挂着"的实现**在 `use-agent.ts` 的 callback 里（和 `pendingQuestion` 同一套模式）：`onAskPermission` 的实现是 `new Promise(resolve => setState(prev => ({ permissionQueue: [...prev.permissionQueue, { ..., resolve }] })))`，把 resolve 函数塞进 state。Permission 组件渲染 `queue[0]`，用户按 y/n 时调 `resolvePermission(approved)` → `pendingPermission.resolve(approved)` → 那边的 await 才返回 → agentLoop 才继续执行下一个工具。期间 ChatInput 是 disabled 的。
 
-Shell 额外分级（`permissions/index.ts:21-31`）：`splitShellCommands` 拆 `&&/||/;`，**任一子命令破坏性 → deny**，**全部只读 → always-allow**，**混合 → ask**。
+Shell 额外分级（`permissions/index.ts::evaluateShellPermission`）：`splitShellCommands` 拆 `&&/||/;`，**任一子命令破坏性 → deny**，**全部只读 → always-allow**，**混合 → ask**。
 
 ---
 
 ### 5. agentLoop 的结束条件是什么，是根据 AI 返回的结果来判断的吗
 
-`while (state.turnCount < options.maxTurns)` 循环（`loop.ts:498`），出口有五个：
+`while (state.turnCount < options.maxTurns)` 循环（`loop.ts::agentLoop`），出口有五个：
 
-1. **`finishReason === 'stop'`**（`loop.ts:633`）—— AI 说完了，最常见的正常退出
+1. **`finishReason === 'stop'`** —— AI 说完了，最常见的正常退出
 2. **`finishReason === 'tool-calls'`** → `continue`，不是退出
-3. **`turnCount >= maxTurns`**（默认 100）—— while 条件假，退出后 `loop.ts:636` 会上报 "Reached maximum turns"
-4. **不可重试错误** —— `streamText` 抛错后走 `classifyApiError`（`loop.ts:537,587,613`），除了 429 / timeout / ECONNRESET，其它一律 `break`
+3. **`turnCount >= maxTurns`**（默认 100）—— while 条件假，退出后 agentLoop 末尾会上报 "Reached maximum turns"
+4. **不可重试错误** —— `runTurn` 里 `streamText` / `streamChunksToUI` / `collectTurnResponse` 抛错后统一走 `classifyApiError`（`api-errors.ts`），除了 429 / timeout / ECONNRESET，其它一律 `break`（返回 `TurnOutcome: 'error'`）
 5. **AbortSignal**（Ctrl+C）—— `options.abortSignal` 传给 streamText，触发后 stream 抛 AbortError，被当作不可重试错误 break
 
 所以答案：**主要是看 `finishReason`**，辅以 maxTurns 封顶、错误中断、取消信号三条兜底。
@@ -97,14 +99,14 @@ Shell 额外分级（`permissions/index.ts:21-31`）：`splitShellCommands` 拆 
 
 ### 6. flushBuffer 有什么用，为什么需要它
 
-AI 流式返回的 text-delta 一个 chunk 可能只有 1-5 个字符。`flushBuffer`（`use-agent.ts:105`）是把 `streamBufferRef`（useRef，不在 React state 里）攒着的文本一次性推到 `messages`。
+AI 流式返回的 text-delta 一个 chunk 可能只有 1-5 个字符。`flushBuffer`（`use-stream-buffer.ts` 里的 `useStreamBuffer` hook）是把 `bufferRef`（useRef，不在 React state 里）攒着的文本一次性推到 `messages`。
 
 **为什么不每个 delta 都推**：
 
 - **放 React state** → 每 delta 触发重渲染 → Ink 重绘动态区 → Ink 的 Yoga 布局算 CJK 宽度算错 → 光标 rewind 超调 → 旧内容被覆盖或新旧内容 splice 成乱码
 - **每 delta 都 write 到 stdout** → 终端被打爆 + 和 Ink 动态区互相踩踏
 
-所以策略是：**累积到一个合理边界再 flush**，触发条件三选一（`use-agent.ts:139-141`）：
+所以策略是：**累积到一个合理边界再 flush**，触发条件三选一（`use-stream-buffer.ts::appendTextDelta`）：
 
 - `buffer.includes('\n\n')` —— 段落自然断点
 - `buffer.length >= 300` —— 字符硬顶

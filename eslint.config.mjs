@@ -48,6 +48,11 @@ export default defineConfig(
       ...reactHooks.configs.recommended.rules,
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
+      // `unused-imports/no-unused-imports` is the only rule in the ecosystem
+      // that autofixes unused code on save. It only covers imports — unused
+      // variable declarations have no autofix path and are reported for the
+      // user to remove manually (Ctrl+. → "Remove unused declaration") or to
+      // silence by prefixing with `_`.
       'unused-imports/no-unused-imports': 'error',
     },
   },

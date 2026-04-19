@@ -61,7 +61,8 @@ x-code-cli/
 │   │   │   │   │   ├── SelectOptions.tsx # askUser 多选交互
 │   │   │   │   │   └── AppHeader.tsx    # printHeader() ASCII banner（Ink 外直写 stdout）
 │   │   │   │   ├── hooks/
-│   │   │   │   │   ├── use-agent.ts     # Agent 状态管理 Hook
+│   │   │   │   │   ├── use-agent.ts     # Agent 状态管理 Hook（orchestration）
+│   │   │   │   │   ├── use-stream-buffer.ts # 流式文本缓冲 Hook（CJK-safe flush）
 │   │   │   │   │   └── use-prompt-input.ts  # 自定义 stdin hook（bracketed paste + debounce）
 │   │   │   │   ├── paste-refs.ts        # [Pasted text #N +M lines] 占位符 helper
 │   │   │   │   ├── stdout-writer.ts     # writeMessageToStdout，绕过 Ink 布局直写终端
@@ -82,10 +83,16 @@ x-code-cli/
 │       ├── src/
 │       │   ├── index.ts            # 公共 API 导出（barrel exports）
 │       │   ├── agent/
-│       │   │   ├── loop.ts         # Agent Loop 核心逻辑
-│       │   │   ├── system-prompt.ts # System Prompt 管理
-│       │   │   ├── plan-mode.ts    # Plan Mode 逻辑（提示注入/移除 + 计划文件管理）
-│       │   │   └── messages.ts     # 消息类型定义与管理
+│       │   │   ├── loop.ts             # Agent Loop 主编排（streaming / tool / compaction 协调）
+│       │   │   ├── loop-state.ts       # LoopState 类型 + createLoopState()
+│       │   │   ├── tool-execution.ts   # processToolCalls：权限检查 + 写/shell 工具分发
+│       │   │   ├── context-window.ts   # 模型上下文窗口表 + 压缩阈值 + token 估算
+│       │   │   ├── api-errors.ts       # classifyApiError + isContextTooLongError
+│       │   │   ├── stream-utils.ts     # StreamResult 类型 + drainStreamResult
+│       │   │   ├── provider-compat.ts  # DeepSeek reasoning_content shim
+│       │   │   ├── system-prompt.ts    # System Prompt 管理
+│       │   │   ├── plan-mode.ts        # Plan Mode 逻辑（提示注入/移除 + 计划文件管理）
+│       │   │   └── messages.ts         # 消息类型定义与管理
 │       │   ├── tools/
 │       │   │   ├── index.ts        # 工具注册表（统一导出）
 │       │   │   ├── read-file.ts    # 读文件
@@ -754,10 +761,9 @@ interface AgentState {
   error: string | null
 }
 
-// 流式文本累积在 ref 里，不触发重渲染
-const streamBufferRef = useRef<string>('')
-const FLUSH_CHAR_THRESHOLD = 300
-const FLUSH_LINE_THRESHOLD = 5
+// 流式文本累积在 ref 里，不触发重渲染（封装在 use-stream-buffer.ts）
+const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage)
+// 内部常量：FLUSH_CHAR_THRESHOLD = 300（字符）/ FLUSH_LINE_THRESHOLD = 5（行）
 ```
 
 **数据流方向**：
@@ -770,7 +776,7 @@ const FLUSH_LINE_THRESHOLD = 5
        └─ MessageList useEffect → writeMessageToStdout → scrollback
     → agentLoop(text, callbacks)
        ├─ callbacks.onTextDelta(delta)
-       │    → streamBufferRef.current += delta
+       │    → useStreamBuffer.appendTextDelta(delta)  // 累积到内部 bufferRef
        │    → 命中 flush 条件（\n\n / ≥ 300 chars / > 5 lines）即 flushBuffer()
        │       → setState({ messages: [...prev, { role: 'assistant', content: buf }] })
        │          └─ MessageList useEffect → writeMessageToStdout → scrollback
@@ -1731,7 +1737,7 @@ interface SessionSummary {
 | 功能 | 文件 | 关键函数 |
 |---|---|---|
 | AGENTS.md chain 加载 | `core/src/knowledge/loader.ts` | `collectAgentsMdChain()`, `buildKnowledgeContext()` |
-| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory`, `initMemories()` |
+| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory`, `initMemories()`, `getAutoMemory()`(project 实例按 cwd 缓存) |
 | saveKnowledge 工具 | `core/src/tools/save-knowledge.ts` | schema + AI 触发指南 |
 | Taxonomy 类型 | `core/src/types/index.ts` | `KnowledgeCategory` |
 | `/init` 命令 | `core/src/knowledge/init.ts` | `initProject()`, AGENTS_TEMPLATE |
@@ -1873,11 +1879,11 @@ interface SessionSummary {
 
 ### 13.4 Agent Loop
 
-- ✅ `agentLoop()`：streamText + 工具调用 + while 循环
-- ✅ `handleToolCalls()`：顺序执行、权限检查、结果收集
+- ✅ `agentLoop()`：streamText + 工具调用 + while 循环（拆为 `runTurn` / `streamChunksToUI` / `collectTurnResponse` / `handleContextTooLong` / `checkAndCompressContext` 等聚焦函数）
+- ✅ `processToolCalls()`（`tool-execution.ts`）：顺序执行、权限检查、结果收集
 - ✅ 上下文压缩（token 超阈值时 `compressMessages()` 生成摘要替换旧消息）
 - ✅ Token 用量统计（累计 input/output token，不做自动计费——汇率和价格会变，内置单价表很快过时）
-- ✅ 错误分类 `classifyApiError()`（401/403/429/503/timeout）+ 非可重试错误 break
+- ✅ 错误分类 `classifyApiError()`（`api-errors.ts`：401/403/429/503/timeout + 上下文超限集中检测）+ 非可重试错误 break
 - ✅ 最大轮次限制（`--max-turns`）+ AbortController（Ctrl+C 中断）
 - ✅ `extractLastAssistantText()` 安全网：某些推理模型把全部文本放在 response.messages 最后 part 的兜底
 
@@ -1911,7 +1917,7 @@ interface SessionSummary {
 
 - ✅ Ink 6 + React 19
 - ✅ `useAgent` hook 管理 AgentState（messages / isLoading / currentToolCall / shellOutput / pending… / usage / error）
-- ✅ streaming 文本走 `streamBufferRef` + effect-based flush（段落 / 300 字 / 5 行），不进 React state
+- ✅ streaming 文本走 `useStreamBuffer()` 内部的 `bufferRef` + effect-based flush（段落 / 300 字 / 5 行），不进 React state
 - ✅ `MessageList`：effect-only 组件，`useStdout().write` 直写 scrollback，绕过 Ink 布局
 - ✅ `stdout-writer.ts`：user/assistant/tool 格式化 + ANSI + `\r\n → \n` 归一化
 - ✅ `ChatInput` + `usePromptInput`：自定义 stdin 处理，bracketed paste + 30ms debounce 双路径，paste 占位符，多行 textarea + 6 行硬顶

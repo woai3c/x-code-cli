@@ -60,7 +60,7 @@ while (未结束) {
 
 | 项目            | API 调用位置                                                             | 调用方式            |
 | --------------- | ------------------------------------------------------------------------ | ------------------- |
-| **x-code-cli**  | `loop.ts:453` (streamText) + `loop.ts:226` / `session.ts` (generateText) | Vercel AI SDK       |
+| **x-code-cli**  | `loop.ts::runTurn` (streamText) + `loop.ts::compressMessages` / `session.ts` (generateText) | Vercel AI SDK       |
 | **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`               | Anthropic SDK 原生  |
 | **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                          | Rust HTTP/WebSocket |
 | **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                          | Google GenAI SDK    |
@@ -221,12 +221,12 @@ streamText() 发出请求，打开流式连接
 带 `execute` 函数的只读工具，AI SDK 在收到 `tool-call` chunk 时**立即在内部执行**：
 
 - `glob`, `grep`, `readFile`, `listDir`, `webSearch`, `webFetch`
-- 不需要权限检查，不经过 `handleToolCalls`
+- 不需要权限检查，不经过 `processToolCalls`
 - 结果作为 `tool-result` chunk 自动推入流中
 
-#### 阶段二：handleToolCalls 手动执行（流结束后）
+#### 阶段二：processToolCalls 手动执行（流结束后）
 
-没有 `execute` 函数的写操作工具，在流结束后由 `handleToolCalls()` 串行处理：
+没有 `execute` 函数的写操作工具，在流结束后由 `processToolCalls()` 串行处理：
 
 - `writeFile`, `edit` → 需要权限确认 → `executeWriteTool()`
 - `shell` → 需要权限确认 → `executeShell()`
@@ -239,7 +239,7 @@ streamText() 发出请求，打开流式连接
 (glob/grep/      自动执行
 readFile...)
 
-没 execute 的    handleToolCalls      流结束后              是（写操作）
+没 execute 的    processToolCalls      流结束后              是（写操作）
 (writeFile/      手动执行
 edit/shell)
 ```
@@ -293,7 +293,7 @@ agentLoop() ── while 循环开始 ──────────────
   │   └─ 流结束，拿到 finishReason                           │
   │                                                         │
   ├─ finishReason === 'tool-calls'?                         │
-  │   ├─ 是 → handleToolCalls()                             │
+  │   ├─ 是 → processToolCalls()                             │
   │   │       串行处理 writeFile/edit/shell（需权限）        │
   │   │       结果 push 到 messages                         │
   │   │       continue → 回到循环顶部 ─────────────────────→│
@@ -320,7 +320,7 @@ finish_reason: "tool_calls"  → 我还需要执行工具，别停
 finish_reason: "end_turn"    → 我说完了，停
 ```
 
-x-code-cli 中的实际代码 (`loop.ts:520`)：
+x-code-cli 中的实际代码 (`loop.ts::agentLoop`)：
 
 ```typescript
 if (finishReason === 'tool-calls') {
@@ -362,7 +362,7 @@ if (finishReason === 'tool-calls') {
 
 | 项目            | 判断方式                                    | 代码位置      |
 | --------------- | ------------------------------------------- | ------------- |
-| **x-code-cli**  | `finishReason === 'tool-calls'`             | `loop.ts:520` |
+| **x-code-cli**  | `finishReason === 'tool-calls'`             | `loop.ts::agentLoop` |
 | **Claude Code** | 检查响应中是否有 `tool_use` content block   | `query.ts`    |
 | **Codex**       | `ResponseEvent::Completed` + 检查待执行工具 | `codex.rs`    |
 | **Gemini CLI**  | `functionCalls` 是否存在于 response parts   | `turn.ts`     |

@@ -1,6 +1,4 @@
-// @x-code-cli/core — Agent Loop (core logic: streaming, tool calls, permission, context compression)
-import { execa } from 'execa'
-
+// @x-code-cli/core — Agent Loop (orchestration: streaming, tool calls, permission, context compression)
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -9,230 +7,24 @@ import type { LanguageModel, ModelMessage } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
-import { checkPermission } from '../permissions/index.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
-import { getShellConfig } from '../tools/shell-utils.js'
-import type { AgentCallbacks, AgentOptions, TokenUsage } from '../types/index.js'
-import { toolResultMessage } from './messages.js'
-import { ensurePlansDir, generatePlanId, getPlanPath } from './plan-mode.js'
+import type { AgentCallbacks, AgentOptions } from '../types/index.js'
+import { classifyApiError, isContextTooLongError } from './api-errors.js'
+import { estimateTokenCount, getCompressionThreshold } from './context-window.js'
+import { createLoopState } from './loop-state.js'
+import type { LoopState } from './loop-state.js'
+import { ensureReasoningContentParts } from './provider-compat.js'
+import { drainStreamResult } from './stream-utils.js'
+import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
+import { processToolCalls } from './tool-execution.js'
 
-/** Minimal shape of what we use from streamText() result — avoids complex generic propagation */
-interface StreamResult {
-  fullStream: AsyncIterable<{
-    type: string
-    text?: string
-    toolName?: string
-    input?: unknown
-    output?: unknown
-    toolCallId?: string
-  }>
-  response: Promise<{ messages: ModelMessage[] }>
-  usage: Promise<{ inputTokens?: number; outputTokens?: number } | undefined>
-  finishReason: Promise<string>
-  toolCalls: Promise<
-    Array<{
-      toolName: string
-      toolCallId: string
-      input: Record<string, unknown>
-    }>
-  >
-}
+export type { LoopState } from './loop-state.js'
 
+/** Number of recent messages to keep verbatim when compressing. */
 const KEEP_RECENT = 6
-/**
- * Compress context when usage exceeds this fraction of the model's context
- * window. Two checks use this:
- *   1. After each turn — based on the **real** input-token count reported by
- *      the API, which is the most reliable signal.
- *   2. Before each API call — based on a **character-based estimate** as a
- *      safety net. Estimates drift (tool output, non-ASCII), so we use a
- *      conservative multiplier. The estimate catches cases where a single
- *      turn (e.g. reading a huge file) pushes context past the limit before
- *      the real count is available.
- */
-const COMPRESSION_TRIGGER_RATIO = 0.8
 
-/**
- * Rough chars-per-token ratio for pre-call estimation. Most English text is
- * ~4 chars/token; CJK and code can be lower. We use 3.0 (aggressive) so the
- * estimate over-counts slightly, making the safety net trigger earlier.
- */
-const CHARS_PER_TOKEN_ESTIMATE = 3.0
-
-/** Count occurrences of a substring without creating intermediate arrays */
-function countOccurrences(content: string, search: string): number {
-  let count = 0
-  let pos = 0
-  while ((pos = content.indexOf(search, pos)) !== -1) {
-    count++
-    pos += search.length
-  }
-  return count
-}
-
-/**
- * Ensure all assistant messages have a reasoning content part.
- *
- * DeepSeek Reasoner requires the `reasoning_content` field on every assistant
- * message during tool-call chains.  The upstream `@ai-sdk/deepseek` converter
- * sets `reasoning_content: undefined` when no reasoning part exists, and
- * `JSON.stringify` strips `undefined` values — causing the DeepSeek API to
- * reject the request with a 400 "Missing reasoning_content" error.
- *
- * This helper injects an empty `{ type: 'reasoning', text: '' }` part into any
- * assistant message that lacks one, so the converter always produces
- * `"reasoning_content": ""` in the JSON body.
- */
-function ensureReasoningContentParts(messages: ModelMessage[], modelId: string): void {
-  if (!modelId.includes('deepseek-reasoner')) return
-
-  for (const msg of messages) {
-    if (msg.role !== 'assistant') continue
-
-    const content = msg.content
-    if (!Array.isArray(content)) continue
-
-    const hasReasoning = (content as Array<{ type: string }>).some((p) => p.type === 'reasoning')
-    if (!hasReasoning) {
-      // Prepend an empty reasoning part so the converter produces `reasoning_content: ""`
-      ;(content as Array<{ type: string; text?: string }>).unshift({ type: 'reasoning', text: '' })
-    }
-  }
-}
-
-/** Context window sizes per model (tokens). Falls back to provider default, then 128k. */
-const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  // Anthropic
-  'anthropic:claude-opus-4-6': 200000,
-  'anthropic:claude-sonnet-4-5': 200000,
-  'anthropic:claude-haiku-4-5': 200000,
-  // OpenAI
-  'openai:gpt-4.1': 1047576,
-  'openai:gpt-4.1-mini': 1047576,
-  'openai:gpt-4.1-nano': 1047576,
-  'openai:o3': 200000,
-  'openai:o4-mini': 200000,
-  // Google
-  'google:gemini-2.5-pro': 1000000,
-  'google:gemini-2.5-flash': 1000000,
-  // DeepSeek
-  'deepseek:deepseek-chat': 64000,
-  'deepseek:deepseek-reasoner': 131072,
-  // Alibaba
-  'alibaba:qwen-max': 128000,
-  'alibaba:qwen-plus': 128000,
-  // xAI
-  'xai:grok-3': 131072,
-  'xai:grok-3-mini': 131072,
-  // Zhipu
-  'zhipu:glm-4-plus': 128000,
-  // Moonshot
-  'moonshotai:kimi-k2.5': 131072,
-}
-
-/** Provider-level fallback context windows */
-const PROVIDER_CONTEXT_WINDOWS: Record<string, number> = {
-  anthropic: 200000,
-  openai: 128000,
-  google: 1000000,
-  deepseek: 64000,
-  alibaba: 128000,
-  xai: 128000,
-  zhipu: 128000,
-  moonshotai: 128000,
-}
-
-function getCompressionThreshold(modelId: string): number {
-  const contextWindow = MODEL_CONTEXT_WINDOWS[modelId] ?? PROVIDER_CONTEXT_WINDOWS[modelId.split(':')[0]] ?? 128000
-  return Math.floor(contextWindow * COMPRESSION_TRIGGER_RATIO)
-}
-
-export interface LoopState {
-  messages: ModelMessage[]
-  tokenUsage: TokenUsage
-  /** Real input-token count from the most recent API response, used to trigger compression. */
-  lastInputTokens: number
-  planMode: boolean
-  planId: string | null
-  sessionId: string
-  startedAt: string
-  filesModified: Set<string>
-  turnCount: number
-}
-
-/** Execute a write tool (writeFile / edit) */
-async function executeWriteTool(toolName: string, input: Record<string, unknown>): Promise<string> {
-  if (toolName === 'writeFile') {
-    const filePath = input.filePath as string
-    const content = input.content as string
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.writeFile(filePath, content, 'utf-8')
-    return `File written: ${filePath} (${content.length} characters)`
-  }
-
-  if (toolName === 'edit') {
-    const filePath = input.filePath as string
-    const oldString = input.oldString as string
-    const newString = input.newString as string
-    const replaceAll = (input.replaceAll as boolean) ?? false
-
-    const content = await fs.readFile(filePath, 'utf-8')
-    if (!replaceAll) {
-      const count = countOccurrences(content, oldString)
-      if (count === 0) return `Error: old_string not found in ${filePath}`
-      if (count > 1)
-        return `Error: old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`
-    }
-
-    const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
-    await fs.writeFile(filePath, newContent, 'utf-8')
-    return `File edited: ${filePath}`
-  }
-
-  return 'Error: unknown write tool'
-}
-
-/** Execute a shell command with streaming */
-async function executeShell(command: string, timeout: number, callbacks: AgentCallbacks): Promise<string> {
-  const { executable, args, type } = getShellConfig()
-
-  // On Windows, force the console codepage to UTF-8 (65001) at the OS level
-  // BEFORE PowerShell starts parsing the command. This ensures even parse errors
-  // (e.g. `&&` on PS 5.1) produce UTF-8 output instead of GBK garbled text.
-  // We wrap via `cmd.exe /c "chcp 65001 >nul && powershell ..."` because
-  // [Console]::OutputEncoding only takes effect after parsing completes.
-  let proc
-  if (type === 'powershell') {
-    // Build as a single string for cmd.exe /c so redirections like >nul work.
-    // Escape embedded double quotes so the command survives cmd.exe parsing.
-    const escapedCommand = command.replace(/"/g, '\\"')
-    const psCmd = `chcp 65001 >nul && ${executable} ${args.join(' ')} "${escapedCommand}"`
-    proc = execa('cmd.exe', ['/c', psCmd], {
-      timeout,
-      reject: false,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    })
-  } else {
-    proc = execa(executable, [...args, command], {
-      timeout,
-      reject: false,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    })
-  }
-
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    callbacks.onShellOutput(chunk.toString())
-  })
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    callbacks.onShellOutput(chunk.toString())
-  })
-
-  const result = await proc
-  return `exit code: ${result.exitCode}\n${result.stdout}\n${result.stderr}`.trim()
-}
-
-/** Compress old messages into a summary */
+/** Compress old messages into a summary. */
 export async function compressMessages(messages: ModelMessage[], model: LanguageModel): Promise<ModelMessage[]> {
   const recent = messages.slice(-KEEP_RECENT)
   const old = messages.slice(0, -KEEP_RECENT)
@@ -250,205 +42,145 @@ export async function compressMessages(messages: ModelMessage[], model: Language
 }
 
 /**
- * Estimate total token count from messages using character length.
- * This is intentionally conservative (over-counting) to serve as a safety net
- * that fires before the real API limit is hit.
+ * Proactive compression: compress when either the last real input-token count
+ * or the character-based estimate has crossed the threshold.
  */
-function estimateTokenCount(messages: ModelMessage[]): number {
-  let chars = 0
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      chars += msg.content.length
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content as Array<{ type: string; text?: string }>) {
-        if (typeof part.text === 'string') chars += part.text.length
-      }
-    }
-  }
-  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE)
-}
-
-/** Classify API error and return a user-friendly recovery message */
-function classifyApiError(err: unknown): { message: string; retryable: boolean } {
-  const msg = err instanceof Error ? err.message : String(err)
-  // Extract HTTP status from patterns like "status code 400" or "(400)" or
-  // leading "400 " — avoid matching arbitrary numbers embedded in prose
-  // (e.g. "131072 tokens" previously mis-matched as status 131).
-  const statusMatch =
-    msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
-  const status = statusMatch ? Number(statusMatch[1]) : 0
-
-  // Context / token limit exceeded (400 from most providers)
-  if (
-    msg.includes('maximum context length') ||
-    msg.includes('context_length_exceeded') ||
-    msg.includes('token limit')
-  ) {
-    return {
-      message:
-        "Context too long — the conversation exceeded the model's token limit. Try /compact to compress context, or /clear to start fresh.",
-      retryable: false,
-    }
-  }
-  if (msg.includes('Missing `reasoning_content`') || msg.includes('reasoning_content')) {
-    return {
-      message:
-        'DeepSeek Reasoner requires reasoning_content in assistant messages during tool-call chains. This is usually an SDK compatibility issue — please report it.',
-      retryable: false,
-    }
-  }
-  if (msg.includes('API key is missing') || msg.includes('API_KEY')) {
-    // Extract provider name from message like "DeepSeek API key API key is missing..."
-    const providerMatch = msg.match(/^(\w+)\s+API key/i)
-    const provider = providerMatch ? providerMatch[1] : 'Provider'
-    return {
-      message: `${provider} API key is not set. Please set the corresponding environment variable (e.g. ${provider.toUpperCase()}_API_KEY).`,
-      retryable: false,
-    }
-  }
-  if (status === 401 || msg.includes('Unauthorized') || msg.includes('Invalid API Key')) {
-    return {
-      message: 'API authentication failed (401). Please check your API key with /model or reconfigure with `xc init`.',
-      retryable: false,
-    }
-  }
-  if (status === 403 || msg.includes('Forbidden')) {
-    return {
-      message: 'API access forbidden (403). Your API key may not have permission for this model.',
-      retryable: false,
-    }
-  }
-  if (status === 503 || msg.includes('Service Unavailable') || msg.includes('overloaded')) {
-    return {
-      message: 'Model service unavailable (503). Try switching to a different model with /model.',
-      retryable: false,
-    }
-  }
-  if (status === 429 || msg.includes('rate limit') || msg.includes('Rate limit')) {
-    return {
-      message:
-        'Rate limited (429). Waiting for retry... (AI SDK handles exponential backoff automatically with maxRetries: 3)',
-      retryable: true, // AI SDK maxRetries handles this
-    }
-  }
-  if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')) {
-    return {
-      message: `Network error: ${msg}. Retrying...`,
-      retryable: true,
-    }
-  }
-  return { message: msg, retryable: false }
-}
-
-/** Silently consume all pending promises on a StreamResult to prevent
- *  unhandled rejections after a stream error. The AI SDK's internal
- *  flush() rejects these with NoOutputGeneratedError when no steps
- *  completed — without draining them Node.js dumps the full error to stderr. */
-function drainStreamResult(result: StreamResult): void {
-  const noop = () => {}
-  Promise.resolve(result.response).catch(noop)
-  Promise.resolve(result.finishReason).catch(noop)
-  Promise.resolve(result.usage).catch(noop)
-  Promise.resolve(result.toolCalls).catch(noop)
-}
-
-/** Helper to push a tool result to state and notify the UI */
-function pushToolResult(
+async function checkAndCompressContext(
   state: LoopState,
-  callbacks: AgentCallbacks,
-  toolCallId: string,
-  toolName: string,
-  output: string,
-): void {
-  state.messages.push(toolResultMessage(toolCallId, toolName, output))
-  callbacks.onToolResult(toolCallId, output)
-}
-
-/** Handle all tool calls from a single model turn */
-async function handleToolCalls(
-  toolCalls: Array<{ toolName: string; toolCallId: string; input: Record<string, unknown> }>,
-  state: LoopState,
-  options: AgentOptions,
+  model: LanguageModel,
+  threshold: number,
   callbacks: AgentCallbacks,
 ): Promise<void> {
-  for (const tc of toolCalls) {
-    const { toolName, input, toolCallId } = tc
-    let output: string
+  const needsCompression =
+    state.lastInputTokens > threshold || estimateTokenCount(state.messages) > threshold
 
-    // ── Plan mode tools ──
-    if (toolName === 'enterPlanMode') {
-      state.planMode = true
-      state.planId = generatePlanId()
-      await ensurePlansDir()
-      output = `Plan mode activated. Plan ID: ${state.planId}. Use only read-only tools. Save plan to ${getPlanPath(state.planId)}`
-      pushToolResult(state, callbacks, toolCallId, toolName, output)
-      continue
+  if (!needsCompression || state.messages.length <= KEEP_RECENT) return
+
+  try {
+    const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
+      ...state.filesModified,
+    ])
+    await saveSessionSummary(summary)
+  } catch {
+    // Don't block compression on session save failure
+  }
+  state.messages = await compressMessages(state.messages, model)
+  state.lastInputTokens = 0
+  callbacks.onContextCompressed('Context compressed to fit context window.')
+}
+
+/**
+ * Reactive compact: when a stream errors because the prompt was too long,
+ * compress and signal the caller to retry. Mirrors Claude Code's reactiveCompact.
+ * Returns true if compression happened (caller should retry this turn).
+ */
+async function handleContextTooLong(
+  state: LoopState,
+  model: LanguageModel,
+  callbacks: AgentCallbacks,
+): Promise<boolean> {
+  if (state.messages.length <= KEEP_RECENT) return false
+  state.messages = await compressMessages(state.messages, model)
+  state.lastInputTokens = 0
+  callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
+  return true
+}
+
+/** Consume streamText output, dispatching chunks to the UI via callbacks. */
+async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks): Promise<void> {
+  for await (const chunk of result.fullStream) {
+    if (chunk.type === 'text-delta') {
+      callbacks.onTextDelta(chunk.text ?? '')
+    } else if (chunk.type === 'tool-call') {
+      callbacks.onToolCall(chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
+    } else if (chunk.type === 'tool-result') {
+      // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
+      const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
+      callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
     }
-
-    if (toolName === 'exitPlanMode') {
-      state.planMode = false
-      if (state.planId) {
-        const planPath = getPlanPath(state.planId)
-        try {
-          const planContent = await fs.readFile(planPath, 'utf-8')
-          output = `Plan ready for review:\n\n${planContent}`
-        } catch {
-          output = 'Plan mode exited. No plan file found.'
-        }
-      } else {
-        output = 'Plan mode exited.'
-      }
-      pushToolResult(state, callbacks, toolCallId, toolName, output)
-      continue
-    }
-
-    // ── askUser tool ──
-    if (toolName === 'askUser') {
-      const question = input.question as string
-      const optionsList = input.options as { label: string; description: string }[]
-      const answer = await callbacks.onAskUser(question, optionsList)
-      output = `User answered: ${answer}`
-      pushToolResult(state, callbacks, toolCallId, toolName, output)
-      continue
-    }
-
-    // ── Permission check for write tools and shell ──
-    if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
-      const approved = await checkPermission(
-        { toolCallId, toolName, input },
-        options.trustMode,
-        callbacks.onAskPermission,
-      )
-
-      if (!approved) {
-        pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
-        continue
-      }
-    }
-
-    // ── Execute tool ──
-    try {
-      if (toolName === 'writeFile' || toolName === 'edit') {
-        output = await executeWriteTool(toolName, input)
-        const filePath = input.filePath as string
-        state.filesModified.add(filePath)
-      } else if (toolName === 'shell') {
-        const timeout = (input.timeout as number) ?? 30000
-        output = await executeShell(input.command as string, timeout, callbacks)
-      } else {
-        // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
-        continue
-      }
-    } catch (err) {
-      output = `Error: ${err instanceof Error ? err.message : String(err)}`
-    }
-
-    output = truncateToolResult(output)
-    pushToolResult(state, callbacks, toolCallId, toolName, output)
   }
 }
 
-/** Main agent loop */
+/** Pull the response + usage off a completed stream and fold into state. */
+async function collectTurnResponse(
+  result: StreamResult,
+  state: LoopState,
+  modelId: string,
+  callbacks: AgentCallbacks,
+): Promise<string> {
+  const response = await result.response
+  state.messages.push(...response.messages)
+  ensureReasoningContentParts(state.messages, modelId)
+
+  const usage = await result.usage
+  if (usage) {
+    state.tokenUsage.inputTokens += usage.inputTokens ?? 0
+    state.tokenUsage.outputTokens += usage.outputTokens ?? 0
+    state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
+    if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
+    callbacks.onUsageUpdate(state.tokenUsage)
+  }
+
+  return result.finishReason
+}
+
+type TurnOutcome =
+  /** Turn completed normally; `finishReason` says what to do next. */
+  | { kind: 'done'; finishReason: string; result: StreamResult }
+  /** Fatal error (already reported to callbacks); caller should break the loop. */
+  | { kind: 'error' }
+  /** Context overflowed and was compressed; caller should retry this turn. */
+  | { kind: 'retry' }
+
+/** Run one agent turn: stream to UI, collect response. Resilient to errors. */
+async function runTurn(
+  state: LoopState,
+  model: LanguageModel,
+  options: AgentOptions,
+  systemPrompt: string,
+  callbacks: AgentCallbacks,
+): Promise<TurnOutcome> {
+  let result: StreamResult
+  try {
+    result = streamText({
+      model,
+      system: systemPrompt,
+      messages: state.messages,
+      tools: toolRegistry,
+      maxRetries: 3,
+      abortSignal: options.abortSignal,
+    }) as unknown as StreamResult
+  } catch (err) {
+    callbacks.onError(new Error(classifyApiError(err).message))
+    return { kind: 'error' }
+  }
+
+  try {
+    await streamChunksToUI(result, callbacks)
+  } catch (err) {
+    // Silently drain all pending AI SDK promises so unhandled-rejection
+    // warnings (NoOutputGeneratedError) don't leak to stderr.
+    drainStreamResult(result)
+
+    if (isContextTooLongError(err)) {
+      const compressed = await handleContextTooLong(state, model, callbacks)
+      if (compressed) return { kind: 'retry' }
+    }
+    callbacks.onError(new Error(classifyApiError(err).message))
+    return { kind: 'error' }
+  }
+
+  try {
+    const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks)
+    return { kind: 'done', finishReason, result }
+  } catch (err) {
+    drainStreamResult(result)
+    callbacks.onError(new Error(classifyApiError(err).message))
+    return { kind: 'error' }
+  }
+}
+
+/** Main agent loop. */
 export async function agentLoop(
   userMessage: string,
   model: LanguageModel,
@@ -456,18 +188,7 @@ export async function agentLoop(
   callbacks: AgentCallbacks,
   existingState?: LoopState,
 ): Promise<LoopState> {
-  const state: LoopState = existingState ?? {
-    messages: [],
-    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    lastInputTokens: 0,
-    planMode: false,
-    planId: null,
-    sessionId: Date.now().toString(36),
-    startedAt: new Date().toISOString(),
-    filesModified: new Set(),
-    turnCount: 0,
-  }
-
+  const state = existingState ?? createLoopState()
   state.messages.push({ role: 'user', content: userMessage })
 
   // Session continuation is handled explicitly by the UI: if the user accepts
@@ -487,25 +208,7 @@ export async function agentLoop(
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
 
-    // ── Proactive context compression ──
-    // Two-tier check: real token count from previous turn (reliable) +
-    // character-based estimate (safety net for the first turn / big tool outputs).
-    const needsCompression =
-      state.lastInputTokens > compressionThreshold || estimateTokenCount(state.messages) > compressionThreshold
-
-    if (needsCompression && state.messages.length > KEEP_RECENT) {
-      try {
-        const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
-          ...state.filesModified,
-        ])
-        await saveSessionSummary(summary)
-      } catch {
-        // Don't block compression on session save failure
-      }
-      state.messages = await compressMessages(state.messages, model)
-      state.lastInputTokens = 0
-      callbacks.onContextCompressed('Context compressed to fit context window.')
-    }
+    await checkAndCompressContext(state, model, compressionThreshold, callbacks)
 
     const systemPrompt = buildSystemPrompt({
       knowledgeContext: fullKnowledgeContext,
@@ -514,109 +217,24 @@ export async function agentLoop(
       isGitRepo,
     })
 
-    let result: StreamResult
-    try {
-      result = streamText({
-        model,
-        system: systemPrompt,
-        messages: state.messages,
-        tools: toolRegistry,
-        maxRetries: 3,
-        abortSignal: options.abortSignal,
-      }) as unknown as StreamResult
-    } catch (err) {
-      const classified = classifyApiError(err)
-      callbacks.onError(new Error(classified.message))
-      break
+    const outcome = await runTurn(state, model, options, systemPrompt, callbacks)
+
+    if (outcome.kind === 'error') break
+    if (outcome.kind === 'retry') {
+      // Don't count a failed attempt that got recovered via reactive compaction.
+      state.turnCount--
+      continue
     }
 
-    // Stream chunks to UI
-    try {
-      for await (const chunk of result.fullStream) {
-        if (chunk.type === 'text-delta') {
-          callbacks.onTextDelta(chunk.text ?? '')
-        }
-        if (chunk.type === 'tool-call') {
-          callbacks.onToolCall(chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
-        }
-        // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
-        if (chunk.type === 'tool-result') {
-          const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
-          const truncated = truncateToolResult(raw)
-          callbacks.onToolResult(chunk.toolCallId ?? '', truncated)
-        }
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      const isContextTooLong =
-        errMsg.includes('maximum context length') ||
-        errMsg.includes('context_length_exceeded') ||
-        errMsg.includes('token limit') ||
-        errMsg.includes('prompt is too long') ||
-        errMsg.includes('prompt_too_long')
-
-      // Silently drain all pending AI SDK promises to prevent unhandled
-      // rejections. When the stream errors, the SDK's internal flush()
-      // rejects result.response / finishReason / usage / toolCalls with
-      // NoOutputGeneratedError — if nobody awaits them, Node prints the
-      // full error object to stderr.
-      drainStreamResult(result)
-
-      // ── Reactive compact: auto-compress and retry on context-too-long ──
-      // Mirrors Claude Code's reactiveCompact — when the proactive check
-      // under-estimates or a single turn pushes context past the limit,
-      // compress and re-attempt the same turn instead of giving up.
-      if (isContextTooLong && state.messages.length > KEEP_RECENT) {
-        state.messages = await compressMessages(state.messages, model)
-        state.lastInputTokens = 0
-        callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
-        state.turnCount-- // don't count the failed attempt
-        continue // retry the current turn with compressed context
-      }
-
-      const classified = classifyApiError(err)
-      callbacks.onError(new Error(classified.message))
-      break
-    }
-
-    // Collect response + usage (may fail if stream errored)
-    let finishReason: string
-    try {
-      const response = await result.response
-      state.messages.push(...response.messages)
-
-      // Workaround: DeepSeek Reasoner requires `reasoning_content` on every
-      // assistant message in tool-call chains.  Ensure it's always present.
-      ensureReasoningContentParts(state.messages, options.modelId)
-
-      const usage = await result.usage
-      if (usage) {
-        state.tokenUsage.inputTokens += usage.inputTokens ?? 0
-        state.tokenUsage.outputTokens += usage.outputTokens ?? 0
-        state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
-        if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
-        callbacks.onUsageUpdate(state.tokenUsage)
-      }
-
-      finishReason = await result.finishReason
-    } catch (err) {
-      const classified = classifyApiError(err)
-      callbacks.onError(new Error(classified.message))
-      drainStreamResult(result)
-      break
-    }
-
-    if (finishReason === 'tool-calls') {
+    if (outcome.finishReason === 'tool-calls') {
       let toolCalls: Awaited<StreamResult['toolCalls']>
       try {
-        toolCalls = await result.toolCalls
+        toolCalls = await outcome.result.toolCalls
       } catch (err) {
-        const classified = classifyApiError(err)
-        callbacks.onError(new Error(classified.message))
+        callbacks.onError(new Error(classifyApiError(err).message))
         break
       }
-
-      await handleToolCalls(toolCalls, state, options, callbacks)
+      await processToolCalls(toolCalls, state, options, callbacks)
       continue
     }
 
@@ -630,7 +248,7 @@ export async function agentLoop(
   return state
 }
 
-/** Save session on exit */
+/** Save session on exit. */
 export async function saveSession(state: LoopState, model: LanguageModel): Promise<void> {
   try {
     const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [

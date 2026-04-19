@@ -117,7 +117,7 @@ const edit = tool({
 
 - 最简洁，零框架成本
 - 有 `execute` 的工具由 AI SDK 自动调用
-- 无 `execute` 的工具在 agent loop 的 `handleToolCalls()` 手动分发
+- 无 `execute` 的工具在 agent loop 的 `processToolCalls()` 手动分发
 - 无验证层、无结构化输出、无 UI 渲染抽象
 
 ### 架构对比小结
@@ -324,7 +324,7 @@ const edit = tool({
 
 | 维度     |       Claude Code        |                       Gemini CLI                       |                Codex CLI                |             x-code-cli              |
 | -------- | :----------------------: | :----------------------------------------------------: | :-------------------------------------: | :---------------------------------: |
-| 调度器   |  AI SDK + 手动 dispatch  |                    Scheduler 状态机                    |        ToolCallRuntime + Router         | AI SDK + `handleToolCalls` for 循环 |
+| 调度器   |  AI SDK + 手动 dispatch  |                    Scheduler 状态机                    |        ToolCallRuntime + Router         | AI SDK + `processToolCalls` for 循环 |
 | 并发支持 | `isConcurrencySafe` 标记 |                     Scheduler 管理                     | **读写锁**（Read = 并行，Write = 独占） |            **顺序执行**             |
 | 状态追踪 |        toolCallId        | Validating→Scheduled→Executing→Success/Error/Cancelled |           Turn-level tracking           |                 无                  |
 | 取消支持 |     AbortController      |                      AbortSignal                       |            CancellationToken            |               **无**                |
@@ -658,7 +658,7 @@ Claude Code 维护了一个常用技术文档的白名单（MDN / React / Python
 
 > 借鉴：Claude Code buildTool / Gemini Builder+Invocation
 
-将当前 `tool()` + `handleToolCalls()` 大函数重构为更结构化的模式：
+将当前 `tool()` + `processToolCalls()` 大函数重构为更结构化的模式：
 
 ```typescript
 interface ToolDef<TInput, TOutput> {
@@ -683,7 +683,7 @@ interface ToolDef<TInput, TOutput> {
 
 > 借鉴：Codex CLI (RwLock) + Claude Code (isConcurrencySafe)
 
-当前 `handleToolCalls` 是顺序 for 循环。对于多个只读工具（grep, glob, readFile），可以并行执行。
+当前 `processToolCalls` 是顺序 for 循环。对于多个只读工具（grep, glob, readFile），可以并行执行。
 
 ---
 

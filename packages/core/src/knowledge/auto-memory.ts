@@ -7,6 +7,15 @@ import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 const MAX_LOAD_LINES = 200
 
+/**
+ * Collapse newlines and trim whitespace — keeps the serialized line-per-fact
+ * invariant intact even if a caller passes multi-line content. Returns '' for
+ * falsy input so callers don't have to null-check.
+ */
+function sanitizeLine(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
 class AutoMemory {
   private facts: KnowledgeFact[] = []
   private filePath: string
@@ -29,13 +38,19 @@ class AutoMemory {
 
   /** Add or update: same category + same key → replace */
   add(newFact: KnowledgeFact): void {
+    // Sanitize so embedded newlines can't break the markdown line format.
+    const fact: KnowledgeFact = {
+      ...newFact,
+      key: sanitizeLine(newFact.key),
+      fact: sanitizeLine(newFact.fact),
+    }
     const conflictIndex = this.facts.findIndex(
-      (existing) => existing.category === newFact.category && existing.key === newFact.key,
+      (existing) => existing.category === fact.category && existing.key === fact.key,
     )
     if (conflictIndex >= 0) {
-      this.facts[conflictIndex] = newFact
+      this.facts[conflictIndex] = fact
     } else {
-      this.facts.push(newFact)
+      this.facts.push(fact)
     }
     this.enqueueSave()
   }
@@ -143,22 +158,34 @@ function parseMemoryFile(content: string): KnowledgeFact[] {
 }
 
 // ─── Singleton instances ───
+//
+// Project memory is keyed by cwd so that if the process ever changes its
+// working directory (e.g. embedding in a daemon or test harness), we get a
+// fresh instance bound to the right file rather than silently reusing the
+// stale one. Global memory is a true singleton — its path is fixed by
+// GLOBAL_XCODE_DIR.
 
-let projectMemory: AutoMemory | null = null
+const projectMemories = new Map<string, AutoMemory>()
 let globalMemory: AutoMemory | null = null
+
+function projectMemoryPath(cwd: string): string {
+  return path.join(cwd, XCODE_DIR, 'memory', 'auto.md')
+}
 
 export function getAutoMemory(scope: 'project' | 'global'): AutoMemory {
   if (scope === 'project') {
-    if (!projectMemory) {
-      projectMemory = new AutoMemory(path.join(process.cwd(), XCODE_DIR, 'memory', 'auto.md'))
+    const filePath = projectMemoryPath(process.cwd())
+    let mem = projectMemories.get(filePath)
+    if (!mem) {
+      mem = new AutoMemory(filePath)
+      projectMemories.set(filePath, mem)
     }
-    return projectMemory
-  } else {
-    if (!globalMemory) {
-      globalMemory = new AutoMemory(path.join(GLOBAL_XCODE_DIR, 'memory', 'auto.md'))
-    }
-    return globalMemory
+    return mem
   }
+  if (!globalMemory) {
+    globalMemory = new AutoMemory(path.join(GLOBAL_XCODE_DIR, 'memory', 'auto.md'))
+  }
+  return globalMemory
 }
 
 /** Initialize memories (load from disk + evict old entries) */

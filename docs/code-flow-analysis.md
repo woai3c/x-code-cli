@@ -57,10 +57,10 @@ packages/
 |  └────────────────────────────────────────────────┘       |
 +----------------------------------------------------------+
 |                Hook 桥接层 (use-agent.ts)                 |
-|  streamBufferRef ←→ AgentCallbacks ←→ Core Agent Loop     |
+|  useStreamBuffer ←→ AgentCallbacks ←→ Core Agent Loop     |
 +----------------------------------------------------------+
 |                      Core 层 (core/)                       |
-|  agentLoop() → streamText() → Tool 执行                    |
+|  agentLoop() → runTurn() → streamText() → processToolCalls() |
 |  Knowledge / Session / Permission / Plan Mode              |
 +----------------------------------------------------------+
 |                   AI SDK + Provider 层                     |
@@ -125,7 +125,7 @@ packages/
  |                |                  |                    |                    |                    |                  |
  |                |                  |                    | text-delta →       |                    |                  |
  |                |                  |                    | callbacks.onTextDelta()                 |                  |
- |                |                  |                    |---> appendTextDelta() (累积到 streamBufferRef) |           |
+ |                |                  |                    |---> useStreamBuffer.appendTextDelta() (内部 bufferRef) |  |
  |                |                  |  (段落 / 300 字 / 5 行任一触发 flushBuffer → messages)        |                  |
  |  <scrollback>  |<------- useStdout().write(formatted)   |                    |                    |                  |
  |                |                  |  (stdout-writer, 绕过 Ink 布局)          |                    |                  |
@@ -135,7 +135,7 @@ packages/
  |  <ToolCall>    |<------- setState(currentToolCall)     |                    |                    |                  |
  |                |                  |                    |                    |                    |                  |
  |                |                  |                    | 22. finishReason=tool-calls             |                  |
- |                |                  |                    | 23. handleToolCalls()                   |                  |
+ |                |                  |                    | 23. processToolCalls() (tool-execution.ts) |              |
  |                |                  |                    |                    |                    |                  |
  |                |                  |                    |    权限检查 (write tools)                |                  |
  |                |                  |    onAskPermission |<---                |                    |                  |
@@ -291,9 +291,9 @@ startApp()
 }
 ```
 
-> 注：权限请求是**队列**而不是单值。同一轮 `handleToolCalls` 里可能触发多次 `onAskPermission`（例如 AI 一次返回多个 edit 调用），UI 逐个弹出、每个 Permission 组件用 `key={toolCallId}` 强制 remount 以拿到干净 state——对齐 Claude Code 的做法。
+> 注：权限请求是**队列**而不是单值。同一轮 `processToolCalls` 里可能触发多次 `onAskPermission`（例如 AI 一次返回多个 edit 调用），UI 逐个弹出、每个 Permission 组件用 `key={toolCallId}` 强制 remount 以拿到干净 state——对齐 Claude Code 的做法。
 
-> 注：streaming 文本不在 React state 里。AI 的 text-delta 累积在 `streamBufferRef`（useRef，不触发重渲染），按"段落 / 300 字 / 5 行 / 工具调用 / 流结束"任一条件 flush 成一条 assistant message 推入 `messages`。
+> 注：streaming 文本不在 React state 里。AI 的 text-delta 累积在 `useStreamBuffer` hook 内部的 `bufferRef`（useRef，不触发重渲染），按"段落 / 300 字 / 5 行 / 工具调用 / 流结束"任一条件 flush 成一条 assistant message 推入 `messages`。
 
 ### 步骤 8: 初始 UI 渲染
 
@@ -502,7 +502,7 @@ submit(text)
   │
   ├─ 4. 构建 AgentCallbacks (Core Agent → UI 桥接)
   │    {
-  │      onTextDelta:       delta → streamBufferRef.current += delta
+  │      onTextDelta:       delta → useStreamBuffer.appendTextDelta(delta)
   │                                   → 若 buffer 命中任一 flush 条件（\n\n 段落断 /
   │                                     length ≥ 300 / split('\n').length > 5）
   │                                     → flushBuffer() 把整段 push 到 state.messages
@@ -626,7 +626,7 @@ agentLoop(userMessage, model, options, callbacks, existingState)
        │    └─ finishReason → 决定是否继续循环
        │
        ├─ if finishReason === 'tool-calls'
-       │    └─ handleToolCalls() → continue (下一轮循环)
+       │    └─ processToolCalls() → continue (下一轮循环)
        │
        └─ else (finishReason === 'stop')
             └─ break (退出循环，AI 完成回复)
@@ -701,7 +701,7 @@ toolRegistry (core/src/tools/index.ts)
 ### 工具调用处理流程
 
 ```
-handleToolCalls(toolCalls, state, options, callbacks)
+processToolCalls(toolCalls, state, options, callbacks)  // tool-execution.ts
   │
   for each toolCall:
   │
@@ -853,9 +853,9 @@ this.log(this.lastOutput) // 重绘动态区到新 cursor 位置
 ```
 renderMarkdown(text)  (cli/src/ui/render-markdown.ts)
   │
-  │  // 颜色常量（与 theme.ts 同步）:
-  │  //   ACCENT  = '#d77757'   h1 / codespan / link
-  │  //   WARNING = '#ffc107'   code block 正文
+  │  // 颜色直接从 theme.ts import（ACCENT→HEADING / BLUE_PURPLE→CODE /
+  │  //                            SPINNER_BLUE→LINK / PROMPT_BORDER→BLOCKQUOTE /
+  │  //                            ACCENT_DIM→CODE_LANG），不再内联 hex 字面量
   │
   ├─ marked.lexer(text)         // Markdown → AST Token 树
   │   └─ 禁用 del 扩展           // 避免文件路径里的 ~ 被当作删除线
@@ -886,10 +886,10 @@ renderMarkdown(text)  (cli/src/ui/render-markdown.ts)
 
 ```
 
-streamBufferRef (use-agent.ts — useRef, 不在 React state 里)
+useStreamBuffer hook (use-stream-buffer.ts — 内部 bufferRef, 不在 React state 里)
 │
 累积 (appendTextDelta):
-├─ onTextDelta(delta) → streamBufferRef.current += delta
+├─ onTextDelta(delta) → bufferRef.current += delta
 └─ 检查 flush 条件：三选一即触发
 ├─ buffer.includes('\n\n') — 段落自然断点
 ├─ buffer.length >= 300 — 300 字符天花板（CJK 适用）
@@ -1078,7 +1078,7 @@ process.on('SIGINT') (cli/src/index.ts)  — 只做安全网，不直接收尾
    │ ⎿ ⠋ Running...
    │
    ├─ finishReason = 'tool-calls'
-   ├─ handleToolCalls()
+   ├─ processToolCalls()
    │ ├─ glob → 自动执行 (always-allow) → 返回文件列表
    │ └─ readFile → 自动执行 (always-allow) → 返回 package.json 内容
    │
@@ -1114,7 +1114,7 @@ process.on('SIGINT') (cli/src/index.ts)  — 只做安全网，不直接收尾
    ├─ 流式输出过程 (段落为单位):
    │ ├─ text-delta: "## 项目产品功能分析\n\n"
    │ │ → callbacks.onTextDelta(delta)
-   │ │ → streamBufferRef.current += delta
+   │ │ → useStreamBuffer.bufferRef.current += delta
    │ │ → buffer 含 "\n\n" 段落断 → flushBuffer()
    │ │ → setState: messages 追加 { role: 'assistant', content: "## 项目产品功能分析\n\n" }
    │ │ → MessageList useEffect → writeMessageToStdout → 落到 scrollback
@@ -1241,7 +1241,7 @@ v
 │ text-delta tool-calls │
 │ │ │ │
 │ │ ┌─────────v───────┐│
-│ │ │ handleToolCalls()││
+│ │ │ processToolCalls()││
 │ │ │ ├─ Permission ││
 │ │ │ ├─ Execute ││
 │ │ │ └─ Result ││
@@ -1254,7 +1254,7 @@ v v
 ┌──────────────────────────────────┐
 │ useAgent (Hook) │
 │ │
-│ onTextDelta → streamBufferRef │
+│ onTextDelta → useStreamBuffer │
 │ + flushBuffer() │
 │ (段落/300字/5行) │
 │ onToolCall → setState │
@@ -1294,7 +1294,11 @@ Ink 动态区 (底部固定)
 | Ink 渲染      | `cli/src/app.tsx`                       | `startApp()`, `printExitSummary()`                                                |
 | 根组件        | `cli/src/ui/components/App.tsx`         | `App`, `handleSubmit()`, `SLASH_COMMANDS`                                         |
 | Agent Hook    | `cli/src/ui/hooks/use-agent.ts`         | `useAgent()`, `submit()`, `AgentState`                                            |
-| Agent 循环    | `core/src/agent/loop.ts`                | `agentLoop()`, `handleToolCalls()`, `compressMessages()`, `classifyApiError()`    |
+| Agent 循环    | `core/src/agent/loop.ts`                | `agentLoop()`, `runTurn()`, `compressMessages()`                                  |
+| 工具执行      | `core/src/agent/tool-execution.ts`      | `processToolCalls()` — 权限检查 + write/shell 分发                                |
+| 上下文窗口    | `core/src/agent/context-window.ts`      | `getCompressionThreshold()`, `estimateTokenCount()` + 模型/provider 表           |
+| API 错误      | `core/src/agent/api-errors.ts`          | `classifyApiError()`, `isContextTooLongError()`, `extractHttpStatus()`           |
+| Stream 工具   | `core/src/agent/stream-utils.ts`        | `StreamResult` 类型, `drainStreamResult()`                                        |
 | System Prompt | `core/src/agent/system-prompt.ts`       | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                                         |
 | 消息处理      | `core/src/agent/messages.ts`            | `userMessage()`, `toolResultMessage()`                                            |
 | 计划模式      | `core/src/agent/plan-mode.ts`           | `ensurePlansDir()`, `generatePlanId()`, `getPlanPath()`                           |

@@ -4,6 +4,41 @@ import type { PermissionLevel } from '../types/index.js'
 
 type PermissionInput = Record<string, unknown>
 
+/**
+ * Cache of resolved shell permission levels keyed by the exact command string.
+ * Destructiveness / read-only patterns are static for the process lifetime,
+ * so a plain Map is safe — no TTL needed. An upper bound guards against a
+ * long-running agent accumulating unique commands without limit.
+ */
+const SHELL_PERMISSION_CACHE_MAX = 256
+const shellPermissionCache = new Map<string, PermissionLevel>()
+
+function evaluateShellPermission(command: string): PermissionLevel {
+  const subCommands = splitShellCommands(command)
+  // Any sub-command destructive → deny the whole command
+  if (subCommands.some(isDestructive)) return 'deny'
+  // All sub-commands read-only → auto-allow
+  if (subCommands.every(isReadOnly)) return 'always-allow'
+  // Otherwise → ask
+  return 'ask'
+}
+
+function resolveShellPermission(input: PermissionInput): PermissionLevel {
+  const cmd = (input.command as string) ?? ''
+  const cached = shellPermissionCache.get(cmd)
+  if (cached) return cached
+
+  const level = evaluateShellPermission(cmd)
+
+  if (shellPermissionCache.size >= SHELL_PERMISSION_CACHE_MAX) {
+    // Evict the oldest entry (Map preserves insertion order).
+    const oldest = shellPermissionCache.keys().next().value
+    if (oldest !== undefined) shellPermissionCache.delete(oldest)
+  }
+  shellPermissionCache.set(cmd, level)
+  return level
+}
+
 /** Permission rules for each tool */
 const rules: Record<string, (input: PermissionInput) => PermissionLevel> = {
   readFile: () => 'always-allow',
@@ -18,17 +53,7 @@ const rules: Record<string, (input: PermissionInput) => PermissionLevel> = {
   writeFile: () => 'ask',
   enterPlanMode: () => 'always-allow',
   exitPlanMode: () => 'always-allow',
-  shell: (input) => {
-    const cmd = (input.command as string) ?? ''
-    const subCommands = splitShellCommands(cmd)
-
-    // Any sub-command destructive → deny the whole command
-    if (subCommands.some(isDestructive)) return 'deny'
-    // All sub-commands read-only → auto-allow
-    if (subCommands.every(isReadOnly)) return 'always-allow'
-    // Otherwise → ask
-    return 'ask'
-  },
+  shell: resolveShellPermission,
 }
 
 /** Get permission level for a tool call */

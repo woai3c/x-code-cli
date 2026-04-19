@@ -10,17 +10,9 @@ import { Text, useInput, useStdout } from 'ink'
 
 import { getPermissionLevel } from '@x-code-cli/core'
 
-const c = new Chalk({ level: 3 })
+import { ACCENT, ACCENT_DIM, ERROR, PROMPT_BORDER, SUCCESS, WARNING } from '../theme.js'
 
-// Theme colors (inline to avoid import issues with chalk)
-const CLR = {
-  accent: '#d77757',
-  success: '#4eba65',
-  error: '#ff6b80',
-  warning: '#ffc107',
-  dim: '#999999',
-  border: '#888888',
-}
+const c = new Chalk({ level: 3 })
 
 interface PermissionProps {
   toolName: string
@@ -29,9 +21,9 @@ interface PermissionProps {
 }
 
 const PERMISSION_LABELS: Record<string, { label: string; color: string }> = {
-  'always-allow': { label: 'read-only', color: CLR.success },
-  ask: { label: 'write', color: CLR.warning },
-  deny: { label: 'dangerous', color: CLR.error },
+  'always-allow': { label: 'read-only', color: SUCCESS },
+  ask: { label: 'write', color: WARNING },
+  deny: { label: 'dangerous', color: ERROR },
 }
 
 function getPermissionTitle(toolName: string): string {
@@ -68,20 +60,20 @@ export function Permission({ toolName, input, onResolve }: PermissionProps) {
   if (toolName === 'shell') {
     const level = getPermissionLevel('shell', input)
     const info = PERMISSION_LABELS[level] ?? PERMISSION_LABELS.ask
-    contentStr = `  ${c.hex(CLR.accent)('$ ' + (input.command as string))} ${c.hex(info.color)('[' + info.label + ']')}`
+    contentStr = `  ${c.hex(ACCENT)('$ ' + (input.command as string))} ${c.hex(info.color)('[' + info.label + ']')}`
   } else if (toolName === 'writeFile') {
     const filePath = input.filePath as string
-    contentStr = `  ${c.hex(CLR.accent)(filePath)} (new file)`
+    contentStr = `  ${c.hex(ACCENT)(filePath)} (new file)`
   } else if (toolName === 'edit') {
     const filePath = input.filePath as string
-    contentStr = `  ${c.hex(CLR.accent)(filePath)}`
+    contentStr = `  ${c.hex(ACCENT)(filePath)}`
   }
 
-  const separator = c.hex(CLR.border)('─'.repeat(Math.max(0, termWidth - 1)))
-  const title = `  ${c.hex(CLR.warning).bold(getPermissionTitle(toolName))}`
+  const separator = c.hex(PROMPT_BORDER)('─'.repeat(Math.max(0, termWidth - 1)))
+  const title = `  ${c.hex(WARNING).bold(getPermissionTitle(toolName))}`
 
-  const yesLine = selected === 0 ? `    ${c.hex(CLR.success).bold('❯ Yes')}` : `      ${c.hex(CLR.dim)('Yes')}`
-  const noLine = selected === 1 ? `    ${c.hex(CLR.error).bold('❯ No')}` : `      ${c.hex(CLR.dim)('No')}`
+  const yesLine = selected === 0 ? `    ${c.hex(SUCCESS).bold('❯ Yes')}` : `      ${c.hex(ACCENT_DIM)('Yes')}`
+  const noLine = selected === 1 ? `    ${c.hex(ERROR).bold('❯ No')}` : `      ${c.hex(ACCENT_DIM)('No')}`
 
   const lines = [separator, title]
   if (contentStr) lines.push(contentStr)

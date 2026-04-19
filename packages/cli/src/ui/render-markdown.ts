@@ -10,14 +10,17 @@
 //   2. Code spans are protected — their content is never re-interpreted.
 //   3. Streaming partial text degrades gracefully (unclosed tokens are
 //      simply treated as plain text by the lexer).
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
-/* eslint-disable @typescript-eslint/no-unsafe-call */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
-/* eslint-disable @typescript-eslint/no-unsafe-argument */
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Chalk } from 'chalk'
 import { type Token, marked } from 'marked'
+
+import {
+  ACCENT as HEADING,
+  ACCENT_DIM as CODE_LANG,
+  BLUE_PURPLE as CODE_COLOR,
+  PROMPT_BORDER as BLOCKQUOTE,
+  SPINNER_BLUE as LINK,
+} from './theme.js'
 
 // ── chalk instance with 24-bit colour ──
 const c = new Chalk({ level: 3 })
@@ -32,13 +35,9 @@ marked.use({
   },
 })
 
-// ── Theme colours (keep in sync with theme.ts) ──
-const HEADING = '#d77757' // Claude orange — h1 headings
-const CODE_INLINE = '#b1b9f9' // Blue-purple — inline code spans
-const CODE_BLOCK = '#b1b9f9' // Blue-purple — fenced code blocks
-const CODE_LANG = '#999999' // Muted gray — language label
-const LINK = '#93a5ff' // Spinner blue — links
-const BLOCKQUOTE = '#888888' // Prompt border gray — blockquotes
+// Inline and block code share a colour — aliased for readability at call sites.
+const CODE_INLINE = CODE_COLOR
+const CODE_BLOCK = CODE_COLOR
 
 // Newline constant for joining blocks
 const NL = '\n'

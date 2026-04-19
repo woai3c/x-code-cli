@@ -9,33 +9,10 @@ import type {
   DisplayToolCall,
   LanguageModel,
   LoopState,
-  ModelMessage,
   TokenUsage,
 } from '@x-code-cli/core'
 
-/**
- * Safety net: extract the text from the most recent assistant message in
- * the loop state. Used to display a reply when the stream produced no
- * text-delta events but the final response message still carries text
- * (e.g. some reasoning-model providers put everything in one final part).
- */
-function extractLastAssistantText(messages: ModelMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (msg.role !== 'assistant') continue
-    const content = msg.content
-    if (typeof content === 'string') return content
-    if (!Array.isArray(content)) return ''
-    const parts: string[] = []
-    for (const part of content as Array<{ type: string; text?: string }>) {
-      if (part.type === 'text' && typeof part.text === 'string') {
-        parts.push(part.text)
-      }
-    }
-    return parts.join('')
-  }
-  return ''
-}
+import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
 
 export interface PendingPermission {
   toolCallId: string
@@ -61,90 +38,33 @@ export interface AgentState {
   error: string | null
 }
 
+const initialState: AgentState = {
+  messages: [],
+  isLoading: false,
+  currentToolCall: null,
+  shellOutput: '',
+  permissionQueue: [],
+  pendingQuestion: null,
+  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+  error: null,
+}
+
 export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
-  const [state, setState] = useState<AgentState>({
-    messages: [],
-    isLoading: false,
-    currentToolCall: null,
-    shellOutput: '',
-    permissionQueue: [],
-    pendingQuestion: null,
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    error: null,
-  })
+  const [state, setState] = useState<AgentState>(initialState)
 
   const modelRef = useRef<LanguageModel>(initialModel)
   const modelIdRef = useRef<string>(options.modelId)
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const initializedRef = useRef(false)
-
-  // ── Tool call timing ──
   const toolCallStartRef = useRef<number>(0)
 
-  // ── Streaming text buffer ──
-  //
-  // We deliberately DO NOT render streaming text in Ink's dynamic region.
-  // Ink + CJK wide characters + Yoga layout don't play well: long Chinese
-  // paragraphs get their visual row count miscalculated, so when Ink rewinds
-  // to repaint the dynamic region the cursor overshoots and old content
-  // splices into new content — you see merged bullet points and mangled
-  // scrollback on long responses.
-  //
-  // Instead, deltas are accumulated in a ref and flushed to `messages`
-  // (which renders via Ink <Static> — write-once scrollback). Flushes happen
-  // at paragraph breaks, every ~300 chars, and on tool-call / end-of-turn
-  // boundaries. The user sees text appear a paragraph at a time rather than
-  // char-by-char, which trades some "typewriter" feel for a completely
-  // corruption-free terminal.
-  const streamBufferRef = useRef<string>('')
-  const FLUSH_CHAR_THRESHOLD = 300
-  const FLUSH_LINE_THRESHOLD = 5
-
-  /** Push whatever is in the buffer into `messages` as one assistant text item. */
-  const flushBuffer = useCallback(() => {
-    const text = streamBufferRef.current
-    if (!text) return
-    streamBufferRef.current = ''
-    setState((prev) => ({
-      ...prev,
-      messages: [
-        ...prev.messages,
-        {
-          id: `stream-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          role: 'assistant' as const,
-          content: text,
-          timestamp: Date.now(),
-        },
-      ],
-    }))
+  /** Append a single message to `messages` (used by the stream buffer). */
+  const appendMessage = useCallback((msg: DisplayMessage) => {
+    setState((prev) => ({ ...prev, messages: [...prev.messages, msg] }))
   }, [])
 
-  /**
-   * Accept a text delta from the agent loop.
-   *
-   * The buffer is flushed when any of these trigger:
-   *   1. A paragraph break (`\n\n`) — natural prose boundary
-   *   2. ≥ FLUSH_CHAR_THRESHOLD characters accumulated
-   *   3. ≥ FLUSH_LINE_THRESHOLD lines accumulated
-   *
-   * Otherwise the buffer keeps growing silently; `flushBuffer()` is also
-   * called by `onToolCall` and at end-of-submit to drain residuals.
-   */
-  const appendTextDelta = useCallback(
-    (delta: string) => {
-      if (!delta) return
-      streamBufferRef.current += delta
-      const buf = streamBufferRef.current
-      const shouldFlush =
-        buf.includes('\n\n') || buf.length >= FLUSH_CHAR_THRESHOLD || buf.split('\n').length > FLUSH_LINE_THRESHOLD
-      if (shouldFlush) flushBuffer()
-    },
-    [flushBuffer],
-  )
-
-  /** Back-compat alias: used by onToolCall to drain text before a tool call. */
-  const flushStreamingToMessages = flushBuffer
+  const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage)
 
   /** Initialize memories (once). Project context comes from AGENTS.md at the repo
    *  root (walked up from cwd, Codex-style), not from language-specific manifest
@@ -167,12 +87,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         error: null,
         messages: [
           ...prev.messages,
-          {
-            id: Date.now().toString(),
-            role: 'user',
-            content: text,
-            timestamp: Date.now(),
-          },
+          { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() },
         ],
       }))
 
@@ -191,13 +106,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         onToolCall: (toolName, input) => {
           // Flush any accumulated text to messages first, so it appears
           // in the scrollback BEFORE the tool call indicator.
-          flushStreamingToMessages()
+          flushBuffer()
           toolCallStartRef.current = Date.now()
           setState((prev) => ({ ...prev, currentToolCall: { toolName, input } }))
         },
         onToolResult: (_toolCallId, result) => {
           const durationMs = Date.now() - toolCallStartRef.current
-          // Push the completed tool call directly into messages (Static)
           setState((prev) => {
             const tc: DisplayToolCall = {
               id: `tc-${Date.now()}`,
@@ -215,7 +129,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
                 ...prev.messages,
                 {
                   id: `tool-${Date.now()}`,
-                  role: 'assistant' as const,
+                  role: 'assistant',
                   content: '',
                   toolCalls: [tc],
                   timestamp: Date.now(),
@@ -232,18 +146,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
               input: toolCall.input,
               resolve,
             }
-            setState((prev) => ({
-              ...prev,
-              permissionQueue: [...prev.permissionQueue, entry],
-            }))
+            setState((prev) => ({ ...prev, permissionQueue: [...prev.permissionQueue, entry] }))
           })
         },
         onAskUser: (question, opts) => {
           return new Promise<string>((resolve) => {
-            setState((prev) => ({
-              ...prev,
-              pendingQuestion: { question, options: opts, resolve },
-            }))
+            setState((prev) => ({ ...prev, pendingQuestion: { question, options: opts, resolve } }))
           })
         },
         onShellOutput: (chunk) => {
@@ -278,18 +186,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         if (!sawTextDelta && loopStateRef.current) {
           const fallback = extractLastAssistantText(loopStateRef.current.messages)
           if (fallback) {
-            setState((prev) => ({
-              ...prev,
-              messages: [
-                ...prev.messages,
-                {
-                  id: `text-${Date.now()}`,
-                  role: 'assistant' as const,
-                  content: fallback,
-                  timestamp: Date.now(),
-                },
-              ],
-            }))
+            appendMessage({
+              id: `text-${Date.now()}`,
+              role: 'assistant',
+              content: fallback,
+              timestamp: Date.now(),
+            })
           }
         }
         setState((prev) => ({ ...prev, isLoading: false, currentToolCall: null }))
@@ -301,7 +203,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         }))
       }
     },
-    [options, initialize, appendTextDelta, flushStreamingToMessages, flushBuffer],
+    [options, initialize, appendTextDelta, flushBuffer, appendMessage],
   )
 
   /** Resolve the first pending permission request and pop it from the queue */
@@ -352,18 +254,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Clear conversation */
   const clear = useCallback(() => {
     loopStateRef.current = null
-    streamBufferRef.current = ''
-    setState({
-      messages: [],
-      isLoading: false,
-      currentToolCall: null,
-      shellOutput: '',
-      permissionQueue: [],
-      pendingQuestion: null,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      error: null,
-    })
-  }, [])
+    resetBuffer()
+    setState(initialState)
+  }, [resetBuffer])
 
   /** Manual context compression */
   const compact = useCallback(async () => {
@@ -378,36 +271,30 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   }, [])
 
   /** Add a system/info message (for slash command output) */
-  const addInfoMessage = useCallback((content: string) => {
-    setState((prev) => ({
-      ...prev,
-      messages: [
-        ...prev.messages,
-        {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content,
-          timestamp: Date.now(),
-        },
-      ],
-    }))
-  }, [])
+  const addInfoMessage = useCallback(
+    (content: string) => {
+      appendMessage({
+        id: Date.now().toString(),
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+      })
+    },
+    [appendMessage],
+  )
 
   /** Add a user message to the history (for echoing slash commands) */
-  const addUserMessage = useCallback((content: string) => {
-    setState((prev) => ({
-      ...prev,
-      messages: [
-        ...prev.messages,
-        {
-          id: Date.now().toString(),
-          role: 'user',
-          content,
-          timestamp: Date.now(),
-        },
-      ],
-    }))
-  }, [])
+  const addUserMessage = useCallback(
+    (content: string) => {
+      appendMessage({
+        id: Date.now().toString(),
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+      })
+    },
+    [appendMessage],
+  )
 
   return {
     state,

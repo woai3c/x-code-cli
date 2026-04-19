@@ -103,7 +103,7 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
 - AGENTS.md 已经说过的
 - 一次性调试解决方案
 
-**冲突检测**:同 category + 同 key 自动替换(见 `auto-memory.ts::add`)。不是只追加。
+**冲突检测**:同 category + 同 key 自动替换(见 `auto-memory.ts::add`)。不是只追加。`add()` 会先对 key/fact 做 `sanitizeLine()`(折叠空白 + 去换行),保证"一条 fact 一行"的序列化格式不被调用方的多行输入破坏。
 
 **TTL**:90 天未更新的条目启动时自动驱逐(`AutoMemory.evict(90)`)。
 
@@ -162,7 +162,7 @@ X-Code 选用 `AGENTS.md`(而非 `CLAUDE.md`)的原因:这是**供应商中性**
 | 功能 | 文件 | 关键函数 |
 |---|---|---|
 | AGENTS.md chain 加载 | `core/src/knowledge/loader.ts` | `collectAgentsMdChain()`, `buildKnowledgeContext()` |
-| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory` 类, `initMemories()` |
+| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory` 类, `initMemories()`(project 实例按 cwd 缓存,global 全局单例) |
 | saveKnowledge 工具 | `core/src/tools/save-knowledge.ts` | 4 类 taxonomy 的 schema + AI 触发指南 |
 | Taxonomy 类型 | `core/src/types/index.ts` | `KnowledgeCategory` type |
 | `/init` 命令 | `core/src/knowledge/init.ts` | `initProject()`, AGENTS_TEMPLATE |
