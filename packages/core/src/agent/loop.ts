@@ -86,7 +86,11 @@ async function handleContextTooLong(
   return true
 }
 
-/** Consume streamText output, dispatching chunks to the UI via callbacks. */
+/** Consume streamText output, dispatching chunks to the UI via callbacks.
+ *  Reasoning-delta chunks (thinking-mode models — DeepSeek-reasoner, o1,
+ *  etc.) are deliberately ignored: that's the model's internal chain of
+ *  thought, not user-facing output. The final user-facing answer arrives
+ *  as regular text-delta chunks. */
 async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks): Promise<void> {
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'text-delta') {
@@ -98,6 +102,7 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks)
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
     }
+    // reasoning-delta / reasoning-start / reasoning-end: intentionally dropped.
   }
 }
 

@@ -9,7 +9,6 @@ import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
 import { ChatInput } from './ChatInput.js'
-import { Permission } from './Permission.js'
 import { SelectOptions } from './SelectOptions.js'
 
 interface AppProps {
@@ -224,31 +223,20 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
   //
   // `ChatInput` owns the ENTIRE terminal region below the initial header:
   //   - scrollback messages are committed via direct stdout writes
-  //   - spinner / input / separators / completions / errors render into a
-  //     single cell-level diff buffer
+  //   - spinner / input / separators / completions / errors / Permission
+  //     dialog all render into a single cell-level diff buffer
   //
-  // Ink's dynamic region stays EMPTY by default — if it ever had any
-  // content (ToolCall, Spinner, Error lines) Ink's own log-update would
-  // shove our stdout cursor around and we'd paint the input frame at the
-  // wrong row, leaving zombie "Thinking..." / separator rows in scrollback.
-  //
-  // The only exceptions are interactive dialogs (`Permission`,
-  // `SelectOptions`) — they DO render via Ink because they need focus +
-  // keypress routing. While one of these is active, ChatInput's
-  // `hidden` prop erases its cell frame and stays out of the way.
-  const blockingDialog = state.permissionQueue.length > 0 || !!state.pendingQuestion
+  // Ink's dynamic region is kept EMPTY except for `SelectOptions`
+  // (askUser dialogs with a free-form "Other" text mode — too involved
+  // to reimplement in the cell buffer right now). If Ink ever writes
+  // there, its internal use of `\x1b7`/`\x1b8` clobbers our cursor
+  // anchor and leaves zombie frames on every cycle.
+  const permissionRequest = state.permissionQueue[0]
+  const blockingDialog = !!state.pendingQuestion
 
   return (
     <>
       <Box flexDirection="column" width={termWidth}>
-        {state.permissionQueue.length > 0 && (
-          <Permission
-            key={state.permissionQueue[0].toolCallId}
-            toolName={state.permissionQueue[0].toolName}
-            input={state.permissionQueue[0].input}
-            onResolve={resolvePermission}
-          />
-        )}
         {state.pendingQuestion && (
           <SelectOptions
             question={state.pendingQuestion.question}
@@ -262,10 +250,14 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
         messages={state.messages}
         onSubmit={handleSubmit}
         onInterrupt={exit}
-        disabled={state.isLoading || blockingDialog}
+        // Lock the keyboard only while SelectOptions owns Ink's bottom
+        // region. During loading OR a Permission dialog we keep typing
+        // enabled — Permission keys (Up/Down/Enter/y/n) are handled by
+        // ChatInput itself; `spinner` tells handleSubmit to gate Enter.
+        disabled={blockingDialog}
         hidden={blockingDialog}
         spinner={
-          state.isLoading && !blockingDialog
+          state.isLoading && !blockingDialog && !permissionRequest
             ? {
                 label: 'Thinking',
                 mode: state.currentToolCall ? 'tool-use' : 'requesting',
@@ -274,6 +266,15 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
             : null
         }
         errorMessage={state.error}
+        permission={
+          permissionRequest
+            ? {
+                toolName: permissionRequest.toolName,
+                input: permissionRequest.input,
+                onResolve: resolvePermission,
+              }
+            : null
+        }
         commands={SLASH_COMMANDS}
       />
     </>

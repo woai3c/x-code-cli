@@ -21,6 +21,12 @@ export interface DisplayMessage {
   content: string
   toolCalls?: DisplayToolCall[]
   timestamp: number
+  /** True for assistant text chunks emitted mid-stream (one per newline).
+   *  Rendered WITHOUT the trailing blank line that regular messages append,
+   *  so consecutive chunks join into a single paragraph visually. Keeps
+   *  streaming text out of the bottom cell buffer (avoids row-shift jitter)
+   *  by sending each complete line directly to scrollback. */
+  streamingChunk?: boolean
 }
 
 export interface DisplayToolCall {

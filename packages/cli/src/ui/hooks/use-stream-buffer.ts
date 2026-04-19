@@ -1,23 +1,19 @@
 // @x-code-cli/cli — Streaming-text buffer management
+//
+// Each time the model emits text deltas, we accumulate them in a ref.
+// As soon as a complete line (ends with `\n`) is available in the buffer,
+// that line is emitted as a `streamingChunk: true` assistant message —
+// which ChatInput writes DIRECTLY to terminal scrollback (no trailing
+// blank line, single `\n` separator so consecutive chunks join into one
+// paragraph). The bottom cell buffer (spinner + input + separators) is
+// NEVER touched by streaming text, so its rows don't shift position as
+// the output grows — exactly the stable Claude-Code-style behaviour.
+//
+// We commit the remaining unterminated tail only when the stream ends
+// or a tool call interrupts it (explicit `flushBuffer()`).
 import { useCallback, useRef } from 'react'
 
 import type { DisplayMessage, ModelMessage } from '@x-code-cli/core'
-
-/**
- * Flush thresholds for streaming text. These are tuned for CJK terminals,
- * not arbitrary cosmetic choices:
- *
- *   FLUSH_CHAR_THRESHOLD — bytes to accumulate before a flush. Chosen so that
- *     a paragraph of Chinese (~150-200 CJK chars) flushes together, which
- *     keeps enough on-screen for the user to read while avoiding mid-clause
- *     cuts. Lower values caused flicker; higher values felt laggy.
- *
- *   FLUSH_LINE_THRESHOLD — line count safety net for responses that are
- *     short-line-heavy (bullet lists, code snippets) and would otherwise sit
- *     in the buffer under the char threshold.
- */
-const FLUSH_CHAR_THRESHOLD = 300
-const FLUSH_LINE_THRESHOLD = 5
 
 /**
  * Safety net: extract the text from the most recent assistant message in
@@ -44,56 +40,60 @@ export function extractLastAssistantText(messages: ModelMessage[]): string {
 }
 
 export interface StreamBufferApi {
-  /** Accept a text delta from the agent loop. Auto-flushes on boundary triggers. */
+  /** Accept a text delta from the agent loop. Emits a streamingChunk
+   *  message for every complete line (`\n`-terminated substring) in the
+   *  rolling buffer; the trailing partial line stays buffered. */
   appendTextDelta: (delta: string) => void
-  /** Push whatever is in the buffer into `messages` as one assistant text item. */
+  /** Emit any remaining partial line as a final streamingChunk. Called
+   *  on tool-call / end-of-turn boundaries to drain the buffer. */
   flushBuffer: () => void
   /** Discard any buffered text without emitting. */
   resetBuffer: () => void
 }
 
-/**
- * Manage the streaming-text buffer.
- *
- * We deliberately DO NOT render streaming text in Ink's dynamic region.
- * Ink + CJK wide characters + Yoga layout don't play well: long Chinese
- * paragraphs get their visual row count miscalculated, so when Ink rewinds
- * to repaint the dynamic region the cursor overshoots and old content
- * splices into new content — merged bullet points, mangled scrollback.
- *
- * Instead, deltas are accumulated in a ref and flushed to `messages`
- * (which renders via Ink <Static> — write-once scrollback). Flushes happen
- * at paragraph breaks, every ~300 chars, and on tool-call / end-of-turn
- * boundaries. The user sees text appear a paragraph at a time rather than
- * char-by-char, which trades some "typewriter" feel for a completely
- * corruption-free terminal.
- */
+let streamChunkSeq = 0
+
+function makeStreamChunkMessage(content: string): DisplayMessage {
+  return {
+    id: `stream-${Date.now()}-${streamChunkSeq++}`,
+    role: 'assistant',
+    content,
+    streamingChunk: true,
+    timestamp: Date.now(),
+  }
+}
+
 export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): StreamBufferApi {
   const bufferRef = useRef<string>('')
-
-  const flushBuffer = useCallback(() => {
-    const text = bufferRef.current
-    if (!text) return
-    bufferRef.current = ''
-    appendMessage({
-      id: `stream-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      role: 'assistant',
-      content: text,
-      timestamp: Date.now(),
-    })
-  }, [appendMessage])
 
   const appendTextDelta = useCallback(
     (delta: string) => {
       if (!delta) return
       bufferRef.current += delta
-      const buf = bufferRef.current
-      const shouldFlush =
-        buf.includes('\n\n') || buf.length >= FLUSH_CHAR_THRESHOLD || buf.split('\n').length > FLUSH_LINE_THRESHOLD
-      if (shouldFlush) flushBuffer()
+
+      // Emit every complete line in the buffer. Each is written straight
+      // to scrollback by ChatInput (streamingChunk = true → no trailing
+      // blank line, so lines of the same paragraph join).
+      while (true) {
+        const nl = bufferRef.current.indexOf('\n')
+        if (nl < 0) break
+        const line = bufferRef.current.slice(0, nl + 1) // includes the \n
+        bufferRef.current = bufferRef.current.slice(nl + 1)
+        appendMessage(makeStreamChunkMessage(line))
+      }
     },
-    [flushBuffer],
+    [appendMessage],
   )
+
+  const flushBuffer = useCallback(() => {
+    const tail = bufferRef.current
+    if (!tail) return
+    bufferRef.current = ''
+    // Emit the remaining partial line. Append a newline so the cursor
+    // lands at column 0 for whatever comes next (tool call indicator /
+    // next turn's content / input box repaint).
+    appendMessage(makeStreamChunkMessage(tail.endsWith('\n') ? tail : tail + '\n'))
+  }, [appendMessage])
 
   const resetBuffer = useCallback(() => {
     bufferRef.current = ''

@@ -128,9 +128,12 @@ AI 流式返回的 text-delta 一个 chunk 可能只有 1-5 个字符。`flushBu
 2. 新内容被打到错误位置，和旧内容 splice 成乱码
 3. 这在 "streaming 长中文段落 + 动态区频繁重绘" 的场景里必现
 
-Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware stringWidth。我们这边选了更轻的方案：**消息历史用 `useStdout().write` 直接写 scrollback**（`MessageList.tsx`），让终端自己处理折行；Ink 动态区只留 spinner + 输入框 + 权限框这些短小 ASCII 内容，即使 Yoga 算错也影响不大。
+Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware stringWidth + cell-level screen buffer。我们走混合方案：
 
-所以"为什么要用它"的准确答案是：**不是主动选择用，是因为 Ink 底层就在用，我们需要理解它的坑才能绕开。**
+1. **依赖换成 Google 维护的 `@jrichman/ink@6.6.9` fork**（Gemini CLI 生产在用）—— 通过 npm alias，`import from 'ink'` 代码不改。fork 自带 cell-level StyledLine 测量、DEC 2026 同步更新、IME 光标定位，从根上解决了 Yoga 宽度计算问题。
+2. **`<ChatInput>` 进一步独占终端底部**，用 `process.stdout.write` + 2D cell-level diff 完全绕开 Ink 动态区。因为 fork 的 log-update 内部也会用 `\x1b7`/`\x1b8` 保存光标，终端只有一个 cursor 保存寄存器 —— 如果 Ink 动态区也写东西会跟我们抢这个寄存器留下残影，所以 Ink 动态区保持永远是空（除了罕见的 `<SelectOptions>`）。
+
+所以"为什么要用它"的准确答案是：**Ink 底层就在用 Yoga，理解它的坑是为了知道为什么要绕开**。
 
 ---
 

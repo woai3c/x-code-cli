@@ -51,21 +51,18 @@ x-code-cli/
 │   │   │   ├── app.tsx             # Ink render 入口
 │   │   │   ├── ui/
 │   │   │   │   ├── components/
-│   │   │   │   │   ├── App.tsx          # 根组件（Fragment + Ink 动态区 sibling Box）
-│   │   │   │   │   ├── MessageList.tsx  # effect-only，走 useStdout().write 直写 scrollback
-│   │   │   │   │   ├── ToolCall.tsx     # 工具调用展示（进行中, 含 Spinner + 计时）
-│   │   │   │   │   ├── ChatInput.tsx    # 用户输入框（多行 textarea + paste 占位符）
-│   │   │   │   │   ├── Spinner.tsx      # 加载动画（支持 mode: requesting/responding/tool-use）
-│   │   │   │   │   ├── Permission.tsx   # 权限确认 UI（含 diff 预览）
-│   │   │   │   │   ├── ShellOutput.tsx  # Shell 命令实时输出
-│   │   │   │   │   ├── SelectOptions.tsx # askUser 多选交互
+│   │   │   │   │   ├── App.tsx          # 根组件（挂 ChatInput，Ink 动态区保持空）
+│   │   │   │   │   ├── ChatInput.tsx    # 底部区域唯一 owner：cell-level diff 渲染
+│   │   │   │   │   │                    #   滚动历史提交 + spinner + 流式文本 + 错误行
+│   │   │   │   │   │                    #   + Permission 对话框 + 输入框 + 补全菜单
+│   │   │   │   │   ├── SelectOptions.tsx # askUser 多选（自由文本 Other 模式，走 Ink 渲染）
 │   │   │   │   │   └── AppHeader.tsx    # printHeader() ASCII banner（Ink 外直写 stdout）
 │   │   │   │   ├── hooks/
-│   │   │   │   │   ├── use-agent.ts     # Agent 状态管理 Hook（orchestration）
-│   │   │   │   │   ├── use-stream-buffer.ts # 流式文本缓冲 Hook（CJK-safe flush）
+│   │   │   │   │   ├── use-agent.ts     # Agent 状态管理 Hook（orchestration，含 streamingText state）
+│   │   │   │   │   ├── use-stream-buffer.ts # 流式文本缓冲：每 delta 更新 streamingText，\n\n 时提交
 │   │   │   │   │   └── use-prompt-input.ts  # 自定义 stdin hook（bracketed paste + debounce）
 │   │   │   │   ├── paste-refs.ts        # [Pasted text #N +M lines] 占位符 helper
-│   │   │   │   ├── stdout-writer.ts     # writeMessageToStdout，绕过 Ink 布局直写终端
+│   │   │   │   ├── stdout-writer.ts     # writeMessageToStdout（消息格式化，供 ChatInput 调用）
 │   │   │   │   ├── tool-display.ts      # 工具显示工具函数（标签/预览/摘要）
 │   │   │   │   ├── render-markdown.ts   # Markdown → ANSI 终端渲染
 │   │   │   │   └── theme.ts             # 主题颜色常量（ACCENT/SUCCESS/WARNING/ERROR）
@@ -641,46 +638,56 @@ async function checkPermission(toolCall, trustMode, onAskPermission) {
 
 **文件**: `packages/cli/src/ui/components/*.tsx`
 
-**渲染架构**：Ink 的 Yoga 布局在 CJK 宽字符 + 长流式文本的组合下会算错视觉行数，导致重绘 rewind 超调、旧内容被覆盖。为了彻底规避这一类 bug，消息历史**完全不走 Ink 布局引擎**——直接用 `useStdout().write` 把格式化好的 ANSI 字符串落到终端 scrollback，让终端自己处理折行和滚动。Ink 只管底部一小块 Dynamic 区（Spinner / ToolCall / Permission / ChatInput 这些短小主要 ASCII 的东西）。
+**渲染架构**：上游 Ink 的 Yoga 布局 + log-update 在 CJK / IME / 长流式文本下会抖动和闪烁。主流 AI CLI 都 fork 了 Ink（Claude Code vendor 自己的、Gemini CLI 用 `@jrichman/ink`、Codex 用 Rust ratatui、opencode 用 OpenTUI）。我们走混合方案：
+
+1. **依赖换成 Google 维护的 `@jrichman/ink@6.6.9`**（Gemini CLI 生产在用），通过 npm alias `"ink": "npm:@jrichman/ink@6.6.9"`，代码里 `import from 'ink'` 不改。fork 自带 cell-level StyledLine 测量 / DEC 2026 同步更新 / IME 光标定位。
+
+2. **`<ChatInput>` 独占底部区域**，自己走 `process.stdout.write` + 2D cell-level diff，完全绕开 Ink 动态区。因为 fork 的 log-update 内部用 `\x1b7`/`\x1b8` 保存光标，终端只有一个 save register —— 如果 Ink 动态区也写东西，两套系统会抢这个寄存器，留下残影。所以 Ink 动态区保持**永远为空**（除非 `<SelectOptions>` 触发）。
 
 ```
-App.tsx 的渲染树（React Fragment 作为外层，不是 Box）
+App.tsx 渲染树（极简）
 ┌─────────────────────────────────────────────────────┐
-│  <MessageList messages={state.messages} />         │
-│     ↑ effect-only 组件，return null                  │
-│       useEffect 监听 messages 数组长度变化           │
-│       对每条新 message 调 writeMessageToStdout       │
-│       → useStdout().write → 终端 scrollback         │
-│                                                      │
-│  <Box flexDirection="column" paddingX={1}>          │
-│    ├── <ToolCall>          # 当前正在执行的工具       │
-│    ├── <ShellOutput>       # Shell 命令实时输出      │
-│    ├── <Permission>        # 权限确认弹窗             │
-│    ├── <SelectOptions>     # askUser 多选交互        │
-│    ├── <Spinner>           # 加载指示                │
-│    ├── <Text>              # Error 错误信息          │
-│    └── <ChatInput>         # 用户输入框               │
+│  <Box flexDirection="column" width={termWidth}>     │
+│    {pendingQuestion && <SelectOptions ... />}       │  ← Ink 树里仅剩的动态内容（罕见）
 │  </Box>                                              │
+│                                                      │
+│  <ChatInput                                          │  ← return null，不走 Ink 布局
+│     messages={...}         # 滚动历史（自己写到 stdout） │
+│     spinner={...}          # Thinking 行             │
+│     streamingText={...}    # 流式 markdown 预览      │
+│     errorMessage={...}     # 错误行                   │
+│     permission={...}       # 权限弹窗（自己路由键盘）  │
+│     hidden={!!pendingQuestion}                      │
+│  />                                                  │
 └─────────────────────────────────────────────────────┘
+
+ChatInput 的 cell buffer 布局（自上而下，每部分按需出现）：
+┌────────────────────────────────────────────────────┐
+│ [Error 行]                                          │
+│ [Streaming 文本（完整行, 经 renderMarkdown）]        │
+│ [Permission 块（title + content + Yes/No）]         │
+│ [空行] (有 streaming 或 permission 时作为 Thinking 顶部 margin) │
+│ [⠋ Thinking... (Xs · ↑ Yk tokens)]                 │
+│ ──── (顶部分隔线)                                    │
+│ > 用户输入（多行 textarea, 10 行硬顶）              │
+│ ──── (底部分隔线)                                    │
+│ [/xxx 补全菜单]                                      │
+└────────────────────────────────────────────────────┘
 ```
 
 **关键组件说明**：
 
-**`<MessageList>`** — **不渲染任何 JSX**（`return null`）。通过 `useStdout()` 拿到 Ink 的 log-update-coordinated write 函数，在 `useEffect` 里对比 `writtenCountRef` 和 `messages.length`，只 append 新增的 message。`/clear` 清空 messages 后 ref 重置。由于不走 Ink 布局，宽字符折行由终端处理，CJK 不会触发 Ink 的重绘 bug。
+**`<ChatInput>`** — 底部区域**唯一** owner，500+ 行单文件包揽以下职责：
 
-**`<Permission>`** — 当工具需要权限确认时显示。展示工具名 + 参数 + **变更预览**，等待用户按 Y/N。使用 Ink 的 `useInput` hook 捕获键盘输入。在 `--trust` 模式下此组件不渲染。
+1. **滚动历史提交**：检测 `messages` prop 数组增长时，`eraseRegion()` 擦掉当前 cell frame，然后用 `process.stdout.write.bind(process.stdout)` 作为 write 函数调用 `writeMessageToStdout` 格式化并写每条新 message（消息走 `renderMarkdown` → ANSI → 2 空格缩进 → 落入 scrollback）。
+2. **Cell-level diff 渲染**：每帧构建 2D `Cell[][]` 网格，对比 `prevFrameRef` 只写差异 cell，一次 `stdout.write()` 发一帧。
+3. **DEC 2026 同步更新**：useEffect 整个 body 包在 `\x1b[?2026h` ... `\x1b[?2026l` 块里，支持的终端原子渲染整帧，消除 `eraseRegion + 写消息 + 重绘` 之间的闪烁。
+4. **Spinner**：`spinner != null` 时内置 80ms 定时器更新 glyph，cell-diff 只重写 glyph 那一格。elapsed 时间从 `loadingStartRef` 渲染时现算（避免 setState-in-effect lint）。
+5. **流式文本实时预览**：`streamingText` prop 过一遍 `renderMarkdown()` 得 ANSI 字符串，内置的 `ansiStringToCells()` 解析器（处理 SGR、跳过 OSC 超链接）把它切成带样式的 cell。只显示完整行（`trimToCompleteLines` 在 `useStreamBuffer` 里已截掉尾段），避免半截 markdown 闪烁。
+6. **Permission 对话框**：`permission` prop 非空时在 cell buffer 里展开 title + content + Yes/No 行。键盘事件（Up/Down 切换选择、Enter 按当前选择 resolve、`y`/`n` 直接 resolve）**全部由 ChatInput 自己路由**，不再用 Ink 的 `useInput`。
+7. **多行输入 + 补全菜单**：`usePromptInput`（自定义 stdin hook）+ paste 占位符 + 智能 backspace + `MAX_VISIBLE_LINES = 10` 硬顶。
 
-对不同工具展示不同预览：
-
-- **edit 工具**：显示 diff（红色旧文本 → 绿色新文本），让用户看到"具体改了什么"
-- **writeFile 工具**：如果是覆盖已有文件，显示 diff；如果是新建文件，显示文件内容摘要
-- **shell 工具**：显示完整命令 + 权限级别标识（只读/写入/危险）
-
-**`<SelectOptions>`** — 当 AI 调用 `askUser` 工具时显示。自定义 Ink 组件，基于 `useInput` 实现上下箭头导航 + Enter 确认。自动追加"其他"选项支持自由输入。
-
-**`<ShellOutput>`** — Shell 工具执行时的实时输出展示。逐行渲染 stdout/stderr，让用户看到 `npm install`、`pnpm build` 等长命令的实时进度，而非等执行完才一次性展示。为避免撑爆动态区，只显示最近 15 行。
-
-**`<ChatInput>`** — 多行输入框，**不使用** Ink 的 `useInput`，改用自定义 `usePromptInput` hook（见下文）。支持 paste 占位符、多行 textarea、智能 backspace、斜杠命令补全。输入框高度硬顶 10 行（`MAX_VISIBLE_LINES`），超出时显示前 9 行 + `… +N more lines`，避免 paste 检测异常时撑爆动态区。
+**`<SelectOptions>`** — Ink 树里唯一的动态渲染例外：`askUser` 工具的多选交互，因为有自由文本输入模式（"Other"）需要完整键盘路由，留在 Ink 里。激活时 `hidden=true` 让 ChatInput 隐掉让出底部。触发频率极低。
 
 #### usePromptInput — 自定义 stdin 输入管线
 
@@ -747,23 +754,24 @@ writeMessageToStdout(write: InkWrite, msg: DisplayMessage)
 
 **文件**: `packages/cli/src/ui/hooks/use-agent.ts`
 
-使用 React Hook 管理全部 Agent 状态。注意：**streaming 文本不在 React state 里**，避免每个 delta 触发重渲染。
+使用 React Hook 管理全部 Agent 状态。**流式文本放在 state 里**（`streamingText`）—— `@jrichman/ink` fork + ChatInput 的 cell-level diff 渲染不怕 CJK 宽度问题，每个 delta 只局部更新 cell。
 
 ```typescript
 interface AgentState {
-  messages: DisplayMessage[] // 完成的 user/assistant/tool 条目（驱动 MessageList useEffect）
+  messages: DisplayMessage[] // 已提交的 user/assistant/tool 条目（ChatInput 自己写到 scrollback）
   isLoading: boolean // 是否等待 LLM 响应
   currentToolCall: { toolName: string; input: Record<string, unknown> } | null
-  shellOutput: string // Shell 实时输出
-  pendingPermission: { toolName; input; resolve: (approved: boolean) => void } | null
+  shellOutput: string // Shell 实时输出（目前未在 UI 显示，保留数据）
+  permissionQueue: PendingPermission[] // 队列：可能同时有多个待批权限
   pendingQuestion: { question; options; resolve: (answer: string) => void } | null
   usage: TokenUsage // { inputTokens, outputTokens, totalTokens }
   error: string | null
+  streamingText: string // 正在流式输出的活文本，ChatInput 实时画在 cell buffer 里
 }
 
-// 流式文本累积在 ref 里，不触发重渲染（封装在 use-stream-buffer.ts）
-const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage)
-// 内部常量：FLUSH_CHAR_THRESHOLD = 300（字符）/ FLUSH_LINE_THRESHOLD = 5（行）
+// 流式文本：每 delta 更新 streamingText state；\n\n 段落边界提交到 messages
+const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage, setStreamingText)
+// 内部常量：MAX_STREAMING_LINES = 12（超过则强制提交到 scrollback 避免 cell buffer 过大）
 ```
 
 **数据流方向**：
@@ -772,31 +780,44 @@ const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMess
 用户输入
   → ChatInput.handleSubmit(text)
   → App.handleSubmit → useAgent.submit(text)
-    → setState({ messages: [...prev, { role: 'user', content: text }] })
-       └─ MessageList useEffect → writeMessageToStdout → scrollback
+    → setState({ messages: [...prev, userMsg], isLoading: true })
+       └─ ChatInput useEffect: eraseRegion + writeMessageToStdout → scrollback (走 process.stdout.write)
     → agentLoop(text, callbacks)
        ├─ callbacks.onTextDelta(delta)
-       │    → useStreamBuffer.appendTextDelta(delta)  // 累积到内部 bufferRef
-       │    → 命中 flush 条件（\n\n / ≥ 300 chars / > 5 lines）即 flushBuffer()
-       │       → setState({ messages: [...prev, { role: 'assistant', content: buf }] })
-       │          └─ MessageList useEffect → writeMessageToStdout → scrollback
-       ├─ callbacks.onToolCall  → flushBuffer()（先 drain 文本）+ setState({ currentToolCall })
+       │    → useStreamBuffer.appendTextDelta(delta)
+       │    → bufferRef += delta
+       │    ├─ 段落断点 \n\n → commitToScrollback (appendMessage to state.messages)
+       │    │    → ChatInput useEffect eraseRegion + writeMessageToStdout → scrollback (经 renderMarkdown)
+       │    ├─ 单段 > MAX_STREAMING_LINES(12) → 强制 commit
+       │    └─ 默认 → setStreamingText(trimToCompleteLines(buffer))
+       │              → React 自动 batch 连续 delta 成单次 re-render
+       │              → ChatInput cell-level diff 只更新 streaming 区域变化的 cell
+       │                (renderMarkdown + ansiStringToCells，cell buffer 里就已经是带格式 markdown)
+       ├─ callbacks.onToolCall  → flushBuffer()（drain 文本）+ setState({ currentToolCall })
+       │                          → spinner mode 变成 'tool-use'（↓ 箭头）
        ├─ callbacks.onToolResult → push DisplayToolCall 到 messages
-       ├─ callbacks.onAskPermission → setState({ pendingPermission }) → Permission 组件弹出
-       ├─ callbacks.onAskUser       → setState({ pendingQuestion }) → SelectOptions 弹出
-       ├─ callbacks.onShellOutput   → setState({ shellOutput: prev + chunk })
+       │                          → ChatInput useEffect 把 tool-call 行写到 scrollback
+       ├─ callbacks.onAskPermission → permissionQueue += entry
+       │                          → ChatInput 在 cell buffer 里展开 title/Yes/No
+       │                          → 键盘 Up/Down/Enter/y/n 由 ChatInput 自己路由
+       ├─ callbacks.onAskUser       → setState({ pendingQuestion })
+       │                          → <SelectOptions> (Ink 渲染, 唯一例外)
+       │                          → ChatInput 收到 hidden=true 隐藏自己让出底部
+       ├─ callbacks.onShellOutput   → setState({ shellOutput: prev + chunk }) (目前未在 UI 显示)
        └─ callbacks.onUsageUpdate   → setState({ usage })
     → loop 结束
-       ├─ flushBuffer() 把 buffer 最后一段残留 flush 到 messages
+       ├─ flushBuffer() 把 buffer 最后一段残留提交到 messages
        ├─ 安全网：若 sawTextDelta=false，从 loopState.messages 兜底抽取文本
        └─ setState({ isLoading: false, currentToolCall: null })
+          → spinner 消失、streamingText 清空、cell buffer 收缩
 ```
 
-**为什么 streaming 文本用 ref 而不是 state**：
+**为什么 streaming 文本进 React state 而不是 ref**：
 
-- React state 里每个 delta 触发重渲染 → Ink 重绘动态区 → Ink 的 Yoga 对 CJK 宽字符算错视觉行数 → 光标 rewind 超调 → 新旧内容 splice
-- 走 ref + effect-based flush 到 scrollback：**动态区内永远没有长内容**，Ink 重绘永远只是短小 spinner + 输入框，根本不会触发宽字符布局 bug
-- UX 上用户看到的是每个 flush 间隔（300 字 / 段落断）打出一段，接近 Claude Code 的段落流风格，不是逐字打字机
+`@jrichman/ink` fork（cell-level 测量 + 同步更新）+ ChatInput 自己的 cell-level diff 保证宽度计算正确、重绘原子化，所以可以把 streaming 文本直接放 state 实时渲染。两个好处：
+
+- UX：用户看到"完整行一行行出现"，接近 Claude Code 的块粒度体验
+- Markdown 格式：cell buffer 里的 streaming 预览已经经过 `renderMarkdown`，跟提交到 scrollback 那一瞬间视觉完全一致，消除"plain text → markdown"的转换闪烁
 
 ### 4.7 Plan Mode（计划模式）
 
@@ -1777,7 +1798,7 @@ interface SessionSummary {
 | 包             | 版本         | 用途                                    |
 | -------------- | ------------ | --------------------------------------- |
 | `@x-code/core` | workspace:\* | Agent 逻辑层                            |
-| `ink`          | ^6.6.0       | TUI 框架（latest 6.6.0）                |
+| `ink`          | `npm:@jrichman/ink@6.6.9` | Google/Gemini CLI 维护的 Ink fork（npm alias），自带 cell-level buffer / StyledLine / DEC 2026 同步更新，消除 CJK 抖动 |
 | `react`        | ^19.1.0      | Ink 的 peer dependency（latest 19.2.4） |
 | `yargs`        | ^18.0.0      | CLI 参数解析（latest 18.0.0）           |
 | `chalk`        | ^5.4.0       | 颜色工具（latest 5.6.2）                |
@@ -1915,16 +1936,17 @@ interface SessionSummary {
 
 ### 13.8 UI & 渲染管线
 
-- ✅ Ink 6 + React 19
-- ✅ `useAgent` hook 管理 AgentState（messages / isLoading / currentToolCall / shellOutput / pending… / usage / error）
-- ✅ streaming 文本走 `useStreamBuffer()` 内部的 `bufferRef` + effect-based flush（段落 / 300 字 / 5 行），不进 React state
-- ✅ `MessageList`：effect-only 组件，`useStdout().write` 直写 scrollback，绕过 Ink 布局
+- ✅ `@jrichman/ink@6.6.9` fork（Google 维护 / Gemini CLI 生产版）+ React 19
+- ✅ `useAgent` hook 管理 AgentState（messages / isLoading / currentToolCall / shellOutput / permissionQueue / pendingQuestion / usage / error / **streamingText**）
+- ✅ streaming 文本**进 state**：`useStreamBuffer(appendMessage, setStreamingText)` 每 delta 更新，`\n\n` 段落边界 flush 到 messages，MAX_STREAMING_LINES=12 兜底
+- ✅ `<ChatInput>` 独占底部区域：cell-level 2D diff 渲染，`process.stdout.write` 直写 stdout
+  - 包揽：滚动历史提交 + spinner + streamingText（`renderMarkdown` + `ansiStringToCells`）+ permission 对话框 + error 行 + 输入框 + 补全菜单
+  - 所有写操作包在 DEC 2026 `\x1b[?2026h`/`\x1b[?2026l` 同步更新块里，原子渲染
 - ✅ `stdout-writer.ts`：user/assistant/tool 格式化 + ANSI + `\r\n → \n` 归一化
-- ✅ `ChatInput` + `usePromptInput`：自定义 stdin 处理，bracketed paste + 30ms debounce 双路径，paste 占位符，多行 textarea + 6 行硬顶
+- ✅ `usePromptInput`：自定义 stdin 处理，bracketed paste + 30ms debounce 双路径，paste 占位符，多行 textarea + 10 行硬顶（`MAX_VISIBLE_LINES`）
 - ✅ `paste-refs.ts`：`[Pasted text #N +M lines]` 占位符 + expand 辅助
-- ✅ `Spinner` 三态（requesting / responding / tool-use）
-- ✅ `ToolCall` / `ShellOutput` / `Permission` / `SelectOptions`
 - ✅ `renderMarkdown`（marked.lexer + chalk）Markdown → ANSI
+- ✅ `SelectOptions`：askUser 多选（含自由文本 Other 模式，唯一仍走 Ink 渲染的动态组件）
 - ✅ 可选诊断 log（`X_CODE_DEBUG=1` → `~/.x-code/x-code-debug.log`）
 
 ### 13.9 斜杠命令

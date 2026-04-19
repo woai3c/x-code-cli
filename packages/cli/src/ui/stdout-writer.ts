@@ -103,7 +103,20 @@ function formatToolCall(tc: DisplayToolCall): string {
   return `${line1}\n${line2}`
 }
 
-/** Print a DisplayMessage to stdout via Ink's log-update-coordinated write. */
+/** Replace every LF with CRLF. Defensive against terminals where stdout's
+ *  ONLCR output translation is disabled (Ink puts stdin into raw mode but
+ *  stdout's termios settings can be implementation-dependent, and VS Code
+ *  terminal in particular has been observed to not translate bare LF into
+ *  CRLF). Without an explicit `\r`, the cursor stays at whatever column
+ *  the line ended on, and the following cell-buffer repaint positions at
+ *  col 1 via `\x1b[1G` — overwriting only the first few columns and
+ *  leaving the tail of the just-written text visible "to the right of"
+ *  the next row's content (looks like partial text next to Thinking). */
+function toCRLF(s: string): string {
+  return s.replace(/\r?\n/g, '\r\n')
+}
+
+/** Print a DisplayMessage to stdout. */
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
@@ -115,20 +128,39 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   // Assistant message — may have tool calls, a text body, or both.
   if (msg.toolCalls && msg.toolCalls.length > 0) {
     for (const tc of msg.toolCalls) {
-      write(normalizeLineEndings(formatToolCall(tc)) + '\n')
+      write(toCRLF(normalizeLineEndings(formatToolCall(tc)) + '\n'))
     }
   }
 
   if (msg.content) {
     const content = normalizeLineEndings(msg.content)
     debugDump('ASSISTANT MESSAGE', content)
-    // Two-space indent mirrors the old MessageList marginLeft={2}.
+
+    // Special-case pure-whitespace streaming chunks (e.g. a bare "\n"
+    // = paragraph break marker between two lines of prose). Markdown
+    // rendering collapses these to an empty string, which would drop
+    // the visual paragraph break — so pass the whitespace through
+    // directly instead.
+    if (msg.streamingChunk && content.trim() === '') {
+      write(toCRLF(content))
+      return
+    }
+
+    // Two-space indent matches the assistant body spacing used throughout.
     const body = renderMarkdown(content)
     const indented = normalizeLineEndings(body)
       .split('\n')
       .map((line) => (line ? `  ${line}` : line))
       .join('\n')
-    write(indented + '\n\n')
+    if (msg.streamingChunk) {
+      // Streaming chunks are ONE line of content (always ends with \n in
+      // the source text). Emit without the trailing blank line so the
+      // next chunk lands on the immediately following row, forming a
+      // continuous paragraph in scrollback.
+      write(toCRLF(indented))
+    } else {
+      write(toCRLF(indented + '\n\n'))
+    }
   }
 }
 
@@ -144,7 +176,6 @@ function writeUserMessage(write: InkWrite, content: string): void {
   const [first = '', ...rest] = lines
   const indentedRest = rest.map((line) => `  ${line}`)
   const body = [`${arrow} ${first}`, ...indentedRest].join('\n')
-  // ONE write call for the whole body — Ink's writeToStdout clears the
-  // dynamic region once, writes our data atomically, then re-renders.
-  write(body + '\n\n')
+  // Explicit CRLF line breaks — see toCRLF() above for rationale.
+  write(toCRLF(body + '\n\n'))
 }
