@@ -118,7 +118,7 @@ async function handleToolCall(
   // ── Plan mode tools ──
   if (toolName === 'enterPlanMode') {
     state.planMode = true
-    state.planId = generatePlanId()
+    state.planId = generatePlanId(typeof input.topic === 'string' ? input.topic : undefined)
     await ensurePlansDir()
     pushToolResult(
       state,

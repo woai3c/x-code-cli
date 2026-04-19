@@ -144,14 +144,14 @@ Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware str
 
 实际入口 `loop.ts:379`：AI 一旦发出 `enterPlanMode` 工具调用，`state.planMode = true`、生成 planId、`ensurePlansDir()`。后续每次 `buildSystemPrompt` 都会附加 `PLAN_MODE_PROMPT`（`system-prompt.ts:89`），限制 AI 只能用只读工具 + `writeFile` 写 `.x-code/plans/{planId}.md`。
 
-**命名改进**：完全可以也应该改。当前 `generatePlanId()` 是 `new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)`（`plan-mode.ts:8`），形如 `2026-04-18T10-23-45` 确实难读。
+**命名改进**：已落地（方案一）。原先 `generatePlanId()` 返回 `2026-04-18T10-23-45` 这样的纯时间戳，一眼看不出计划内容。
 
-两种可行做法：
+现在的实现（`plan-mode.ts`）：
 
-1. **给 `enterPlanMode` 工具加一个 `topic` / `slug` 参数**（tool 定义在 `tools/enter-plan-mode.ts`，schema 里加一个 string 字段），AI 调用时传 `enterPlanMode({ topic: "refactor-auth-middleware" })`，planId 改成 `${date}-${slug}`，既有时间戳保序又有语义。
-2. **进入 plan mode 后让 AI 先写一个 title 到 plan 文件开头**，退出时从文件里 grep 出来当归档名。
-
-第一种改动更小，推荐。大约 5 行改动：工具 schema + `generatePlanId(slug?: string)` + `loop.ts:381` 传参。
+- `enterPlanMode` 工具的 inputSchema 增加了必填字段 `topic`（3-6 个词，描述本计划要做什么），AI 在 tool-call 时顺手生成，不需要额外的 API 请求。
+- `generatePlanId(topic?: string)` 先把 topic 走 `slugify`（小写、非字母数字归一成 `-`、上限 40 字符），再拼接紧凑时间戳 `YYYYMMDD-HHmmss`。
+- 结果形如 `refactor-auth-middleware-20260419-0812.md`：slug 给辨识度，时间戳保证同主题重复调用不互相覆盖，按字典序仍可粗略排序。
+- `tool-execution.ts` 的 `enterPlanMode` 分支读 `input.topic` 传给 `generatePlanId`；缺省时仍回退到纯时间戳。
 
 ---
 

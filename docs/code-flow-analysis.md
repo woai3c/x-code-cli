@@ -706,7 +706,9 @@ processToolCalls(toolCalls, state, options, callbacks)  // tool-execution.ts
   for each toolCall:
   │
   ├─ enterPlanMode
-  │    → state.planMode = true, generatePlanId()
+  │    → state.planMode = true, generatePlanId(input.topic)
+  │       // topic 是 AI 在 tool-call 里顺手生成的短主题
+  │       // 最终 planId 形如 refactor-auth-middleware-20260419-0812
   │
   ├─ exitPlanMode
   │    → state.planMode = false, 读取计划文件内容
@@ -1301,7 +1303,7 @@ Ink 动态区 (底部固定)
 | Stream 工具   | `core/src/agent/stream-utils.ts`        | `StreamResult` 类型, `drainStreamResult()`                                        |
 | System Prompt | `core/src/agent/system-prompt.ts`       | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                                         |
 | 消息处理      | `core/src/agent/messages.ts`            | `userMessage()`, `toolResultMessage()`                                            |
-| 计划模式      | `core/src/agent/plan-mode.ts`           | `ensurePlansDir()`, `generatePlanId()`, `getPlanPath()`                           |
+| 计划模式      | `core/src/agent/plan-mode.ts`           | `ensurePlansDir()`, `generatePlanId(topic?)`, `getPlanPath()`                     |
 | 工具注册      | `core/src/tools/index.ts`               | `toolRegistry`, `truncateToolResult()`                                            |
 | 权限系统      | `core/src/permissions/index.ts`         | `checkPermission()`, `getPermissionLevel()`                                       |
 | 知识加载      | `core/src/knowledge/loader.ts`          | `buildKnowledgeContext()`, AGENTS.md 向上遍历                                     |
