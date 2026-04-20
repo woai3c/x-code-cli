@@ -29,7 +29,7 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } fro
 
 import { useStdout } from 'ink'
 
-import { getPermissionLevel } from '@x-code-cli/core'
+import { debugLog, getPermissionLevel } from '@x-code-cli/core'
 import type { DisplayMessage } from '@x-code-cli/core'
 
 import { usePromptInput } from '../hooks/use-prompt-input.js'
@@ -247,6 +247,61 @@ const RESTORE_CURSOR = '\x1b8'
 const BSU = '\x1b[?2026h'
 const ESU = '\x1b[?2026l'
 
+/**
+ * Build an ANSI escape sequence that inserts `content` into scrollback
+ * ABOVE the cell buffer at the bottom of the terminal, using a DECSTBM
+ * scroll region to fence the insertion off from the cell buffer rows.
+ *
+ * Why this exists: previously we "erased the cell buffer, wrote the new
+ * message where the cell buffer used to be, then redrew the cell buffer".
+ * That approach relies on terminal cursor arithmetic that breaks as soon
+ * as content wraps or the terminal scrolls during the write, producing
+ * duplicated bullet-list renders in Windows Terminal / PowerShell
+ * (tracked via log: 每个 chunk 只 emit 一次但屏幕上出现多份).
+ *
+ * The DECSTBM approach is the pattern codex-rs uses (insert_history.rs,
+ * Standard mode). A scroll region is set to `[1, termRows - cellBufH]`,
+ * excluding the cell buffer rows. Cursor moves to the bottom of that
+ * region. For each new line we emit `\r\n + line`: the `\n` at the
+ * bottom of the scroll region scrolls the region up by 1 (top row
+ * scrolls off into the terminal's scrollback, exactly what we want),
+ * freeing the bottom row, which is then filled with the line content.
+ *
+ * Before/after we save/restore the cursor via DECSC/DECRC so the cell
+ * buffer's subsequent frame diff is cursor-position-neutral — the cell
+ * buffer literally does not move, and the cell-diff path after this
+ * runs exactly as if the insertion never happened.
+ */
+function buildInsertHistoryAbove(content: string, cellBufHeight: number, termRows: number): string {
+  if (!content) return ''
+  // Degenerate cases: no cell buffer yet (first paint), or cell buffer
+  // eats the whole screen. Fall back to a plain write — the terminal's
+  // default scroll handles it, and cursor position doesn't matter
+  // because a subsequent cell-diff will rebuild from scratch.
+  if (cellBufHeight <= 0 || termRows < 2 || cellBufHeight >= termRows) return content
+
+  const regionBottom = termRows - cellBufHeight // 1-based: last row of scroll region
+  const lines = content.split('\n')
+  // If content ends with `\n`, split produces a trailing '' — drop it so
+  // we don't emit a phantom trailing scroll step.
+  if (lines[lines.length - 1] === '') lines.pop()
+  if (lines.length === 0) return ''
+
+  let out = SAVE_CURSOR // DECSC — anchor return point
+  out += `\x1b[1;${regionBottom}r` // DECSTBM: scroll region = rows above cell buffer
+  out += `\x1b[${regionBottom};1H` // move to bottom-left of that region
+  for (const line of lines) {
+    // `\r\n` at the bottom of the scroll region scrolls the region up
+    // (top row goes to terminal scrollback), leaves the cursor at
+    // column 1 of the (same-physical, newly-empty) bottom row, which
+    // then gets filled by `line`.
+    out += '\r\n' + line
+  }
+  out += '\x1b[r' // reset scroll region to full screen
+  out += RESTORE_CURSOR // DECRC — return cursor to end of cell buffer
+  return out
+}
+
 function textToCells(text: string, style: string): Cell[] {
   const cells: Cell[] = []
   for (const ch of text) cells.push({ char: ch, style, width: charWidth(ch) })
@@ -390,6 +445,7 @@ export function ChatInput({
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
+  const termRows = stdout?.rows ?? 24
 
   // ── Fuzzy matching ──
   const matches = useMemo(() => {
@@ -648,28 +704,41 @@ export function ChatInput({
     }
 
     // ── Commit new scrollback messages ───────────────────────────────────
-    // We own the terminal below the header — messages are NOT written via
-    // Ink (MessageList is retired). If new messages arrived since the last
-    // render, erase our current cell frame, emit the messages as plain
-    // scrollback by appending to preBuf, and then redraw the frame fresh
-    // below them. prevFrameRef is cleared so the next cell-diff starts
-    // from zero at the new cursor position.
+    // We own the terminal below the header. Once the cell buffer is
+    // active, new messages are inserted ABOVE the cell buffer using a
+    // DECSTBM scroll region (buildInsertHistoryAbove) — this is
+    // cursor-position-neutral, so the cell buffer literally doesn't move
+    // and the cell-diff pass after this runs unchanged. Before the cell
+    // buffer ever paints (first submit), we just write plain messages —
+    // the terminal's default scroll handles placement.
     //
     // A /clear command may shrink messages; detect and reset the counter.
     if (messages.length < writtenMessageCountRef.current) {
       writtenMessageCountRef.current = messages.length
     }
     if (messages.length > writtenMessageCountRef.current) {
-      if (activeRef.current) {
-        preBuf += buildEraseRegion()
-      }
+      let newMessagesBuf = ''
       const collectWrite: (data: string) => void = (data) => {
-        preBuf += data
+        newMessagesBuf += data
       }
       for (let i = writtenMessageCountRef.current; i < messages.length; i++) {
         writeMessageToStdout(collectWrite, messages[i])
       }
       writtenMessageCountRef.current = messages.length
+
+      if (activeRef.current) {
+        const cellBufHeight = prevFrameRef.current.length
+        preBuf += buildInsertHistoryAbove(newMessagesBuf, cellBufHeight, termRows)
+        debugLog(
+          'chatinput.history-insert',
+          `lines=${newMessagesBuf.split('\n').length - 1} cellBufH=${cellBufHeight} termRows=${termRows}`,
+        )
+      } else {
+        // First paint — no cell buffer yet. Just write plainly; the
+        // frame below will be drawn fresh at whatever cursor position
+        // the terminal leaves us at.
+        preBuf += newMessagesBuf
+      }
     }
 
     activeRef.current = true
@@ -965,7 +1034,13 @@ export function ChatInput({
     // scrollback commits) + frame diff + SAVE_CURSOR + ESU. One write()
     // = one atomic paint on every terminal, not just those with DEC 2026
     // support — this is what eliminates the streaming flicker.
-    process.stdout.write(preBuf + buf + SAVE_CURSOR + ESU)
+    const payload = preBuf + buf + SAVE_CURSOR + ESU
+    debugLog(
+      'chatinput.flush',
+      `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
+    )
+    const ok = process.stdout.write(payload)
+    if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
 
     prevFrameRef.current = frame
   })

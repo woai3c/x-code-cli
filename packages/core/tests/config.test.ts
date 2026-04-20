@@ -1,10 +1,22 @@
 // Tests for config module
+import os from 'node:os'
+import path from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { getAvailableProviders, resolveModelId } from '../src/config/index.js'
 
+/** Redirect config.json reads to an empty tmpdir so the real user's
+ *  ~/.x-code/config.json (possibly written by a recent /model switch)
+ *  can't contaminate these assertions. */
+function isolateUserConfig(): void {
+  const tmp = path.join(os.tmpdir(), 'x-code-config-test-' + Math.random().toString(36).slice(2))
+  process.env.X_CODE_HOME = tmp
+}
+
 describe('resolveModelId', () => {
   beforeEach(() => {
+    isolateUserConfig()
     delete process.env.X_CODE_MODEL
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.OPENAI_API_KEY
@@ -12,6 +24,7 @@ describe('resolveModelId', () => {
   })
 
   afterEach(() => {
+    delete process.env.X_CODE_HOME
     delete process.env.X_CODE_MODEL
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.OPENAI_API_KEY

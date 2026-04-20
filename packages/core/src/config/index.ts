@@ -80,6 +80,12 @@ export interface UserConfig {
 }
 
 function userConfigPath(): string {
+  // `X_CODE_HOME` overrides the config directory — used by tests to point
+  // at a scratch tmpdir so the real user's config doesn't leak into
+  // assertions, and available to end users who want to sandbox the CLI's
+  // state. Falls through to `~/.x-code` otherwise.
+  const override = process.env.X_CODE_HOME
+  if (override) return path.join(override, 'config.json')
   return path.join(GLOBAL_XCODE_DIR, 'config.json')
 }
 
