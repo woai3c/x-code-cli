@@ -42,9 +42,18 @@ const entitiesFixPlugin = {
   },
 }
 
-// Plugin to fix signal-exit ESM/CJS interop
-// signal-exit@3 exports a single CJS function (module.exports = fn), so the default import IS the onExit function.
-// Ink expects `import { onExit } from 'signal-exit'`, so we alias default → onExit.
+// Plugin to fix signal-exit ESM/CJS interop.
+// signal-exit@4 (what's actually installed via Ink's dep tree) has NO default
+// export in either its ESM or CJS build — only named `onExit`. Earlier versions
+// had `module.exports = fn` which esbuild's CJS→ESM synth would sometimes
+// expose as a default, depending on which file esbuild's module graph
+// resolved to that build. That's what caused the intermittent
+// "No matching export ... for import 'default'" failures: same shim, but
+// esbuild's parallel worker state / cache decided between ESM (truly no
+// default) and CJS (synthetic default) non-deterministically.
+// Fix: re-export the real named `onExit` under both names so consumers
+// using `import { onExit }` and `import onExit` (default) both work — and
+// the import from the real module is a named one that exists in every build.
 const signalExitFixPlugin = {
   name: 'fix-signal-exit-default',
   setup(build) {
@@ -58,7 +67,7 @@ const signalExitFixPlugin = {
       }
     })
     build.onLoad({ filter: /.*/, namespace: 'signal-exit-shim' }, (args) => ({
-      contents: `export { default as default, default as onExit } from 'signal-exit';`,
+      contents: `export { onExit, onExit as default } from 'signal-exit';`,
       loader: 'js',
       resolveDir: args.pluginData.resolveDir,
     }))
