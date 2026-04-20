@@ -48,9 +48,11 @@ export async function generateSessionSummary(
   sessionId: string,
   startedAt: string,
   filesModified: string[],
+  signal?: AbortSignal,
 ): Promise<SessionSummary> {
   const { text } = await generateText({
     model,
+    abortSignal: signal,
     messages: [
       {
         role: 'system',

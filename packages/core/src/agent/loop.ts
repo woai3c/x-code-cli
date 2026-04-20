@@ -154,6 +154,14 @@ async function runTurn(
       tools: toolRegistry,
       maxRetries: 3,
       abortSignal: options.abortSignal,
+      // Explicit ceiling so provider defaults don't silently truncate long
+      // replies. Anthropic defaults to 4096 which is easily blown by a
+      // reasoning model (reasoning + output share the budget) producing a
+      // long-form answer. 32000 covers DeepSeek-reasoner at its max, Claude
+      // well within hard cap, and the AI SDK clamps the value down for
+      // providers with a lower ceiling (e.g. GPT-4.1 → 16k) instead of
+      // failing the request — so one global value is safe for all targets.
+      maxOutputTokens: 32000,
     }) as unknown as StreamResult
   } catch (err) {
     callbacks.onError(new Error(classifyApiError(err).message))
@@ -210,6 +218,14 @@ export async function agentLoop(
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
 
+  // Auto-continuation on `length` finish. Reasoning models can exhaust the
+  // output token budget before the user-visible reply completes — the old
+  // behavior was to stop mid-sentence and surface an error, which looks
+  // broken to the user. Instead, we push a short "continue" nudge and loop,
+  // capped so a pathologically runaway reply still terminates eventually.
+  const MAX_CONTINUATIONS = 3
+  let continuationAttempts = 0
+
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
 
@@ -232,6 +248,9 @@ export async function agentLoop(
     }
 
     if (outcome.finishReason === 'tool-calls') {
+      // Any successful tool round means the model is making real progress —
+      // reset the consecutive-truncation counter.
+      continuationAttempts = 0
       let toolCalls: Awaited<StreamResult['toolCalls']>
       try {
         toolCalls = await outcome.result.toolCalls
@@ -241,6 +260,31 @@ export async function agentLoop(
       }
       await processToolCalls(toolCalls, state, options, callbacks)
       continue
+    }
+
+    if (outcome.finishReason === 'length') {
+      if (continuationAttempts < MAX_CONTINUATIONS) {
+        continuationAttempts++
+        // Nudge the model to pick up exactly where it stopped. This goes
+        // into state.messages but NOT into UI messages, so the user sees
+        // one continuous streamed reply with at most a brief pause.
+        state.messages.push({
+          role: 'user',
+          content:
+            'Output token limit hit. Resume directly — no apology, no recap. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.',
+        })
+        continue
+      }
+      callbacks.onError(
+        new Error(
+          `Response still truncated after ${MAX_CONTINUATIONS} continuation attempts — ask a narrower question.`,
+        ),
+      )
+      break
+    }
+
+    if (outcome.finishReason === 'content-filter') {
+      callbacks.onError(new Error('Response stopped by the provider content filter.'))
     }
 
     break
@@ -253,14 +297,31 @@ export async function agentLoop(
   return state
 }
 
-/** Save session on exit. */
-export async function saveSession(state: LoopState, model: LanguageModel): Promise<void> {
+/** Save session on exit. Summary generation makes an LLM call that can be
+ *  slow, so we bound it with a 2s timeout — on Ctrl+C we want to return
+ *  to the shell promptly, not wait for a roundtrip. If the timeout fires
+ *  or the call fails, we silently skip (session summaries are nice-to-have,
+ *  not critical for exit). */
+export async function saveSession(
+  state: LoopState,
+  model: LanguageModel,
+  timeoutMs = 2000,
+): Promise<void> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
-      ...state.filesModified,
-    ])
+    const summary = await generateSessionSummary(
+      state.messages,
+      model,
+      state.sessionId,
+      state.startedAt,
+      [...state.filesModified],
+      controller.signal,
+    )
     await saveSessionSummary(summary)
   } catch {
-    // Don't crash on session save failure
+    // Timeout or any other failure — skip summary silently.
+  } finally {
+    clearTimeout(timer)
   }
 }
