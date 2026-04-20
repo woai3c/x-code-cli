@@ -50,12 +50,32 @@ function checkNodeVersion(): void {
 //   waitUntilExit() → cleanup → printExitSummary → process.exit(0)
 let shutdownInProgress = false
 
+// Belt-and-suspenders terminal restore. Runs synchronously before exit so even
+// if Ink's unmount is partially broken (e.g. a useEffect cleanup threw, or the
+// raw-mode ref-count leaked over a long session), the terminal is still left
+// in a usable state. Safe to call multiple times — each escape is idempotent.
+function resetTerminal(): void {
+  if (!process.stdout.isTTY) return
+  try {
+    fs.writeSync(1, '\x1b[?2004l') // disable bracketed paste
+    fs.writeSync(1, '\x1b[?25h') // show cursor
+    fs.writeSync(1, '\x1b[?1049l') // exit alt screen (if ever entered)
+    if (process.stdin.isTTY) process.stdin.setRawMode(false)
+  } catch {
+    // Terminal may already be closed (SIGHUP, SSH disconnect) — ignore.
+  }
+}
+
 async function gracefulShutdown(exitCode: number): Promise<never> {
   if (shutdownInProgress) return undefined as never
   shutdownInProgress = true
 
-  // Safety net — guarantee exit even if cleanup hangs
-  const failsafeTimer = setTimeout(() => process.exit(exitCode), 5000)
+  // Safety net — guarantee exit even if cleanup hangs. Also reset the terminal
+  // from the failsafe path in case we never reach the normal reset below.
+  const failsafeTimer = setTimeout(() => {
+    resetTerminal()
+    process.exit(exitCode)
+  }, 5000)
   failsafeTimer.unref()
 
   process.exitCode = exitCode
@@ -67,6 +87,7 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
     // Don't crash on cleanup failure
   }
 
+  resetTerminal()
   printExitSummary()
   process.exit(exitCode)
 }
@@ -244,14 +265,27 @@ function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     let data = ''
     process.stdin.setEncoding('utf-8')
-    process.stdin.on('data', (chunk: string) => {
+
+    const onData = (chunk: string): void => {
       data += chunk
-    })
-    process.stdin.on('end', () => {
+    }
+    const onEnd = (): void => {
+      cleanup()
       resolve(data)
-    })
+    }
+    const cleanup = (): void => {
+      process.stdin.off('data', onData)
+      process.stdin.off('end', onEnd)
+      clearTimeout(timer)
+    }
+
+    process.stdin.on('data', onData)
+    process.stdin.on('end', onEnd)
     // Timeout for stdin — don't hang forever
-    setTimeout(() => resolve(data), 1000)
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve(data)
+    }, 1000)
   })
 }
 

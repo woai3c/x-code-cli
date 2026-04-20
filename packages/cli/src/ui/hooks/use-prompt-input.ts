@@ -116,6 +116,7 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       stdin.on('data', handleCtrlC)
       return () => {
         stdin.off('data', handleCtrlC)
+        setRawMode(false)
       }
     }
 
@@ -320,6 +321,7 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       if (useBracketedPaste) {
         process.stdout.write(DISABLE_BRACKETED_PASTE)
       }
+      setRawMode(false)
     }
   }, [enabled, stdin, setRawMode])
 }
