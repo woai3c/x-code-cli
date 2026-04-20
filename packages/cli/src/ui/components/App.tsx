@@ -16,7 +16,6 @@ interface AppProps {
   options: AgentOptions
   initialPrompt?: string
   onCleanupReady?: (fn: () => Promise<void>) => void
-  onUsageUpdate?: (usage: import('@x-code-cli/core').TokenUsage, modelId: string) => void
 }
 
 /** Slash commands — used for both help text and tab completion */
@@ -38,7 +37,7 @@ const HELP_TEXT =
   `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
   `\nKeyboard: ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} to abort current operation`
 
-export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpdate }: AppProps) {
+export function App({ model, options, initialPrompt, onCleanupReady }: AppProps) {
   const { exit } = useApp()
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
@@ -60,11 +59,6 @@ export function App({ model, options, initialPrompt, onCleanupReady, onUsageUpda
   useEffect(() => {
     onCleanupReady?.(cleanup)
   }, [cleanup]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync usage to the global ref so exit handler can print it
-  useEffect(() => {
-    onUsageUpdate?.(state.usage, options.modelId)
-  }, [state.usage, options.modelId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle initial prompt
   useEffect(() => {

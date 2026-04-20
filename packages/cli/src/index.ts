@@ -18,7 +18,7 @@ import {
 } from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
 
-import { getCleanupFn, printExitSummary, startApp } from './app.js'
+import { getCleanupFn, startApp } from './app.js'
 import { VERSION } from './version.js'
 
 const MIN_NODE_VERSION = [20, 19, 0]
@@ -39,15 +39,16 @@ function checkNodeVersion(): void {
   }
 }
 
-// ── Graceful shutdown (aligned with Claude Code's pattern) ──────────────
+// ── Graceful shutdown ────────────────────────────────────────────────────
 //
-// Claude Code's approach: SIGINT sets process.exitCode=0 as a safety net,
-// then Ink unmounts → waitUntilExit() resolves → gracefulShutdown() runs
-// cleanup → process.exit(0). There's no race between competing exit paths.
+// Single Ctrl+C path:
+//   waitUntilExit() → gracefulShutdown() → resetTerminal → process.exit(0)
 //
-// We follow the same pattern: the SIGINT handler only marks the exit code
-// and (on double Ctrl+C) forces exit. The normal path is:
-//   waitUntilExit() → cleanup → printExitSummary → process.exit(0)
+// Session save runs as fire-and-forget (not awaited) so it doesn't block
+// exit. Token-usage summary is NOT printed on exit — none of the other
+// four CLIs we compared (claude-code, codex, gemini-cli, opencode) do,
+// and the delayed stdout flush made it appear after the shell prompt,
+// confusing users.
 let shutdownInProgress = false
 
 // Belt-and-suspenders terminal restore. Runs synchronously before exit so even
@@ -57,9 +58,11 @@ let shutdownInProgress = false
 function resetTerminal(): void {
   if (!process.stdout.isTTY) return
   try {
+    fs.writeSync(1, '\x1b[0m') // reset SGR (colors, bold, inverse, ...) so the shell prompt isn't styled
     fs.writeSync(1, '\x1b[?2004l') // disable bracketed paste
     fs.writeSync(1, '\x1b[?25h') // show cursor
     fs.writeSync(1, '\x1b[?1049l') // exit alt screen (if ever entered)
+    fs.writeSync(1, '\r\n') // land the shell prompt on a fresh line
     if (process.stdin.isTTY) process.stdin.setRawMode(false)
   } catch {
     // Terminal may already be closed (SIGHUP, SSH disconnect) — ignore.
@@ -70,25 +73,20 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   if (shutdownInProgress) return undefined as never
   shutdownInProgress = true
 
-  // Safety net — guarantee exit even if cleanup hangs. Also reset the terminal
-  // from the failsafe path in case we never reach the normal reset below.
-  const failsafeTimer = setTimeout(() => {
-    resetTerminal()
-    process.exit(exitCode)
-  }, 5000)
-  failsafeTimer.unref()
-
-  process.exitCode = exitCode
-
-  try {
-    const cleanup = getCleanupFn()
-    if (cleanup) await cleanup()
-  } catch {
-    // Don't crash on cleanup failure
-  }
+  // Kick off cleanup as best-effort in the background, but don't block the
+  // exit on it. saveSession internally calls the model to generate a summary
+  // which can take seconds — that was the "press Ctrl+C and wait 2-5 seconds"
+  // UX problem. None of the competitors (claude-code, gemini-cli, opencode,
+  // codex) make users wait for anything on exit; we align with them.
+  //
+  // Consequence: if the process exits before saveSession's file write lands,
+  // that session isn't saved. Acceptable trade-off given users care far more
+  // about exit speed than about session summaries. A future improvement is
+  // incremental saves during the session (opencode's approach).
+  const cleanup = getCleanupFn()
+  if (cleanup) cleanup().catch(() => undefined)
 
   resetTerminal()
-  printExitSummary()
   process.exit(exitCode)
 }
 
@@ -176,6 +174,14 @@ async function main() {
   // Combine prompt with stdin
   const fullPrompt = [stdinContent, prompt].filter(Boolean).join('\n\n')
 
+  // Heads-up: WebSearch needs a key. Print once, before Ink takes over, so
+  // the hint lands in scrollback above the TUI. Not fatal — WebFetch still
+  // works key-less, and the tool itself returns a detailed error if invoked
+  // without a key configured.
+  if (!process.env.TAVILY_API_KEY && !process.env.BRAVE_API_KEY) {
+    printNoWebSearchKeyHint()
+  }
+
   // Start the app — waitUntilExit resolves when Ink unmounts (including on Ctrl+C)
   const waitUntilExit = startApp(model, options, fullPrompt || undefined)
   await waitUntilExit()
@@ -247,6 +253,41 @@ function printNoApiKeyMessage() {
   console.error(`\nAlternatively, put keys in a project-local ${chalk.bold('.env')} file (loaded from cwd upward).`)
 }
 
+function printNoWebSearchKeyHint(): void {
+  const shell = detectShell()
+  const yellow = chalk.yellow
+  const bold = chalk.bold
+  const dim = chalk.gray
+  const code = chalk.cyan
+
+  console.error(yellow('Note:') + ' WebSearch is disabled — no search API key configured.')
+  console.error(dim('  (WebFetch still works key-less; the hint is only for web search.)'))
+  console.error('  Pick either (both free, signup only):')
+  console.error(`    ${bold('TAVILY_API_KEY')}  ${dim('1000/month — https://tavily.com')}`)
+  console.error(`    ${bold('BRAVE_API_KEY')}   ${dim('2000/month — https://api.search.brave.com')}`)
+
+  let cmd: string
+  switch (shell) {
+    case 'powershell':
+      cmd = `[Environment]::SetEnvironmentVariable('TAVILY_API_KEY','tvly-...','User')`
+      break
+    case 'cmd':
+      cmd = `setx TAVILY_API_KEY "tvly-..."`
+      break
+    case 'zsh':
+      cmd = `echo 'export TAVILY_API_KEY=tvly-...' >> ~/.zshrc && source ~/.zshrc`
+      break
+    case 'fish':
+      cmd = `set -Ux TAVILY_API_KEY tvly-...`
+      break
+    case 'bash':
+    default:
+      cmd = `echo 'export TAVILY_API_KEY=tvly-...' >> ~/.bashrc && source ~/.bashrc`
+      break
+  }
+  console.error(`  ${dim(`(${shell})`)}  ${code(cmd)}\n`)
+}
+
 function detectShell(): 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | 'sh' {
   if (process.platform === 'win32') {
     // PowerShell sets PSModulePath; CMD typically doesn't (and no PSHOME).
@@ -298,6 +339,11 @@ process.on('SIGINT', () => {
   sigintCount++
   process.exitCode = 0
   if (sigintCount >= 2) {
+    // Double Ctrl+C → user wants out NOW. Skip async cleanup (gracefulShutdown
+    // was already running from the first press) but ALWAYS restore the terminal
+    // so the shell prompt is usable. Without this reset, raw mode / hidden
+    // cursor / bracketed paste mode can leak into the shell.
+    resetTerminal()
     process.exit(0)
   }
 })
