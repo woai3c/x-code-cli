@@ -1,10 +1,18 @@
 // @x-code-cli/core — Configuration resolution
 //
-// Everything comes from environment variables. API keys are mandatory and
-// live in provider-specific env vars; the default model is an optional
-// preference in X_CODE_MODEL. There is no config file — if the user wants
-// to pin a default model, they export X_CODE_MODEL or pass --model each time.
+// API keys always come from environment variables (provider-specific keys
+// like ANTHROPIC_API_KEY / ALIBABA_API_KEY — never stored on disk).
+//
+// The default **model** can come from three sources, in precedence order:
+//   1. `--model` CLI flag (explicit `input` arg)
+//   2. `X_CODE_MODEL` environment variable
+//   3. `~/.x-code/config.json` `model` field — written by `/model` picker
+// If none of the above, smart-default picks the first provider with a key.
+import fsSync from 'node:fs'
+import path from 'node:path'
+
 import { MODEL_ALIASES, PROVIDER_DETECTION_ORDER } from '../types/index.js'
+import { GLOBAL_XCODE_DIR } from '../utils.js'
 
 /** Provider → environment variable mapping */
 const ENV_MAP: Record<string, string> = {
@@ -39,16 +47,17 @@ export function getAvailableProviders(): string[] {
 }
 
 /**
- * Resolve a model ID with three levels of precedence:
+ * Resolve a model ID with four levels of precedence:
  *   1. Explicit `input` (e.g. --model CLI flag)
  *   2. `X_CODE_MODEL` environment variable
- *   3. Smart default: first provider (by PROVIDER_DETECTION_ORDER) with an API key
+ *   3. `~/.x-code/config.json` `model` field (written by the /model picker)
+ *   4. Smart default: first provider (by PROVIDER_DETECTION_ORDER) with an API key
  *
  * Aliases in MODEL_ALIASES (e.g. "sonnet" → "anthropic:claude-sonnet-4-5")
  * are expanded at all levels. Returns null if no provider is configured.
  */
 export function resolveModelId(input?: string): string | null {
-  const explicit = input ?? process.env.X_CODE_MODEL
+  const explicit = input ?? process.env.X_CODE_MODEL ?? loadUserConfig().model
   if (explicit) {
     return MODEL_ALIASES[explicit] ?? explicit
   }
@@ -58,6 +67,46 @@ export function resolveModelId(input?: string): string | null {
   }
 
   return null
+}
+
+// ── User config file (~/.x-code/config.json) ────────────────────────────
+//
+// Only persistent preference right now is `model` — the id the /model
+// picker most recently committed. API keys are deliberately NOT stored
+// here (env-var only, see header comment).
+
+export interface UserConfig {
+  model?: string
+}
+
+function userConfigPath(): string {
+  return path.join(GLOBAL_XCODE_DIR, 'config.json')
+}
+
+/** Read the user config. Returns empty object on any failure (missing file,
+ *  parse error, wrong shape) so callers don't have to null-check. */
+export function loadUserConfig(): UserConfig {
+  try {
+    const raw = fsSync.readFileSync(userConfigPath(), 'utf-8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as UserConfig
+    }
+  } catch {
+    // File may not exist yet, or is malformed — either way fall through to {}
+  }
+  return {}
+}
+
+/** Write a partial update into the user config, preserving other keys. */
+export function saveUserConfig(update: Partial<UserConfig>): void {
+  const merged: UserConfig = { ...loadUserConfig(), ...update }
+  try {
+    fsSync.mkdirSync(GLOBAL_XCODE_DIR, { recursive: true })
+    fsSync.writeFileSync(userConfigPath(), JSON.stringify(merged, null, 2) + '\n', 'utf-8')
+  } catch {
+    // Best-effort: don't crash the UI if the config dir is read-only.
+  }
 }
 
 /** Build provider options with API keys from env vars */

@@ -1,9 +1,17 @@
 // @x-code-cli/cli — Root App component
-import React, { useEffect } from 'react'
+import { useEffect } from 'react'
 
 import { Box, useApp, useStdout } from 'ink'
 
-import { MODEL_ALIASES, createModelRegistry, initProject, resolveModelId } from '@x-code-cli/core'
+import {
+  MODEL_ALIASES,
+  PROVIDER_MODELS,
+  createModelRegistry,
+  getAvailableProviders,
+  initProject,
+  resolveModelId,
+  saveUserConfig,
+} from '@x-code-cli/core'
 import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
@@ -21,7 +29,7 @@ interface AppProps {
 /** Slash commands — used for both help text and tab completion */
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
-  { name: '/model', description: 'Switch model or list available models' },
+  { name: '/model', description: 'Pick a model (no-arg = interactive) — choice is saved' },
   { name: '/usage', description: 'Show token usage' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
@@ -53,6 +61,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,
+    askQuestion,
   } = useAgent(model, options)
 
   // Register cleanup function for graceful exit (SIGINT)
@@ -148,29 +157,79 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     await submit(text)
   }
 
-  function handleModelSwitch(arg: string) {
-    if (!arg) {
-      // List available models
-      const aliases = Object.entries(MODEL_ALIASES)
-        .map(([alias, id]) => `  ${alias} → ${id}`)
-        .join('\n')
-      addInfoMessage(`Current model: ${options.modelId}\n\nAvailable aliases:\n${aliases}`)
-      return
-    }
-
+  /**
+   * Commit a model switch: rebuild the provider registry (so the new
+   * provider's env-var API key is picked up), swap the live language-model
+   * reference, persist to the user config, and echo a confirmation message.
+   */
+  function commitModelChange(newModelId: string) {
     try {
+      const registry = createModelRegistry()
+      const newModel = registry.languageModel(newModelId as `${string}:${string}`)
+      switchModel(newModelId, newModel)
+      saveUserConfig({ model: newModelId })
+      addInfoMessage(`Model switched to: ${newModelId}\n(saved — will be used on next startup)`)
+    } catch (err) {
+      addInfoMessage(`Failed to switch model: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleModelSwitch(arg: string) {
+    // With an explicit arg: keep the old scriptable path (alias or full id).
+    if (arg) {
       const newModelId = resolveModelId(arg)
       if (!newModelId) {
         addInfoMessage(`Could not resolve model: ${arg}`)
         return
       }
-      const registry = createModelRegistry()
-      const newModel = registry.languageModel(newModelId as `${string}:${string}`)
-      switchModel(newModelId, newModel)
-      addInfoMessage(`Model switched to: ${newModelId}`)
-    } catch (err) {
-      addInfoMessage(`Failed to switch model: ${err instanceof Error ? err.message : String(err)}`)
+      commitModelChange(newModelId)
+      return
     }
+
+    // No arg → interactive picker. Enumerate models whose provider has a
+    // configured API key so the list is actionable, not aspirational.
+    const providers = new Set(getAvailableProviders())
+    const choices: { id: string; label: string; description: string }[] = []
+    for (const [provider, models] of Object.entries(PROVIDER_MODELS)) {
+      if (!providers.has(provider)) continue
+      for (const m of models) {
+        const marker = m.id === state.modelId ? '● ' : '  '
+        choices.push({ id: m.id, label: `${marker}${m.label}`, description: `${m.id} — ${m.description}` })
+      }
+    }
+
+    if (choices.length === 0) {
+      addInfoMessage(
+        'No models available — set an API key (e.g. `ANTHROPIC_API_KEY`, `ALIBABA_API_KEY`) and restart.',
+      )
+      return
+    }
+
+    // askQuestion resolves to the chosen option's LABEL (not id). The
+    // SelectOptions dialog is designed for human-readable choices, so we
+    // look the id back up via the label we pushed.
+    const answer = await askQuestion(
+      `Current: ${state.modelId}\nPick a model (● = current):`,
+      choices.map((c) => ({ label: c.label, description: c.description })),
+    )
+    const picked = choices.find((c) => c.label === answer)
+    if (!picked) {
+      // User chose "Other" or typed something free-form. Treat it as a
+      // direct model id / alias so power users can still jump to exotic
+      // models the picker doesn't list.
+      const resolved = resolveModelId(answer)
+      if (!resolved) {
+        addInfoMessage(`Could not resolve model: ${answer}`)
+        return
+      }
+      commitModelChange(resolved)
+      return
+    }
+    if (picked.id === state.modelId) {
+      addInfoMessage(`Already on ${picked.id} — no change.`)
+      return
+    }
+    commitModelChange(picked.id)
   }
 
   function handleUsage() {
@@ -180,7 +239,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
         `  Input:    ${usage.inputTokens.toLocaleString()} tokens\n` +
         `  Output:   ${usage.outputTokens.toLocaleString()} tokens\n` +
         `  Total:    ${usage.totalTokens.toLocaleString()} tokens\n` +
-        `  Model:    ${options.modelId}`,
+        `  Model:    ${state.modelId}`,
     )
   }
 

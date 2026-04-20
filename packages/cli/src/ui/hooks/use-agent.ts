@@ -36,9 +36,11 @@ export interface AgentState {
   pendingQuestion: PendingQuestion | null
   usage: TokenUsage
   error: string | null
+  /** Live model id — mirrors modelIdRef so UI can re-render on /model change. */
+  modelId: string
 }
 
-const initialState: AgentState = {
+const initialState: Omit<AgentState, 'modelId'> = {
   messages: [],
   isLoading: false,
   currentToolCall: null,
@@ -50,7 +52,7 @@ const initialState: AgentState = {
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
-  const [state, setState] = useState<AgentState>(initialState)
+  const [state, setState] = useState<AgentState>({ ...initialState, modelId: options.modelId })
 
   const modelRef = useRef<LanguageModel>(initialModel)
   const modelIdRef = useRef<string>(options.modelId)
@@ -229,6 +231,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     })
   }, [])
 
+  /** Pop a multi-choice question for the user. Same SelectOptions dialog
+   *  that `askUser` uses, exposed for slash commands like /model that need
+   *  an interactive picker. Returns a promise that resolves to the label
+   *  the user chose (or the free-form "Other" text). */
+  const askQuestion = useCallback((question: string, options: { label: string; description: string }[]) => {
+    return new Promise<string>((resolve) => {
+      setState((prev) => ({ ...prev, pendingQuestion: { question, options, resolve } }))
+    })
+  }, [])
+
   /** Abort current operation */
   const abort = useCallback(() => {
     abortControllerRef.current?.abort()
@@ -255,7 +267,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   const clear = useCallback(() => {
     loopStateRef.current = null
     resetBuffer()
-    setState(initialState)
+    // Preserve the current live model id when clearing — user expects the
+    // model they just picked to stay after /clear.
+    setState((prev) => ({ ...initialState, modelId: prev.modelId }))
   }, [resetBuffer])
 
   /** Manual context compression */
@@ -268,6 +282,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   const switchModel = useCallback((newModelId: string, newModel: LanguageModel) => {
     modelRef.current = newModel
     modelIdRef.current = newModelId
+    setState((prev) => ({ ...prev, modelId: newModelId }))
   }, [])
 
   /** Add a system/info message (for slash command output) */
@@ -309,5 +324,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,
+    askQuestion,
   }
 }

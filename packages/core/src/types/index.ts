@@ -131,6 +131,64 @@ export const PROVIDER_DETECTION_ORDER = [
   { envKey: 'MOONSHOT_API_KEY', defaultModel: 'moonshotai:kimi-k2.5' },
 ] as const
 
+// ─── Curated model catalog per provider (for interactive /model picker) ───
+
+export interface ProviderModel {
+  /** Full `<provider>:<model>` id passed to AI SDK */
+  id: string
+  /** Short display label shown in the picker */
+  label: string
+  /** One-line description shown under the label */
+  description: string
+}
+
+/**
+ * Hand-curated models per provider. Only models we've tested or that are
+ * advertised as production-stable make the list — agents tend to pick
+ * whatever is visible, so we don't dump every experimental variant here.
+ * Users who need something exotic can still type the full id into
+ * `/model <provider>:<model>` or pass it via `--model`.
+ */
+export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
+  anthropic: [
+    { id: 'anthropic:claude-sonnet-4-5', label: 'Sonnet 4.5', description: 'Balanced default — good for coding + reasoning' },
+    { id: 'anthropic:claude-opus-4-6', label: 'Opus 4.6', description: 'Most capable, slower and pricier' },
+    { id: 'anthropic:claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest, cheapest — shorter replies' },
+  ],
+  openai: [
+    { id: 'openai:gpt-4.1', label: 'GPT-4.1', description: 'General-purpose, 1M context window' },
+    { id: 'openai:gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Cheaper tier of 4.1, 1M context' },
+    { id: 'openai:o3', label: 'o3', description: 'Reasoning model — slower, stronger on hard problems' },
+    { id: 'openai:o4-mini', label: 'o4-mini', description: 'Smaller reasoning model' },
+  ],
+  deepseek: [
+    { id: 'deepseek:deepseek-chat', label: 'DeepSeek V3 (chat)', description: 'General-purpose, 64k context' },
+    { id: 'deepseek:deepseek-reasoner', label: 'DeepSeek R1', description: 'Reasoning model, 128k context' },
+  ],
+  alibaba: [
+    { id: 'alibaba:qwen-max', label: 'Qwen Max', description: 'Strongest general Qwen, 128k context' },
+    { id: 'alibaba:qwen-plus', label: 'Qwen Plus', description: 'Balanced cost/quality' },
+    { id: 'alibaba:qwen-turbo', label: 'Qwen Turbo', description: 'Cheapest, fast' },
+    { id: 'alibaba:qwen3-max', label: 'Qwen3 Max', description: 'Latest flagship' },
+    { id: 'alibaba:qwen3-coder-plus', label: 'Qwen3 Coder Plus', description: 'Tuned for coding tasks' },
+    { id: 'alibaba:qwq-plus', label: 'QwQ Plus', description: 'Reasoning model' },
+  ],
+  google: [
+    { id: 'google:gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '1M context, strong long-doc handling' },
+    { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Cheaper/faster tier' },
+  ],
+  xai: [
+    { id: 'xai:grok-3', label: 'Grok 3', description: '131k context' },
+    { id: 'xai:grok-3-mini', label: 'Grok 3 Mini', description: 'Smaller/cheaper variant' },
+  ],
+  zhipu: [
+    { id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: '128k context' },
+  ],
+  moonshotai: [
+    { id: 'moonshotai:kimi-k2.5', label: 'Kimi K2.5', description: '131k context' },
+  ],
+}
+
 // ─── Provider API key URLs ───
 
 export const PROVIDER_KEY_URLS: Record<string, string> = {
