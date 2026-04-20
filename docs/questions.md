@@ -85,15 +85,19 @@ Shell 额外分级（`permissions/index.ts::evaluateShellPermission`）：`split
 
 ### 5. agentLoop 的结束条件是什么，是根据 AI 返回的结果来判断的吗
 
-`while (state.turnCount < options.maxTurns)` 循环（`loop.ts::agentLoop`），出口有五个：
+`while (state.turnCount < options.maxTurns)` 循环（`loop.ts::agentLoop`），出口有这些情况：
 
 1. **`finishReason === 'stop'`** —— AI 说完了，最常见的正常退出
-2. **`finishReason === 'tool-calls'`** → `continue`，不是退出
-3. **`turnCount >= maxTurns`**（默认 100）—— while 条件假，退出后 agentLoop 末尾会上报 "Reached maximum turns"
-4. **不可重试错误** —— `runTurn` 里 `streamText` / `streamChunksToUI` / `collectTurnResponse` 抛错后统一走 `classifyApiError`（`api-errors.ts`），除了 429 / timeout / ECONNRESET，其它一律 `break`（返回 `TurnOutcome: 'error'`）
-5. **AbortSignal**（Ctrl+C）—— `options.abortSignal` 传给 streamText，触发后 stream 抛 AbortError，被当作不可重试错误 break
+2. **`finishReason === 'tool-calls'`** → `continue`，不是退出(`continuationAttempts` 归零,表示还在做事)
+3. **`finishReason === 'length'`** —— 输出被 max_tokens 截断
+   - `continuationAttempts < MAX_CONTINUATIONS(=3)` → push 续写 nudge,`continue`
+   - 达到上限 → `onError('still truncated')` + `break`
+4. **`finishReason === 'content-filter'`** —— 被 provider 审核拦截,`onError` + `break`
+5. **`turnCount >= maxTurns`**（默认 100）—— while 条件假，退出后 agentLoop 末尾会上报 "Reached maximum turns"
+6. **不可重试错误** —— `runTurn` 里 `streamText` / `streamChunksToUI` / `collectTurnResponse` 抛错后统一走 `classifyApiError`（`api-errors.ts`），除了 429 / timeout / ECONNRESET，其它一律 `break`（返回 `TurnOutcome: 'error'`）
+7. **AbortSignal**（Ctrl+C）—— `options.abortSignal` 传给 streamText，触发后 stream 抛 AbortError，被当作不可重试错误 break
 
-所以答案：**主要是看 `finishReason`**，辅以 maxTurns 封顶、错误中断、取消信号三条兜底。
+所以答案：**主要是看 `finishReason`**(4 种取值各有不同处理),辅以 maxTurns 封顶、错误中断、取消信号三条兜底。`length` 的自动续写是 x-code-cli 的显式设计——对齐 claude-code,避免让用户看到半句话就没了。
 
 ---
 

@@ -259,14 +259,14 @@ const edit = tool({
 
 ### 6.3 x-code-cli 当前状态
 
-`web-search.ts` 仍然是 Tavily 直连（~30 行）；`web-fetch.ts` 在近期迭代后加了缓存和反爬降级（~150 行）。当前能力和剩余差距：
+`web-search.ts` 已经是 **Tavily 优先 + Brave 兜底**的双 provider 实现(~110 行)；`web-fetch.ts` 在近期迭代后加了缓存和反爬降级（~150 行）。当前能力和剩余差距：
 
 **webSearch（已做 / 待做）：**
 
 - ✅ 工具描述注入当前年份，纠正模型按训练年份构造查询
+- ✅ **双 provider**:`TAVILY_API_KEY` 优先(`@tavily/core` SDK),否则 `BRAVE_API_KEY`(直连 `api.search.brave.com`,无额外依赖)。两家都缺时返回按当前 shell 定制的配置引导,启动时也提示一次
 - ❌ Tavily 已支持的 `search_depth` / `topic` / `include_domains` / `exclude_domains` 还没透传给模型
 - ❌ 没有 allowed / blocked domains 过滤
-- ❌ 没有备用后端（Tavily quota 用完就没了）
 
 **webFetch（已做 / 待做）：**
 
@@ -281,8 +281,9 @@ const edit = tool({
 当前缺的都是锦上添花项。最有价值的下一步按 "影响 / 工作量" 排序：
 
 1. **§12.4 webSearch 丰富入参**（~30 行）：把 Tavily SDK 已有的 `searchDepth` / `topic` / `timeRange` / `includeDomains` / `excludeDomains` 透传出去，零后端改动拿到更精准的检索控制
-2. **§12.5 Brave 多后端 fallback**（~200 行）：Tavily 用尽后自动切 Brave Search API（2k/月免费，独立索引），组合 ≈ 3k/月免费额度
-3. **§12.10 webFetch 预授权域名白名单**（~50 行）：React / Python / Rust / MDN / Stack Overflow 等站点直接走宽松路径，不用跑 CF 降级
+2. **§12.10 webFetch 预授权域名白名单**（~50 行）：React / Python / Rust / MDN / Stack Overflow 等站点直接走宽松路径，不用跑 CF 降级
+
+> **§12.5 Brave 多后端 fallback 已完成** —— 见 `packages/core/src/tools/web-search.ts`。当前顺序 Tavily → Brave → 报错并引导配置;没有显式 `WEBSEARCH_PROVIDER` override 也没加 DDG 兜底(ToS 风险太大,不纳入)。
 
 ---
 
@@ -500,22 +501,19 @@ inputSchema: z.object({
 
 预估工作量：~30 行
 
-#### 12.5 webSearch 多后端 + Brave fallback
+#### 12.5 webSearch 多后端 + Brave fallback ✅ 已完成
 
 > 借鉴：独立调研（无单一竞品完整实现）
 
-Tavily 免费额度用完后，我们应该能自动切到 Brave Search API（2000 次/月免费，独立索引），而不是直接返回错误。同时保留一个 `WEBSEARCH_PROVIDER` env var 让用户手动指定。
+**实现**(`packages/core/src/tools/web-search.ts`,~110 行):
+- 仅内置 Tavily + Brave 两家,不引入 DDG(抓取方案 ToS 风险大,被封概率高)
+- 选择顺序固定:`TAVILY_API_KEY` → `BRAVE_API_KEY` → 返回友好错误
+- 两家 provider 返回结构统一为 `{ title, url, content }`,输出格式完全一致
+- Brave 直连 `api.search.brave.com/res/v1/web/search`(header `X-Subscription-Token`),不引入 SDK 依赖
+- 缺失双 key 时,`buildMissingKeyError()` 按当前 shell 返回 PowerShell / bash / zsh / fish / cmd 的配置命令;CLI 启动时 `printNoWebSearchKeyHint()` 也提示一次
+- 没有加 `WEBSEARCH_PROVIDER` 显式 override —— 实际用不到,两个 key 按顺序探测就够了
 
-**实现方案**：
-
-- 抽象 `SearchBackend` 接口：`{ name, isAvailable(), search(query, opts) }`
-- 内置 `TavilyBackend` / `BraveBackend` / `DuckDuckGoBackend`（后者作为零配置兜底，基于 `duck-duck-scrape`）
-- 选择逻辑：
-  1. 若显式指定 `WEBSEARCH_PROVIDER`，用指定的
-  2. 否则按 `TAVILY_API_KEY` → `BRAVE_API_KEY` → DDG 顺序探测
-  3. 执行时若主 backend 返回 429/quota 错误，自动 fallback 到次级 backend（一次性，不无限重试）
-
-预估工作量：~200 行（含 Brave client + DDG fallback + 后端选择逻辑）
+实际工作量:~110 行(比原估 200 行少,因为去掉了 DDG 和 provider override)
 
 #### 12.6 结构化错误类型
 

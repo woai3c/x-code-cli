@@ -296,15 +296,24 @@ agentLoop() ── while 循环开始 ──────────────
   │   ├─ 是 → processToolCalls()                             │
   │   │       串行处理 writeFile/edit/shell（需权限）        │
   │   │       结果 push 到 messages                         │
+  │   │       continuationAttempts = 0（成功工具轮次重置）  │
   │   │       continue → 回到循环顶部 ─────────────────────→│
   │   │                                                     │
-  │   └─ 否 → break → 退出循环                              │
+  │   ├─ 'length' → 模型输出被 max_tokens 截断              │
+  │   │       continuationAttempts < 3?                      │
+  │   │       └─ 是 → push "Output token limit hit..."       │
+  │   │              nudge 到 messages,continue              │
+  │   │       └─ 否 → onError('still truncated') + break     │
+  │   │                                                     │
+  │   ├─ 'content-filter' → onError + break                 │
+  │   │                                                     │
+  │   └─ 否 (stop) → break → 退出循环                        │
   │                                                         │
   └────────────────────────────────────────────────────────┘
   │
   ▼
-saveSession() → 保存会话摘要
 返回 state → UI 显示最终结果
+(saveSession 由外层 gracefulShutdown fire-and-forget 调用,不阻塞返回)
 ```
 
 ---

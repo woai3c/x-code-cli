@@ -298,7 +298,6 @@ startApp()
             ├─ useAgent(model, options)      // 核心 Hook，管理所有 Agent 状态
             │    └─ useState<AgentState>()   // 初始状态 (见下方)
             ├─ useEffect → onCleanupReady    // 注册 SIGINT 清理函数
-            ├─ useEffect → onUsageUpdate     // 同步 token 用量到全局 ref
             └─ useEffect → initialPrompt     // 如有 CLI 传入 prompt，自动提交
 ```
 
@@ -1006,40 +1005,46 @@ Paragraph text...
 │
 ├─ Ink unmount → waitUntilExit() 在 main() 里返回
 │
-└─ gracefulShutdown() (index.ts) ← 统一收尾
-     ├─ saveSession(loopState, model)
-     │    ├─ generateSessionSummary()  // AI 生成会话摘要
-     │    │   → title, summary, keyResults, pendingWork, decisions, status
-     │    └─ saveSessionSummary()
-     │        ├─ .x-code/sessions/latest.json  // 最新会话
-     │        └─ .x-code/sessions/{id}.json    // 归档
+└─ gracefulShutdown() (index.ts) ← 统一收尾（<10 ms）
+     ├─ cleanup().catch(() => undefined)   // fire-and-forget
+     │    └─ saveSession(loopState, model, 2 s AbortSignal)
+     │         ├─ generateSessionSummary()  // AI 摘要；2 s 超时自动 abort
+     │         └─ saveSessionSummary()
+     │              ├─ .x-code/sessions/latest.json
+     │              └─ .x-code/sessions/{id}.json
      │
-     │   注：持久化仍然会发生（上下文压缩时也会写一次），预留给后续 history 功能。
-     │   但下次启动 CLI 时不会再自动读取 latest.json 并注入到 system prompt。
+     │   注：cleanup 不再被 await —— 进程可能在 saveSession 完成前就退出。
+     │   这是为了 Ctrl+C 秒退（对齐 claude-code/gemini-cli/opencode 的做法）。
+     │   上下文压缩时仍会同步写一次 session，所以长对话的快照不会丢。
      │
-     └─ printExitSummary()
-         → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
+     └─ resetTerminal()
+         → \x1b[0m SGR 重置 + \x1b[?2004l bracketed paste off
+         + \x1b[?25h 光标显示 + \x1b[?1049l 退出 alt screen + \r\n + setRawMode(false)
 
 ```
+
+> **注：不再打印 token 用量摘要。** 历史版本里的 `printExitSummary` 已随 Ctrl+C 的响应性改造一起删除 ——
+> 该行经常因 pnpm/tsx 多级 stdout buffering 在 shell 提示符之后才闪现，观感像 bug；
+> 对比 claude-code / codex / gemini-cli / opencode,没有一家在退出时打 token 统计。
 
 ### SIGINT (Ctrl+C) 处理
 
 ```
 
-process.on('SIGINT') (cli/src/index.ts)  — 只做安全网，不直接收尾
+process.on('SIGINT') (cli/src/index.ts)  — 安全网
 ├─ 第一次 Ctrl+C
-│    ├─ sigintCount++       // 仅记录计数
-│    └─ process.exitCode = 0 // 若后续直接退出，保证退出码为 0
+│    ├─ sigintCount++       // 计数
+│    └─ process.exitCode = 0
 │       ↓
-│    随后 Ink 捕获信号 → unmount App → waitUntilExit 返回
-│       ↓
-│    main() 走到 gracefulShutdown() → saveSession() + printExitSummary()
-│       → "anthropic:claude-sonnet-4-5 | 12,345 tokens (in: 10,000, out: 2,345)"
+│    通常路径：stdin raw mode 下此 Ctrl+C 被 usePromptInput 的 \x03
+│    检测拦截，转为 onInterrupt → Ink exit → unmount → waitUntilExit
+│    返回 → main() 调 gracefulShutdown → resetTerminal + process.exit(0)
 │
-└─ 第二次 Ctrl+C → process.exit(0)  // 强退，退出码仍是 0
+└─ 第二次 Ctrl+C（已在 cooked mode）→ resetTerminal() + process.exit(0)  // 强退，退出码 0
 ```
 
-> 两次 Ctrl+C 退出码都是 `0`。区别在于第二次跳过 gracefulShutdown 的 saveSession / printExitSummary，用于用户等不及收尾想立即返回 shell 的场景。
+> 两次 Ctrl+C 退出码都是 `0`。区别在于第二次跳过 fire-and-forget cleanup 的剩余执行时间，
+> 直接强退 —— 用于 Ctrl+C 后 Ink unmount 卡住的极端场景。
 
 ---
 
@@ -1312,7 +1317,7 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 | 阶段          | 文件                                    | 关键函数/组件                                                                     |
 | ------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
 | CLI 入口      | `cli/src/index.ts`                      | `main()`, `checkNodeVersion()`, `loadEnvFile()`                                   |
-| Ink 渲染      | `cli/src/app.tsx`                       | `startApp()`, `printExitSummary()`                                                |
+| Ink 渲染      | `cli/src/app.tsx`                       | `startApp()`, `getCleanupFn()`                                                    |
 | 根组件        | `cli/src/ui/components/App.tsx`         | `App`, `handleSubmit()`, `SLASH_COMMANDS`                                         |
 | Agent Hook    | `cli/src/ui/hooks/use-agent.ts`         | `useAgent()`, `submit()`, `AgentState`                                            |
 | Agent 循环    | `core/src/agent/loop.ts`                | `agentLoop()`, `runTurn()`, `compressMessages()`                                  |

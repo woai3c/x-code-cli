@@ -345,7 +345,7 @@ interface TokenUsage {
 | `webSearch` | 网页搜索（查文档、查错误信息） | 自动允许 |
 | `webFetch`  | 抓取网页内容并提取信息         | 自动允许 |
 
-**webSearch API 选型 — Tavily**：
+**webSearch API 选型 — Tavily 优先 + Brave 兜底**：
 
 竞品搜索方案对比：
 
@@ -358,22 +358,26 @@ interface TokenUsage {
 | Roo Code    | 无内置，MCP 接入 Tavily / Brave                  |
 | Aider       | 无搜索功能                                       |
 
-竞品基本都是用各自绑定的搜索方案，没有统一标准。**Tavily** 是开源生态中最常见的选择（LangChain 默认集成、Roo Code MCP 推荐），返回格式对 LLM 友好，且提供免费额度（1000 次/月）。
+竞品基本都是用各自绑定的搜索方案，没有统一标准。我们采用**双 provider**：**Tavily** 优先（LangChain 默认集成、返回格式对 LLM 友好、免费 1000 次/月），缺失时回退到 **Brave**（免费 2000 次/月，独立索引，不依赖 Google/Bing）。两家都必须自行注册 —— 三方 ToS 禁止在发行包里内置共享 key。
 
-**默认行为**：使用 Tavily（`@tavily/core`），无需配置 `TAVILY_API_KEY` 也可运行 — 搜索工具正常注册，调用时如果没有 Key 则返回错误提示让用户配置。
+**默认行为**：
+- `TAVILY_API_KEY` 存在 → 走 Tavily（`@tavily/core` SDK）
+- 否则 `BRAVE_API_KEY` 存在 → 走 Brave（直接 `fetch` `api.search.brave.com`，无额外依赖）
+- 两者都没有 → CLI 启动时 stderr 打印一次当前 shell（PowerShell / bash / zsh / fish / cmd）对应的配置命令；WebSearch 工具被调用时返回一段同样内容的错误,引导配置
 
 ```typescript
-async function webSearch(query: string): Promise<SearchResult> {
-  if (!process.env.TAVILY_API_KEY) {
-    return { error: '需要配置 TAVILY_API_KEY 才能使用搜索。免费注册：https://tavily.com（1000 次/月）' }
-  }
-  const client = new TavilyClient({ apiKey: process.env.TAVILY_API_KEY })
-  const response = await client.search(query, { maxResults: 5 })
-  return { results: response.results.map((r) => ({ title: r.title, url: r.url, content: r.content })) }
-}
+export const webSearch = tool({
+  inputSchema: z.object({ query: z.string(), maxResults: z.number().optional() }),
+  execute: async ({ query, maxResults }) => {
+    const n = maxResults ?? 5
+    if (process.env.TAVILY_API_KEY) return formatResults(await searchWithTavily(query, n))
+    if (process.env.BRAVE_API_KEY) return formatResults(await searchWithBrave(query, n))
+    return buildMissingKeyError()  // 按当前 shell 定制的安装指引
+  },
+})
 ```
 
-webFetch 不需要任何 API Key，直接 HTTP 请求 + HTML 转 Markdown（使用 `cheerio` 解析 HTML + `turndown` 转 Markdown）。
+webFetch 不需要任何 API Key，直接 HTTP 请求 + HTML 转 Markdown（使用 `cheerio` 解析 HTML + `turndown` 转 Markdown）。15 min LRU URL 缓存 + Cloudflare 反爬降级(浏览器 UA → CLI UA)。
 
 **第三层：交互与知识工具** — Agent 与用户的结构化交互 + 持久化知识
 
@@ -1156,6 +1160,7 @@ export function createModelRegistry() {
 | `OPENAI_COMPATIBLE_MODEL`      | 自定义提供商模型名                                         | 与上面配套 |
 | `X_CODE_MODEL`                 | 默认使用的模型（如 `deepseek:deepseek-chat`）              |    可选    |
 | `TAVILY_API_KEY`               | Tavily 搜索 API Key（免费 1000 次/月，https://tavily.com） |    可选    |
+| `BRAVE_API_KEY`                | Brave 搜索 API Key（免费 2000 次/月，Tavily 缺失时自动回退，https://api.search.brave.com） |    可选    |
 
 > 至少需要配置 **一个** 模型提供商的 API Key 才能使用。
 
@@ -1887,9 +1892,10 @@ interface SessionSummary {
 
 ### 13.2 CLI 入口 & 启动
 
-- ✅ `packages/cli/src/index.ts`：Node 版本检查 + `.env` 自动加载 + yargs 参数解析（`--model` / `--trust` / `--print` / `--max-turns` / `--version`）
-- ✅ `packages/cli/src/app.tsx`：Ink render 入口 + `printExitSummary`（退出时打印 token 用量）
+- ✅ `packages/cli/src/index.ts`：Node 版本检查 + `.env` 自动加载 + yargs 参数解析（`--model` / `--trust` / `--print` / `--max-turns` / `--version`）+ 未配 WebSearch API Key 时启动提示
+- ✅ `packages/cli/src/app.tsx`：Ink render 入口 + `startApp()` / `getCleanupFn()`
 - ✅ `AppHeader.printHeader()`：ASCII Logo + 版本 + 模型信息（Ink 外直写 stdout）
+- ✅ `gracefulShutdown()` + `resetTerminal()`：Ctrl+C 秒退（<10 ms），cleanup 跑为 fire-and-forget；退出时**不**打 token 统计（对齐 claude-code/gemini-cli/opencode）
 
 ### 13.3 多 Provider 支持
 
@@ -1907,12 +1913,14 @@ interface SessionSummary {
 - ✅ 错误分类 `classifyApiError()`（`api-errors.ts`：401/403/429/503/timeout + 上下文超限集中检测）+ 非可重试错误 break
 - ✅ 最大轮次限制（`--max-turns`）+ AbortController（Ctrl+C 中断）
 - ✅ `extractLastAssistantText()` 安全网：某些推理模型把全部文本放在 response.messages 最后 part 的兜底
+- ✅ `maxOutputTokens: 32000` 显式设置（覆盖 Anthropic 4096 默认）+ `finishReason === 'length'` 自动续写（push "continue" 提示,最多 3 次,成功 tool 轮次 reset 计数）
+- ✅ `finishReason === 'content-filter'` 明确报错(不再静默)
 
 ### 13.5 工具（13 个）
 
 - ✅ `readFile` / `writeFile` / `edit` / `listDir` / `glob` / `grep`（跨平台，ripgrep 基础）
 - ✅ `shell`：execa + 跨平台（Windows PowerShell / Unix bash/zsh）+ 流式输出 + 智能权限分级
-- ✅ `webSearch`：Tavily API，工具描述注入当前年份
+- ✅ `webSearch`：Tavily 优先 + Brave 兜底（`@tavily/core` SDK + Brave 直连 fetch），工具描述注入当前年份；都缺失时返回平台化配置引导
 - ✅ `webFetch`：HTTP + cheerio + turndown，100 KB 上限，50 条 / 15 min LRU 缓存，Cloudflare bot-challenge 降级重试
 - ✅ `askUser`：配合 `<SelectOptions>` UI
 - ✅ `saveKnowledge`：模型驱动知识提炼
@@ -1932,7 +1940,7 @@ interface SessionSummary {
 - ✅ `AutoMemory` 类（key-based CRUD + 冲突检测 + 90 天 TTL 淘汰）
 - ✅ `/init` 命令在项目根生成 `AGENTS.md` 模板 + `.x-code/` 内部目录结构
 - ✅ AGENTS.md chain（从 cwd 向上到 `.git`，沿路径收集所有 AGENTS.md，root-to-leaf 拼接，monorepo 子包可覆盖根约定）
-- ✅ 会话持久化（`saveSession` + `saveSessionSummary`；上下文压缩时也写一次）；**启动时不自动恢复**，预留给后续 history 功能
+- ✅ 会话持久化（`saveSession` + `saveSessionSummary`；上下文压缩时同步写一次；Ctrl+C 退出路径为 fire-and-forget，可能来不及保存最后一次摘要 —— 这是为了 exit 秒退的明确取舍）；**启动时不自动恢复**，预留给后续 history 功能
 
 ### 13.8 UI & 渲染管线
 
