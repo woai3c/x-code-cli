@@ -56,7 +56,7 @@ function cacheSet(url: string, markdown: string): void {
   fetchCache.set(url, { markdown, at: Date.now() })
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-call
+ 
 const turndown = new TurndownService({
   headingStyle: 'atx',
   codeBlockStyle: 'fenced',
@@ -83,6 +83,8 @@ function formatOutput(url: string, markdown: string, prompt?: string): string {
 export const webFetch = tool({
   description:
     `Fetch a web page and extract its content as markdown. No API key needed. ` +
+    `When summarizing the returned content for the user, preserve key details, concrete examples, ` +
+    `section structure, and numbers — don't over-compress. ` +
     `Results are cached for 15 minutes per URL, so repeated reads of the same page are free. ` +
     `The current year is ${YEAR} — use it whenever the user asks for recent/latest/current information.`,
   inputSchema: z.object({

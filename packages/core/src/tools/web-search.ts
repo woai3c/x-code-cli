@@ -1,9 +1,94 @@
-// @x-code-cli/core — webSearch tool (Tavily API)
+// @x-code-cli/core — webSearch tool (Tavily primary, Brave fallback)
 import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { getShellConfig } from './shell-utils.js'
+
 const YEAR = new Date().getFullYear()
+const BRAVE_TIMEOUT_MS = 15_000
+
+interface SearchResult {
+  title: string
+  url: string
+  content: string
+}
+
+async function searchWithTavily(query: string, maxResults: number): Promise<SearchResult[]> {
+  const { tavily } = await import('@tavily/core')
+  const client = tavily({ apiKey: process.env.TAVILY_API_KEY! })
+  const response = await client.search(query, { maxResults })
+  return response.results.map((r: SearchResult) => ({ title: r.title, url: r.url, content: r.content }))
+}
+
+async function searchWithBrave(query: string, maxResults: number): Promise<SearchResult[]> {
+  const url = new URL('https://api.search.brave.com/res/v1/web/search')
+  url.searchParams.set('q', query)
+  url.searchParams.set('count', String(Math.min(maxResults, 20)))
+
+  const res = await fetch(url, {
+    headers: {
+      'X-Subscription-Token': process.env.BRAVE_API_KEY!,
+      Accept: 'application/json',
+    },
+    signal: AbortSignal.timeout(BRAVE_TIMEOUT_MS),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Brave API returned HTTP ${res.status} ${res.statusText}`)
+  }
+
+  const data = (await res.json()) as {
+    web?: { results?: Array<{ title: string; url: string; description: string }> }
+  }
+  return (data.web?.results ?? []).map((r) => ({ title: r.title, url: r.url, content: r.description }))
+}
+
+function buildMissingKeyError(): string {
+  const { type } = getShellConfig()
+  let setupBlock: string
+
+  if (type === 'powershell') {
+    setupBlock = [
+      '  # current session:',
+      '  $env:TAVILY_API_KEY = "tvly-xxx"',
+      '  $env:BRAVE_API_KEY  = "BSA-xxx"',
+      '  # persistent (new shells):',
+      '  [Environment]::SetEnvironmentVariable("TAVILY_API_KEY","tvly-xxx","User")',
+      '  [Environment]::SetEnvironmentVariable("BRAVE_API_KEY", "BSA-xxx", "User")',
+    ].join('\n')
+  } else {
+    const rc = type === 'zsh' ? '~/.zshrc' : '~/.bashrc'
+    setupBlock = [
+      '  # current session:',
+      '  export TAVILY_API_KEY="tvly-xxx"',
+      '  export BRAVE_API_KEY="BSA-xxx"',
+      '  # persistent (new shells):',
+      `  echo 'export TAVILY_API_KEY="tvly-xxx"' >> ${rc}`,
+      `  echo 'export BRAVE_API_KEY="BSA-xxx"' >> ${rc}`,
+    ].join('\n')
+  }
+
+  return [
+    'Error: WebSearch requires an API key. Two free options (set either one):',
+    '',
+    '  1. Tavily — 1000 searches/month, recommended',
+    '     Sign up: https://tavily.com → copy API key from dashboard',
+    '',
+    '  2. Brave  — 2000 searches/month (requires credit card, no charge)',
+    '     Sign up: https://api.search.brave.com → create API key',
+    '',
+    `Setup (${type}):`,
+    setupBlock,
+    '',
+    'After setting, restart this shell for the variable to take effect.',
+  ].join('\n')
+}
+
+function formatResults(results: SearchResult[]): string {
+  if (results.length === 0) return 'No results found.'
+  return results.map((r) => `### ${r.title}\n${r.url}\n${r.content}`).join('\n\n')
+}
 
 export const webSearch = tool({
   description:
@@ -15,20 +100,18 @@ export const webSearch = tool({
     maxResults: z.number().optional().describe('Max results (default: 5)'),
   }),
   execute: async ({ query, maxResults }) => {
-    if (!process.env.TAVILY_API_KEY) {
-      return 'Error: TAVILY_API_KEY is not configured. Get a free API key (1000 searches/month) at https://tavily.com'
-    }
+    const n = maxResults ?? 5
+    const hasTavily = !!process.env.TAVILY_API_KEY
+    const hasBrave = !!process.env.BRAVE_API_KEY
+
+    if (!hasTavily && !hasBrave) return buildMissingKeyError()
+
     try {
-      const { tavily } = await import('@tavily/core')
-      const client = tavily({ apiKey: process.env.TAVILY_API_KEY })
-      const response = await client.search(query, { maxResults: maxResults ?? 5 })
-      const results = response.results.map(
-        (r: { title: string; url: string; content: string }) => `### ${r.title}\n${r.url}\n${r.content}`,
-      )
-      return results.join('\n\n') || 'No results found.'
+      const results = hasTavily ? await searchWithTavily(query, n) : await searchWithBrave(query, n)
+      return formatResults(results)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      return `Error searching: ${msg}`
+      return `Error searching (${hasTavily ? 'Tavily' : 'Brave'}): ${msg}`
     }
   },
 })

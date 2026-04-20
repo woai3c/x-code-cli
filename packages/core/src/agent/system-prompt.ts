@@ -63,7 +63,8 @@ Do NOT use enterPlanMode for:
 
 ### Interaction
 - When uncertain between multiple approaches, use askUser to let the user choose
-- Keep responses concise — focus on what changed and why
+- For code changes: keep responses concise — focus on what changed and why
+- For research, summarization, or explanation tasks (e.g. summarizing a fetched article, explaining a codebase, answering "what is X"): be thorough — preserve key points, concrete examples, and structure; don't over-compress
 - Use markdown formatting with language-tagged code blocks
 
 ### Security
