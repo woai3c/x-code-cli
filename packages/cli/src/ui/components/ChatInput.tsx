@@ -352,20 +352,18 @@ export function ChatInput({
   // Permission dialog: selection index (0 = Yes, 1 = No). Rendered inside
   // our cell buffer — not via Ink — so the dialog never fights our
   // cursor management. Reset to 0 whenever the prompt changes (new tool
-  // call) via a stable "key" derived from the permission props; the ref
-  // comparison avoids a setState-inside-effect.
+  // call) using React's "adjust state during render" pattern — React
+  // throws away the first render and immediately re-renders, which is
+  // cheaper than a cascading setState-inside-effect and doesn't trip the
+  // react-hooks/set-state-in-effect lint.
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders
   const [permissionSelected, setPermissionSelected] = useState(0)
-  const permissionKeyRef = useRef<string | null>(null)
-  const permissionKey = permission
-    ? `${permission.toolName}:${JSON.stringify(permission.input)}`
-    : null
-  useEffect(() => {
-    if (permissionKey !== permissionKeyRef.current) {
-      permissionKeyRef.current = permissionKey
-      setPermissionSelected(0)
-    }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-  }, [permissionKey])
+  const [lastPermissionKey, setLastPermissionKey] = useState<string | null>(null)
+  const permissionKey = permission ? `${permission.toolName}:${JSON.stringify(permission.input)}` : null
+  if (permissionKey !== lastPermissionKey) {
+    setLastPermissionKey(permissionKey)
+    setPermissionSelected(0)
+  }
 
   // Spinner animation — self-contained so the parent doesn't have to
   // re-render 12× per second. Only runs while `spinner` is truthy.
@@ -872,7 +870,6 @@ export function ChatInput({
         frame.push(cells)
       }
     }
-
 
     // ── Diff against previous frame and emit one buffered write ──────────
     const prevFrame = prevFrameRef.current
