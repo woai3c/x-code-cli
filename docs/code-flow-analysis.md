@@ -107,14 +107,13 @@ Ink 上游标准版在 CJK / IME / 长流式文本组合下有根深蒂固的抖
  |                | 1. checkNodeVersion()                 |                    |                    |                  |
  |                | 2. loadEnvFile()                      |                    |                    |                  |
  |                | 3. yargs 解析参数                      |                    |                    |                  |
- |                | 4. loadConfig()                       |                    |                    |                  |
- |                | 5. resolveModelId()                   |                    |                    |                  |
- |                | 6. createModelRegistry()              |                    |                    |                  |
+ |                | 4. resolveModelId()                   |                    |                    |                  |
+ |                | 5. createModelRegistry()              |                    |                    |                  |
  |                |                  |                    |                    |                    |                  |
- |                | 7. printHeader() — 直接写 stdout       |                    |                    |                  |
+ |                | 6. printHeader() — 直接写 stdout       |                    |                    |                  |
  |  <ASCII Logo>  |<-----------------------------------------                  |                    |                  |
  |                |                  |                    |                    |                    |                  |
- |                | 8. startApp()    |                    |                    |                    |                  |
+ |                | 7. startApp()    |                    |                    |                    |                  |
  |                |----------------->|                    |                    |                    |                  |
  |                |     render(<App>)|                    |                    |                    |                  |
  |                |                  | 9. useAgent() 初始化                    |                    |                  |
@@ -228,14 +227,15 @@ main()
 
 ```
 main()
-  ├─ loadConfig()                  // 读取 ~/.x-code/config.json
-  ├─ getAvailableProviders()       // 检测哪些 Provider 有 API Key
-  ├─ resolveModelId(argv.model, config)
-  │    ├─ 优先级: --model 参数 > X_CODE_MODEL 环境变量 > config.json > 自动检测
+  ├─ getAvailableProviders()       // 检测哪些 Provider 有 API Key（env 变量扫描）
+  ├─ resolveModelId(argv.model)
+  │    ├─ 优先级: --model 参数 > X_CODE_MODEL 环境变量 > 自动检测
   │    └─ MODEL_ALIASES 映射: "sonnet" → "anthropic:claude-sonnet-4-5" 等
   └─ createModelRegistry()         // 创建 AI SDK Provider Registry
        └─ 注册所有有 API Key 的 Provider (Anthropic/OpenAI/Google/DeepSeek/...)
 ```
+
+> 没有配置文件。配置源 = 环境变量（`config/index.ts` 注释里有明确声明："There is no config file"）。这意味着 CLI 启动路径不会去触碰 `~/.x-code/config.json`，减少了一层 IO 和可能的解析错误。
 
 **模型别名映射表（定义在 `core/src/types/index.ts`）：**
 
@@ -1334,7 +1334,7 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 | 会话持久化    | `core/src/knowledge/session.ts`         | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history) |
 | 自动记忆      | `core/src/knowledge/auto-memory.ts`     | `AutoMemory`, `initMemories()` — 4 类 taxonomy (user/feedback/project/reference)  |
 | 项目初始化    | `core/src/knowledge/init.ts`            | `initProject()` — `/init` 命令入口，写 AGENTS.md 到项目根                         |
-| 配置          | `core/src/config/index.ts`              | `loadConfig()`, `resolveModelId()`, `getAvailableProviders()`                     |
+| 配置          | `core/src/config/index.ts`              | `resolveModelId()`, `getAvailableProviders()`, `getEnvVarName()`（env 变量为唯一来源） |
 | Provider      | `core/src/providers/registry.ts`        | `createModelRegistry()`                                                           |
 | 底部 UI       | `cli/src/ui/components/ChatInput.tsx`   | `ChatInput` — 整个底部区域唯一 owner: scrollback 提交 + cell-level diff 渲染 spinner/streaming/permission/error/输入框/补全菜单, DEC 2026 同步更新 |
 | 输入 Hook     | `cli/src/ui/hooks/use-prompt-input.ts`  | `usePromptInput()`, bracketed paste + 30ms debounce fallback, `\r\n` 归一化       |

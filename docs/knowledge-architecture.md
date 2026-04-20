@@ -32,10 +32,11 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
 
 ~/.x-code/
 ├── AGENTS.md                     ← 全局用户偏好(人写)
-├── memory/
-│   └── auto.md                   ← 全局自动记忆
-└── config.json                   ← API Key、默认模型
+└── memory/
+    └── auto.md                   ← 全局自动记忆
 ```
+
+> 没有配置文件。API Key 和默认模型都走环境变量(`ANTHROPIC_API_KEY` / `X_CODE_MODEL` 等),一份数据源不必同步。
 
 ---
 

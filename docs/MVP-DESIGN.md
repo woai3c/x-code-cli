@@ -29,15 +29,15 @@ X-Code CLI 是一个终端 AI 编程助手，通过自然语言与用户交互�
 
 采用 **pnpm monorepo** 架构，将项目拆分为两个包：
 
-- **`@x-code/core`**：Agent 逻辑层（AI SDK、工具、权限）—— 与 UI 无关，未来可复用于 VSCode 插件 / SDK
-- **`@x-code/cli`**：TUI 表现层（Ink/React、yargs、用户交互）—— 依赖 core
+- **`@x-code-cli/core`**：Agent 逻辑层（AI SDK、工具、权限）—— 与 UI 无关，未来可复用于 VSCode 插件 / SDK
+- **`@x-code-cli/cli`**：TUI 表现层（Ink/React、yargs、用户交互）—— 依赖 core
 
 **依赖关系**：
 
 ```
-@x-code/cli  →  @x-code/core (workspace:*)
-                    ↓
-              ai, @ai-sdk/*, zod, globby, execa, @tavily/core, ...
+@x-code-cli/cli  →  @x-code-cli/core (workspace:*)
+                        ↓
+                  ai, @ai-sdk/*, zod, globby, execa, @tavily/core, marked, ...
 ```
 
 **目录结构**：
@@ -56,7 +56,12 @@ x-code-cli/
 │   │   │   │   │   │                    #   滚动历史提交 + spinner + 流式文本 + 错误行
 │   │   │   │   │   │                    #   + Permission 对话框 + 输入框 + 补全菜单
 │   │   │   │   │   ├── SelectOptions.tsx # askUser 多选（自由文本 Other 模式，走 Ink 渲染）
-│   │   │   │   │   └── AppHeader.tsx    # printHeader() ASCII banner（Ink 外直写 stdout）
+│   │   │   │   │   ├── AppHeader.tsx    # printHeader() ASCII banner（Ink 外直写 stdout）
+│   │   │   │   ├── MessageList.tsx  # 消息列表（scrollback 历史）
+│   │   │   │   ├── Permission.tsx   # 权限确认对话框（含 diff 预览）
+│   │   │   │   ├── ShellOutput.tsx  # Shell 实时流式输出
+│   │   │   │   ├── Spinner.tsx      # 通用加载动画
+│   │   │   │   └── ToolCall.tsx     # 工具调用条目渲染
 │   │   │   │   ├── hooks/
 │   │   │   │   │   ├── use-agent.ts     # Agent 状态管理 Hook（orchestration，含 streamingText state）
 │   │   │   │   │   ├── use-stream-buffer.ts # 流式文本缓冲：每 delta 更新 streamingText，\n\n 时提交
@@ -66,11 +71,9 @@ x-code-cli/
 │   │   │   │   ├── tool-display.ts      # 工具显示工具函数（标签/预览/摘要）
 │   │   │   │   ├── render-markdown.ts   # Markdown → ANSI 终端渲染
 │   │   │   │   └── theme.ts             # 主题颜色常量（ACCENT/SUCCESS/WARNING/ERROR）
+│   │   │   ├── version.ts              # 构建注入的版本号
 │   │   │   └── config/
-│   │   │       └── index.ts             # 配置管理（API Key 等）
-│   │   ├── tests/
-│   │   │   └── ui/
-│   │   │       └── app.test.tsx
+│   │   │       └── index.ts             # CLI 侧配置（slash 命令等）
 │   │   ├── esbuild.config.js       # 构建配置（打包为单文件）
 │   │   ├── package.json
 │   │   ├── tsconfig.json
@@ -111,7 +114,8 @@ x-code-cli/
 │       │   ├── providers/
 │       │   │   └── registry.ts     # AI SDK Provider Registry（多模型）
 │       │   ├── config/
-│       │   │   └── index.ts        # 配置加载（环境变量、配置文件）
+│       │   │   └── index.ts        # 模型解析 + 环境变量读取（无配置文件）
+│       │   ├── utils.ts            # 路径常量（XCODE_DIR / GLOBAL_XCODE_DIR）
 │       │   ├── knowledge/
 │       │   │   ├── loader.ts       # 知识加载器（AGENTS.md 向上遍历 + 分层拼接）
 │       │   │   ├── auto-memory.ts  # AutoMemory 类（CRUD + 冲突检测 + 90 天 TTL）
@@ -119,32 +123,27 @@ x-code-cli/
 │       │   │   └── init.ts         # /init 命令：在项目根生成 AGENTS.md 模板
 │       │   └── types/
 │       │       └── index.ts        # 公共类型定义
-│       ├── tests/
-│       │   ├── agent/
-│       │   │   └── loop.test.ts
-│       │   └── tools/
-│       │       ├── read-file.test.ts
-│       │       ├── write-file.test.ts
-│       │       └── shell.test.ts
+│       ├── tests/                  # agent-loop / config / knowledge / permissions / shell-utils / tool-registry / glob / grep / messages
 │       ├── package.json
 │       ├── tsconfig.json
 │       └── vitest.config.ts
 │
 ├── .husky/pre-commit               # Git 提交前自动运行 lint-staged
-├── .vscode/
-│   ├── settings.json               # 保存时自动格式化 + ESLint 修复
-│   └── extensions.json             # 推荐安装的扩展
 ├── .prettierrc                     # Prettier 配置
 ├── .prettierignore
 ├── eslint.config.mjs               # ESLint flat config
+├── commitlint.config.js            # commitlint（conventional commits）
 ├── pnpm-workspace.yaml             # pnpm 工作区配置
 ├── package.json                    # 根包（private，共享 scripts + devDeps）
 ├── tsconfig.base.json              # 共享 TypeScript 配置
 ├── tsconfig.json                   # 项目引用根配置
-├── .env.example                    # 环境变量示例
+├── patches/                        # pnpm patch-package（修上游 ink 类依赖的小问题）
+├── scripts/release.mjs             # 版本发布脚本
+├── docs/                           # 设计与分析文档
+├── CHANGELOG.md
+├── README.md
 ├── .gitignore
-├── LICENSE
-└── MVP-DESIGN.md
+└── LICENSE
 ```
 
 ---
@@ -400,7 +399,7 @@ import { z } from 'zod'
 
 export const readFile = tool({
   description: 'Read the contents of a file at the given path. Returns the file content with line numbers.',
-  parameters: z.object({
+  inputSchema: z.object({
     filePath: z.string().describe('Absolute path to the file'),
     offset: z.number().optional().describe('Start line (1-based)'),
     limit: z.number().optional().describe('Max lines to read'),
@@ -426,7 +425,7 @@ import { z } from 'zod'
 export const shell = tool({
   description:
     'Execute a shell command and return stdout/stderr. Commands should be compatible with the current platform shell.',
-  parameters: z.object({
+  inputSchema: z.object({
     command: z.string().describe('The command to execute'),
     timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
   }),
@@ -456,7 +455,7 @@ import { z } from 'zod'
 export const askUser = tool({
   description:
     'Ask the user a clarifying question with multiple-choice options. Use when you need user input to decide between approaches.',
-  parameters: z.object({
+  inputSchema: z.object({
     question: z.string().describe('The question to ask'),
     options: z
       .array(
@@ -502,12 +501,12 @@ const MAX_TOOL_RESULT_CHARS = 30000 // ~7500 tokens
 function truncateToolResult(result: string): string {
   if (result.length <= MAX_TOOL_RESULT_CHARS) return result
   const half = Math.floor(MAX_TOOL_RESULT_CHARS / 2)
-  const truncatedLines = result.slice(half, -half).split('\n').length
-  return result.slice(0, half) + `\n\n... [truncated ${truncatedLines} lines] ...\n\n` + result.slice(-half)
+  const truncatedChars = result.length - MAX_TOOL_RESULT_CHARS
+  return result.slice(0, half) + `\n\n... [truncated ${truncatedChars} characters] ...\n\n` + result.slice(-half)
 }
 ```
 
-保留首尾各一半，中间截断并提示被截断的行数，让模型知道结果不完整、可用 offset/limit 再读。
+保留首尾各一半，中间截断并提示被截掉的字符数，让模型知道结果不完整、可用 offset/limit 再读。
 
 #### 关于 `execute` 的设计选择
 
@@ -866,14 +865,20 @@ export const enterPlanMode = tool({
   description: `Enter plan mode for exploring the codebase and designing an implementation plan.
 Use proactively for non-trivial tasks: new features, multi-file changes, architectural decisions, unclear requirements.
 Skip for: single-line fixes, obvious bugs, specific user instructions.`,
-  parameters: z.object({}),
+  inputSchema: z.object({
+    topic: z
+      .string()
+      .describe(
+        'Short 3-6 word description of what this plan addresses, used to name the plan file (e.g. "refactor auth middleware").',
+      ),
+  }),
   // 不提供 execute — 在 Agent Loop 中处理（注入 plan mode 提示 + 等待用户同意）
 })
 
 export const exitPlanMode = tool({
   description:
     'Signal that the plan is complete and ready for user review. The system will read the plan file and present it to the user.',
-  parameters: z.object({}),
+  inputSchema: z.object({}),
   // 不提供 execute — 在 Agent Loop 中处理（读取计划文件 + 展示给用户）
 })
 ```
@@ -1025,8 +1030,7 @@ xc --model custom:doubao-1.5-pro
 
 1. **CLI 参数**：`xc --model anthropic:claude-sonnet-4-5`
 2. **环境变量**：`X_CODE_MODEL=anthropic:claude-sonnet-4-5`
-3. **用户配置文件**：`~/.x-code/config.json` 中的 `model` 字段
-4. **智能默认**：扫描已配置的 API Key，按以下顺序选择第一个可用的提供商：
+3. **智能默认**：扫描已配置的 API Key，按以下顺序选择第一个可用的提供商：
    - `ANTHROPIC_API_KEY` → `anthropic:claude-sonnet-4-5`
    - `OPENAI_API_KEY` → `openai:gpt-4.1`
    - `DEEPSEEK_API_KEY` → `deepseek:deepseek-chat`
@@ -1112,10 +1116,9 @@ export function createModelRegistry() {
 
 1. 命令行 `--model <alias>` / `-m <alias>`（最高优先级）
 2. `X_CODE_MODEL` 环境变量
-3. `~/.x-code/config.json` 里的 `model` 字段
-4. **自动选择**：按顺序扫描环境变量 / config 里已配置的 API Key（Anthropic → OpenAI → DeepSeek → Alibaba → Google → xAI → Zhipu → Moonshot → Custom），第一个有 key 的 Provider 即为默认
+3. **自动选择**：按顺序扫描环境变量里已配置的 API Key（Anthropic → OpenAI → DeepSeek → Alibaba → Google → xAI → Zhipu → Moonshot → Custom），第一个有 key 的 Provider 即为默认
 
-如果**一个 Provider 的 API Key 都没有**，启动时直接报错并打印所有支持的环境变量名和各提供商 Key 获取地址。用户自行设置环境变量或 `~/.x-code/config.json` 后重新启动即可。
+如果**一个 Provider 的 API Key 都没有**，启动时直接报错并打印所有支持的环境变量名和各提供商 Key 获取地址。用户自行设置环境变量后重新启动即可。
 
 > 交互式配置向导不在 MVP 范围内——多数用户在开发环境里设一次环境变量就够了，做一整套 Wizard 是过度工程。
 
@@ -1132,16 +1135,9 @@ export function createModelRegistry() {
 | 智谱 AI   | https://open.bigmodel.cn/usercenter/apikeys   |
 | Moonshot  | https://platform.moonshot.ai/console/api-keys |
 
-### 6.6 配置文件格式
+### 6.6 配置来源
 
-```json
-// ~/.x-code/config.json
-{
-  "model": "deepseek"
-}
-```
-
-配置文件**仅存储模型偏好**（`model` 字段），API Key **只能通过环境变量配置**，不支持写在配置文件中。
+**所有配置都走环境变量**，没有配置文件。用户如果想固定默认模型，设置 `X_CODE_MODEL` 或每次传 `--model`；API Key 同样只读环境变量。实现见 `packages/core/src/config/index.ts` —— 注释里也明确写了 "There is no config file"。这是刻意的简化：一份数据源，不必同步 JSON / env / CLI 三处。
 
 **完整环境变量清单**：
 
@@ -1309,8 +1305,8 @@ const result = streamText({
 
 Monorepo 下有两种构建产物：
 
-- **`@x-code/core`**：TypeScript 编译（`tsc`），输出 `packages/core/dist/`，供 cli 包引用
-- **`@x-code/cli`**：esbuild 打包为单文件 `packages/cli/dist/cli.js`，包含 shebang，可直接执行
+- **`@x-code-cli/core`**：TypeScript 编译（`tsc`），输出 `packages/core/dist/`，供 cli 包引用
+- **`@x-code-cli/cli`**：esbuild 打包为单文件 `packages/cli/dist/cli.js`，包含 shebang，可直接执行
 
 ### esbuild 配置
 
@@ -1339,15 +1335,15 @@ Monorepo 下有两种构建产物：
 ```json
 {
   "build": "pnpm -r run build",
-  "dev": "pnpm --filter @x-code/cli run dev",
+  "dev": "pnpm -r run build && pnpm --filter @x-code-cli/cli run dev",
   "test": "vitest run",
   "test:watch": "vitest",
-  "lint": "eslint .",
-  "lint:fix": "eslint . --fix",
+  "lint": "eslint . --fix",
   "format": "prettier --write .",
   "format:check": "prettier --check .",
   "typecheck": "tsc -b",
-  "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+  "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+  "release": "node scripts/release.mjs"
 }
 ```
 
@@ -1363,10 +1359,11 @@ Monorepo 下有两种构建产物：
 
 ESLint 10、yargs 18 等依赖要求 Node ≥20.19.0。启动时如果检测到低版本 Node，输出明确提示并退出。
 
-### 分发方式（MVP）
+### 分发方式
 
 本地开发：`pnpm build && node packages/cli/dist/cli.js`
 全局链接：`cd packages/cli && pnpm link --global` → 使用 `x-code` 或 `xc` 命令
+npm 发布：`pnpm release`（`scripts/release.mjs`，按 conventional commits 决定版本号）
 
 ---
 
@@ -1567,7 +1564,7 @@ description: Create a well-formatted git commit following project conventions.
 | P2     | **图片/PDF 支持**        | 多模态输入（截图分析、文档阅读）                                                                                                                                                         |
 | P2     | **浏览器自动化**         | Playwright 集成（截图、交互测试）                                                                                                                                                        |
 | P3     | **插件系统**             | 第三方扩展框架                                                                                                                                                                           |
-| P3     | **VSCode 扩展**          | 复用 @x-code/core，IDE 内使用                                                                                                                                                            |
+| P3     | **VSCode 扩展**          | 复用 @x-code-cli/core，IDE 内使用                                                                                                                                                            |
 
 ---
 
@@ -1601,9 +1598,10 @@ description: Create a well-formatted git commit following project conventions.
 
 ~/.x-code/
 ├── AGENTS.md                     ← 全局用户偏好(人写)
-├── memory/auto.md                ← 全局自动记忆
-└── config.json                   ← API Key、默认模型
+└── memory/auto.md                ← 全局自动记忆
 ```
+
+> 没有配置文件。API Key 和默认模型都走环境变量(`ANTHROPIC_API_KEY` / `X_CODE_MODEL` 等),`config/index.ts` 注释里也有明确声明:"There is no config file"。
 
 ### 10.2 AGENTS.md 加载规则
 
@@ -1774,7 +1772,7 @@ interface SessionSummary {
 
 ## 十一、依赖清单
 
-### `@x-code/core` dependencies
+### `@x-code-cli/core` dependencies
 
 | 包                          | 版本     | 用途                                                               |
 | --------------------------- | -------- | ------------------------------------------------------------------ |
@@ -1798,35 +1796,39 @@ interface SessionSummary {
 | `diff`                      | ^8.0.0   | Permission 组件 diff 预览（edit/writeFile 变更对比，latest 8.0.3） |
 | `chalk`                     | ^5.4.0   | 颜色输出（latest 5.6.2）                                           |
 
-### `@x-code/cli` dependencies
+### `@x-code-cli/cli` dependencies
 
-| 包             | 版本         | 用途                                    |
-| -------------- | ------------ | --------------------------------------- |
-| `@x-code/core` | workspace:\* | Agent 逻辑层                            |
-| `ink`          | `npm:@jrichman/ink@6.6.9` | Google/Gemini CLI 维护的 Ink fork（npm alias），自带 cell-level buffer / StyledLine / DEC 2026 同步更新，消除 CJK 抖动 |
-| `react`        | ^19.1.0      | Ink 的 peer dependency（latest 19.2.4） |
-| `yargs`        | ^18.0.0      | CLI 参数解析（latest 18.0.0）           |
-| `chalk`        | ^5.4.0       | 颜色工具（latest 5.6.2）                |
+| 包                 | 版本         | 用途                                    |
+| ------------------ | ------------ | --------------------------------------- |
+| `@x-code-cli/core` | workspace:\* | Agent 逻辑层                            |
+| `ink`              | `npm:@jrichman/ink@6.6.9` | Google/Gemini CLI 维护的 Ink fork（npm alias），自带 cell-level buffer / StyledLine / DEC 2026 同步更新，消除 CJK 抖动 |
+| `react`            | ^19.1.0      | Ink 的 peer dependency                  |
+| `yargs`            | ^18.0.0      | CLI 参数解析                            |
+| `chalk`            | ^5.4.0       | ANSI 颜色（启动提示、header 输出）      |
+| `marked`           | ^17.0.0      | streaming markdown lexer → ANSI 渲染    |
+| `diff`             | ^8.0.0       | Permission 组件 diff 预览               |
 
 ### 根包 devDependencies（共享）
 
 | 包                                      | 版本    | 用途                                                              |
 | --------------------------------------- | ------- | ----------------------------------------------------------------- |
 | `typescript`                            | ^5.7.0  | 类型检查（latest 5.9.3）                                          |
-| `esbuild`                               | ^0.27.0 | 构建打包（latest 0.27.3，注意 0.x 下 ^ 只覆盖同 minor）           |
-| `vitest`                                | ^4.0.0  | 测试框架（latest 4.0.18）                                         |
-| `eslint`                                | ^9.0.0  | 代码检查（ESLint 10 插件生态尚未兼容，暂用 9，latest 9.28.0）     |
-| `typescript-eslint`                     | ^8.0.0  | ESLint TypeScript 支持（latest 8.54.0）                           |
-| `eslint-plugin-react-hooks`             | ^7.0.0  | React Hooks 规则（latest 7.0.1）                                  |
-| `eslint-plugin-unused-imports`          | ^4.0.0  | 自动移除未使用 import（latest 4.3.0）                             |
-| `prettier`                              | ^3.0.0  | 代码格式化（latest 3.8.1）                                        |
-| `@trivago/prettier-plugin-sort-imports` | ^6.0.0  | import 排序（latest 6.0.2）                                       |
-| `husky`                                 | ^9.0.0  | Git hooks（latest 9.1.7）                                         |
-| `lint-staged`                           | ^16.0.0 | 只对暂存文件运行 lint/format（latest 16.2.7）                     |
-| `@types/react`                          | ^19.0.0 | React 类型（latest 19.2.13）                                      |
-| `@types/node`                           | ^22.0.0 | Node.js 类型（latest 22.x，25.x 也可用但我们 target Node 20）     |
-| `@types/yargs`                          | ^17.0.0 | yargs 类型（yargs 18 暂无 @types/yargs@18，沿用 @types/yargs@17） |
-| `ink-testing-library`                   | ^4.0.0  | Ink 组件测试（latest 4.0.0）                                      |
+| `esbuild`                               | ^0.27.0 | 构建打包（0.x 下 ^ 只覆盖同 minor）                              |
+| `vitest`                                | ^4.0.0  | 测试框架                                                          |
+| `eslint`                                | ^10.0.0 | 代码检查（flat config）                                           |
+| `typescript-eslint`                     | ^8.0.0  | ESLint TypeScript 支持                                            |
+| `eslint-plugin-react-hooks`             | ^7.0.0  | React Hooks 规则                                                  |
+| `eslint-plugin-unused-imports`          | ^4.4.1  | 自动移除未使用 import                                             |
+| `prettier`                              | ^3.0.0  | 代码格式化                                                        |
+| `@trivago/prettier-plugin-sort-imports` | ^6.0.0  | import 排序                                                       |
+| `husky`                                 | ^9.0.0  | Git hooks                                                         |
+| `lint-staged`                           | ^16.0.0 | 只对暂存文件运行 lint/format                                      |
+| `@commitlint/cli` + `config-conventional` | ^20.0.0 | conventional commits 校验（commit-msg hook）                    |
+| `tsx`                                   | ^4.21.0 | `pnpm dev` 入口（直接跑 TS 无需先 build）                        |
+| `@types/react`                          | ^19.0.0 | React 类型                                                        |
+| `@types/node`                           | ^22.0.0 | Node.js 类型（target Node 20）                                    |
+| `@types/yargs`                          | ^17.0.0 | yargs 类型（yargs 18 暂无 @types/yargs@18，沿用 17）              |
+| `ink-testing-library`                   | ^4.0.0  | Ink 组件测试（保留依赖，尚未写 cli 侧测试）                       |
 
 ---
 
@@ -1836,7 +1838,7 @@ interface SessionSummary {
 
 **文件**: `eslint.config.mjs`
 
-使用 ESLint 9 flat config 格式（ESLint 10 插件生态尚未兼容，待 typescript-eslint 支持后升级），主要规则集：
+使用 ESLint 10 flat config 格式，主要规则集：
 
 - `typescript-eslint/recommendedTypeChecked` — 基于类型信息的 TS 检查
 - `eslint-plugin-react-hooks` — React Hooks 使用规范
@@ -1859,7 +1861,7 @@ interface SessionSummary {
   "printWidth": 120,
   "trailingComma": "all",
   "plugins": ["@trivago/prettier-plugin-sort-imports"],
-  "importOrder": ["^node:", "^react", "^ink", "^(ai|@ai-sdk)", "^zod", "^@x-code/", "^[./]"],
+  "importOrder": ["^node:", "^react", "^ink", "^(ai|@ai-sdk)", "^zod", "^@x-code-cli/", "^[./]"],
   "importOrderSeparation": true,
   "importOrderSortSpecifiers": true
 }
