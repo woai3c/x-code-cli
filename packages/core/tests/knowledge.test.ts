@@ -1,11 +1,15 @@
 // Tests for the auto-memory system
-import { beforeEach, describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { AutoMemory } from '../src/knowledge/auto-memory.js'
 import type { KnowledgeFact } from '../src/types/index.js'
 
 function createTestMemory() {
-  return new AutoMemory('/tmp/x-code-test-memory-' + Date.now() + '.md')
+  return new AutoMemory(path.join(os.tmpdir(), 'x-code-test-memory-' + Date.now() + Math.random() + '.md'))
 }
 
 describe('AutoMemory', () => {
@@ -91,6 +95,42 @@ describe('AutoMemory', () => {
     memory.evict(90)
     expect(memory.getAll()).toHaveLength(1)
     expect(memory.getAll()[0].key).toBe('new')
+  })
+
+  it('rejects writes with an invalid category (defense in depth)', () => {
+    memory.add({
+      key: 'bogus',
+      fact: 'should be dropped',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      category: 'tech-stack' as any,
+      date: '2026-04-20',
+    })
+    expect(memory.getAll()).toHaveLength(0)
+  })
+
+  it('drops legacy entries under unknown categories on load', async () => {
+    const tmp = path.join(os.tmpdir(), 'x-code-legacy-mem-' + Date.now() + Math.random() + '.md')
+    await fs.writeFile(
+      tmp,
+      `## Auto Memory
+
+### context
+- [2026-04-05] junk-task: user asked for a snake game
+
+### tech-stack
+- [2026-04-05] package-manager: pnpm
+
+### user
+- [2026-04-05] user-role: senior Go engineer
+`,
+      'utf-8',
+    )
+    const mem = new AutoMemory(tmp)
+    await mem.load()
+    const all = mem.getAll()
+    expect(all).toHaveLength(1)
+    expect(all[0].category).toBe('user')
+    await fs.rm(tmp, { force: true })
   })
 
   it('getPromptContent groups by category', () => {

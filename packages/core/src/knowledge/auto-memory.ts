@@ -2,10 +2,20 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import type { KnowledgeFact } from '../types/index.js'
+import type { KnowledgeCategory, KnowledgeFact } from '../types/index.js'
 import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 const MAX_LOAD_LINES = 200
+
+/** Whitelist of valid categories — keep in sync with `KnowledgeCategory` in types/index.ts.
+ *  Anything outside this set is rejected at both write time and parse time so legacy
+ *  entries written by older schema-less versions (`context`, `tech-stack`, `commands`, …)
+ *  don't silently persist across sessions. */
+const VALID_CATEGORIES: ReadonlySet<KnowledgeCategory> = new Set(['user', 'feedback', 'project', 'reference'])
+
+function isValidCategory(c: string): c is KnowledgeCategory {
+  return VALID_CATEGORIES.has(c as KnowledgeCategory)
+}
 
 /**
  * Collapse newlines and trim whitespace — keeps the serialized line-per-fact
@@ -36,8 +46,13 @@ class AutoMemory {
     }
   }
 
-  /** Add or update: same category + same key → replace */
+  /** Add or update: same category + same key → replace. Rejects unknown categories. */
   add(newFact: KnowledgeFact): void {
+    if (!isValidCategory(newFact.category)) {
+      // Defense in depth: the tool schema should have caught this, but if a
+      // caller bypasses it we'd rather drop the write than pollute the file.
+      return
+    }
     // Sanitize so embedded newlines can't break the markdown line format.
     const fact: KnowledgeFact = {
       ...newFact,
@@ -131,7 +146,9 @@ class AutoMemory {
   }
 }
 
-/** Parse markdown memory file back to facts */
+/** Parse markdown memory file back to facts. Drops entries under unknown
+ *  categories so legacy sections (`context`, `tech-stack`, `commands`, …) get
+ *  dropped on next save instead of being re-serialized. */
 function parseMemoryFile(content: string): KnowledgeFact[] {
   const facts: KnowledgeFact[] = []
   let currentCategory = ''
@@ -144,12 +161,12 @@ function parseMemoryFile(content: string): KnowledgeFact[] {
     }
 
     const factMatch = line.match(/^- \[(\d{4}-\d{2}-\d{2})\] (.+?):\s*(.+)$/)
-    if (factMatch && currentCategory) {
+    if (factMatch && isValidCategory(currentCategory)) {
       facts.push({
         date: factMatch[1],
         key: factMatch[2].trim(),
         fact: factMatch[3].trim(),
-        category: currentCategory as KnowledgeFact['category'],
+        category: currentCategory,
       })
     }
   }
