@@ -176,6 +176,8 @@ function writeUserMessage(write: InkWrite, content: string): void {
   const [first = '', ...rest] = lines
   const indentedRest = rest.map((line) => `  ${line}`)
   const body = [`${arrow} ${first}`, ...indentedRest].join('\n')
+  // Leading \n gives one blank row of margin-top so the echo doesn't
+  // crowd against the previous assistant reply's last line of content.
   // Explicit CRLF line breaks — see toCRLF() above for rationale.
-  write(toCRLF(body + '\n\n'))
+  write(toCRLF('\n' + body + '\n\n'))
 }

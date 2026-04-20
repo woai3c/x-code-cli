@@ -349,10 +349,6 @@ export function ChatInput({
   const wasHiddenRef = useRef(false)
   /** How many messages we've already committed to scrollback. */
   const writtenMessageCountRef = useRef(0)
-  const writeStdout = useRef<(data: string) => void>((data) => {
-    process.stdout.write(data)
-  }).current
-
   // Permission dialog: selection index (0 = Yes, 1 = No). Rendered inside
   // our cell buffer — not via Ink — so the dialog never fights our
   // cursor management. Reset to 0 whenever the prompt changes (new tool
@@ -415,20 +411,30 @@ export function ChatInput({
   const safeIndex = matches.length > 0 ? completionIndex % matches.length : 0
   const currentMatch = matches.length > 0 ? matches[safeIndex] : null
 
-  /** Synchronously erase our region and rewind the cursor to its top-left.
-   *  Called before onSubmit so MessageList's echo lands on clean terminal
-   *  rows, and on unmount / when `hidden` flips true. */
-  const eraseRegion = () => {
+  /** Build the ANSI sequence to erase our region and rewind the cursor
+   *  to its top-left. Returned as a string so callers can coalesce it
+   *  with other writes into a single process.stdout.write — critical for
+   *  flicker-free streaming on terminals without DEC 2026 sync support,
+   *  which paint each write() separately. */
+  const buildEraseRegion = (): string => {
     const prevH = prevFrameRef.current.length
+    prevFrameRef.current = []
     if (prevH > 1) {
       let buf = `\x1b[${prevH - 1}A` // up to first row of region
       for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
       buf += `\x1b[${prevH - 1}A` // back up to top
-      process.stdout.write(buf)
-    } else if (prevH === 1) {
-      process.stdout.write('\r\x1b[K')
+      return buf
     }
-    prevFrameRef.current = []
+    if (prevH === 1) return '\r\x1b[K'
+    return ''
+  }
+
+  /** Synchronous erase used by non-effect call sites (handleSubmit pre-echo,
+   *  unmount cleanup, hidden-dialog transitions). Effect path uses
+   *  buildEraseRegion directly and appends to its local buffer instead. */
+  const eraseRegion = () => {
+    const s = buildEraseRegion()
+    if (s) process.stdout.write(s)
   }
 
   const handleSubmit = () => {
@@ -620,13 +626,15 @@ export function ChatInput({
       return
     }
 
-    // Enter DEC 2026 Synchronized Update Mode. Every process.stdout.write
-    // we make until the matching ESU (at the bottom of this effect) gets
-    // buffered by supported terminals and painted as one atomic frame —
-    // so the user never sees the intermediate "frame erased, scrollback
-    // message written, frame not yet redrawn" state that causes a visible
-    // flicker on each tool-result arrival.
-    process.stdout.write(BSU)
+    // Accumulate ALL writes for this render into a single string, flushed
+    // via one process.stdout.write at the bottom. Rationale: DEC 2026
+    // Synchronized Update Mode (BSU/ESU) only buffers inter-write state on
+    // terminals that support it — VS Code terminal and others paint every
+    // separate write() immediately. Coalescing into one write keeps each
+    // render a single atomic paint regardless of terminal support, which
+    // is what actually eliminates the "Thinking + input box flicker every
+    // streaming chunk" symptom.
+    let preBuf = BSU
 
     if (wasHiddenRef.current) {
       // Transitioning out of a dialog. Ink's cell-diff renderer doesn't
@@ -637,8 +645,7 @@ export function ChatInput({
       // `prevH-1` rows and erases the exact rows we own.
       wasHiddenRef.current = false
       if (activeRef.current) {
-        process.stdout.write(RESTORE_CURSOR)
-        eraseRegion()
+        preBuf += RESTORE_CURSOR + buildEraseRegion()
       }
     }
 
@@ -646,7 +653,7 @@ export function ChatInput({
     // We own the terminal below the header — messages are NOT written via
     // Ink (MessageList is retired). If new messages arrived since the last
     // render, erase our current cell frame, emit the messages as plain
-    // scrollback via direct stdout.write, and then redraw the frame fresh
+    // scrollback by appending to preBuf, and then redraw the frame fresh
     // below them. prevFrameRef is cleared so the next cell-diff starts
     // from zero at the new cursor position.
     //
@@ -656,10 +663,13 @@ export function ChatInput({
     }
     if (messages.length > writtenMessageCountRef.current) {
       if (activeRef.current) {
-        eraseRegion()
+        preBuf += buildEraseRegion()
+      }
+      const collectWrite: (data: string) => void = (data) => {
+        preBuf += data
       }
       for (let i = writtenMessageCountRef.current; i < messages.length; i++) {
-        writeMessageToStdout(writeStdout, messages[i])
+        writeMessageToStdout(collectWrite, messages[i])
       }
       writtenMessageCountRef.current = messages.length
     }
@@ -911,14 +921,26 @@ export function ChatInput({
             }
           }
           buf += S_RESET
-
-          // Clear trailing garbage if the old row was wider
-          let oldTailW = 0
-          for (let c = diffIdx; c < prevRow.length; c++) oldTailW += prevRow[c].width
-          let newTailW = 0
-          for (let c = diffIdx; c < nextRow.length; c++) newTailW += nextRow[c].width
-          if (oldTailW > newTailW) {
-            buf += ' '.repeat(oldTailW - newTailW)
+          if (prevRow.length === 0) {
+            // Fresh redraw (post-eraseRegion or first paint). The row may
+            // carry stale chars from scrollback writes that preceded this
+            // frame (e.g. a CJK line whose width miscalculation bumped
+            // residuals onto the spinner/input row). Erase to EOL so we
+            // start from a clean line. We deliberately DON'T do this on
+            // diff updates: the 80 ms spinner tick would then emit an
+            // \x1b[K every frame, which visibly flickers on terminals
+            // without full DEC 2026 sync-update support.
+            buf += '\x1b[K'
+          } else {
+            // Diff update — pad with spaces when the old row was wider.
+            // Invisible on terminals (no SGR change), so no flicker.
+            let oldTailW = 0
+            for (let c = diffIdx; c < prevRow.length; c++) oldTailW += prevRow[c].width
+            let newTailW = 0
+            for (let c = diffIdx; c < nextRow.length; c++) newTailW += nextRow[c].width
+            if (oldTailW > newTailW) {
+              buf += ' '.repeat(oldTailW - newTailW)
+            }
           }
         }
         // else: row identical — skip
@@ -942,11 +964,11 @@ export function ChatInput({
       buf += `\x1b[${maxH - nextH}A`
     }
 
-    // Save cursor AFTER the frame + close the DEC 2026 synchronized
-    // block. All writes since BSU (eraseRegion, message commits, frame
-    // diff, this final save) get rendered as one atomic frame by
-    // terminals that support 2026 — no visible intermediate state.
-    process.stdout.write((buf || '') + SAVE_CURSOR + ESU)
+    // Flush everything as a single write: preBuf (BSU + any erase /
+    // scrollback commits) + frame diff + SAVE_CURSOR + ESU. One write()
+    // = one atomic paint on every terminal, not just those with DEC 2026
+    // support — this is what eliminates the streaming flicker.
+    process.stdout.write(preBuf + buf + SAVE_CURSOR + ESU)
 
     prevFrameRef.current = frame
   })
