@@ -14,6 +14,7 @@
 import { useCallback, useRef } from 'react'
 
 import type { DisplayMessage, ModelMessage } from '@x-code-cli/core'
+import { debugLog } from '@x-code-cli/core'
 
 /**
  * Safety net: extract the text from the most recent assistant message in
@@ -69,6 +70,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
   const appendTextDelta = useCallback(
     (delta: string) => {
       if (!delta) return
+      debugLog('buffer.append', delta)
       bufferRef.current += delta
 
       // Emit every complete line in the buffer. Each is written straight
@@ -79,6 +81,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
         if (nl < 0) break
         const line = bufferRef.current.slice(0, nl + 1) // includes the \n
         bufferRef.current = bufferRef.current.slice(nl + 1)
+        debugLog('buffer.emit-line', line)
         appendMessage(makeStreamChunkMessage(line))
       }
     },
@@ -89,6 +92,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
     const tail = bufferRef.current
     if (!tail) return
     bufferRef.current = ''
+    debugLog('buffer.flush-tail', tail)
     // Emit the remaining partial line. Append a newline so the cursor
     // lands at column 0 for whatever comes next (tool call indicator /
     // next turn's content / input box repaint).

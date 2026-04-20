@@ -9,6 +9,7 @@ import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
+import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { estimateTokenCount, getCompressionThreshold } from './context-window.js'
 import { createLoopState } from './loop-state.js'
@@ -94,15 +95,22 @@ async function handleContextTooLong(
 async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks): Promise<void> {
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'text-delta') {
-      callbacks.onTextDelta(chunk.text ?? '')
+      const text = chunk.text ?? ''
+      debugLog('stream.text-delta', text)
+      callbacks.onTextDelta(text)
     } else if (chunk.type === 'tool-call') {
+      debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
       callbacks.onToolCall(chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
     } else if (chunk.type === 'tool-result') {
       // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
+      debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
+    } else {
+      debugLog('stream.other-chunk', chunk.type)
     }
-    // reasoning-delta / reasoning-start / reasoning-end: intentionally dropped.
+    // reasoning-delta / reasoning-start / reasoning-end: intentionally dropped from UI
+    // but logged above under stream.other-chunk so we can see them in debug mode.
   }
 }
 
@@ -185,6 +193,7 @@ async function runTurn(
 
   try {
     const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks)
+    debugLog('turn.finish', `reason=${finishReason} turn=${state.turnCount} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`)
     return { kind: 'done', finishReason, result }
   } catch (err) {
     drainStreamResult(result)
@@ -265,6 +274,7 @@ export async function agentLoop(
     if (outcome.finishReason === 'length') {
       if (continuationAttempts < MAX_CONTINUATIONS) {
         continuationAttempts++
+        debugLog('turn.length-continuation', `attempt=${continuationAttempts}/${MAX_CONTINUATIONS} turn=${state.turnCount}`)
         // Nudge the model to pick up exactly where it stopped. This goes
         // into state.messages but NOT into UI messages, so the user sees
         // one continuous streamed reply with at most a brief pause.

@@ -15,10 +15,12 @@ export type {
   LanguageModel,
 } from './types/index.js'
 
-export { MODEL_ALIASES, PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS } from './types/index.js'
+export { MODEL_ALIASES, PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS, PROVIDER_MODELS } from './types/index.js'
+export type { ProviderModel } from './types/index.js'
 
 // Config
-export { resolveModelId, getAvailableProviders, getEnvVarName } from './config/index.js'
+export { resolveModelId, getAvailableProviders, getEnvVarName, loadUserConfig, saveUserConfig } from './config/index.js'
+export type { UserConfig } from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry } from './providers/registry.js'
@@ -36,7 +38,7 @@ export { getShellConfig } from './tools/shell-utils.js'
 export { checkPermission, getPermissionLevel } from './permissions/index.js'
 
 // Utils
-export { GLOBAL_XCODE_DIR, XCODE_DIR } from './utils.js'
+export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog } from './utils.js'
 
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'

@@ -24,7 +24,7 @@ import { Chalk } from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { GLOBAL_XCODE_DIR } from '@x-code-cli/core'
+import { GLOBAL_XCODE_DIR, debugLog } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderMarkdown } from './render-markdown.js'
@@ -121,6 +121,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
     debugDump('USER MESSAGE', content)
+    debugLog('stdout.user', content)
     writeUserMessage(write, content)
     return
   }
@@ -128,6 +129,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   // Assistant message — may have tool calls, a text body, or both.
   if (msg.toolCalls && msg.toolCalls.length > 0) {
     for (const tc of msg.toolCalls) {
+      debugLog('stdout.tool-call-line', `${tc.toolName} ${tc.status}`)
       write(toCRLF(normalizeLineEndings(formatToolCall(tc)) + '\n'))
     }
   }
@@ -135,6 +137,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   if (msg.content) {
     const content = normalizeLineEndings(msg.content)
     debugDump('ASSISTANT MESSAGE', content)
+    debugLog(msg.streamingChunk ? 'stdout.assistant-chunk' : 'stdout.assistant-full', content)
 
     // Special-case pure-whitespace streaming chunks (e.g. a bare "\n"
     // = paragraph break marker between two lines of prose). Markdown
