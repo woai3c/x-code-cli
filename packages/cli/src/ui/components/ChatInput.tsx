@@ -798,11 +798,16 @@ export function ChatInput({
       // message already ends with `\n\n` → one blank row is ALREADY
       // there, and adding another would make the gap look too large.
       if (permission) frame.push([])
-      const cells: Cell[] = []
-      cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(glyph, S_SPINNER))
-      cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`${spinner.label}...`, S_SPINNER))
+      // Build the whole prefix (` ${glyph} ${label}...`) under ONE style
+      // (S_SPINNER) instead of alternating S_NONE / S_SPINNER per cell.
+      // Why: each cell with a different style emits an SGR escape in the
+      // diff loop, and on terminals that don't perfectly atomize DEC
+      // 2026 sync-update those escapes arrive with visible spacing —
+      // the user perceives the "Thinking" label flashing default-color
+      // → blue → default → blue as the spaces in between trigger
+      // resets. Keeping one continuous SGR run for the whole prefix
+      // makes the row paint as one solid blue stripe.
+      const cells: Cell[] = textToCells(` ${glyph} ${spinner.label}...`, S_SPINNER)
       if (meta) cells.push(...textToCells(meta, S_DIM))
       frame.push(cells)
     }
