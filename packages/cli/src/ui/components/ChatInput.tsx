@@ -662,6 +662,30 @@ export function ChatInput({
     // streaming chunk" symptom.
     let preBuf = BSU
 
+    // ABSOLUTE cursor anchor — `\x1b[{ROWS};1H` parks the cursor at the
+    // bottom-left of the terminal before any other write. Why this is
+    // critical: every relative movement in the rest of this useEffect
+    // (`\x1b[NA` up, `\x1b[1B` down, `\n`, `\r`, eraseRegion's CUU/CUD
+    // dance) assumes "cursor is wherever the previous render left it".
+    // Under PowerShell ConHost (which doesn't perfectly atomize DEC 2026)
+    // that assumption breaks the moment the terminal scrolls or any
+    // background process touches stdout — and once it breaks, every
+    // subsequent render lands content on the wrong row, which the user
+    // perceives as "rendered partially then nothing else appears".
+    //
+    // Anchoring here means: this component's cell buffer always lives at
+    // the bottom `prevH` rows of the terminal. eraseRegion's `\x1b[(prevH-1)A`
+    // now reliably lands on the top of the cell buffer, the diff loop's
+    // row iteration is always within the cell buffer rows, and message
+    // writes during a commit get inserted just above (terminal scrolls
+    // banner / older history into scrollback, exactly as desired). This
+    // is the same property Claude Code's vendored ink fork gets via its
+    // `Screen` abstraction (viewport tracking + DECSTBM scroll regions);
+    // a single absolute-position escape gives us the same robustness
+    // without porting their full screen-buffer engine.
+    const termRows = stdout?.rows ?? 25
+    preBuf += `\x1b[${termRows};1H`
+
     if (wasHiddenRef.current) {
       // Transitioning out of a dialog. We used to RESTORE_CURSOR (\x1b8)
       // back to a position we'd previously DECSC'd — but that single
