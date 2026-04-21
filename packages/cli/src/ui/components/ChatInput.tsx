@@ -1043,6 +1043,12 @@ export function ChatInput({
       'chatinput.flush',
       `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
     )
+    // Optional verbose payload dump (DEBUG_STDOUT_PAYLOAD=1). Captures the
+    // exact bytes written so we can replay them and verify whether content
+    // missing from the terminal display was actually delivered.
+    if (process.env.DEBUG_STDOUT_PAYLOAD === '1') {
+      debugLog('chatinput.flush.payload', JSON.stringify(payload))
+    }
     const ok = process.stdout.write(payload)
     if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
 
