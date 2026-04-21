@@ -662,30 +662,6 @@ export function ChatInput({
     // streaming chunk" symptom.
     let preBuf = BSU
 
-    // ABSOLUTE cursor anchor — `\x1b[{ROWS};1H` parks the cursor at the
-    // bottom-left of the terminal before any other write. Why this is
-    // critical: every relative movement in the rest of this useEffect
-    // (`\x1b[NA` up, `\x1b[1B` down, `\n`, `\r`, eraseRegion's CUU/CUD
-    // dance) assumes "cursor is wherever the previous render left it".
-    // Under PowerShell ConHost (which doesn't perfectly atomize DEC 2026)
-    // that assumption breaks the moment the terminal scrolls or any
-    // background process touches stdout — and once it breaks, every
-    // subsequent render lands content on the wrong row, which the user
-    // perceives as "rendered partially then nothing else appears".
-    //
-    // Anchoring here means: this component's cell buffer always lives at
-    // the bottom `prevH` rows of the terminal. eraseRegion's `\x1b[(prevH-1)A`
-    // now reliably lands on the top of the cell buffer, the diff loop's
-    // row iteration is always within the cell buffer rows, and message
-    // writes during a commit get inserted just above (terminal scrolls
-    // banner / older history into scrollback, exactly as desired). This
-    // is the same property Claude Code's vendored ink fork gets via its
-    // `Screen` abstraction (viewport tracking + DECSTBM scroll regions);
-    // a single absolute-position escape gives us the same robustness
-    // without porting their full screen-buffer engine.
-    const termRows = stdout?.rows ?? 25
-    preBuf += `\x1b[${termRows};1H`
-
     if (wasHiddenRef.current) {
       // Transitioning out of a dialog. We used to RESTORE_CURSOR (\x1b8)
       // back to a position we'd previously DECSC'd — but that single
@@ -948,9 +924,33 @@ export function ChatInput({
 
     let buf = ''
 
-    // After the previous render the cursor sits on the LAST row (prevH-1).
-    // Move up to row 0 so we can diff top-down.
-    if (prevH > 1) {
+    // Cursor-anchor policy. Two cases:
+    //
+    //   prevH > 0  — previous render parked the cursor at the last row of
+    //     the prev frame (see park code below). Relative up-move from there
+    //     reliably lands on the prev frame's top row, wherever the frame
+    //     actually sits on screen. Anchoring absolutely to (termRows,1) in
+    //     this case is HARMFUL: when the frame shrank last render (park
+    //     moved cursor UP by the shrink delta), an absolute jump to
+    //     termRows overshoots the real frame position and the subsequent
+    //     `\x1b[prevH-1 A` undershoots the frame top — leaving the top
+    //     (prevH - nextH_previous) rows of the drifted prev frame
+    //     un-erased and visible as a GHOST duplicate above the new frame.
+    //     This was the 3.png/4.png "两个 thinking" bug.
+    //
+    //   prevH === 0 — either first paint, a wasHiddenRef reset (Ink's
+    //     dialog left the cursor somewhere unpredictable), or a just-
+    //     completed scrollback commit (buildEraseRegion reset the ref).
+    //     In the first two the cursor row is unknown; in the third it's
+    //     at termRows from the scroll. Teleport to (termRows,1) to pin
+    //     the frame's bottom row at the terminal's bottom row — identical
+    //     behavior to the scrollback-commit case, no-op in that case.
+    if (prevH === 0) {
+      const termRows = stdout?.rows ?? 25
+      buf += `\x1b[${termRows};1H`
+    } else if (prevH > 1) {
+      // After the previous render the cursor sits on the LAST row (prevH-1).
+      // Move up to row 0 so we can diff top-down.
       buf += `\x1b[${prevH - 1}A`
     }
 
