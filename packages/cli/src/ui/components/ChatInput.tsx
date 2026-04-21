@@ -227,16 +227,15 @@ const S_INV = '\x1b[7m'
 const S_INV_OFF = '\x1b[27m'
 const S_NONE = ''
 
-/** DEC save/restore cursor position. We save at the end of every frame
- *  render so that when Ink briefly paints a Permission/SelectOptions
- *  dialog over our region, we can return the terminal cursor to a known
- *  anchor (end of our frame's last row) before running eraseRegion.
- *  Relying on Ink's own cleanup cursor position is unreliable — the
- *  @jrichman/ink fork uses cell-level diffing and the cursor it leaves
- *  after clearing a dialog doesn't always coincide with the start of
- *  that dialog area, so `\x1b[prevH-1 A` can land on the wrong row. */
-const SAVE_CURSOR = '\x1b7'
-const RESTORE_CURSOR = '\x1b8'
+// NOTE: `\x1b7` / `\x1b8` (DECSC / DECRC) are DELIBERATELY NOT used
+// anywhere in this file. The terminal provides a single save register,
+// and Ink's own log-update reuses it on every render cycle — co-owning
+// it from two places was producing "ghost" restore positions. We
+// reconstruct cursor position with relative moves (CUU / CUD / \r /
+// \x1b[NG absolute-column) and by treating post-dialog transitions as
+// fresh first-paints (prevFrameRef cleared), which removes the cross-
+// writer contention entirely. See the wasHidden handler below for the
+// transition-case reasoning.
 
 /** DEC 2026 "Synchronized Update Mode". Between BSU and ESU, supported
  *  terminals buffer all output and render it as a single atomic frame.
@@ -439,11 +438,15 @@ export function ChatInput({
   }
 
   /** Synchronous erase used by non-effect call sites (handleSubmit pre-echo,
-   *  unmount cleanup, hidden-dialog transitions). Effect path uses
-   *  buildEraseRegion directly and appends to its local buffer instead. */
+   *  unmount cleanup, hidden-dialog transitions). Wrapped in BSU/ESU
+   *  so the terminal renders the erase atomically — without this wrap
+   *  the multi-step cursor+\x1b[K sequence paints visibly on terminals
+   *  that don't auto-batch writes (observed on Windows ConHost). Effect
+   *  path uses buildEraseRegion directly and appends to its local
+   *  buffer (already BSU/ESU-wrapped by the outer render). */
   const eraseRegion = () => {
     const s = buildEraseRegion()
-    if (s) process.stdout.write(s)
+    if (s) process.stdout.write(BSU + s + ESU)
   }
 
   const handleSubmit = () => {
@@ -453,13 +456,15 @@ export function ChatInput({
     // only Enter is suppressed, matching Claude Code's behavior.
     if (spinner) return
     const expanded = expandPasteRefs(text, pastedContents)
-    // Wipe our stdout footprint BEFORE triggering state changes. That way
-    // when MessageList's useEffect fires and writes the user-echo via
-    // Ink's coordinated `write`, the terminal cursor is already at the
-    // top of an empty region — the echo doesn't overwrite our bottom
-    // separator, and our next frame draws fresh below the echo.
-    eraseRegion()
-    activeRef.current = false
+    // Let the normal render useEffect handle the transition. The next
+    // render sees `messages.length > writtenMessageCountRef` (user-echo
+    // just got appended inside onSubmit) and emits a single atomic
+    // BSU/ESU-wrapped payload of: eraseRegion + writeMessageToStdout +
+    // new frame. An extra synchronous eraseRegion here used to exist
+    // "to clear space for MessageList's separate scrollback write", but
+    // MessageList has been retired — this component owns both the
+    // frame and the scrollback commit, so the redundant write was just
+    // a second non-atomic flash on every submit.
     onSubmit(expanded)
     dispatch({ type: 'RESET' })
     setPastedContents({})
@@ -646,16 +651,22 @@ export function ChatInput({
     let preBuf = BSU
 
     if (wasHiddenRef.current) {
-      // Transitioning out of a dialog. Ink's cell-diff renderer doesn't
-      // guarantee where it leaves the terminal cursor after clearing a
-      // dialog, so we use the DEC-saved cursor position (captured at
-      // the end of our last frame render) as a reliable anchor: jump
-      // back to the end of our previous frame, THEN eraseRegion rewinds
-      // `prevH-1` rows and erases the exact rows we own.
+      // Transitioning out of a dialog. We used to RESTORE_CURSOR (\x1b8)
+      // back to a position we'd previously DECSC'd — but that single
+      // terminal-level save register is ALSO used internally by Ink's
+      // own log-update cycle for its own cursor bookkeeping. Two
+      // writers, one register: every Ink render that cycled through its
+      // save/restore clobbered ours, so the restore here could land at
+      // Ink's saved position rather than our frame's bottom row.
+      //
+      // Instead of fighting for the register, treat the post-dialog
+      // frame as a fresh first-paint: drop prevFrameRef (so the diff
+      // loop does full-row writes with \x1b[K, no stale assumptions)
+      // and let Ink's log.clear leave the cursor wherever it ends up.
+      // We redraw starting from THAT position.
       wasHiddenRef.current = false
-      if (activeRef.current) {
-        preBuf += RESTORE_CURSOR + buildEraseRegion()
-      }
+      prevFrameRef.current = []
+      activeRef.current = false
     }
 
     // ── Commit new scrollback messages ───────────────────────────────────
@@ -979,10 +990,16 @@ export function ChatInput({
     }
 
     // Flush everything as a single write: preBuf (BSU + any erase /
-    // scrollback commits) + frame diff + SAVE_CURSOR + ESU. One write()
-    // = one atomic paint on every terminal, not just those with DEC 2026
-    // support — this is what eliminates the streaming flicker.
-    const payload = preBuf + buf + SAVE_CURSOR + ESU
+    // scrollback commits) + frame diff + ESU. One write() = one atomic
+    // paint on every terminal, not just those with DEC 2026 support —
+    // this is what eliminates the streaming flicker. NOTE: we no longer
+    // tack on SAVE_CURSOR (\x1b7) at the end. That DEC save register is
+    // single-slot AND shared with Ink's log-update internals, so our
+    // save was being clobbered on every Ink tree reconcile. Instead we
+    // rely on relative cursor movement (`\x1b[prevH-1 A` at the top of
+    // the next render) from wherever this frame left the cursor — no
+    // global register dependency.
+    const payload = preBuf + buf + ESU
     debugLog(
       'chatinput.flush',
       `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
