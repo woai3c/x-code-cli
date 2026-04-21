@@ -156,11 +156,20 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       .map((line) => (line ? `  ${line}` : line))
       .join('\n')
     if (msg.streamingChunk) {
-      // Streaming chunks are ONE line of content (always ends with \n in
-      // the source text). Emit without the trailing blank line so the
-      // next chunk lands on the immediately following row, forming a
-      // continuous paragraph in scrollback.
-      write(toCRLF(indented))
+      // Streaming chunks carry their own trailing newline(s) — renderMarkdown
+      // emits "line\n" for list items, "line\n" for headings, and "line\n\n"
+      // when a block is followed by a paragraph-break space token. The
+      // indented `  ${line}` mapping preserves those trailing \ns as-is.
+      //
+      // We MUST ensure the chunk ends in at least one \n so the cursor
+      // advances to the next row: the subsequent frame redraw starts from
+      // wherever writeMessage left the cursor, and if we emit text without
+      // a newline, the next row-0 of the frame overwrites the chunk text.
+      // Belt-and-suspenders: append one \n if renderMarkdown returned a
+      // trailing-newline-less body (theoretically possible for unknown
+      // token shapes or the catch-fallback plain-text path).
+      const out = indented.endsWith('\n') ? indented : indented + '\n'
+      write(toCRLF(out))
     } else {
       write(toCRLF(indented + '\n\n'))
     }

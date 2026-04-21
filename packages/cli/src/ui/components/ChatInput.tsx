@@ -699,6 +699,7 @@ export function ChatInput({
     if (messages.length < writtenMessageCountRef.current) {
       writtenMessageCountRef.current = messages.length
     }
+    let didCommitMessages = false
     if (messages.length > writtenMessageCountRef.current) {
       if (activeRef.current) {
         preBuf += buildEraseRegion()
@@ -710,6 +711,7 @@ export function ChatInput({
         writeMessageToStdout(collectWrite, messages[i])
       }
       writtenMessageCountRef.current = messages.length
+      didCommitMessages = true
     }
 
     activeRef.current = true
@@ -924,9 +926,9 @@ export function ChatInput({
 
     let buf = ''
 
-    // Cursor-anchor policy. Two cases:
+    // Cursor-anchor policy. Three cases:
     //
-    //   prevH > 0  — previous render parked the cursor at the last row of
+    //   prevH > 0 — previous render parked the cursor at the last row of
     //     the prev frame (see park code below). Relative up-move from there
     //     reliably lands on the prev frame's top row, wherever the frame
     //     actually sits on screen. Anchoring absolutely to (termRows,1) in
@@ -934,20 +936,30 @@ export function ChatInput({
     //     moved cursor UP by the shrink delta), an absolute jump to
     //     termRows overshoots the real frame position and the subsequent
     //     `\x1b[prevH-1 A` undershoots the frame top — leaving the top
-    //     (prevH - nextH_previous) rows of the drifted prev frame
-    //     un-erased and visible as a GHOST duplicate above the new frame.
-    //     This was the 3.png/4.png "两个 thinking" bug.
+    //     rows of the drifted prev frame un-erased and visible as a GHOST
+    //     duplicate above the new frame (3.png/4.png "两个 thinking" bug).
     //
-    //   prevH === 0 — either first paint, a wasHiddenRef reset (Ink's
-    //     dialog left the cursor somewhere unpredictable), or a just-
-    //     completed scrollback commit (buildEraseRegion reset the ref).
-    //     In the first two the cursor row is unknown; in the third it's
-    //     at termRows from the scroll. Teleport to (termRows,1) to pin
-    //     the frame's bottom row at the terminal's bottom row — identical
-    //     behavior to the scrollback-commit case, no-op in that case.
+    //   prevH === 0 AND didCommitMessages — buildEraseRegion just reset
+    //     the ref, and writeMessageToStdout left the cursor on the row
+    //     IMMEDIATELY below the last message content (streamingChunk
+    //     writes end in \r\n; non-streaming in \r\n\r\n). Do NOT teleport:
+    //     the frame should start drawing right where the cursor is so it
+    //     lands flush against the scrollback, with zero blank rows between
+    //     the streamed line and the frame's top. Teleporting to termRows
+    //     here is what PRODUCED the "2 empty rows between every bullet"
+    //     bug — the (nextH-1) \n-scrolls then carried the erase's blanks
+    //     up along with the message text.
+    //
+    //   prevH === 0 AND !didCommitMessages — first paint or wasHiddenRef
+    //     reset. Cursor row is unknown (Ink's banner / post-dialog
+    //     position). Teleport to (termRows,1) to pin the frame's bottom
+    //     at the terminal's bottom row.
     if (prevH === 0) {
-      const termRows = stdout?.rows ?? 25
-      buf += `\x1b[${termRows};1H`
+      if (!didCommitMessages) {
+        const termRows = stdout?.rows ?? 25
+        buf += `\x1b[${termRows};1H`
+      }
+      // else: cursor already at the row right after the scrollback commit.
     } else if (prevH > 1) {
       // After the previous render the cursor sits on the LAST row (prevH-1).
       // Move up to row 0 so we can diff top-down.
