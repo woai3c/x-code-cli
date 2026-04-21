@@ -256,15 +256,17 @@ const S_NONE = '\x1b[0m'
  *  only the final state, never the intermediate blank region.
  *  Unsupported terminals silently ignore these sequences.
  *
- *  Paired with cursor hide/show (DECTCEM — `\x1b[?25l` / `\x1b[?25h`):
- *  on PowerShell ConHost DEC 2026 is parsed but not fully atomized, so
- *  the multi-step cursor dance (up-N, move-to-col, write diff, down-N,
- *  park) flashes a visible caret across the frame mid-render. Hiding
- *  the cursor for the duration of the atomic payload makes ConHost's
- *  non-atomic paint path look smooth — the user sees only the final
- *  frame state, not the cursor trail through each escape sequence. */
+ *  Paired with DECTCEM hide (`\x1b[?25l`) in BSU, but NOT with a show
+ *  at ESU: the input box paints its own cursor as an inverse-video
+ *  cell (S_INV). If we re-enabled the real terminal cursor at ESU, it
+ *  would end up parked at the end of the bottom separator after the
+ *  diff loop — visible as a SECOND caret next to the inverse block
+ *  (image.png "两个光标"). Keeping the real cursor hidden for the
+ *  lifetime of the TUI means the inverse cell is the ONE visible
+ *  cursor. The process exit handler in index.ts emits `\x1b[?25h` to
+ *  restore cursor visibility after the TUI tears down. */
 const BSU = '\x1b[?2026h\x1b[?25l'
-const ESU = '\x1b[?25h\x1b[?2026l'
+const ESU = '\x1b[?2026l'
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
