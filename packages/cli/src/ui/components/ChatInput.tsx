@@ -216,7 +216,18 @@ const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
 const S_ERROR_FG = '\x1b[38;2;255;107;128m' // error rgb(255,107,128) #ff6b80
 const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'
-const S_DIM = '\x1b[2m'
+// NB: leading `\x1b[0m` matters. Plain `\x1b[2m` just adds the "dim"
+// attribute ON TOP of whatever foreground color is active — so meta
+// text rendered after a colored span (e.g. the spinner row, where
+// S_SPINNER blue is emitted just before the meta transition) comes out
+// as BLUE-dim instead of gray-dim. And on a spinner tick where only
+// the seconds cell changes, the diff loop emits S_NONE (reset) first
+// and then S_DIM starting from the seconds digit — so the SAME meta
+// text is redrawn as WHITE-dim. Result: meta flashes white/blue every
+// tick depending on which diff path fires ("一会白一会蓝"). Resetting
+// SGR first then applying dim pins the color to the terminal default,
+// so meta looks consistent regardless of prior SGR state.
+const S_DIM = '\x1b[0m\x1b[2m'
 // S_NONE means "default styling — no fg color, no attribute" and MUST
 // be a non-empty escape, otherwise the cell-diff loop's
 // `if (cell.style !== lastStyle) buf += cell.style` branch emits an
@@ -445,15 +456,22 @@ export function ChatInput({
    *  to its top-left. Returned as a string so callers can coalesce it
    *  with other writes into a single process.stdout.write — critical for
    *  flicker-free streaming on terminals without DEC 2026 sync support,
-   *  which paint each write() separately. */
+   *  which paint each write() separately.
+   *
+   *  Uses `\x1b[{prevH-1}A` (up to top of region) followed by `\x1b[J`
+   *  (erase from cursor to end of display) — a 2-escape sequence that
+   *  does the same job as the previous per-row `\r\x1b[K\x1b[1B` dance
+   *  (2*prevH+2 escapes). Fewer escapes = smaller intermediate-state
+   *  window on ConHost, which is the terminal where the user reports
+   *  "渲染几行内容后 thinking 和输入框会上下抖动一下". The cursor ends
+   *  at the top-left of the region (column 1 reset by \r below the J,
+   *  left where the up-move placed it by J itself since \x1b[J does
+   *  not move the cursor). */
   const buildEraseRegion = (): string => {
     const prevH = prevFrameRef.current.length
     prevFrameRef.current = []
     if (prevH > 1) {
-      let buf = `\x1b[${prevH - 1}A` // up to first row of region
-      for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
-      buf += `\x1b[${prevH - 1}A` // back up to top
-      return buf
+      return `\x1b[${prevH - 1}A\r\x1b[J`
     }
     if (prevH === 1) return '\r\x1b[K'
     return ''
