@@ -15,10 +15,10 @@ import { Chalk } from 'chalk'
 import { type Token, marked } from 'marked'
 
 import {
-  ACCENT as HEADING,
-  ACCENT_DIM as CODE_LANG,
-  BLUE_PURPLE as CODE_COLOR,
   PROMPT_BORDER as BLOCKQUOTE,
+  BLUE_PURPLE as CODE_COLOR,
+  ACCENT_DIM as CODE_LANG,
+  ACCENT as HEADING,
   SPINNER_BLUE as LINK,
 } from './theme.js'
 

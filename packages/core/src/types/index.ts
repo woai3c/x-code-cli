@@ -151,7 +151,11 @@ export interface ProviderModel {
  */
 export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
   anthropic: [
-    { id: 'anthropic:claude-sonnet-4-5', label: 'Sonnet 4.5', description: 'Balanced default — good for coding + reasoning' },
+    {
+      id: 'anthropic:claude-sonnet-4-5',
+      label: 'Sonnet 4.5',
+      description: 'Balanced default — good for coding + reasoning',
+    },
     { id: 'anthropic:claude-opus-4-6', label: 'Opus 4.6', description: 'Most capable, slower and pricier' },
     { id: 'anthropic:claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest, cheapest — shorter replies' },
   ],
@@ -181,12 +185,8 @@ export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
     { id: 'xai:grok-3', label: 'Grok 3', description: '131k context' },
     { id: 'xai:grok-3-mini', label: 'Grok 3 Mini', description: 'Smaller/cheaper variant' },
   ],
-  zhipu: [
-    { id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: '128k context' },
-  ],
-  moonshotai: [
-    { id: 'moonshotai:kimi-k2.5', label: 'Kimi K2.5', description: '131k context' },
-  ],
+  zhipu: [{ id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: '128k context' }],
+  moonshotai: [{ id: 'moonshotai:kimi-k2.5', label: 'Kimi K2.5', description: '131k context' }],
 }
 
 // ─── Provider API key URLs ───

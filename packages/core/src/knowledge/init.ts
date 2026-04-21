@@ -122,4 +122,3 @@ const PREFERENCES_TEMPLATE = `# Personal Preferences
   - Don't run the test suite unless I ask
 -->
 `
-

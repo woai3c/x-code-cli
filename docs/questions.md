@@ -17,13 +17,13 @@
 
 ### 2. 知识系统有哪些文件，优先级是什么
 
-| 角色 | 路径 | 写入方式 | 加载机制 |
-|---|---|---|---|
-| 项目说明 | 项目根 `AGENTS.md` | 人写 | 每次 session 必加载；monorepo 从 cwd 向上遍历收集 |
-| 全局偏好 | `~/.x-code/AGENTS.md` | 人写 | 每次 session 必加载 |
-| 本地偏好 | `.x-code/local/preferences.md` | 人写（gitignored） | 每次 session 必加载 |
-| 项目记忆 | `.x-code/memory/auto.md` | AI 调 `saveKnowledge` 工具 | 每次加载，90 天 TTL 自动驱逐（`auto-memory.ts::evict()` + `initMemories()`） |
-| 全局记忆 | `~/.x-code/memory/auto.md` | AI 调 `saveKnowledge` 工具（scope=global） | 同上 |
+| 角色     | 路径                           | 写入方式                                   | 加载机制                                                                     |
+| -------- | ------------------------------ | ------------------------------------------ | ---------------------------------------------------------------------------- |
+| 项目说明 | 项目根 `AGENTS.md`             | 人写                                       | 每次 session 必加载；monorepo 从 cwd 向上遍历收集                            |
+| 全局偏好 | `~/.x-code/AGENTS.md`          | 人写                                       | 每次 session 必加载                                                          |
+| 本地偏好 | `.x-code/local/preferences.md` | 人写（gitignored）                         | 每次 session 必加载                                                          |
+| 项目记忆 | `.x-code/memory/auto.md`       | AI 调 `saveKnowledge` 工具                 | 每次加载，90 天 TTL 自动驱逐（`auto-memory.ts::evict()` + `initMemories()`） |
+| 全局记忆 | `~/.x-code/memory/auto.md`     | AI 调 `saveKnowledge` 工具（scope=global） | 同上                                                                         |
 
 **加载顺序**（`buildKnowledgeContext` 的拼接顺序，`loader.ts`），后出现的在 prompt 末尾、模型权重更高：
 
@@ -166,11 +166,11 @@ Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware str
 
 先澄清三个概念：
 
-| 名词 | 是什么 | 本项目现状 |
-|---|---|---|
-| **内置 tool** | 项目里 13 个用 AI SDK `tool({ description, inputSchema, execute })` 定义的函数 | ✅ 已有 |
-| **MCP tool** | Anthropic 推的 **Model Context Protocol** 规范的外部工具：独立进程（stdio / SSE）+ JSON-RPC 协议，第三方可以用任意语言实现工具 server | ❌ 未接入 |
-| **Skill** | Claude Code 的概念：`SKILL.md` + 可选脚本，预先注册一段 system-prompt 片段 + 触发条件，让用户定义"工作流" | ❌ 未接入 |
+| 名词          | 是什么                                                                                                                                | 本项目现状 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **内置 tool** | 项目里 13 个用 AI SDK `tool({ description, inputSchema, execute })` 定义的函数                                                        | ✅ 已有    |
+| **MCP tool**  | Anthropic 推的 **Model Context Protocol** 规范的外部工具：独立进程（stdio / SSE）+ JSON-RPC 协议，第三方可以用任意语言实现工具 server | ❌ 未接入  |
+| **Skill**     | Claude Code 的概念：`SKILL.md` + 可选脚本，预先注册一段 system-prompt 片段 + 触发条件，让用户定义"工作流"                             | ❌ 未接入  |
 
 所以**内置 tool ≠ MCP tool**——它们只是"工具"这个抽象概念的两种实现：一种是进程内的 JS 函数，一种是跨进程的 JSON-RPC 服务。
 
@@ -192,16 +192,16 @@ Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware str
 
 **按作用域分层**，从"全场景恒定"到"任务临时"：
 
-| 层级 | 位置 | 内容 |
-|---|---|---|
-| 系统 prompt 硬编码 | `core/src/agent/system-prompt.ts` | 身份、工具清单、`File Operations` / `Command Execution` / `Interaction` / `Security` / `Response Format` 五段规则、`Auto Memory Guidelines` |
-| Plan mode overlay | `system-prompt.ts::PLAN_MODE_PROMPT` | 只读工具限制 |
-| 权限规则（代码层） | `core/src/permissions/index.ts` | 13 个工具的 `always-allow` / `ask` / `deny` 分级 |
-| Shell 命令分级 | `core/src/tools/shell-utils.ts` | `isReadOnly` / `isDestructive` 判定 |
-| 工具 description | `core/src/tools/*.ts` 各文件 | 每个工具 schema 里的自然语言说明 |
-| 项目说明 | 项目根 `AGENTS.md` | 团队共享的项目规范、技术栈、命令、约定、业务背景 |
-| 用户长期偏好 | `~/.x-code/AGENTS.md` / `.x-code/local/preferences.md` | 自由 markdown |
-| 运行时学到的事实 | `.x-code/memory/auto.md` / `~/.x-code/memory/auto.md` | AI 通过 `saveKnowledge` 工具写入 |
+| 层级               | 位置                                                   | 内容                                                                                                                                        |
+| ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 系统 prompt 硬编码 | `core/src/agent/system-prompt.ts`                      | 身份、工具清单、`File Operations` / `Command Execution` / `Interaction` / `Security` / `Response Format` 五段规则、`Auto Memory Guidelines` |
+| Plan mode overlay  | `system-prompt.ts::PLAN_MODE_PROMPT`                   | 只读工具限制                                                                                                                                |
+| 权限规则（代码层） | `core/src/permissions/index.ts`                        | 13 个工具的 `always-allow` / `ask` / `deny` 分级                                                                                            |
+| Shell 命令分级     | `core/src/tools/shell-utils.ts`                        | `isReadOnly` / `isDestructive` 判定                                                                                                         |
+| 工具 description   | `core/src/tools/*.ts` 各文件                           | 每个工具 schema 里的自然语言说明                                                                                                            |
+| 项目说明           | 项目根 `AGENTS.md`                                     | 团队共享的项目规范、技术栈、命令、约定、业务背景                                                                                            |
+| 用户长期偏好       | `~/.x-code/AGENTS.md` / `.x-code/local/preferences.md` | 自由 markdown                                                                                                                               |
+| 运行时学到的事实   | `.x-code/memory/auto.md` / `~/.x-code/memory/auto.md`  | AI 通过 `saveKnowledge` 工具写入                                                                                                            |
 
 所以回答"行为规则是什么"要看你问的是**硬性代码约束**（权限层）还是**软性自然语言约束**（prompt 层）还是**用户自定义**（AGENTS.md / preferences / auto memory）。
 
@@ -228,4 +228,3 @@ Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware str
 - h1 bold + underline + accent color、h2 bold + accent、h3+ 仅 bold（有视觉层级）
 
 整个 renderer 大约 280 行，没有依赖 Chalk 外的重型东西。
-

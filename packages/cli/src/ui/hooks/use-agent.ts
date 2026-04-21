@@ -87,10 +87,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         isLoading: true,
         shellOutput: '',
         error: null,
-        messages: [
-          ...prev.messages,
-          { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() },
-        ],
+        messages: [...prev.messages, { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }],
       }))
 
       const controller = new AbortController()

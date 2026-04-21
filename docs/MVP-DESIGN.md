@@ -360,6 +360,7 @@ interface TokenUsage {
 竞品基本都是用各自绑定的搜索方案，没有统一标准。我们采用**双 provider**：**Tavily** 优先（LangChain 默认集成、返回格式对 LLM 友好、免费 1000 次/月），缺失时回退到 **Brave**（免费 2000 次/月，独立索引，不依赖 Google/Bing）。两家都必须自行注册 —— 三方 ToS 禁止在发行包里内置共享 key。
 
 **默认行为**：
+
 - `TAVILY_API_KEY` 存在 → 走 Tavily（`@tavily/core` SDK）
 - 否则 `BRAVE_API_KEY` 存在 → 走 Brave（直接 `fetch` `api.search.brave.com`，无额外依赖）
 - 两者都没有 → CLI 启动时 stderr 打印一次当前 shell（PowerShell / bash / zsh / fish / cmd）对应的配置命令；WebSearch 工具被调用时返回一段同样内容的错误,引导配置
@@ -371,7 +372,7 @@ export const webSearch = tool({
     const n = maxResults ?? 5
     if (process.env.TAVILY_API_KEY) return formatResults(await searchWithTavily(query, n))
     if (process.env.BRAVE_API_KEY) return formatResults(await searchWithBrave(query, n))
-    return buildMissingKeyError()  // 按当前 shell 定制的安装指引
+    return buildMissingKeyError() // 按当前 shell 定制的安装指引
   },
 })
 ```
@@ -1141,21 +1142,21 @@ export function createModelRegistry() {
 
 **完整环境变量清单**：
 
-| 环境变量                       | 说明                                                       |    必填    |
-| ------------------------------ | ---------------------------------------------------------- | :--------: |
-| `ANTHROPIC_API_KEY`            | Anthropic Claude API Key                                   |    按需    |
-| `OPENAI_API_KEY`               | OpenAI GPT API Key                                         |    按需    |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google Gemini API Key                                      |    按需    |
-| `XAI_API_KEY`                  | xAI Grok API Key                                           |    按需    |
-| `DEEPSEEK_API_KEY`             | DeepSeek API Key                                           |    按需    |
-| `ALIBABA_API_KEY`              | 通义千问 / DashScope API Key                               |    按需    |
-| `ZHIPU_API_KEY`                | 智谱 GLM API Key                                           |    按需    |
-| `MOONSHOT_API_KEY`             | Moonshot / Kimi API Key                                    |    按需    |
-| `OPENAI_COMPATIBLE_API_KEY`    | 自定义 OpenAI 兼容提供商 Key                               |    按需    |
-| `OPENAI_COMPATIBLE_BASE_URL`   | 自定义提供商 API 端点                                      | 与上面配套 |
-| `OPENAI_COMPATIBLE_MODEL`      | 自定义提供商模型名                                         | 与上面配套 |
-| `X_CODE_MODEL`                 | 默认使用的模型（如 `deepseek:deepseek-chat`）              |    可选    |
-| `TAVILY_API_KEY`               | Tavily 搜索 API Key（免费 1000 次/月，https://tavily.com） |    可选    |
+| 环境变量                       | 说明                                                                                       |    必填    |
+| ------------------------------ | ------------------------------------------------------------------------------------------ | :--------: |
+| `ANTHROPIC_API_KEY`            | Anthropic Claude API Key                                                                   |    按需    |
+| `OPENAI_API_KEY`               | OpenAI GPT API Key                                                                         |    按需    |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google Gemini API Key                                                                      |    按需    |
+| `XAI_API_KEY`                  | xAI Grok API Key                                                                           |    按需    |
+| `DEEPSEEK_API_KEY`             | DeepSeek API Key                                                                           |    按需    |
+| `ALIBABA_API_KEY`              | 通义千问 / DashScope API Key                                                               |    按需    |
+| `ZHIPU_API_KEY`                | 智谱 GLM API Key                                                                           |    按需    |
+| `MOONSHOT_API_KEY`             | Moonshot / Kimi API Key                                                                    |    按需    |
+| `OPENAI_COMPATIBLE_API_KEY`    | 自定义 OpenAI 兼容提供商 Key                                                               |    按需    |
+| `OPENAI_COMPATIBLE_BASE_URL`   | 自定义提供商 API 端点                                                                      | 与上面配套 |
+| `OPENAI_COMPATIBLE_MODEL`      | 自定义提供商模型名                                                                         | 与上面配套 |
+| `X_CODE_MODEL`                 | 默认使用的模型（如 `deepseek:deepseek-chat`）                                              |    可选    |
+| `TAVILY_API_KEY`               | Tavily 搜索 API Key（免费 1000 次/月，https://tavily.com）                                 |    可选    |
 | `BRAVE_API_KEY`                | Brave 搜索 API Key（免费 2000 次/月，Tavily 缺失时自动回退，https://api.search.brave.com） |    可选    |
 
 > 至少需要配置 **一个** 模型提供商的 API Key 才能使用。
@@ -1172,7 +1173,7 @@ export function createModelRegistry() {
 | `/compact`      | 手动触发上下文压缩      | 不等自动阈值，立即压缩旧消息                              |
 | `/usage`        | 查看 token 用量         | 本次会话的累计 token 统计（不含自动计费）                 |
 | `/clear`        | 清空对话历史            | 不退出程序，重新开始新对话（保留知识上下文）              |
-| `/init`         | 初始化项目             | 在项目根生成 `AGENTS.md` 模板 + 建 `.x-code/` 目录结构     |
+| `/init`         | 初始化项目              | 在项目根生成 `AGENTS.md` 模板 + 建 `.x-code/` 目录结构    |
 | `/session save` | 手动保存会话摘要        | 不退出程序，保存当前进度                                  |
 | `/exit`         | 退出（等同 Ctrl+C）     | 自动保存会话摘要后退出                                    |
 
@@ -1252,16 +1253,16 @@ export function getShellConfig(): { executable: string; args: string[]; type: Sh
 
 #### 各层跨平台要点
 
-| 层面              | 设计决策                                                 |
-| ----------------- | -------------------------------------------------------- |
-| **工具命名**      | `shell`（非 `bash`），语义上不绑定特定 shell             |
+| 层面              | 设计决策                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| **工具命名**      | `shell`（非 `bash`），语义上不绑定特定 shell                                                      |
 | **命令执行**      | 运行时检测：Windows → 优先 Git Bash/MSYS2（如有 $SHELL），否则 PowerShell；macOS/Linux → bash/zsh |
-| **System Prompt** | 注入 `{shell}` 变量，模型据此生成对应语法的命令          |
-| **路径处理**      | 全部用 Node.js `path` 模块（自动处理 `\` vs `/`）        |
-| **进程管理**      | 使用 `execa` 库（跨平台进程管理，自动处理信号/编码）     |
-| **危险命令检测**  | PowerShell 和 bash 分别维护检测规则                      |
-| **文件操作**      | 使用 `node:fs` API，不依赖 shell 命令                    |
-| **沙盒**          | MVP 不实现，后续可分平台实现                             |
+| **System Prompt** | 注入 `{shell}` 变量，模型据此生成对应语法的命令                                                   |
+| **路径处理**      | 全部用 Node.js `path` 模块（自动处理 `\` vs `/`）                                                 |
+| **进程管理**      | 使用 `execa` 库（跨平台进程管理，自动处理信号/编码）                                              |
+| **危险命令检测**  | PowerShell 和 bash 分别维护检测规则                                                               |
+| **文件操作**      | 使用 `node:fs` API，不依赖 shell 命令                                                             |
+| **沙盒**          | MVP 不实现，后续可分平台实现                                                                      |
 
 #### 已知挑战
 
@@ -1564,22 +1565,21 @@ description: Create a well-formatted git commit following project conventions.
 | P2     | **图片/PDF 支持**        | 多模态输入（截图分析、文档阅读）                                                                                                                                                         |
 | P2     | **浏览器自动化**         | Playwright 集成（截图、交互测试）                                                                                                                                                        |
 | P3     | **插件系统**             | 第三方扩展框架                                                                                                                                                                           |
-| P3     | **VSCode 扩展**          | 复用 @x-code-cli/core，IDE 内使用                                                                                                                                                            |
+| P3     | **VSCode 扩展**          | 复用 @x-code-cli/core，IDE 内使用                                                                                                                                                        |
 
 ---
-
 
 ## 十、项目知识系统
 
 **人写的和 AI 写的严格分开**,各自有独立的文件和触发机制。
 
-| 角色 | 写入者 | 目的 | 文件 |
-|---|---|---|---|
-| 项目说明 | 人(团队 / 用户) | 项目是什么、团队约定、业务背景 | `AGENTS.md`(项目根) |
-| 全局偏好 | 人(用户) | 跨项目的个人偏好 | `~/.x-code/AGENTS.md` |
-| 本地覆盖 | 人(用户) | 不提交到 git 的个人项目偏好 | `.x-code/local/preferences.md` |
-| 项目记忆 | AI | 对话中学到的项目相关事实 | `.x-code/memory/auto.md` |
-| 全局记忆 | AI | 学到的用户相关事实(跨项目) | `~/.x-code/memory/auto.md` |
+| 角色     | 写入者          | 目的                           | 文件                           |
+| -------- | --------------- | ------------------------------ | ------------------------------ |
+| 项目说明 | 人(团队 / 用户) | 项目是什么、团队约定、业务背景 | `AGENTS.md`(项目根)            |
+| 全局偏好 | 人(用户)        | 跨项目的个人偏好               | `~/.x-code/AGENTS.md`          |
+| 本地覆盖 | 人(用户)        | 不提交到 git 的个人项目偏好    | `.x-code/local/preferences.md` |
+| 项目记忆 | AI              | 对话中学到的项目相关事实       | `.x-code/memory/auto.md`       |
+| 全局记忆 | AI              | 学到的用户相关事实(跨项目)     | `~/.x-code/memory/auto.md`     |
 
 项目说明文件用 `AGENTS.md` 并放在**项目根**——对齐 Codex / OpenCode 的行业惯例,供应商中性,发现性高。
 
@@ -1624,18 +1624,23 @@ description: Create a well-formatted git commit following project conventions.
 # AGENTS.md
 
 ## Overview
+
 <!-- 项目做什么,给谁用 -->
 
 ## Tech Stack
+
 <!-- 语言 / 框架 / 关键依赖 -->
 
 ## Commands
+
 <!-- 常用命令(build / test / lint 等) -->
 
 ## Conventions
+
 <!-- 非显而易见的项目约定 -->
 
 ## Business Context
+
 <!-- 领域知识 / 业务约束 / 关键决策 -->
 ```
 
@@ -1647,12 +1652,12 @@ description: Create a well-formatted git commit following project conventions.
 
 **Taxonomy(4 分类)**——按"**知识类型**"分,边界清晰、互斥:
 
-| 类别 | 含义 | 典型触发 |
-|---|---|---|
-| `user` | 关于用户本身(角色、专长、长期约束) | "我是十年 Go 工程师,第一次碰 React" |
-| `feedback` | 用户的纠正或认可(都要含原因) | "不要 mock 数据库——上季度 mock 过测试通过但迁移炸了" |
-| `project` | 进行中的工作 / 决策 / 非代码可推导的状态 | "mobile release 冻结从 2026-03-05 开始" |
-| `reference` | 外部系统指针 | "pipeline bug 都在 Linear 的 INGEST 项目" |
+| 类别        | 含义                                     | 典型触发                                             |
+| ----------- | ---------------------------------------- | ---------------------------------------------------- |
+| `user`      | 关于用户本身(角色、专长、长期约束)       | "我是十年 Go 工程师,第一次碰 React"                  |
+| `feedback`  | 用户的纠正或认可(都要含原因)             | "不要 mock 数据库——上季度 mock 过测试通过但迁移炸了" |
+| `project`   | 进行中的工作 / 决策 / 非代码可推导的状态 | "mobile release 冻结从 2026-03-05 开始"              |
+| `reference` | 外部系统指针                             | "pipeline bug 都在 Linear 的 INGEST 项目"            |
 
 **不该写入**(避免记忆膨胀和误导):
 
@@ -1673,13 +1678,16 @@ description: Create a well-formatted git commit following project conventions.
 ## Auto Memory
 
 ### feedback
+
 - [2026-04-18] testing-db-policy: 集成测试必须打真库。原因:Q1 migration 事故,mocked 测试通过但生产炸了
 - [2026-04-18] refactor-batching: 重构倾向打成一个 PR——用户验证过减少 churn
 
 ### user
+
 - [2026-04-18] user-stack: 十年 Go 工程师,React 新手,前端例子可类比后端概念
 
 ### project
+
 - [2026-04-18] release-freeze: mobile release 冻结 2026-03-05 起,非 critical PR 要 flag
 ```
 
@@ -1688,8 +1696,8 @@ description: Create a well-formatted git commit following project conventions.
 ```typescript
 saveKnowledge({
   action: 'add' | 'delete',
-  key: string,                  // 短唯一 slug,如 "user-role"
-  fact: string,                 // 事实内容
+  key: string, // 短唯一 slug,如 "user-role"
+  fact: string, // 事实内容
   scope: 'project' | 'global',
   category: 'user' | 'feedback' | 'project' | 'reference',
 })
@@ -1749,26 +1757,25 @@ interface SessionSummary {
 
 ### 10.8 和竞品的位置对比
 
-| 工具 | 项目说明文件 | 位置 | 自动记忆 | Monorepo 向上遍历 |
-|---|---|---|---|---|
-| **X-Code** | `AGENTS.md` | 项目根 | ✅ auto.md(AI 主动调用) | ✅ 向上到 `.git` |
-| Codex | `AGENTS.md` | 项目根 | ✅ 后台双阶段 pipeline | ✅ 向上到 `.git` |
-| OpenCode | `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` | 项目根 | ❌ | ❌ 只读 cwd |
-| Claude Code | `CLAUDE.md` | 项目根 | ✅ 后台 extractor | ✅ 向上遍历 |
+| 工具        | 项目说明文件                             | 位置   | 自动记忆                | Monorepo 向上遍历 |
+| ----------- | ---------------------------------------- | ------ | ----------------------- | ----------------- |
+| **X-Code**  | `AGENTS.md`                              | 项目根 | ✅ auto.md(AI 主动调用) | ✅ 向上到 `.git`  |
+| Codex       | `AGENTS.md`                              | 项目根 | ✅ 后台双阶段 pipeline  | ✅ 向上到 `.git`  |
+| OpenCode    | `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` | 项目根 | ❌                      | ❌ 只读 cwd       |
+| Claude Code | `CLAUDE.md`                              | 项目根 | ✅ 后台 extractor       | ✅ 向上遍历       |
 
 ### 10.9 相关代码位置
 
-| 功能 | 文件 | 关键函数 |
-|---|---|---|
-| AGENTS.md chain 加载 | `core/src/knowledge/loader.ts` | `collectAgentsMdChain()`, `buildKnowledgeContext()` |
-| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory`, `initMemories()`, `getAutoMemory()`(project 实例按 cwd 缓存) |
-| saveKnowledge 工具 | `core/src/tools/save-knowledge.ts` | schema + AI 触发指南 |
-| Taxonomy 类型 | `core/src/types/index.ts` | `KnowledgeCategory` |
-| `/init` 命令 | `core/src/knowledge/init.ts` | `initProject()`, AGENTS_TEMPLATE |
-| System prompt memory 指南 | `core/src/agent/system-prompt.ts` | "Auto Memory Guidelines" 段 |
+| 功能                      | 文件                                | 关键函数                                                                   |
+| ------------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| AGENTS.md chain 加载      | `core/src/knowledge/loader.ts`      | `collectAgentsMdChain()`, `buildKnowledgeContext()`                        |
+| 自动记忆管理              | `core/src/knowledge/auto-memory.ts` | `AutoMemory`, `initMemories()`, `getAutoMemory()`(project 实例按 cwd 缓存) |
+| saveKnowledge 工具        | `core/src/tools/save-knowledge.ts`  | schema + AI 触发指南                                                       |
+| Taxonomy 类型             | `core/src/types/index.ts`           | `KnowledgeCategory`                                                        |
+| `/init` 命令              | `core/src/knowledge/init.ts`        | `initProject()`, AGENTS_TEMPLATE                                           |
+| System prompt memory 指南 | `core/src/agent/system-prompt.ts`   | "Auto Memory Guidelines" 段                                                |
 
 ---
-
 
 ## 十一、依赖清单
 
@@ -1798,37 +1805,37 @@ interface SessionSummary {
 
 ### `@x-code-cli/cli` dependencies
 
-| 包                 | 版本         | 用途                                    |
-| ------------------ | ------------ | --------------------------------------- |
-| `@x-code-cli/core` | workspace:\* | Agent 逻辑层                            |
+| 包                 | 版本                      | 用途                                                                                                                   |
+| ------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `@x-code-cli/core` | workspace:\*              | Agent 逻辑层                                                                                                           |
 | `ink`              | `npm:@jrichman/ink@6.6.9` | Google/Gemini CLI 维护的 Ink fork（npm alias），自带 cell-level buffer / StyledLine / DEC 2026 同步更新，消除 CJK 抖动 |
-| `react`            | ^19.1.0      | Ink 的 peer dependency                  |
-| `yargs`            | ^18.0.0      | CLI 参数解析                            |
-| `chalk`            | ^5.4.0       | ANSI 颜色（启动提示、header 输出）      |
-| `marked`           | ^17.0.0      | streaming markdown lexer → ANSI 渲染    |
-| `diff`             | ^8.0.0       | Permission 组件 diff 预览               |
+| `react`            | ^19.1.0                   | Ink 的 peer dependency                                                                                                 |
+| `yargs`            | ^18.0.0                   | CLI 参数解析                                                                                                           |
+| `chalk`            | ^5.4.0                    | ANSI 颜色（启动提示、header 输出）                                                                                     |
+| `marked`           | ^17.0.0                   | streaming markdown lexer → ANSI 渲染                                                                                   |
+| `diff`             | ^8.0.0                    | Permission 组件 diff 预览                                                                                              |
 
 ### 根包 devDependencies（共享）
 
-| 包                                      | 版本    | 用途                                                              |
-| --------------------------------------- | ------- | ----------------------------------------------------------------- |
-| `typescript`                            | ^5.7.0  | 类型检查（latest 5.9.3）                                          |
-| `esbuild`                               | ^0.27.0 | 构建打包（0.x 下 ^ 只覆盖同 minor）                              |
-| `vitest`                                | ^4.0.0  | 测试框架                                                          |
-| `eslint`                                | ^10.0.0 | 代码检查（flat config）                                           |
-| `typescript-eslint`                     | ^8.0.0  | ESLint TypeScript 支持                                            |
-| `eslint-plugin-react-hooks`             | ^7.0.0  | React Hooks 规则                                                  |
-| `eslint-plugin-unused-imports`          | ^4.4.1  | 自动移除未使用 import                                             |
-| `prettier`                              | ^3.0.0  | 代码格式化                                                        |
-| `@trivago/prettier-plugin-sort-imports` | ^6.0.0  | import 排序                                                       |
-| `husky`                                 | ^9.0.0  | Git hooks                                                         |
-| `lint-staged`                           | ^16.0.0 | 只对暂存文件运行 lint/format                                      |
-| `@commitlint/cli` + `config-conventional` | ^20.0.0 | conventional commits 校验（commit-msg hook）                    |
-| `tsx`                                   | ^4.21.0 | `pnpm dev` 入口（直接跑 TS 无需先 build）                        |
-| `@types/react`                          | ^19.0.0 | React 类型                                                        |
-| `@types/node`                           | ^22.0.0 | Node.js 类型（target Node 20）                                    |
-| `@types/yargs`                          | ^17.0.0 | yargs 类型（yargs 18 暂无 @types/yargs@18，沿用 17）              |
-| `ink-testing-library`                   | ^4.0.0  | Ink 组件测试（保留依赖，尚未写 cli 侧测试）                       |
+| 包                                        | 版本    | 用途                                                 |
+| ----------------------------------------- | ------- | ---------------------------------------------------- |
+| `typescript`                              | ^5.7.0  | 类型检查（latest 5.9.3）                             |
+| `esbuild`                                 | ^0.27.0 | 构建打包（0.x 下 ^ 只覆盖同 minor）                  |
+| `vitest`                                  | ^4.0.0  | 测试框架                                             |
+| `eslint`                                  | ^10.0.0 | 代码检查（flat config）                              |
+| `typescript-eslint`                       | ^8.0.0  | ESLint TypeScript 支持                               |
+| `eslint-plugin-react-hooks`               | ^7.0.0  | React Hooks 规则                                     |
+| `eslint-plugin-unused-imports`            | ^4.4.1  | 自动移除未使用 import                                |
+| `prettier`                                | ^3.0.0  | 代码格式化                                           |
+| `@trivago/prettier-plugin-sort-imports`   | ^6.0.0  | import 排序                                          |
+| `husky`                                   | ^9.0.0  | Git hooks                                            |
+| `lint-staged`                             | ^16.0.0 | 只对暂存文件运行 lint/format                         |
+| `@commitlint/cli` + `config-conventional` | ^20.0.0 | conventional commits 校验（commit-msg hook）         |
+| `tsx`                                     | ^4.21.0 | `pnpm dev` 入口（直接跑 TS 无需先 build）            |
+| `@types/react`                            | ^19.0.0 | React 类型                                           |
+| `@types/node`                             | ^22.0.0 | Node.js 类型（target Node 20）                       |
+| `@types/yargs`                            | ^17.0.0 | yargs 类型（yargs 18 暂无 @types/yargs@18，沿用 17） |
+| `ink-testing-library`                     | ^4.0.0  | Ink 组件测试（保留依赖，尚未写 cli 侧测试）          |
 
 ---
 
