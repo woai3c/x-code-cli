@@ -254,9 +254,17 @@ const S_NONE = '\x1b[0m'
  *  This eliminates the flash that otherwise occurs between eraseRegion
  *  wiping the frame and the full re-render that follows — the user sees
  *  only the final state, never the intermediate blank region.
- *  Unsupported terminals silently ignore these sequences. */
-const BSU = '\x1b[?2026h'
-const ESU = '\x1b[?2026l'
+ *  Unsupported terminals silently ignore these sequences.
+ *
+ *  Paired with cursor hide/show (DECTCEM — `\x1b[?25l` / `\x1b[?25h`):
+ *  on PowerShell ConHost DEC 2026 is parsed but not fully atomized, so
+ *  the multi-step cursor dance (up-N, move-to-col, write diff, down-N,
+ *  park) flashes a visible caret across the frame mid-render. Hiding
+ *  the cursor for the duration of the atomic payload makes ConHost's
+ *  non-atomic paint path look smooth — the user sees only the final
+ *  frame state, not the cursor trail through each escape sequence. */
+const BSU = '\x1b[?2026h\x1b[?25l'
+const ESU = '\x1b[?25h\x1b[?2026l'
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
