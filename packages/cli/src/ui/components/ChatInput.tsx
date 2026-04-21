@@ -217,6 +217,18 @@ const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
 const S_ERROR_FG = '\x1b[38;2;255;107;128m' // error rgb(255,107,128) #ff6b80
 const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'
 const S_DIM = '\x1b[2m'
+// S_NONE means "default styling — no fg color, no attribute" and MUST
+// be a non-empty escape, otherwise the cell-diff loop's
+// `if (cell.style !== lastStyle) buf += cell.style` branch emits an
+// empty string and leaves the terminal SGR state inherited from
+// whatever preceded it. That used to render rows like
+// `[' '(NONE)][glyph(BLUE)][' '(NONE)][T(BLUE)]…` with the trailing
+// NONE space inheriting the BLUE — and with non-atomic terminals the
+// user perceived the "Thinking" text flashing white→blue between
+// frames as redundant SGR codes arrived just after the chars. Setting
+// S_NONE to the explicit DEC reset (`\x1b[0m`, same byte as S_RESET)
+// makes every NONE cell explicitly clear styling before its glyph,
+// which removes the inheritance and the perceived flash.
 // Reset ALL attributes at row end (\x1b[0m), not just foreground (\x1b[39m).
 // Bold cells (e.g. Permission's Yes/No highlight) would otherwise bleed
 // their bold attribute into the next row. The cell-diff emitter re-emits
@@ -225,7 +237,7 @@ const S_DIM = '\x1b[2m'
 const S_RESET = '\x1b[0m'
 const S_INV = '\x1b[7m'
 const S_INV_OFF = '\x1b[27m'
-const S_NONE = ''
+const S_NONE = '\x1b[0m'
 
 // NOTE: `\x1b7` / `\x1b8` (DECSC / DECRC) are DELIBERATELY NOT used
 // anywhere in this file. The terminal provides a single save register,
@@ -924,6 +936,22 @@ export function ChatInput({
         while (diffIdx < minCells && cellsEqual(prevRow[diffIdx], nextRow[diffIdx])) {
           diffIdx++
         }
+        // Last cell that differs (scanning from the end). On a fresh
+        // redraw (prevRow empty) we keep emitting through end-of-row;
+        // otherwise we cap at the last actual change so that, e.g., a
+        // spinner tick rewrites just the glyph cell instead of the
+        // entire " glyph  Thinking… (5s · ↑ 2k tokens)" suffix every
+        // 80ms. Less to write = fewer visible cells re-painting per
+        // tick = no perceptible flash on terminals where DEC 2026
+        // sync-update isn't perfectly atomic.
+        let endIdx = nextRow.length
+        if (prevRow.length > 0 && nextRow.length === prevRow.length) {
+          let last = nextRow.length - 1
+          while (last >= diffIdx && cellsEqual(prevRow[last], nextRow[last])) {
+            last--
+          }
+          endIdx = last + 1 // exclusive bound
+        }
 
         if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
           // Position cursor at diffIdx's visual column
@@ -931,9 +959,15 @@ export function ChatInput({
           for (let c = 0; c < diffIdx; c++) col += nextRow[c].width
           buf += `\x1b[${col + 1}G`
 
-          // Emit changed cells
-          let lastStyle = ''
-          for (let c = diffIdx; c < nextRow.length; c++) {
+          // Emit changed cells. Initialize lastStyle to S_NONE (= explicit
+          // reset code) so the first cell's char doesn't inherit any SGR
+          // state left over from the previous render — without this, the
+          // diff loop's `if (cell.style !== lastStyle) buf += cell.style`
+          // branch could emit '' (no-op) for an S_NONE cell whose char
+          // then renders in whatever color was active before.
+          let lastStyle = S_NONE
+          buf += S_NONE
+          for (let c = diffIdx; c < endIdx; c++) {
             const cell = nextRow[c]
             if (cell.style !== lastStyle) {
               buf += cell.style
