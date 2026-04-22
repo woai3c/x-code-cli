@@ -752,7 +752,7 @@ writeMessageToStdout(write: InkWrite, msg: DisplayMessage)
        renderMarkdown → ANSI → 每行加 2 空格缩进 → write(indented + '\n\n')
 ```
 
-**诊断 log 开关**：设 `X_CODE_DEBUG=1` 环境变量时，每次 `writeMessageToStdout` 调用会把 message 内容 append 到 `~/.x-code/x-code-debug.log`，便于对比 React state 与实际屏幕输出。默认关闭，不会创建文件或目录。
+**诊断 log 开关**：设 `DEBUG_STDOUT=1` 环境变量时，`debugLog` 会把事件（stream/buffer/stdout/chatinput.flush 及 payload）append 到 `<cwd>/stdout-debug.log`，便于对比 React state 与实际屏幕输出。默认关闭，不会创建文件。
 
 ### 4.6 状态管理
 
@@ -1964,7 +1964,7 @@ interface SessionSummary {
 - ✅ `paste-refs.ts`：`[Pasted text #N +M lines]` 占位符 + expand 辅助
 - ✅ `renderMarkdown`（marked.lexer + chalk）Markdown → ANSI
 - ✅ `SelectOptions`：askUser 多选（含自由文本 Other 模式，唯一仍走 Ink 渲染的动态组件）
-- ✅ 可选诊断 log（`X_CODE_DEBUG=1` → `~/.x-code/x-code-debug.log`）
+- ✅ 可选诊断 log（`DEBUG_STDOUT=1` → `<cwd>/stdout-debug.log`）
 
 ### 13.9 斜杠命令
 

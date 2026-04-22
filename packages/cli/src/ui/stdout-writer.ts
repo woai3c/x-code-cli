@@ -21,10 +21,7 @@
 // mostly ASCII, so Ink's own measurement is good enough.
 import { Chalk } from 'chalk'
 
-import * as fs from 'node:fs'
-import * as path from 'node:path'
-
-import { GLOBAL_XCODE_DIR, debugLog } from '@x-code-cli/core'
+import { debugLog } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderMarkdown } from './render-markdown.js'
@@ -49,28 +46,6 @@ const RESULT_INDENT = '     '
  */
 function normalizeLineEndings(s: string): string {
   return s.replace(/\r\n?/g, '\n')
-}
-
-// ── Debug logging ────────────────────────────────────────────────────────
-// Turn on with `X_CODE_DEBUG=1`. Appends every message handed to
-// writeMessageToStdout to `~/.x-code/x-code-debug.log` so we can compare
-// what React sees vs what lands on screen. Using the global `.x-code`
-// directory matches the knowledge / auto-memory layout and keeps the
-// file easy to find (~/.x-code on macOS/Linux, C:\Users\<user>\.x-code on
-// Windows) instead of hiding it under the OS temp directory.
-const DEBUG = process.env.X_CODE_DEBUG === '1'
-const DEBUG_DIR = GLOBAL_XCODE_DIR
-const DEBUG_LOG = path.join(DEBUG_DIR, 'x-code-debug.log')
-
-function debugDump(tag: string, content: string): void {
-  if (!DEBUG) return
-  try {
-    fs.mkdirSync(DEBUG_DIR, { recursive: true })
-    const sep = '\n=== ' + tag + ' (' + content.length + ' chars, ' + content.split('\n').length + ' lines) ===\n'
-    fs.appendFileSync(DEBUG_LOG, sep + content + '\n', 'utf8')
-  } catch {
-    // best effort
-  }
 }
 
 function formatDuration(ms: number): string {
@@ -120,7 +95,6 @@ function toCRLF(s: string): string {
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
-    debugDump('USER MESSAGE', content)
     debugLog('stdout.user', content)
     writeUserMessage(write, content)
     return
@@ -136,7 +110,6 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
 
   if (msg.content) {
     const content = normalizeLineEndings(msg.content)
-    debugDump('ASSISTANT MESSAGE', content)
     debugLog(msg.streamingChunk ? 'stdout.assistant-chunk' : 'stdout.assistant-full', content)
 
     // Special-case pure-whitespace streaming chunks (e.g. a bare "\n"
