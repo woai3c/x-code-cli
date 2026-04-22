@@ -98,9 +98,7 @@ function skipByWidth(str: string, skipCols: number): number {
  *  which drives the pre-scroll line count — over/under-counting would leave
  *  visible gaps or let content overflow into the frame area. */
 function stripAnsi(s: string): string {
-  return s
-    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+  return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
 }
 
 /** Count display rows that `content` will occupy when written at the top of
@@ -1081,12 +1079,7 @@ export function ChatInput({
         if (regionBottom > 0) {
           // Trailing `\x1b[?25l`: same DECSTBM-unhides-cursor quirk as
           // the scrollback-insert path above.
-          preBuf +=
-            `\x1b[1;${regionBottom}r` +
-            `\x1b[${regionBottom};1H` +
-            '\n'.repeat(deltaH) +
-            '\x1b[r' +
-            '\x1b[?25l'
+          preBuf += `\x1b[1;${regionBottom}r` + `\x1b[${regionBottom};1H` + '\n'.repeat(deltaH) + '\x1b[r' + '\x1b[?25l'
         }
       } else {
         const deltaH = oldFrameH - nextH
