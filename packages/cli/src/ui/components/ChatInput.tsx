@@ -225,6 +225,22 @@ function cellsEqual(a: Cell, b: Cell): boolean {
   return a.char === b.char && a.style === b.style
 }
 
+/** Render a row of cells to a single ANSI-styled string (no cursor moves,
+ *  no trailing erase). Used by the scrollback-commit inline-stream path
+ *  so frame rows can be emitted as part of the `content + frame` stream. */
+function renderRowToAnsi(cells: Cell[]): string {
+  let out = '\x1b[0m'
+  let lastStyle = '\x1b[0m'
+  for (const cell of cells) {
+    if (cell.style !== lastStyle) {
+      out += cell.style
+      lastStyle = cell.style
+    }
+    out += cell.char
+  }
+  return out + '\x1b[0m'
+}
+
 // ── Palette ─────────────────────────────────────────────────────────────
 // Hardcoded RGB ANSI escapes because cells store raw style strings (the
 // cell-diff emitter can't run chalk). Values mirror `ui/theme.ts` which
@@ -289,27 +305,20 @@ const S_NONE = '\x1b[0m'
  *  only the final state, never the intermediate blank region.
  *  Unsupported terminals silently ignore these sequences.
  *
- *  Cursor-hide (`\x1b[?25l`) is emitted before sync entry, inside the
- *  sync envelope, and as the last byte of ESU when the input row has
- *  no active cursor anchor (disabled state, permission dialog, etc.).
- *  When an anchor IS present, ESU ends with `\x1b[?25h` instead so the
- *  terminal's real cursor becomes visible at the parked position — that
- *  is now the one and only visible cursor. No inverse-video "fake"
- *  cursor cell is drawn; whatever shape the user configured in their
- *  terminal (block / bar / underline) is respected and there is no
- *  overlap-with-fake-block trick that desynced on terminals where the
- *  real caret wasn't a block.
- *
- *  Hide DURING sync is still required:
- *    1. Windows Terminal / ConHost don't fully atomize DEC 2026, so the
- *       cursor would visibly walk through the diff loop's intermediate
- *       positions and produce flicker without the mid-sync hide.
- *    2. DECSTBM (`\x1b[1;N r` / `\x1b[r`) re-enables cursor visibility
- *       as a side effect on those same terminals — any render path that
- *       uses DECSTBM re-hides the cursor afterwards. */
-const BSU = '\x1b[?25l\x1b[?2026h\x1b[?25l'
-const ESU_HIDE = '\x1b[?25l\x1b[?2026l\x1b[?25l'
-const ESU_SHOW = '\x1b[?25l\x1b[?2026l\x1b[?25h'
+ *  Cursor visibility is intentionally NOT toggled around each render.
+ *  Earlier revisions cycled `\x1b[?25l` in BSU and `\x1b[?25h` in ESU to
+ *  mask the diff-loop's intermediate cursor positions on terminals that
+ *  don't fully atomize DEC 2026. At the 80ms spinner cadence that
+ *  produced a 12Hz hide/show flap which users perceived as "上下抖动"
+ *  flicker around the input row — and sync-mode batching already hides
+ *  the intermediate positions on every terminal we target (xterm.js /
+ *  VSCode, Windows Terminal, iTerm2, Ghostty). So: the cursor stays
+ *  shown throughout; sync mode handles atomicity; the end-of-buf park
+ *  places it at the input column before ESU commits. When there is no
+ *  active anchor (disabled / dialog) ESU_HIDE explicitly hides. */
+const BSU = '\x1b[?2026h'
+const ESU_SHOW = '\x1b[?2026l\x1b[?25h'
+const ESU_HIDE = '\x1b[?2026l\x1b[?25l'
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
@@ -416,6 +425,11 @@ export function ChatInput({
   const lastEscRef = useRef(0)
   const activeRef = useRef(false)
   const prevFrameRef = useRef<Cell[][]>([])
+  /** Timestamp (ms) of the last stdout.write that actually hit the
+   *  terminal. Used to coalesce spinner-tick writes that would fire
+   *  immediately after a scrollback-commit write — see flush section
+   *  for the 16ms-gap rule. */
+  const lastFlushTimeRef = useRef(0)
   /** Height of the frame currently sitting at the bottom of the terminal
    *  (the value that prevFrameRef was last set to). Tracked separately
    *  because prevFrameRef gets reset to [] on transitions (post-hidden,
@@ -740,49 +754,21 @@ export function ChatInput({
 
     // ── Commit new scrollback messages ───────────────────────────────────
     //
-    // NATURAL-SCROLL-AT-BOTTOM INSERTION:
-    //   The frame is PINNED to the last H rows of the terminal. To push
-    //   new content into the scrollback area above the frame WITHOUT
-    //   jitter AND without losing history, we:
-    //
-    //     1. Pre-scroll the whole screen up by N rows by emitting N \n
-    //        characters at the screen bottom. Each \n at the bottom of
-    //        the default (full-screen) scroll region preserves the top
-    //        row into the terminal's real scrollback buffer — this is
-    //        the ONLY mechanism that does so reliably across terminals.
-    //     2. Move the cursor to the top of the new content area and
-    //        erase-to-end-of-screen so the shifted-up old frame rows
-    //        don't poke through.
-    //     3. Write the new scrollback content. Cursor advances through
-    //        rows naturally without triggering further scrolls because
-    //        we're not at screen bottom.
-    //     4. Frame redraw below writes the new frame at its pinned rows,
-    //        overwriting whatever fragments of the shifted-up old frame
-    //        and trailing blank rows remain.
-    //
-    //   All of this is wrapped in BSU/ESU Synchronized Update Mode so
-    //   the terminal commits the final state atomically — the user never
-    //   sees the shifted-up frame or the blanks between frames.
-    //
-    //   Why NOT DECSTBM: a restricted DECSTBM region (the codex approach
-    //   in `insert_history.rs`) silently DISCARDS any row scrolled out
-    //   past the region's top margin (per VT100 spec). codex gets away
-    //   with it because they run in the alt-screen buffer where there's
-    //   no user-visible scrollback anyway — ratatui manages its own
-    //   viewport. In the main screen buffer (our setup) scrolled-out
-    //   content needs to go to real terminal scrollback, which only
-    //   happens at a full-screen (default) scroll region's bottom.
-    //
-    // Fallback (first paint, no prior frame): emit inline at the current
-    // cursor and let natural scroll handle it.
+    // COLLECT-ONLY here. The actual write happens AFTER the frame cells
+    // have been built, so we can emit `content + frame` as one continuous
+    // stream that triggers the terminal's natural full-screen scroll at
+    // its bottom edge — the only mechanism xterm.js / VSCode honor for
+    // pushing rows into real scrollback (DECSTBM-restricted region scrolls
+    // are splice-discarded in xterm.js's InputHandler, confirmed in source).
     //
     // A /clear command may shrink messages; detect and reset the counter.
     if (messages.length < writtenMessageCountRef.current) {
       writtenMessageCountRef.current = messages.length
     }
     const termRows = stdout?.rows ?? 25
-    if (messages.length > writtenMessageCountRef.current) {
-      let scrollbackContent = ''
+    const didCommitMessages = messages.length > writtenMessageCountRef.current
+    let scrollbackContent = ''
+    if (didCommitMessages) {
       const collectWrite: (data: string) => void = (data) => {
         scrollbackContent += data
       }
@@ -790,41 +776,6 @@ export function ChatInput({
         writeMessageToStdout(collectWrite, messages[i])
       }
       writtenMessageCountRef.current = messages.length
-
-      const oldFrameH = lastFrameHRef.current
-      if (activeRef.current && oldFrameH > 0 && oldFrameH < termRows) {
-        const scrollRows = countContentRows(scrollbackContent, termWidth)
-        if (scrollRows > 0) {
-          // Pre-scroll by scrollRows (full-screen natural scroll, preserves
-          // top rows to terminal scrollback). Then position at the top of
-          // the freed area and erase to end of screen so any shifted-up
-          // old frame fragments are wiped before we write content.
-          //
-          // If content exceeds rows above frame (termRows - oldFrameH), cap
-          // the cursor destination at row 1 so we don't address a negative
-          // row. Excess content then overflows into the (to-be-overwritten)
-          // frame area — a few trailing lines may be clobbered by the frame
-          // redraw in that rare case. For the common case (scrollRows <=
-          // termRows - oldFrameH) the math is exact and no content is lost.
-          const contentRow = Math.max(1, termRows - oldFrameH - scrollRows + 1)
-          preBuf +=
-            '\x1b[r' +
-            `\x1b[${termRows};1H` +
-            '\n'.repeat(scrollRows) +
-            `\x1b[${contentRow};1H` +
-            '\x1b[J' +
-            scrollbackContent +
-            '\x1b[?25l'
-          // Old cell matrix reflects rows that have been scrolled; force
-          // full redraw so the diff loop doesn't assume stale positions.
-          prevFrameRef.current = []
-        }
-      } else {
-        // First paint: emit inline, cursor is somewhere in the terminal
-        // and natural scroll handles placement. The frame redraw below
-        // will absolute-jump to its pinned row.
-        preBuf += scrollbackContent
-      }
     }
 
     activeRef.current = true
@@ -1057,6 +1008,67 @@ export function ChatInput({
     const oldFrameH = lastFrameHRef.current
     const frameTop = Math.max(1, termRows - nextH + 1)
 
+    // ── Scrollback-commit write (inline-stream) ──────────────────────────
+    //
+    // Writes new `content + frame` as ONE continuous stream starting at
+    // row `startRow = termRows - scrollRows - nextH + 1`, ending exactly
+    // at `termRows`. Rows that would be overwritten by the write AND
+    // previously held real scrollback content are first pushed to the
+    // terminal's real scrollback via pre-scroll `\n`s at screen bottom
+    // (the only mechanism xterm.js / Windows Terminal honor for preserving
+    // content — DECSTBM-restricted region scrolls are splice-discarded in
+    // xterm.js's InputHandler, confirmed in source).
+    //
+    // Pre-scroll amount = (rows in [startRow, termRows] that were
+    // above the old frame) = max(0, scrollRows + nextH - oldFrameH).
+    // This is 0 on first-paint / post-hidden (oldFrameH = 0, no active
+    // scrollback to preserve — pre-existing rows above stay put), it is
+    // scrollRows in the steady-state active case, and scrollRows +
+    // (nextH - oldFrameH) when the frame grows (e.g. spinner appearing
+    // at user submission).
+    //
+    // After the pre-scroll, existing content rests at rows shifted up,
+    // and the write zone [startRow, termRows] contains the bottom rows
+    // of the old frame and the blanks just created by the pre-scroll —
+    // safe to overwrite entirely. The write places new content at
+    // rows [frameTop - scrollRows, frameTop - 1] and the new frame at
+    // [frameTop, termRows].
+    //
+    // prevFrameRef is set to the just-written frame so the diff loop
+    // below emits only cursor advances (no cell writes) — no separate
+    // frame-redraw phase, no flicker.
+    //
+    // Cursor is hidden for the duration of the write.
+    const scrollRows = didCommitMessages ? countContentRows(scrollbackContent, termWidth) : 0
+    let handledCommitWithFrame = false
+    if (didCommitMessages && scrollRows > 0 && nextH > 0 && nextH < termRows) {
+      const startRow = Math.max(1, termRows - scrollRows - nextH + 1)
+      const preScrollRows = oldFrameH > 0 ? Math.max(0, scrollRows + nextH - oldFrameH) : 0
+      preBuf += '\x1b[?25l'
+      if (preScrollRows > 0) {
+        // Full-screen scroll at termRows to push `preScrollRows` rows into
+        // the terminal's real scrollback (the only mechanism xterm.js
+        // honors — DECSTBM regions splice-discard in its InputHandler).
+        preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
+      }
+      // Erase from startRow to end of screen so residue from the old
+      // frame (or shifted rows left behind by pre-scroll) doesn't bleed
+      // through the `\r\n`-only advances in content (user messages have
+      // leading/trailing blank lines for margin).
+      preBuf += `\x1b[${startRow};1H\x1b[J`
+      preBuf += scrollbackContent
+      for (let i = 0; i < nextH; i++) {
+        preBuf += renderRowToAnsi(frame[i]) + '\x1b[K'
+        if (i < nextH - 1) preBuf += '\r\n'
+      }
+      prevFrameRef.current = frame
+      handledCommitWithFrame = true
+    } else if (didCommitMessages) {
+      // scrollRows == 0 (empty commit) or degenerate dimensions: dump at
+      // current cursor, let frame redraw below clean up.
+      preBuf += scrollbackContent
+    }
+
     let buf = ''
 
     // Frame-height change: the frame is pinned to the bottom, so when
@@ -1065,15 +1077,15 @@ export function ChatInput({
     // the terminal preserves them in its scrollback buffer. When H
     // shrinks, the bottom of the old frame stays exposed as "stale frame
     // cells" above the new top — clear those rows.
-    if (activeRef.current && oldFrameH > 0 && oldFrameH !== nextH) {
+    if (!handledCommitWithFrame && activeRef.current && oldFrameH > 0 && oldFrameH !== nextH) {
       if (nextH > oldFrameH) {
         const deltaH = nextH - oldFrameH
-        const regionBottom = termRows - oldFrameH
-        if (regionBottom > 0) {
-          // Trailing `\x1b[?25l`: same DECSTBM-unhides-cursor quirk as
-          // the scrollback-insert path above.
-          preBuf += `\x1b[1;${regionBottom}r` + `\x1b[${regionBottom};1H` + '\n'.repeat(deltaH) + '\x1b[r' + '\x1b[?25l'
-        }
+        // Grow via natural full-screen scroll at termRows (the scrolled-out
+        // rows reach the terminal's real scrollback). The equivalent DECSTBM
+        // region approach is splice-discarded by xterm.js (see commit handler
+        // comment) so we'd lose `deltaH` rows of history on every spinner
+        // appear / permission-dialog-open event.
+        preBuf += `\x1b[${termRows};1H` + '\n'.repeat(deltaH)
       } else {
         const deltaH = oldFrameH - nextH
         for (let i = 0; i < deltaH; i++) {
@@ -1209,8 +1221,31 @@ export function ChatInput({
       `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
     )
     debugLog('chatinput.flush.payload', JSON.stringify(payload))
+
+    // Coalesce rapid follow-up frames. Spinner ticks (80ms cadence) and
+    // streaming-chunk commits (~100ms debounce) drift into near-collision
+    // every few seconds: commit completes, spinner tick fires 1-20ms later
+    // and emits a second DEC 2026 sync envelope. Some hosts (VSCode
+    // xterm.js, Windows Terminal over ConHost) paint the two envelopes
+    // across two animation frames which users perceive as "上下抖动".
+    //
+    // Rule: if this render is NOT carrying a commit or a frame-height
+    // change (preBuf is just the bare BSU), AND the terminal received a
+    // write less than 16ms ago, drop it. The next natural
+    // spinner tick (~80ms later) will paint the up-to-date frame —
+    // spinner animation loses at most one frame, invisible in practice.
+    // Keep prevFrameRef / lastFrameHRef on their previous values so the
+    // next diff runs against the state the terminal actually has.
+    const now = Date.now()
+    const isBareTick = !didCommitMessages && preBuf.length === BSU.length
+    if (isBareTick && now - lastFlushTimeRef.current < 16) {
+      debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms`)
+      return
+    }
+
     const ok = process.stdout.write(payload)
     if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
+    lastFlushTimeRef.current = now
 
     prevFrameRef.current = frame
     lastFrameHRef.current = nextH
