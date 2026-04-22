@@ -1,286 +1,346 @@
 // @x-code-cli/cli — Markdown-to-ANSI renderer (token-based)
 //
-// Uses `marked.lexer()` to parse Markdown into an AST (token tree), then
-// recursively renders each token to ANSI-styled terminal text using chalk.
+// Port of Claude Code's formatToken() in src/utils/markdown.ts, adapted for
+// direct stdout writing (no React/Ink wrapper). Uses marked.lexer() to parse
+// Markdown into an AST, then recursively renders each token to ANSI-styled
+// text using chalk.
 //
-// This approach (identical to what Claude Code uses internally) is far more
-// reliable than regex-based rendering because:
-//   1. The parser correctly handles nested structures
-//      (e.g. bold **inside** a list item inside a blockquote).
-//   2. Code spans are protected — their content is never re-interpreted.
-//   3. Streaming partial text degrades gracefully (unclosed tokens are
-//      simply treated as plain text by the lexer).
+// Style choices mirror Claude Code verbatim: heading h1 is bold+italic+underline
+// (no accent color), h2/h3+ are bold, blockquote uses U+258E ▎ as a dim prefix
+// bar with italic text, code blocks emit raw text without indent, inline code
+// is tinted in the brand blue-purple, list bullets use `-` (nested ordered
+// levels switch to letter/roman), and links become OSC 8 hyperlinks.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Chalk } from 'chalk'
-import { type Token, marked } from 'marked'
+import { type Token, type Tokens, marked } from 'marked'
 
-import {
-  PROMPT_BORDER as BLOCKQUOTE,
-  BLUE_PURPLE as CODE_COLOR,
-  ACCENT_DIM as CODE_LANG,
-  ACCENT as HEADING,
-  SPINNER_BLUE as LINK,
-} from './theme.js'
+import { ACCENT_DIM as LINK_URL, BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
 
-// ── chalk instance with 24-bit colour ──
 const c = new Chalk({ level: 3 })
 
-// Disable del (strikethrough) extension to avoid conflicts with file paths
-// containing tildes — same approach Claude Code uses.
-marked.use({
-  tokenizer: {
-    del() {
-      return undefined as any
+const EOL = '\n'
+
+// U+258E LEFT ONE QUARTER BLOCK — blockquote line prefix (Claude Code figures.ts)
+const BLOCKQUOTE_BAR = '\u258e'
+
+// Inline code tint — matches Claude Code's `permission` color (rgb(177,185,249))
+const CODE_INLINE = BLUE_PURPLE
+
+let markedConfigured = false
+function configureMarked(): void {
+  if (markedConfigured) return
+  markedConfigured = true
+  // Disable strikethrough: the model often writes ~N for "approximately N"
+  // and almost never means real strikethrough. Matches Claude Code.
+  marked.use({
+    tokenizer: {
+      del() {
+        return undefined as any
+      },
     },
-  },
-})
+  })
+}
 
-// Inline and block code share a colour — aliased for readability at call sites.
-const CODE_INLINE = CODE_COLOR
-const CODE_BLOCK = CODE_COLOR
+// Fast path: skip full lexer when the text contains no Markdown markers.
+// Covers short plain-sentence assistant replies (the common case).
+const MD_SYNTAX_RE = /[#*`|[>\-_~]|\n\n|^\d+\. |\n\d+\. /
+function hasMarkdownSyntax(s: string): boolean {
+  return MD_SYNTAX_RE.test(s.length > 500 ? s.slice(0, 500) : s)
+}
 
-// Newline constant for joining blocks
-const NL = '\n'
+// Strip CSI escapes (`\x1B[…m`, etc.) so visual width calculations work on
+// colored text.
+const ANSI_RE = /\x1B\[[0-9;]*[A-Za-z]/g
+function stripAnsi(str: string): string {
+  return str.replace(ANSI_RE, '')
+}
 
-// ── Recursive token renderer ──────────────────────────────────────────
-//
-// Mirrors the approach from Claude Code's minified `CM` function:
-//   - Each token type has a dedicated case
-//   - Inline tokens (bold, italic, code, etc.) recurse into child tokens
-//   - Block tokens (heading, list, code block, etc.) append newlines
+function numberToLetter(n: number): string {
+  let result = ''
+  while (n > 0) {
+    n--
+    result = String.fromCharCode(97 + (n % 26)) + result
+    n = Math.floor(n / 26)
+  }
+  return result
+}
 
-function renderToken(
-  token: Token,
-  depth: number = 0,
-  orderedStart: number | null = null,
-  _parentToken: Token | null = null,
-): string {
-  switch (token.type) {
-    // ── Block elements ──
+const ROMAN_VALUES: ReadonlyArray<[number, string]> = [
+  [1000, 'm'],
+  [900, 'cm'],
+  [500, 'd'],
+  [400, 'cd'],
+  [100, 'c'],
+  [90, 'xc'],
+  [50, 'l'],
+  [40, 'xl'],
+  [10, 'x'],
+  [9, 'ix'],
+  [5, 'v'],
+  [4, 'iv'],
+  [1, 'i'],
+]
 
-    case 'heading': {
-      const content = renderTokens(token.tokens ?? [], depth)
-      switch (token.depth) {
-        case 1:
-          return c.hex(HEADING).bold.underline(content) + NL
-        case 2:
-          return c.hex(HEADING).bold(content) + NL
-        default:
-          return c.bold(content) + NL
-      }
+function numberToRoman(n: number): string {
+  let result = ''
+  for (const [value, numeral] of ROMAN_VALUES) {
+    while (n >= value) {
+      result += numeral
+      n -= value
     }
+  }
+  return result
+}
 
-    case 'paragraph': {
-      const content = renderTokens(token.tokens ?? [], depth)
-      return content + NL
-    }
-
-    case 'blockquote': {
-      const content = renderTokens(token.tokens ?? [], depth)
-      return (
-        content
-          .split(NL)
-          .map((line) => (line.trim() ? c.hex(BLOCKQUOTE).italic(`  │ ${line}`) : ''))
-          .filter(Boolean)
-          .join(NL) + NL
-      )
-    }
-
-    case 'code': {
-      const langLabel = token.lang ? c.hex(CODE_LANG)(`  [${token.lang}]`) : ''
-      const codeLines = (token.text ?? '')
-        .split(NL)
-        .map((line: string) => `  ${c.hex(CODE_BLOCK)(line)}`)
-        .join(NL)
-      return (langLabel ? langLabel + NL : '') + codeLines + NL
-    }
-
-    case 'list': {
-      return token.items
-        .map((item: any, idx: number) =>
-          renderToken(item, depth, token.ordered ? (token.start ?? 1) + idx : null, token),
-        )
-        .join('')
-    }
-
-    case 'list_item': {
-      // Each list_item contains child tokens (paragraph, text, sub-lists…).
-      // We render them, prepending a bullet/number to the first line.
-      const inner = (token.tokens ?? [])
-        .map((child: any) => {
-          // If the child is a 'text' token at list-item level, render its
-          // inline children directly (without adding an extra newline that
-          // 'paragraph' would add).
-          if (child.type === 'text') {
-            const prefix = orderedStart !== null ? `${orderedStart}.` : '•'
-            const indent = '  '.repeat(depth)
-            const inlineContent = child.tokens ? renderTokens(child.tokens, depth) : (child.text ?? '')
-            return `${indent}${prefix} ${inlineContent}${NL}`
-          }
-          if (child.type === 'list') {
-            // Nested list — increase depth
-            return renderToken(child, depth + 1)
-          }
-          // Other block elements inside a list item (e.g. paragraph)
-          if (child.type === 'paragraph') {
-            const prefix = orderedStart !== null ? `${orderedStart}.` : '•'
-            const indent = '  '.repeat(depth)
-            const inlineContent = renderTokens(child.tokens ?? [], depth)
-            return `${indent}${prefix} ${inlineContent}${NL}`
-          }
-          return renderToken(child, depth)
-        })
-        .join('')
-      return inner
-    }
-
-    case 'hr':
-      return c.dim('─'.repeat(40)) + NL
-
-    case 'space':
-      return NL
-
-    case 'html':
-      // Pass HTML through as-is (rare in LLM output)
-      return (token.text ?? '') + NL
-
-    case 'table': {
-      // Simple table rendering
-      const header = token.header as any[]
-      const rows = token.rows as any[][]
-
-      // Compute column widths
-      const colWidths = header.map((cell: any, i: number) => {
-        let max = stripAnsi(renderTokens(cell.tokens ?? [], 0)).length
-        for (const row of rows) {
-          if (row[i]) {
-            const len = stripAnsi(renderTokens(row[i].tokens ?? [], 0)).length
-            max = Math.max(max, len)
-          }
-        }
-        return Math.max(max, 3)
-      })
-
-      // Header
-      const headerLine = header
-        .map((cell: any, i: number) => {
-          const text = renderTokens(cell.tokens ?? [], 0)
-          return padVisual(text, colWidths[i])
-        })
-        .join(' │ ')
-
-      // Separator
-      const sepLine = colWidths.map((w) => '─'.repeat(w)).join('─┼─')
-
-      // Rows
-      const rowLines = rows
-        .map((row: any[]) =>
-          row
-            .map((cell: any, i: number) => {
-              const text = renderTokens(cell?.tokens ?? [], 0)
-              return padVisual(text, colWidths[i])
-            })
-            .join(' │ '),
-        )
-        .join(NL)
-
-      return [c.bold(headerLine), c.dim(sepLine), rowLines].join(NL) + NL
-    }
-
-    // ── Inline elements ──
-
-    case 'strong':
-      return c.bold(renderTokens(token.tokens ?? [], depth))
-
-    case 'em':
-      return c.italic(renderTokens(token.tokens ?? [], depth))
-
-    case 'codespan':
-      return c.hex(CODE_INLINE)(token.text ?? '')
-
-    case 'br':
-      return NL
-
-    case 'del':
-      return c.strikethrough.dim(renderTokens(token.tokens ?? [], depth))
-
-    case 'link':
-      if (token.href?.startsWith('mailto:')) {
-        return token.href.replace(/^mailto:/, '')
-      }
-      return `${c.hex(LINK).underline(renderTokens(token.tokens ?? [], depth))} (${c.dim(token.href ?? '')})`
-
-    case 'image':
-      return token.text || token.href || '[image]'
-
-    case 'text': {
-      // Text tokens may have inline sub-tokens (e.g. inside a paragraph)
-      if (token.tokens && token.tokens.length > 0) {
-        return renderTokens(token.tokens, depth)
-      }
-      return token.text ?? ''
-    }
-
-    case 'escape':
-      return token.text ?? ''
-
+function getListNumber(listDepth: number, orderedListNumber: number): string {
+  switch (listDepth) {
+    case 0:
+    case 1:
+      return orderedListNumber.toString()
+    case 2:
+      return numberToLetter(orderedListNumber)
+    case 3:
+      return numberToRoman(orderedListNumber)
     default:
-      // Fallback — return raw text if available
-      return (token as any).text ?? (token as any).raw ?? ''
+      return orderedListNumber.toString()
   }
 }
 
-/**
- * Render an array of tokens into a single ANSI string.
- */
-function renderTokens(tokens: Token[], depth: number = 0): string {
-  return tokens.map((t) => renderToken(t, depth)).join('')
+function padAligned(
+  content: string,
+  displayWidth: number,
+  targetWidth: number,
+  align: 'left' | 'center' | 'right' | null | undefined,
+): string {
+  const padding = Math.max(0, targetWidth - displayWidth)
+  if (align === 'center') {
+    const leftPad = Math.floor(padding / 2)
+    return ' '.repeat(leftPad) + content + ' '.repeat(padding - leftPad)
+  }
+  if (align === 'right') {
+    return ' '.repeat(padding) + content
+  }
+  return content + ' '.repeat(padding)
+}
+
+function formatToken(
+  token: Token,
+  listDepth: number = 0,
+  orderedListNumber: number | null = null,
+  parent: Token | null = null,
+): string {
+  switch (token.type) {
+    case 'blockquote': {
+      const inner = (token.tokens ?? [])
+        .map((t) => formatToken(t, 0, null, null))
+        .join('')
+      const bar = c.dim(BLOCKQUOTE_BAR)
+      return inner
+        .split(EOL)
+        .map((line) =>
+          stripAnsi(line).trim() ? `${bar} ${c.italic(line)}` : line,
+        )
+        .join(EOL)
+    }
+
+    case 'code': {
+      // No syntax highlighter wired up — plain text with trailing EOL,
+      // same as Claude Code's highlight=null fallback path.
+      return ((token as Tokens.Code).text ?? '') + EOL
+    }
+
+    case 'codespan':
+      return c.hex(CODE_INLINE)((token as Tokens.Codespan).text ?? '')
+
+    case 'em':
+      return c.italic(
+        (token.tokens ?? [])
+          .map((t) => formatToken(t, 0, null, parent))
+          .join(''),
+      )
+
+    case 'strong':
+      return c.bold(
+        (token.tokens ?? [])
+          .map((t) => formatToken(t, 0, null, parent))
+          .join(''),
+      )
+
+    case 'heading': {
+      const h = token as Tokens.Heading
+      const content = (h.tokens ?? [])
+        .map((t) => formatToken(t, 0, null, null))
+        .join('')
+      if (h.depth === 1) {
+        return c.bold.italic.underline(content) + EOL + EOL
+      }
+      return c.bold(content) + EOL + EOL
+    }
+
+    case 'hr':
+      return '---'
+
+    case 'image':
+      return (token as Tokens.Image).href ?? ''
+
+    case 'link': {
+      const l = token as Tokens.Link
+      if (l.href?.startsWith('mailto:')) {
+        return l.href.replace(/^mailto:/, '')
+      }
+      const linkText = (l.tokens ?? [])
+        .map((t) => formatToken(t, 0, null, l as Token))
+        .join('')
+      const href = l.href ?? ''
+      const plain = stripAnsi(linkText)
+      // No OSC 8 — emitting the hyperlink start/end sequences leaked into
+      // subsequent Ink frames on some terminals and desynced the input
+      // cursor. Render as underlined text followed by the URL in dim.
+      if (plain && plain !== href) {
+        return `${c.hex(LINK).underline(linkText)} (${c.hex(LINK_URL)(href)})`
+      }
+      return c.hex(LINK).underline(href)
+    }
+
+    case 'list': {
+      const list = token as Tokens.List
+      return list.items
+        .map((item, index) =>
+          formatToken(
+            item as Token,
+            listDepth,
+            list.ordered ? Number(list.start ?? 1) + index : null,
+            list as Token,
+          ),
+        )
+        .join('')
+    }
+
+    case 'list_item':
+      return (token.tokens ?? [])
+        .map(
+          (t) =>
+            `${'  '.repeat(listDepth)}${formatToken(t, listDepth + 1, orderedListNumber, token)}`,
+        )
+        .join('')
+
+    case 'paragraph':
+      return (
+        (token.tokens ?? [])
+          .map((t) => formatToken(t, 0, null, null))
+          .join('') + EOL
+      )
+
+    case 'space':
+      return EOL
+
+    case 'br':
+      return EOL
+
+    case 'text': {
+      const tx = token as Tokens.Text
+      if (parent?.type === 'link') {
+        // Inside a link — don't wrap again; the link handler already emitted
+        // the OSC 8 sequence.
+        return tx.text
+      }
+      if (parent?.type === 'list_item') {
+        const marker =
+          orderedListNumber === null
+            ? '-'
+            : `${getListNumber(listDepth, orderedListNumber)}.`
+        const content = tx.tokens
+          ? tx.tokens
+              .map((t) => formatToken(t, listDepth, orderedListNumber, token))
+              .join('')
+          : tx.text
+        return `${marker} ${content}${EOL}`
+      }
+      return tx.text
+    }
+
+    case 'table': {
+      const tb = token as Tokens.Table
+
+      const displayTextOf = (tokens?: Token[]): string =>
+        stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join(''))
+
+      const columnWidths = tb.header.map((header, index) => {
+        let maxWidth = displayTextOf(header.tokens).length
+        for (const row of tb.rows) {
+          const cellLength = displayTextOf(row[index]?.tokens).length
+          maxWidth = Math.max(maxWidth, cellLength)
+        }
+        return Math.max(maxWidth, 3)
+      })
+
+      let out = '| '
+      tb.header.forEach((header, index) => {
+        const content = (header.tokens ?? [])
+          .map((t) => formatToken(t, 0, null, null))
+          .join('')
+        const displayText = displayTextOf(header.tokens)
+        const width = columnWidths[index]!
+        const align = tb.align?.[index]
+        out += padAligned(content, displayText.length, width, align) + ' | '
+      })
+      out = out.trimEnd() + EOL
+
+      out += '|'
+      columnWidths.forEach((width) => {
+        out += '-'.repeat(width + 2) + '|'
+      })
+      out += EOL
+
+      tb.rows.forEach((row) => {
+        out += '| '
+        row.forEach((cell, index) => {
+          const content = (cell.tokens ?? [])
+            .map((t) => formatToken(t, 0, null, null))
+            .join('')
+          const displayText = displayTextOf(cell.tokens)
+          const width = columnWidths[index]!
+          const align = tb.align?.[index]
+          out += padAligned(content, displayText.length, width, align) + ' | '
+        })
+        out = out.trimEnd() + EOL
+      })
+
+      return out + EOL
+    }
+
+    case 'escape':
+      return (token as Tokens.Escape).text ?? ''
+
+    case 'def':
+    case 'del':
+    case 'html':
+      return ''
+  }
+  return ''
 }
 
 /**
- * Convert a Markdown string into ANSI-styled terminal text.
+ * Convert a Markdown string to ANSI-styled terminal text.
  *
- * Uses `marked.lexer()` to parse the Markdown into tokens, then renders
- * each token recursively.
+ * Preserves trailing newlines emitted by the token formatters — the caller
+ * (stdout-writer) relies on them for the streaming-chunk boundary logic.
  */
 export function renderMarkdown(text: string): string {
   if (!text) return ''
 
+  configureMarked()
+
   try {
-    const tokens = marked.lexer(text)
-    // Return renderTokens output verbatim. Earlier revisions called
-    // `.replace(/\n{2,}$/g, '\n').trimEnd()` which silently destroyed the
-    // trailing newlines that the token renderer emits — a bug: list items
-    // ("• x\n") lost their \n and the caller (stdout-writer streamingChunk
-    // branch) ended up writing text without a line break, leaving the
-    // cursor mid-row. ChatInput's post-commit frame redraw then teleported
-    // to termRows and its nextH-1 scrolls carried the erased frame's blank
-    // rows up along with the chunk, producing 2 empty lines between every
-    // streamed bullet/paragraph (visible in a.log). The renderer already
-    // emits the correct number of trailing \ns per block type (paragraph,
-    // heading, space, list item) — preserve them unchanged.
-    return renderTokens(tokens as Token[])
+    // Fast path — single paragraph for plain text
+    if (!hasMarkdownSyntax(text)) {
+      return text + EOL
+    }
+    const tokens = marked.lexer(text) as Token[]
+    return tokens.map((t) => formatToken(t, 0, null, null)).join('')
   } catch {
-    // If parsing fails (e.g. during streaming with very partial text),
-    // return the original text so the user at least sees something.
+    // Partial/invalid Markdown during streaming — fall back to raw text so
+    // the user still sees something.
     return text
   }
-}
-
-// ── Utility helpers ───────────────────────────────────────────────────
-
-/**
- * Strip ANSI escape codes from a string (for width calculation).
- */
-function stripAnsi(str: string): string {
-  return str.replace(/\x1B\[[0-9;]*m/g, '')
-}
-
-/**
- * Pad a string to a visual width, accounting for ANSI codes.
- */
-function padVisual(str: string, width: number): string {
-  const visible = stripAnsi(str).length
-  if (visible >= width) return str
-  return str + ' '.repeat(width - visible)
 }
