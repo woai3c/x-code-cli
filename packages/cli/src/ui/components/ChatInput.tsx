@@ -270,8 +270,6 @@ const S_DIM = '\x1b[0m\x1b[2m'
 // any non-empty style on the first cell of the next row, so a full reset
 // here is safe.
 const S_RESET = '\x1b[0m'
-const S_INV = '\x1b[7m'
-const S_INV_OFF = '\x1b[27m'
 const S_NONE = '\x1b[0m'
 
 // NOTE: `\x1b7` / `\x1b8` (DECSC / DECRC) are DELIBERATELY NOT used
@@ -291,29 +289,27 @@ const S_NONE = '\x1b[0m'
  *  only the final state, never the intermediate blank region.
  *  Unsupported terminals silently ignore these sequences.
  *
- *  Cursor-hide (`\x1b[?25l`) is emitted BOTH before sync entry AND
- *  after sync exit, and also inside the sync envelope. Why all three:
+ *  Cursor-hide (`\x1b[?25l`) is emitted before sync entry, inside the
+ *  sync envelope, and as the last byte of ESU when the input row has
+ *  no active cursor anchor (disabled state, permission dialog, etc.).
+ *  When an anchor IS present, ESU ends with `\x1b[?25h` instead so the
+ *  terminal's real cursor becomes visible at the parked position — that
+ *  is now the one and only visible cursor. No inverse-video "fake"
+ *  cursor cell is drawn; whatever shape the user configured in their
+ *  terminal (block / bar / underline) is respected and there is no
+ *  overlap-with-fake-block trick that desynced on terminals where the
+ *  real caret wasn't a block.
  *
- *    1. Windows Terminal / ConHost handles DEC 2026 sync mode by
- *       buffering the sequence and committing at ESU, but DECTCEM
- *       state changes issued INSIDE the sync window have been observed
- *       to be discarded — the terminal "remembers" the cursor was
- *       shown before BSU and restores that state on commit. So a hide
- *       inside sync alone is not enough.
- *    2. DECSTBM (`\x1b[1;N r` / `\x1b[r`) has been observed to
- *       re-enable cursor visibility as a side effect on the same
- *       terminals — so any render that uses DECSTBM (scrollback insert,
- *       height-growth scroll) needs to re-hide mid-payload.
- *    3. Pre-sync hide plus post-sync hide means the cursor is hidden
- *       at every observable frame boundary regardless of what sync
- *       mode does or doesn't preserve.
- *
- *  The inverse-video cursor cell (S_INV) painted inside the input row
- *  is thus the only visible cursor. The process exit handler in
- *  index.ts emits `\x1b[?25h` to restore cursor visibility after the
- *  TUI tears down. */
+ *  Hide DURING sync is still required:
+ *    1. Windows Terminal / ConHost don't fully atomize DEC 2026, so the
+ *       cursor would visibly walk through the diff loop's intermediate
+ *       positions and produce flicker without the mid-sync hide.
+ *    2. DECSTBM (`\x1b[1;N r` / `\x1b[r`) re-enables cursor visibility
+ *       as a side effect on those same terminals — any render path that
+ *       uses DECSTBM re-hides the cursor afterwards. */
 const BSU = '\x1b[?25l\x1b[?2026h\x1b[?25l'
-const ESU = '\x1b[?25l\x1b[?2026l\x1b[?25l'
+const ESU_HIDE = '\x1b[?25l\x1b[?2026l\x1b[?25l'
+const ESU_SHOW = '\x1b[?25l\x1b[?2026l\x1b[?25h'
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
@@ -521,7 +517,7 @@ export function ChatInput({
    *  composition (already BSU/ESU-wrapped by the outer render). */
   const eraseRegion = () => {
     const s = buildEraseRegion()
-    if (s) process.stdout.write(BSU + s + ESU)
+    if (s) process.stdout.write(BSU + s + ESU_HIDE)
   }
 
   const handleSubmit = () => {
@@ -970,15 +966,12 @@ export function ChatInput({
     frame.push(textToCells(sepText, S_GRAY))
 
     // Input lines. `cursorAnchor` captures the frame-row index (0-based)
-    // and 1-based visual column of the S_INV cursor cell so the cell-diff
-    // loop can PARK the native terminal cursor directly on top of it at
-    // end of render. Why: even with `\x1b[?25l` emitted at BSU, ESU, and
-    // after every DECSTBM block, Windows Terminal / ConHost has been
-    // observed to keep the cursor visible (user reports two cursors on
-    // the input row). Since we can't reliably force it hidden, we make
-    // it OVERLAP our S_INV cell — if visible it coincides with the
-    // inverse-video block we paint; if hidden, nothing changes. Either
-    // way the user sees exactly one visible cursor position.
+    // and 1-based visual column where the terminal's real cursor should
+    // be parked at end of render. ESU is then chosen based on whether an
+    // anchor is set: ESU_SHOW (trailing `\x1b[?25h`) reveals the caret at
+    // that column so it is the one and only visible cursor; ESU_HIDE
+    // (trailing `\x1b[?25l`) keeps it hidden when the input is disabled
+    // or there is no active cursor line.
     let cursorAnchor: { row: number; col: number } | null = null
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
@@ -1005,7 +998,7 @@ export function ChatInput({
           // +1 to convert to 1-based. Captured BEFORE pushing cursor cell
           // so it reflects the cursor cell's starting column.
           cursorAnchor = { row: frame.length, col: 2 + visualWidth(before) + 1 }
-          cells.push({ char: cursorChar, style: S_INV, width: charWidth(cursorChar) })
+          cells.push({ char: cursorChar, style: S_RESET, width: charWidth(cursorChar) })
           cells.push(...textToCells(after, S_RESET))
         } else {
           const beforeWidth = visualWidth(before)
@@ -1020,7 +1013,7 @@ export function ChatInput({
           const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
           cells.push(...textToCells(vb, S_RESET))
           cursorAnchor = { row: frame.length, col: 2 + visualWidth(vb) + 1 }
-          cells.push({ char: cursorChar, style: S_INV, width: charWidth(cursorChar) })
+          cells.push({ char: cursorChar, style: S_RESET, width: charWidth(cursorChar) })
           cells.push(...textToCells(va, S_RESET))
         }
       }
@@ -1150,10 +1143,6 @@ export function ChatInput({
               lastStyle = cell.style
             }
             buf += cell.char
-            if (cell.style === S_INV) {
-              buf += S_INV_OFF
-              lastStyle = S_NONE
-            }
           }
           buf += S_RESET
           if (prevRow.length === 0) {
@@ -1196,12 +1185,10 @@ export function ChatInput({
       }
     }
 
-    // Park the native terminal cursor on top of our S_INV cursor cell.
-    // If the terminal has `\x1b[?25l` correctly applied, this is a no-op
-    // visually. If it ignores our hide (observed on Windows Terminal /
-    // ConHost), the native caret ends up exactly where our inverse-video
-    // block is drawn — overlapping into a single visible cursor instead
-    // of a second phantom cursor hanging wherever the diff loop stopped.
+    // Park the real cursor at the input cursor's column. ESU_SHOW below
+    // then makes it visible there; the user's terminal draws it in
+    // whatever shape they configured (block / bar / underline) — that
+    // is the only cursor on screen.
     if (cursorAnchor) {
       const anchorRow = frameTop + cursorAnchor.row
       buf += `\x1b[${anchorRow};${cursorAnchor.col}H`
@@ -1215,7 +1202,8 @@ export function ChatInput({
     // Ink's log-update internals, so our save was being clobbered on every
     // Ink tree reconcile. Instead we jump absolutely to (frameTop, 1) at
     // the start of every render — no cross-render cursor-state dependency.
-    const payload = preBuf + buf + ESU
+    const esu = cursorAnchor ? ESU_SHOW : ESU_HIDE
+    const payload = preBuf + buf + esu
     debugLog(
       'chatinput.flush',
       `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
