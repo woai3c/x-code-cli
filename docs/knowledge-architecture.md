@@ -2,13 +2,13 @@
 
 X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独立的文件和触发机制**。
 
-| 角色 | 写入者 | 目的 | 文件 |
-|---|---|---|---|
-| **项目说明** | 人(用户 / 团队) | 项目是什么、团队约定、业务背景 | `AGENTS.md` (项目根) |
-| **全局偏好** | 人(用户) | 跨项目的个人偏好 | `~/.x-code/AGENTS.md` |
-| **本地覆盖** | 人(用户) | 不提交到 git 的个人项目偏好 | `.x-code/local/preferences.md` |
-| **项目记忆** | **AI** | AI 在对话中学到的项目相关事实 | `.x-code/memory/auto.md` |
-| **全局记忆** | **AI** | AI 学到的用户相关事实(跨项目) | `~/.x-code/memory/auto.md` |
+| 角色         | 写入者          | 目的                           | 文件                           |
+| ------------ | --------------- | ------------------------------ | ------------------------------ |
+| **项目说明** | 人(用户 / 团队) | 项目是什么、团队约定、业务背景 | `AGENTS.md` (项目根)           |
+| **全局偏好** | 人(用户)        | 跨项目的个人偏好               | `~/.x-code/AGENTS.md`          |
+| **本地覆盖** | 人(用户)        | 不提交到 git 的个人项目偏好    | `.x-code/local/preferences.md` |
+| **项目记忆** | **AI**          | AI 在对话中学到的项目相关事实  | `.x-code/memory/auto.md`       |
+| **全局记忆** | **AI**          | AI 学到的用户相关事实(跨项目)  | `~/.x-code/memory/auto.md`     |
 
 `AGENTS.md` 放在项目根,不在隐藏目录——这是对齐 Codex / OpenCode 的行业惯例,用户主权和发现性都更好。
 
@@ -65,18 +65,23 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
 # AGENTS.md
 
 ## Overview
+
 <!-- 一两句话:项目做什么,给谁用 -->
 
 ## Tech Stack
+
 <!-- 语言 / 框架 / 关键依赖 -->
 
 ## Commands
+
 <!-- 常用命令(build / test / lint 等) -->
 
 ## Conventions
+
 <!-- 非显而易见的项目约定 -->
 
 ## Business Context
+
 <!-- 领域知识 / 业务约束 / 关键决策 -->
 ```
 
@@ -90,12 +95,12 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
 
 **Taxonomy(4 分类)**:按"**知识类型**"分,不是按"主题"分。四类互斥,边界清晰:
 
-| 类别 | 含义 | 典型触发 |
-|---|---|---|
-| `user` | 关于用户本身(角色、专长、长期约束) | "我是十年 Go 工程师,第一次碰 React" |
-| `feedback` | 用户的纠正 **或** 认可(都要含原因) | "不要 mock 数据库——上季度 mock 过测试通过但迁移炸了" |
-| `project` | 进行中的工作 / 决策 / 非代码可推导的状态 | "mobile release 冻结从 2026-03-05 开始" |
-| `reference` | 外部系统指针 | "pipeline bug 都在 Linear 的 INGEST 项目" |
+| 类别        | 含义                                     | 典型触发                                             |
+| ----------- | ---------------------------------------- | ---------------------------------------------------- |
+| `user`      | 关于用户本身(角色、专长、长期约束)       | "我是十年 Go 工程师,第一次碰 React"                  |
+| `feedback`  | 用户的纠正 **或** 认可(都要含原因)       | "不要 mock 数据库——上季度 mock 过测试通过但迁移炸了" |
+| `project`   | 进行中的工作 / 决策 / 非代码可推导的状态 | "mobile release 冻结从 2026-03-05 开始"              |
+| `reference` | 外部系统指针                             | "pipeline bug 都在 Linear 的 INGEST 项目"            |
 
 **不该写入**(避免记忆膨胀和误导):
 
@@ -116,13 +121,16 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
 ## Auto Memory
 
 ### feedback
+
 - [2026-04-18] testing-db-policy: 集成测试必须打真库,不能 mock。原因:Q1 migration 事故,mocked 测试通过但生产炸了
 - [2026-04-18] refactor-batching: 大规模重构倾向打成一个 PR 而不是拆多个——用户验证过减少 churn
 
 ### user
+
 - [2026-04-18] user-stack: 十年 Go 工程师,React 新手,前端例子可类比后端概念
 
 ### project
+
 - [2026-04-18] release-freeze: mobile release 冻结 2026-03-05 起,非 critical PR 要 flag
 ```
 
@@ -147,12 +155,12 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
 
 ## 和竞品的位置对比
 
-| 工具 | 项目说明文件 | 位置 | 自动记忆 | Monorepo 向上遍历 |
-|---|---|---|---|---|
-| **X-Code** | `AGENTS.md` | 项目根 | ✅ auto.md(主动调用 saveKnowledge) | ✅ 向上到 `.git` |
-| Codex | `AGENTS.md` | 项目根 | ✅ 后台双阶段 pipeline(Phase 1 + 2) | ✅ 向上到 `.git` |
-| OpenCode | `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` 优先级链 | 项目根 | ❌ 无自动记忆 | ❌ 只读 cwd |
-| Claude Code | `CLAUDE.md` | 项目根 | ✅ 后台 extractor 子 agent | ✅ 向上遍历 |
+| 工具        | 项目说明文件                                      | 位置   | 自动记忆                            | Monorepo 向上遍历 |
+| ----------- | ------------------------------------------------- | ------ | ----------------------------------- | ----------------- |
+| **X-Code**  | `AGENTS.md`                                       | 项目根 | ✅ auto.md(主动调用 saveKnowledge)  | ✅ 向上到 `.git`  |
+| Codex       | `AGENTS.md`                                       | 项目根 | ✅ 后台双阶段 pipeline(Phase 1 + 2) | ✅ 向上到 `.git`  |
+| OpenCode    | `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` 优先级链 | 项目根 | ❌ 无自动记忆                       | ❌ 只读 cwd       |
+| Claude Code | `CLAUDE.md`                                       | 项目根 | ✅ 后台 extractor 子 agent          | ✅ 向上遍历       |
 
 X-Code 选用 `AGENTS.md`(而非 `CLAUDE.md`)的原因:这是**供应商中性**的标准,用户如果已经为 Codex / OpenCode 写过 AGENTS.md,装我们的工具立刻能用,零迁移成本。
 
@@ -160,11 +168,11 @@ X-Code 选用 `AGENTS.md`(而非 `CLAUDE.md`)的原因:这是**供应商中性**
 
 ## 相关代码位置
 
-| 功能 | 文件 | 关键函数 |
-|---|---|---|
-| AGENTS.md chain 加载 | `core/src/knowledge/loader.ts` | `collectAgentsMdChain()`, `buildKnowledgeContext()` |
-| 自动记忆管理 | `core/src/knowledge/auto-memory.ts` | `AutoMemory` 类, `initMemories()`(project 实例按 cwd 缓存,global 全局单例) |
-| saveKnowledge 工具 | `core/src/tools/save-knowledge.ts` | 4 类 taxonomy 的 schema + AI 触发指南 |
-| Taxonomy 类型 | `core/src/types/index.ts` | `KnowledgeCategory` type |
-| `/init` 命令 | `core/src/knowledge/init.ts` | `initProject()`, AGENTS_TEMPLATE |
-| System prompt 的 memory 指南 | `core/src/agent/system-prompt.ts` | "Auto Memory Guidelines" 段 |
+| 功能                         | 文件                                | 关键函数                                                                   |
+| ---------------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| AGENTS.md chain 加载         | `core/src/knowledge/loader.ts`      | `collectAgentsMdChain()`, `buildKnowledgeContext()`                        |
+| 自动记忆管理                 | `core/src/knowledge/auto-memory.ts` | `AutoMemory` 类, `initMemories()`(project 实例按 cwd 缓存,global 全局单例) |
+| saveKnowledge 工具           | `core/src/tools/save-knowledge.ts`  | 4 类 taxonomy 的 schema + AI 触发指南                                      |
+| Taxonomy 类型                | `core/src/types/index.ts`           | `KnowledgeCategory` type                                                   |
+| `/init` 命令                 | `core/src/knowledge/init.ts`        | `initProject()`, AGENTS_TEMPLATE                                           |
+| System prompt 的 memory 指南 | `core/src/agent/system-prompt.ts`   | "Auto Memory Guidelines" 段                                                |

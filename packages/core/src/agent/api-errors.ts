@@ -11,8 +11,7 @@ const CONTEXT_TOO_LONG_PATTERNS = [
 
 /** Extract HTTP status from "status code 400", "(400)", or "400 ..." */
 export function extractHttpStatus(msg: string): number {
-  const match =
-    msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
+  const match = msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
   return match ? Number(match[1]) : 0
 }
 

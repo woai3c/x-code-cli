@@ -52,8 +52,7 @@ async function checkAndCompressContext(
   threshold: number,
   callbacks: AgentCallbacks,
 ): Promise<void> {
-  const needsCompression =
-    state.lastInputTokens > threshold || estimateTokenCount(state.messages) > threshold
+  const needsCompression = state.lastInputTokens > threshold || estimateTokenCount(state.messages) > threshold
 
   if (!needsCompression || state.messages.length <= KEEP_RECENT) return
 
@@ -193,7 +192,10 @@ async function runTurn(
 
   try {
     const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks)
-    debugLog('turn.finish', `reason=${finishReason} turn=${state.turnCount} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`)
+    debugLog(
+      'turn.finish',
+      `reason=${finishReason} turn=${state.turnCount} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
+    )
     return { kind: 'done', finishReason, result }
   } catch (err) {
     drainStreamResult(result)
@@ -274,7 +276,10 @@ export async function agentLoop(
     if (outcome.finishReason === 'length') {
       if (continuationAttempts < MAX_CONTINUATIONS) {
         continuationAttempts++
-        debugLog('turn.length-continuation', `attempt=${continuationAttempts}/${MAX_CONTINUATIONS} turn=${state.turnCount}`)
+        debugLog(
+          'turn.length-continuation',
+          `attempt=${continuationAttempts}/${MAX_CONTINUATIONS} turn=${state.turnCount}`,
+        )
         // Nudge the model to pick up exactly where it stopped. This goes
         // into state.messages but NOT into UI messages, so the user sees
         // one continuous streamed reply with at most a brief pause.
@@ -312,11 +317,7 @@ export async function agentLoop(
  *  to the shell promptly, not wait for a roundtrip. If the timeout fires
  *  or the call fails, we silently skip (session summaries are nice-to-have,
  *  not critical for exit). */
-export async function saveSession(
-  state: LoopState,
-  model: LanguageModel,
-  timeoutMs = 2000,
-): Promise<void> {
+export async function saveSession(state: LoopState, model: LanguageModel, timeoutMs = 2000): Promise<void> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {

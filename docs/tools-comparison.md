@@ -323,15 +323,15 @@ const edit = tool({
 
 ## 8. 工具执行调度
 
-| 维度     |       Claude Code        |                       Gemini CLI                       |                Codex CLI                |             x-code-cli              |
-| -------- | :----------------------: | :----------------------------------------------------: | :-------------------------------------: | :---------------------------------: |
+| 维度     |       Claude Code        |                       Gemini CLI                       |                Codex CLI                |              x-code-cli              |
+| -------- | :----------------------: | :----------------------------------------------------: | :-------------------------------------: | :----------------------------------: |
 | 调度器   |  AI SDK + 手动 dispatch  |                    Scheduler 状态机                    |        ToolCallRuntime + Router         | AI SDK + `processToolCalls` for 循环 |
-| 并发支持 | `isConcurrencySafe` 标记 |                     Scheduler 管理                     | **读写锁**（Read = 并行，Write = 独占） |            **顺序执行**             |
-| 状态追踪 |        toolCallId        | Validating→Scheduled→Executing→Success/Error/Cancelled |           Turn-level tracking           |                 无                  |
-| 取消支持 |     AbortController      |                      AbortSignal                       |            CancellationToken            |               **无**                |
-| Hooks    |        前/后执行         |                `executeToolWithHooks()`                |         Pre/Post ToolUse hooks          |               **无**                |
-| 投机执行 |     Y (speculation)      |                           -                            |                    -                    |                  -                  |
-| 重试机制 |   API 级别 maxRetries    |                           -                            |     **沙箱拒绝 → 权限提升 → 重试**      |                 无                  |
+| 并发支持 | `isConcurrencySafe` 标记 |                     Scheduler 管理                     | **读写锁**（Read = 并行，Write = 独占） |             **顺序执行**             |
+| 状态追踪 |        toolCallId        | Validating→Scheduled→Executing→Success/Error/Cancelled |           Turn-level tracking           |                  无                  |
+| 取消支持 |     AbortController      |                      AbortSignal                       |            CancellationToken            |                **无**                |
+| Hooks    |        前/后执行         |                `executeToolWithHooks()`                |         Pre/Post ToolUse hooks          |                **无**                |
+| 投机执行 |     Y (speculation)      |                           -                            |                    -                    |                  -                   |
+| 重试机制 |   API 级别 maxRetries    |                           -                            |     **沙箱拒绝 → 权限提升 → 重试**      |                  无                  |
 
 > **Codex 的并行执行最精巧**：用 Rust 的 `RwLock` — 只读工具获取读锁（可并行），写工具获取写锁（独占），在语言层面保证安全。
 
@@ -506,6 +506,7 @@ inputSchema: z.object({
 > 借鉴：独立调研（无单一竞品完整实现）
 
 **实现**(`packages/core/src/tools/web-search.ts`,~110 行):
+
 - 仅内置 Tavily + Brave 两家,不引入 DDG(抓取方案 ToS 风险大,被封概率高)
 - 选择顺序固定:`TAVILY_API_KEY` → `BRAVE_API_KEY` → 返回友好错误
 - 两家 provider 返回结构统一为 `{ title, url, content }`,输出格式完全一致

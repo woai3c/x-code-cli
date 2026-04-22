@@ -1,9 +1,9 @@
 // Tests for the auto-memory system
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { AutoMemory } from '../src/knowledge/auto-memory.js'
 import type { KnowledgeFact } from '../src/types/index.js'
@@ -45,7 +45,12 @@ describe('AutoMemory', () => {
 
   it('allows same key in different categories', () => {
     memory.add({ key: 'testing', fact: 'integration tests hit real DB', category: 'feedback', date: '2026-04-01' })
-    memory.add({ key: 'testing', fact: 'Grafana test dashboard at internal/test', category: 'reference', date: '2026-04-01' })
+    memory.add({
+      key: 'testing',
+      fact: 'Grafana test dashboard at internal/test',
+      category: 'reference',
+      date: '2026-04-01',
+    })
 
     expect(memory.getAll()).toHaveLength(2)
   })

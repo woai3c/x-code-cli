@@ -199,9 +199,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     }
 
     if (choices.length === 0) {
-      addInfoMessage(
-        'No models available — set an API key (e.g. `ANTHROPIC_API_KEY`, `ALIBABA_API_KEY`) and restart.',
-      )
+      addInfoMessage('No models available — set an API key (e.g. `ANTHROPIC_API_KEY`, `ALIBABA_API_KEY`) and restart.')
       return
     }
 

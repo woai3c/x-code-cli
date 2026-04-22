@@ -93,7 +93,6 @@ Ink 上游标准版在 CJK / IME / 长流式文本组合下有根深蒂固的抖
 +----------------------------------------------------------+
 ```
 
-
 ---
 
 ## 完整时序图
@@ -369,6 +368,7 @@ App 组件 JSX 结构（极简）：
 ```
 
 **关键点**：
+
 - `<ChatInput>` 通过 props 接收所有动态信息（messages、spinner、permission、error、streamingText），内部构建 cell buffer 一帧。
 - `disabled` 只在 `pendingQuestion` 时为 true；加载中不锁键盘（允许预输入下一个问题，Enter 被 `spinner != null` 守卫忽略）。
 - 整个 useEffect 包在 DEC 2026 `\x1b[?2026h` / `\x1b[?2026l` 同步更新块里，保证 eraseRegion + 写消息 + 重绘 frame 原子化，消除闪烁。
@@ -1314,35 +1314,35 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 
 ## 文件索引
 
-| 阶段          | 文件                                    | 关键函数/组件                                                                     |
-| ------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
-| CLI 入口      | `cli/src/index.ts`                      | `main()`, `checkNodeVersion()`, `loadEnvFile()`                                   |
-| Ink 渲染      | `cli/src/app.tsx`                       | `startApp()`, `getCleanupFn()`                                                    |
-| 根组件        | `cli/src/ui/components/App.tsx`         | `App`, `handleSubmit()`, `SLASH_COMMANDS`                                         |
-| Agent Hook    | `cli/src/ui/hooks/use-agent.ts`         | `useAgent()`, `submit()`, `AgentState`                                            |
-| Agent 循环    | `core/src/agent/loop.ts`                | `agentLoop()`, `runTurn()`, `compressMessages()`                                  |
-| 工具执行      | `core/src/agent/tool-execution.ts`      | `processToolCalls()` — 权限检查 + write/shell 分发                                |
-| 上下文窗口    | `core/src/agent/context-window.ts`      | `getCompressionThreshold()`, `estimateTokenCount()` + 模型/provider 表           |
-| API 错误      | `core/src/agent/api-errors.ts`          | `classifyApiError()`, `isContextTooLongError()`, `extractHttpStatus()`           |
-| Stream 工具   | `core/src/agent/stream-utils.ts`        | `StreamResult` 类型, `drainStreamResult()`                                        |
-| System Prompt | `core/src/agent/system-prompt.ts`       | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                                         |
-| 消息处理      | `core/src/agent/messages.ts`            | `userMessage()`, `toolResultMessage()`                                            |
-| 计划模式      | `core/src/agent/plan-mode.ts`           | `ensurePlansDir()`, `generatePlanId(topic?)`, `getPlanPath()`                     |
-| 工具注册      | `core/src/tools/index.ts`               | `toolRegistry`, `truncateToolResult()`                                            |
-| 权限系统      | `core/src/permissions/index.ts`         | `checkPermission()`, `getPermissionLevel()`                                       |
-| 知识加载      | `core/src/knowledge/loader.ts`          | `buildKnowledgeContext()`, AGENTS.md 向上遍历                                     |
-| 会话持久化    | `core/src/knowledge/session.ts`         | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history) |
-| 自动记忆      | `core/src/knowledge/auto-memory.ts`     | `AutoMemory`, `initMemories()` — 4 类 taxonomy (user/feedback/project/reference)  |
-| 项目初始化    | `core/src/knowledge/init.ts`            | `initProject()` — `/init` 命令入口，写 AGENTS.md 到项目根                         |
-| 配置          | `core/src/config/index.ts`              | `resolveModelId()`, `getAvailableProviders()`, `getEnvVarName()`（env 变量为唯一来源） |
-| Provider      | `core/src/providers/registry.ts`        | `createModelRegistry()`                                                           |
-| 底部 UI       | `cli/src/ui/components/ChatInput.tsx`   | `ChatInput` — 整个底部区域唯一 owner: scrollback 提交 + cell-level diff 渲染 spinner/streaming/permission/error/输入框/补全菜单, DEC 2026 同步更新 |
-| 输入 Hook     | `cli/src/ui/hooks/use-prompt-input.ts`  | `usePromptInput()`, bracketed paste + 30ms debounce fallback, `\r\n` 归一化       |
-| 粘贴引用      | `cli/src/ui/paste-refs.ts`              | `formatPasteRef()`, `expandPasteRefs()`, `stripTrailingRef()`                     |
-| 流式缓冲      | `cli/src/ui/hooks/use-stream-buffer.ts` | `useStreamBuffer()`, 每 delta 更新 streamingText (完整行), \n\n 段落边界提交到 messages |
-| Stdout 写入   | `cli/src/ui/stdout-writer.ts`           | `writeMessageToStdout()`, user/assistant/tool 格式化 + ANSI + 行尾归一化          |
-| 工具显示      | `cli/src/ui/tool-display.ts`            | `getToolLabel()`, `getToolInputPreview()`, `getToolResultSummary()`               |
-| askUser UI    | `cli/src/ui/components/SelectOptions.tsx` | `SelectOptions` — 唯一仍走 Ink 渲染的动态组件（自由文本 "Other" 输入模式）        |
-| Header        | `cli/src/ui/components/AppHeader.tsx`   | `printHeader()`, ASCII Logo                                                       |
-| Markdown      | `cli/src/ui/render-markdown.ts`         | `renderMarkdown()`, marked lexer + chalk                                          |
-| 主题          | `cli/src/ui/theme.ts`                   | `ACCENT`, `SUCCESS`, `WARNING`, `ERROR` 等 (对齐 Claude Code dark 配色)           |
+| 阶段          | 文件                                      | 关键函数/组件                                                                                                                                      |
+| ------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI 入口      | `cli/src/index.ts`                        | `main()`, `checkNodeVersion()`, `loadEnvFile()`                                                                                                    |
+| Ink 渲染      | `cli/src/app.tsx`                         | `startApp()`, `getCleanupFn()`                                                                                                                     |
+| 根组件        | `cli/src/ui/components/App.tsx`           | `App`, `handleSubmit()`, `SLASH_COMMANDS`                                                                                                          |
+| Agent Hook    | `cli/src/ui/hooks/use-agent.ts`           | `useAgent()`, `submit()`, `AgentState`                                                                                                             |
+| Agent 循环    | `core/src/agent/loop.ts`                  | `agentLoop()`, `runTurn()`, `compressMessages()`                                                                                                   |
+| 工具执行      | `core/src/agent/tool-execution.ts`        | `processToolCalls()` — 权限检查 + write/shell 分发                                                                                                 |
+| 上下文窗口    | `core/src/agent/context-window.ts`        | `getCompressionThreshold()`, `estimateTokenCount()` + 模型/provider 表                                                                             |
+| API 错误      | `core/src/agent/api-errors.ts`            | `classifyApiError()`, `isContextTooLongError()`, `extractHttpStatus()`                                                                             |
+| Stream 工具   | `core/src/agent/stream-utils.ts`          | `StreamResult` 类型, `drainStreamResult()`                                                                                                         |
+| System Prompt | `core/src/agent/system-prompt.ts`         | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                                                                                                          |
+| 消息处理      | `core/src/agent/messages.ts`              | `userMessage()`, `toolResultMessage()`                                                                                                             |
+| 计划模式      | `core/src/agent/plan-mode.ts`             | `ensurePlansDir()`, `generatePlanId(topic?)`, `getPlanPath()`                                                                                      |
+| 工具注册      | `core/src/tools/index.ts`                 | `toolRegistry`, `truncateToolResult()`                                                                                                             |
+| 权限系统      | `core/src/permissions/index.ts`           | `checkPermission()`, `getPermissionLevel()`                                                                                                        |
+| 知识加载      | `core/src/knowledge/loader.ts`            | `buildKnowledgeContext()`, AGENTS.md 向上遍历                                                                                                      |
+| 会话持久化    | `core/src/knowledge/session.ts`           | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history)                                                                  |
+| 自动记忆      | `core/src/knowledge/auto-memory.ts`       | `AutoMemory`, `initMemories()` — 4 类 taxonomy (user/feedback/project/reference)                                                                   |
+| 项目初始化    | `core/src/knowledge/init.ts`              | `initProject()` — `/init` 命令入口，写 AGENTS.md 到项目根                                                                                          |
+| 配置          | `core/src/config/index.ts`                | `resolveModelId()`, `getAvailableProviders()`, `getEnvVarName()`（env 变量为唯一来源）                                                             |
+| Provider      | `core/src/providers/registry.ts`          | `createModelRegistry()`                                                                                                                            |
+| 底部 UI       | `cli/src/ui/components/ChatInput.tsx`     | `ChatInput` — 整个底部区域唯一 owner: scrollback 提交 + cell-level diff 渲染 spinner/streaming/permission/error/输入框/补全菜单, DEC 2026 同步更新 |
+| 输入 Hook     | `cli/src/ui/hooks/use-prompt-input.ts`    | `usePromptInput()`, bracketed paste + 30ms debounce fallback, `\r\n` 归一化                                                                        |
+| 粘贴引用      | `cli/src/ui/paste-refs.ts`                | `formatPasteRef()`, `expandPasteRefs()`, `stripTrailingRef()`                                                                                      |
+| 流式缓冲      | `cli/src/ui/hooks/use-stream-buffer.ts`   | `useStreamBuffer()`, 每 delta 更新 streamingText (完整行), \n\n 段落边界提交到 messages                                                            |
+| Stdout 写入   | `cli/src/ui/stdout-writer.ts`             | `writeMessageToStdout()`, user/assistant/tool 格式化 + ANSI + 行尾归一化                                                                           |
+| 工具显示      | `cli/src/ui/tool-display.ts`              | `getToolLabel()`, `getToolInputPreview()`, `getToolResultSummary()`                                                                                |
+| askUser UI    | `cli/src/ui/components/SelectOptions.tsx` | `SelectOptions` — 唯一仍走 Ink 渲染的动态组件（自由文本 "Other" 输入模式）                                                                         |
+| Header        | `cli/src/ui/components/AppHeader.tsx`     | `printHeader()`, ASCII Logo                                                                                                                        |
+| Markdown      | `cli/src/ui/render-markdown.ts`           | `renderMarkdown()`, marked lexer + chalk                                                                                                           |
+| 主题          | `cli/src/ui/theme.ts`                     | `ACCENT`, `SUCCESS`, `WARNING`, `ERROR` 等 (对齐 Claude Code dark 配色)                                                                            |

@@ -15,10 +15,10 @@ import { Chalk } from 'chalk'
 import { type Token, marked } from 'marked'
 
 import {
-  ACCENT as HEADING,
-  ACCENT_DIM as CODE_LANG,
-  BLUE_PURPLE as CODE_COLOR,
   PROMPT_BORDER as BLOCKQUOTE,
+  BLUE_PURPLE as CODE_COLOR,
+  ACCENT_DIM as CODE_LANG,
+  ACCENT as HEADING,
   SPINNER_BLUE as LINK,
 } from './theme.js'
 
@@ -248,9 +248,18 @@ export function renderMarkdown(text: string): string {
 
   try {
     const tokens = marked.lexer(text)
-    const result = renderTokens(tokens as Token[])
-    // Trim trailing newlines but keep at most one
-    return result.replace(/\n{2,}$/g, '\n').trimEnd()
+    // Return renderTokens output verbatim. Earlier revisions called
+    // `.replace(/\n{2,}$/g, '\n').trimEnd()` which silently destroyed the
+    // trailing newlines that the token renderer emits — a bug: list items
+    // ("• x\n") lost their \n and the caller (stdout-writer streamingChunk
+    // branch) ended up writing text without a line break, leaving the
+    // cursor mid-row. ChatInput's post-commit frame redraw then teleported
+    // to termRows and its nextH-1 scrolls carried the erased frame's blank
+    // rows up along with the chunk, producing 2 empty lines between every
+    // streamed bullet/paragraph (visible in a.log). The renderer already
+    // emits the correct number of trailing \ns per block type (paragraph,
+    // heading, space, list item) — preserve them unchanged.
+    return renderTokens(tokens as Token[])
   } catch {
     // If parsing fails (e.g. during streaming with very partial text),
     // return the original text so the user at least sees something.

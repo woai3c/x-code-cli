@@ -56,7 +56,6 @@ function cacheSet(url: string, markdown: string): void {
   fetchCache.set(url, { markdown, at: Date.now() })
 }
 
- 
 const turndown = new TurndownService({
   headingStyle: 'atx',
   codeBlockStyle: 'fenced',

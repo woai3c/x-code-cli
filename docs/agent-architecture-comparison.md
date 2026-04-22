@@ -58,12 +58,12 @@ while (未结束) {
 
 ## 二、AI API 调用位置
 
-| 项目            | API 调用位置                                                             | 调用方式            |
-| --------------- | ------------------------------------------------------------------------ | ------------------- |
+| 项目            | API 调用位置                                                                                | 调用方式            |
+| --------------- | ------------------------------------------------------------------------------------------- | ------------------- |
 | **x-code-cli**  | `loop.ts::runTurn` (streamText) + `loop.ts::compressMessages` / `session.ts` (generateText) | Vercel AI SDK       |
-| **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`               | Anthropic SDK 原生  |
-| **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                          | Rust HTTP/WebSocket |
-| **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                          | Google GenAI SDK    |
+| **Claude Code** | `services/api/claude.ts:1778` → `client.messages.create()`                                  | Anthropic SDK 原生  |
+| **Codex**       | `client.rs:1360` → OpenAI `/responses` endpoint                                             | Rust HTTP/WebSocket |
+| **Gemini CLI**  | `geminiChat.ts:639` → `generateContentStream()`                                             | Google GenAI SDK    |
 
 x-code-cli 的 AI 调用只在 agentLoop 里：
 
@@ -369,12 +369,12 @@ if (finishReason === 'tool-calls') {
 
 ### 所有项目的判断方式
 
-| 项目            | 判断方式                                    | 代码位置      |
-| --------------- | ------------------------------------------- | ------------- |
+| 项目            | 判断方式                                    | 代码位置             |
+| --------------- | ------------------------------------------- | -------------------- |
 | **x-code-cli**  | `finishReason === 'tool-calls'`             | `loop.ts::agentLoop` |
-| **Claude Code** | 检查响应中是否有 `tool_use` content block   | `query.ts`    |
-| **Codex**       | `ResponseEvent::Completed` + 检查待执行工具 | `codex.rs`    |
-| **Gemini CLI**  | `functionCalls` 是否存在于 response parts   | `turn.ts`     |
+| **Claude Code** | 检查响应中是否有 `tool_use` content block   | `query.ts`           |
+| **Codex**       | `ResponseEvent::Completed` + 检查待执行工具 | `codex.rs`           |
+| **Gemini CLI**  | `functionCalls` 是否存在于 response parts   | `turn.ts`            |
 
 没有任何一个项目自己判断"该不该继续" — 全部委托给模型。唯一的例外是防护性措施：`maxTurns` 超限强制停止，防止模型无限循环。
 

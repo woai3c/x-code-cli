@@ -6,8 +6,6 @@ import { hideBin } from 'yargs/helpers'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
-
 import {
   PROVIDER_DETECTION_ORDER,
   PROVIDER_KEY_URLS,
@@ -20,6 +18,8 @@ import type { AgentOptions } from '@x-code-cli/core'
 
 import { getCleanupFn, startApp } from './app.js'
 import { VERSION } from './version.js'
+
+const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
 
 const MIN_NODE_VERSION = [20, 19, 0]
 
@@ -225,7 +225,9 @@ function printNoApiKeyMessage() {
     const url = PROVIDER_KEY_URLS[provider] ?? ''
     console.error(`  ${envName(envKey.padEnd(32))} ${chalk.dim(url)}`)
   }
-  console.error(`\n  ${envName('OPENAI_COMPATIBLE_API_KEY'.padEnd(32))} ${chalk.dim('(custom OpenAI-compatible endpoint)')}`)
+  console.error(
+    `\n  ${envName('OPENAI_COMPATIBLE_API_KEY'.padEnd(32))} ${chalk.dim('(custom OpenAI-compatible endpoint)')}`,
+  )
 
   const shell = detectShell()
   console.error(`\nDetected shell: ${chalk.bold(shell)}`)

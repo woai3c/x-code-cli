@@ -93,6 +93,30 @@ function skipByWidth(str: string, skipCols: number): number {
   return i
 }
 
+/** Strip ANSI CSI + OSC escape sequences so visual width math ignores them.
+ *  Used to count how many TERMINAL rows a scrollback payload will occupy,
+ *  which drives the pre-scroll line count — over/under-counting would leave
+ *  visible gaps or let content overflow into the frame area. */
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+}
+
+/** Count display rows that `content` will occupy when written at the top of
+ *  a blank area. Accounts for line wrap at `termWidth` using visual (CJK-aware)
+ *  widths. A trailing `\n` is not counted as a row (cursor just advances to
+ *  the next row but that row has no content). */
+function countContentRows(content: string, termWidth: number): number {
+  const clean = stripAnsi(content).replace(/\r\n/g, '\n').replace(/\r/g, '')
+  const lines = clean.split('\n')
+  const effective = clean.endsWith('\n') ? lines.slice(0, -1) : lines
+  const w = Math.max(1, termWidth)
+  let rows = 0
+  for (const line of effective) {
+    rows += Math.max(1, Math.ceil(visualWidth(line) / w))
+  }
+  return rows
+}
+
 // ── Types ───────────────────────────────────────────────────────────────
 
 export interface SlashCommand {
@@ -216,7 +240,30 @@ const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
 const S_ERROR_FG = '\x1b[38;2;255;107;128m' // error rgb(255,107,128) #ff6b80
 const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'
-const S_DIM = '\x1b[2m'
+// NB: leading `\x1b[0m` matters. Plain `\x1b[2m` just adds the "dim"
+// attribute ON TOP of whatever foreground color is active — so meta
+// text rendered after a colored span (e.g. the spinner row, where
+// S_SPINNER blue is emitted just before the meta transition) comes out
+// as BLUE-dim instead of gray-dim. And on a spinner tick where only
+// the seconds cell changes, the diff loop emits S_NONE (reset) first
+// and then S_DIM starting from the seconds digit — so the SAME meta
+// text is redrawn as WHITE-dim. Result: meta flashes white/blue every
+// tick depending on which diff path fires ("一会白一会蓝"). Resetting
+// SGR first then applying dim pins the color to the terminal default,
+// so meta looks consistent regardless of prior SGR state.
+const S_DIM = '\x1b[0m\x1b[2m'
+// S_NONE means "default styling — no fg color, no attribute" and MUST
+// be a non-empty escape, otherwise the cell-diff loop's
+// `if (cell.style !== lastStyle) buf += cell.style` branch emits an
+// empty string and leaves the terminal SGR state inherited from
+// whatever preceded it. That used to render rows like
+// `[' '(NONE)][glyph(BLUE)][' '(NONE)][T(BLUE)]…` with the trailing
+// NONE space inheriting the BLUE — and with non-atomic terminals the
+// user perceived the "Thinking" text flashing white→blue between
+// frames as redundant SGR codes arrived just after the chars. Setting
+// S_NONE to the explicit DEC reset (`\x1b[0m`, same byte as S_RESET)
+// makes every NONE cell explicitly clear styling before its glyph,
+// which removes the inheritance and the perceived flash.
 // Reset ALL attributes at row end (\x1b[0m), not just foreground (\x1b[39m).
 // Bold cells (e.g. Permission's Yes/No highlight) would otherwise bleed
 // their bold attribute into the next row. The cell-diff emitter re-emits
@@ -225,27 +272,48 @@ const S_DIM = '\x1b[2m'
 const S_RESET = '\x1b[0m'
 const S_INV = '\x1b[7m'
 const S_INV_OFF = '\x1b[27m'
-const S_NONE = ''
+const S_NONE = '\x1b[0m'
 
-/** DEC save/restore cursor position. We save at the end of every frame
- *  render so that when Ink briefly paints a Permission/SelectOptions
- *  dialog over our region, we can return the terminal cursor to a known
- *  anchor (end of our frame's last row) before running eraseRegion.
- *  Relying on Ink's own cleanup cursor position is unreliable — the
- *  @jrichman/ink fork uses cell-level diffing and the cursor it leaves
- *  after clearing a dialog doesn't always coincide with the start of
- *  that dialog area, so `\x1b[prevH-1 A` can land on the wrong row. */
-const SAVE_CURSOR = '\x1b7'
-const RESTORE_CURSOR = '\x1b8'
+// NOTE: `\x1b7` / `\x1b8` (DECSC / DECRC) are DELIBERATELY NOT used
+// anywhere in this file. The terminal provides a single save register,
+// and Ink's own log-update reuses it on every render cycle — co-owning
+// it from two places was producing "ghost" restore positions. We
+// reconstruct cursor position with relative moves (CUU / CUD / \r /
+// \x1b[NG absolute-column) and by treating post-dialog transitions as
+// fresh first-paints (prevFrameRef cleared), which removes the cross-
+// writer contention entirely. See the wasHidden handler below for the
+// transition-case reasoning.
 
 /** DEC 2026 "Synchronized Update Mode". Between BSU and ESU, supported
  *  terminals buffer all output and render it as a single atomic frame.
  *  This eliminates the flash that otherwise occurs between eraseRegion
  *  wiping the frame and the full re-render that follows — the user sees
  *  only the final state, never the intermediate blank region.
- *  Unsupported terminals silently ignore these sequences. */
-const BSU = '\x1b[?2026h'
-const ESU = '\x1b[?2026l'
+ *  Unsupported terminals silently ignore these sequences.
+ *
+ *  Cursor-hide (`\x1b[?25l`) is emitted BOTH before sync entry AND
+ *  after sync exit, and also inside the sync envelope. Why all three:
+ *
+ *    1. Windows Terminal / ConHost handles DEC 2026 sync mode by
+ *       buffering the sequence and committing at ESU, but DECTCEM
+ *       state changes issued INSIDE the sync window have been observed
+ *       to be discarded — the terminal "remembers" the cursor was
+ *       shown before BSU and restores that state on commit. So a hide
+ *       inside sync alone is not enough.
+ *    2. DECSTBM (`\x1b[1;N r` / `\x1b[r`) has been observed to
+ *       re-enable cursor visibility as a side effect on the same
+ *       terminals — so any render that uses DECSTBM (scrollback insert,
+ *       height-growth scroll) needs to re-hide mid-payload.
+ *    3. Pre-sync hide plus post-sync hide means the cursor is hidden
+ *       at every observable frame boundary regardless of what sync
+ *       mode does or doesn't preserve.
+ *
+ *  The inverse-video cursor cell (S_INV) painted inside the input row
+ *  is thus the only visible cursor. The process exit handler in
+ *  index.ts emits `\x1b[?25h` to restore cursor visibility after the
+ *  TUI tears down. */
+const BSU = '\x1b[?25l\x1b[?2026h\x1b[?25l'
+const ESU = '\x1b[?25l\x1b[?2026l\x1b[?25l'
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
@@ -352,6 +420,13 @@ export function ChatInput({
   const lastEscRef = useRef(0)
   const activeRef = useRef(false)
   const prevFrameRef = useRef<Cell[][]>([])
+  /** Height of the frame currently sitting at the bottom of the terminal
+   *  (the value that prevFrameRef was last set to). Tracked separately
+   *  because prevFrameRef gets reset to [] on transitions (post-hidden,
+   *  frame-height change) while we still need to know where the PHYSICAL
+   *  frame on screen begins so the next DECSTBM scroll region doesn't
+   *  overlap it. */
+  const lastFrameHRef = useRef(0)
   /** True while a Permission/SelectOptions dialog was showing on the
    *  previous render. When it disappears we need to erase the old frame
    *  before redrawing — Ink's log.clear returns the cursor to the row
@@ -420,30 +495,33 @@ export function ChatInput({
   const safeIndex = matches.length > 0 ? completionIndex % matches.length : 0
   const currentMatch = matches.length > 0 ? matches[safeIndex] : null
 
-  /** Build the ANSI sequence to erase our region and rewind the cursor
-   *  to its top-left. Returned as a string so callers can coalesce it
-   *  with other writes into a single process.stdout.write — critical for
-   *  flicker-free streaming on terminals without DEC 2026 sync support,
-   *  which paint each write() separately. */
+  /** Erase the frame region at its pinned location (last `lastFrameHRef`
+   *  rows of the terminal) and clear prevFrameRef. Returns the ANSI
+   *  sequence so callers can coalesce it with other writes into a single
+   *  process.stdout.write. Cursor ends at the top-left of the (now blank)
+   *  frame region.
+   *
+   *  Only used for unmount cleanup now — the live render path keeps the
+   *  frame PINNED at the bottom and uses DECSTBM scroll regions to insert
+   *  scrollback above it (see the flush effect below), so erasing is only
+   *  needed when the TUI itself is tearing down. */
   const buildEraseRegion = (): string => {
-    const prevH = prevFrameRef.current.length
+    const prevH = lastFrameHRef.current
     prevFrameRef.current = []
-    if (prevH > 1) {
-      let buf = `\x1b[${prevH - 1}A` // up to first row of region
-      for (let i = 0; i < prevH; i++) buf += '\r\x1b[K' + (i < prevH - 1 ? '\x1b[1B' : '')
-      buf += `\x1b[${prevH - 1}A` // back up to top
-      return buf
-    }
-    if (prevH === 1) return '\r\x1b[K'
-    return ''
+    lastFrameHRef.current = 0
+    if (prevH <= 0) return ''
+    const termRows = stdout?.rows ?? 25
+    const frameTop = Math.max(1, termRows - prevH + 1)
+    // Jump to frame top, erase to end of display. One atomic wipe.
+    return `\x1b[${frameTop};1H\x1b[J`
   }
 
-  /** Synchronous erase used by non-effect call sites (handleSubmit pre-echo,
-   *  unmount cleanup, hidden-dialog transitions). Effect path uses
-   *  buildEraseRegion directly and appends to its local buffer instead. */
+  /** Synchronous erase used by unmount cleanup. Wrapped in BSU/ESU so the
+   *  terminal renders the erase atomically. Effect path does its own
+   *  composition (already BSU/ESU-wrapped by the outer render). */
   const eraseRegion = () => {
     const s = buildEraseRegion()
-    if (s) process.stdout.write(s)
+    if (s) process.stdout.write(BSU + s + ESU)
   }
 
   const handleSubmit = () => {
@@ -453,13 +531,15 @@ export function ChatInput({
     // only Enter is suppressed, matching Claude Code's behavior.
     if (spinner) return
     const expanded = expandPasteRefs(text, pastedContents)
-    // Wipe our stdout footprint BEFORE triggering state changes. That way
-    // when MessageList's useEffect fires and writes the user-echo via
-    // Ink's coordinated `write`, the terminal cursor is already at the
-    // top of an empty region — the echo doesn't overwrite our bottom
-    // separator, and our next frame draws fresh below the echo.
-    eraseRegion()
-    activeRef.current = false
+    // Let the normal render useEffect handle the transition. The next
+    // render sees `messages.length > writtenMessageCountRef` (user-echo
+    // just got appended inside onSubmit) and emits a single atomic
+    // BSU/ESU-wrapped payload of: eraseRegion + writeMessageToStdout +
+    // new frame. An extra synchronous eraseRegion here used to exist
+    // "to clear space for MessageList's separate scrollback write", but
+    // MessageList has been retired — this component owns both the
+    // frame and the scrollback commit, so the redundant write was just
+    // a second non-atomic flash on every submit.
     onSubmit(expanded)
     dispatch({ type: 'RESET' })
     setPastedContents({})
@@ -628,9 +708,8 @@ export function ChatInput({
       // moved the cursor beyond it — we can't safely erase anything NOW
       // without corrupting the dialog. But when the dialog resolves,
       // Ink's log.clear sends the cursor back to the row where the
-      // dialog started (= our frame's bottom row), and at THAT point
-      // prevFrameRef + our normal eraseRegion correctly wipes the old
-      // frame. So just flag that we were hidden and bail.
+      // dialog started (= our frame's bottom row), and at THAT point we
+      // treat the next render as a fresh first-paint.
       wasHiddenRef.current = true
       return
     }
@@ -640,53 +719,116 @@ export function ChatInput({
     // Synchronized Update Mode (BSU/ESU) only buffers inter-write state on
     // terminals that support it — VS Code terminal and others paint every
     // separate write() immediately. Coalescing into one write keeps each
-    // render a single atomic paint regardless of terminal support, which
-    // is what actually eliminates the "Thinking + input box flicker every
-    // streaming chunk" symptom.
+    // render a single atomic paint regardless of terminal support.
     let preBuf = BSU
 
     if (wasHiddenRef.current) {
-      // Transitioning out of a dialog. Ink's cell-diff renderer doesn't
-      // guarantee where it leaves the terminal cursor after clearing a
-      // dialog, so we use the DEC-saved cursor position (captured at
-      // the end of our last frame render) as a reliable anchor: jump
-      // back to the end of our previous frame, THEN eraseRegion rewinds
-      // `prevH-1` rows and erases the exact rows we own.
+      // Transitioning out of a dialog. We used to RESTORE_CURSOR (\x1b8)
+      // back to a position we'd previously DECSC'd — but that single
+      // terminal-level save register is ALSO used internally by Ink's
+      // own log-update cycle for its own cursor bookkeeping. Two
+      // writers, one register: every Ink render that cycled through its
+      // save/restore clobbered ours, so the restore here could land at
+      // Ink's saved position rather than our frame's bottom row.
+      //
+      // Instead of fighting for the register, treat the post-dialog
+      // frame as a fresh first-paint: drop prevFrameRef (so the diff
+      // loop does full-row writes with \x1b[K, no stale assumptions)
+      // and the absolute-positioning below puts the frame back at the
+      // terminal's bottom rows regardless of where Ink parked the cursor.
       wasHiddenRef.current = false
-      if (activeRef.current) {
-        preBuf += RESTORE_CURSOR + buildEraseRegion()
-      }
+      prevFrameRef.current = []
+      lastFrameHRef.current = 0
+      activeRef.current = false
     }
 
     // ── Commit new scrollback messages ───────────────────────────────────
-    // Erase the current cell frame, write the new messages where the frame
-    // used to live (terminal scrolls naturally as they fill), then redraw
-    // the frame below. `prevFrameRef` gets cleared by buildEraseRegion so
-    // the next cell-diff starts from a blank prev state at the new cursor
-    // position.
     //
-    // (A DECSTBM-based approach was attempted but reverted: it assumed the
-    // cell buffer sits at the very bottom of the terminal, which isn't
-    // guaranteed when the startup banner + scrollback leaves the frame
-    // somewhere in the middle. The scroll region then overlapped the cell
-    // buffer's rows and ate the message echo. Anchoring the frame to the
-    // bottom is a larger refactor — left for a follow-up.)
+    // NATURAL-SCROLL-AT-BOTTOM INSERTION:
+    //   The frame is PINNED to the last H rows of the terminal. To push
+    //   new content into the scrollback area above the frame WITHOUT
+    //   jitter AND without losing history, we:
+    //
+    //     1. Pre-scroll the whole screen up by N rows by emitting N \n
+    //        characters at the screen bottom. Each \n at the bottom of
+    //        the default (full-screen) scroll region preserves the top
+    //        row into the terminal's real scrollback buffer — this is
+    //        the ONLY mechanism that does so reliably across terminals.
+    //     2. Move the cursor to the top of the new content area and
+    //        erase-to-end-of-screen so the shifted-up old frame rows
+    //        don't poke through.
+    //     3. Write the new scrollback content. Cursor advances through
+    //        rows naturally without triggering further scrolls because
+    //        we're not at screen bottom.
+    //     4. Frame redraw below writes the new frame at its pinned rows,
+    //        overwriting whatever fragments of the shifted-up old frame
+    //        and trailing blank rows remain.
+    //
+    //   All of this is wrapped in BSU/ESU Synchronized Update Mode so
+    //   the terminal commits the final state atomically — the user never
+    //   sees the shifted-up frame or the blanks between frames.
+    //
+    //   Why NOT DECSTBM: a restricted DECSTBM region (the codex approach
+    //   in `insert_history.rs`) silently DISCARDS any row scrolled out
+    //   past the region's top margin (per VT100 spec). codex gets away
+    //   with it because they run in the alt-screen buffer where there's
+    //   no user-visible scrollback anyway — ratatui manages its own
+    //   viewport. In the main screen buffer (our setup) scrolled-out
+    //   content needs to go to real terminal scrollback, which only
+    //   happens at a full-screen (default) scroll region's bottom.
+    //
+    // Fallback (first paint, no prior frame): emit inline at the current
+    // cursor and let natural scroll handle it.
     //
     // A /clear command may shrink messages; detect and reset the counter.
     if (messages.length < writtenMessageCountRef.current) {
       writtenMessageCountRef.current = messages.length
     }
+    const termRows = stdout?.rows ?? 25
     if (messages.length > writtenMessageCountRef.current) {
-      if (activeRef.current) {
-        preBuf += buildEraseRegion()
-      }
+      let scrollbackContent = ''
       const collectWrite: (data: string) => void = (data) => {
-        preBuf += data
+        scrollbackContent += data
       }
       for (let i = writtenMessageCountRef.current; i < messages.length; i++) {
         writeMessageToStdout(collectWrite, messages[i])
       }
       writtenMessageCountRef.current = messages.length
+
+      const oldFrameH = lastFrameHRef.current
+      if (activeRef.current && oldFrameH > 0 && oldFrameH < termRows) {
+        const scrollRows = countContentRows(scrollbackContent, termWidth)
+        if (scrollRows > 0) {
+          // Pre-scroll by scrollRows (full-screen natural scroll, preserves
+          // top rows to terminal scrollback). Then position at the top of
+          // the freed area and erase to end of screen so any shifted-up
+          // old frame fragments are wiped before we write content.
+          //
+          // If content exceeds rows above frame (termRows - oldFrameH), cap
+          // the cursor destination at row 1 so we don't address a negative
+          // row. Excess content then overflows into the (to-be-overwritten)
+          // frame area — a few trailing lines may be clobbered by the frame
+          // redraw in that rare case. For the common case (scrollRows <=
+          // termRows - oldFrameH) the math is exact and no content is lost.
+          const contentRow = Math.max(1, termRows - oldFrameH - scrollRows + 1)
+          preBuf +=
+            '\x1b[r' +
+            `\x1b[${termRows};1H` +
+            '\n'.repeat(scrollRows) +
+            `\x1b[${contentRow};1H` +
+            '\x1b[J' +
+            scrollbackContent +
+            '\x1b[?25l'
+          // Old cell matrix reflects rows that have been scrolled; force
+          // full redraw so the diff loop doesn't assume stale positions.
+          prevFrameRef.current = []
+        }
+      } else {
+        // First paint: emit inline, cursor is somewhere in the terminal
+        // and natural scroll handles placement. The frame redraw below
+        // will absolute-jump to its pinned row.
+        preBuf += scrollbackContent
+      }
     }
 
     activeRef.current = true
@@ -775,11 +917,16 @@ export function ChatInput({
       // message already ends with `\n\n` → one blank row is ALREADY
       // there, and adding another would make the gap look too large.
       if (permission) frame.push([])
-      const cells: Cell[] = []
-      cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(glyph, S_SPINNER))
-      cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`${spinner.label}...`, S_SPINNER))
+      // Build the whole prefix (` ${glyph} ${label}...`) under ONE style
+      // (S_SPINNER) instead of alternating S_NONE / S_SPINNER per cell.
+      // Why: each cell with a different style emits an SGR escape in the
+      // diff loop, and on terminals that don't perfectly atomize DEC
+      // 2026 sync-update those escapes arrive with visible spacing —
+      // the user perceives the "Thinking" label flashing default-color
+      // → blue → default → blue as the spaces in between trigger
+      // resets. Keeping one continuous SGR run for the whole prefix
+      // makes the row paint as one solid blue stripe.
+      const cells: Cell[] = textToCells(` ${glyph} ${spinner.label}...`, S_SPINNER)
       if (meta) cells.push(...textToCells(meta, S_DIM))
       frame.push(cells)
     }
@@ -822,7 +969,17 @@ export function ChatInput({
     // Top separator
     frame.push(textToCells(sepText, S_GRAY))
 
-    // Input lines
+    // Input lines. `cursorAnchor` captures the frame-row index (0-based)
+    // and 1-based visual column of the S_INV cursor cell so the cell-diff
+    // loop can PARK the native terminal cursor directly on top of it at
+    // end of render. Why: even with `\x1b[?25l` emitted at BSU, ESU, and
+    // after every DECSTBM block, Windows Terminal / ConHost has been
+    // observed to keep the cursor visible (user reports two cursors on
+    // the input row). Since we can't reliably force it hidden, we make
+    // it OVERLAP our S_INV cell — if visible it coincides with the
+    // inverse-video block we paint; if hidden, nothing changes. Either
+    // way the user sees exactly one visible cursor position.
+    let cursorAnchor: { row: number; col: number } | null = null
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
       const prompt = i === 0 ? '> ' : '  '
@@ -844,6 +1001,10 @@ export function ChatInput({
 
         if (lw <= vpWidth) {
           cells.push(...textToCells(before, S_RESET))
+          // Visual col = prompt width (2) + width of chars before cursor,
+          // +1 to convert to 1-based. Captured BEFORE pushing cursor cell
+          // so it reflects the cursor cell's starting column.
+          cursorAnchor = { row: frame.length, col: 2 + visualWidth(before) + 1 }
           cells.push({ char: cursorChar, style: S_INV, width: charWidth(cursorChar) })
           cells.push(...textToCells(after, S_RESET))
         } else {
@@ -858,6 +1019,7 @@ export function ChatInput({
           const remaining = vpWidth - visualWidth(vb) - charWidth(cursorChar)
           const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
           cells.push(...textToCells(vb, S_RESET))
+          cursorAnchor = { row: frame.length, col: 2 + visualWidth(vb) + 1 }
           cells.push({ char: cursorChar, style: S_INV, width: charWidth(cursorChar) })
           cells.push(...textToCells(va, S_RESET))
         }
@@ -889,18 +1051,55 @@ export function ChatInput({
     }
 
     // ── Diff against previous frame and emit one buffered write ──────────
-    const prevFrame = prevFrameRef.current
-    const prevH = prevFrame.length
+    //
+    // Frame is PINNED to the last `nextH` rows of the terminal. Every
+    // render jumps the cursor absolutely to the frame's top-left — no
+    // relative up/down walks from a "parked" position, no dependence on
+    // where the last render left the cursor. This is what lets the
+    // DECSTBM scrollback path (above) work correctly: that path parks the
+    // cursor at row (termRows - H) after reset-scroll-region, which would
+    // break any relative cursor math anchored to "the last row of the
+    // previous frame".
     const nextH = frame.length
-    const maxH = Math.max(prevH, nextH)
+    const oldFrameH = lastFrameHRef.current
+    const frameTop = Math.max(1, termRows - nextH + 1)
 
     let buf = ''
 
-    // After the previous render the cursor sits on the LAST row (prevH-1).
-    // Move up to row 0 so we can diff top-down.
-    if (prevH > 1) {
-      buf += `\x1b[${prevH - 1}A`
+    // Frame-height change: the frame is pinned to the bottom, so when
+    // H grows, its top moves UP — risking overwrite of scrollback rows
+    // that currently live there. Scroll those rows UP by delta first so
+    // the terminal preserves them in its scrollback buffer. When H
+    // shrinks, the bottom of the old frame stays exposed as "stale frame
+    // cells" above the new top — clear those rows.
+    if (activeRef.current && oldFrameH > 0 && oldFrameH !== nextH) {
+      if (nextH > oldFrameH) {
+        const deltaH = nextH - oldFrameH
+        const regionBottom = termRows - oldFrameH
+        if (regionBottom > 0) {
+          // Trailing `\x1b[?25l`: same DECSTBM-unhides-cursor quirk as
+          // the scrollback-insert path above.
+          preBuf += `\x1b[1;${regionBottom}r` + `\x1b[${regionBottom};1H` + '\n'.repeat(deltaH) + '\x1b[r' + '\x1b[?25l'
+        }
+      } else {
+        const deltaH = oldFrameH - nextH
+        for (let i = 0; i < deltaH; i++) {
+          const row = termRows - oldFrameH + 1 + i
+          preBuf += `\x1b[${row};1H\x1b[K`
+        }
+      }
+      // Frame moved — prev cell matrix is at the wrong rows now; force
+      // full redraw at the new position.
+      prevFrameRef.current = []
     }
+
+    const prevFrame = prevFrameRef.current
+    const prevH = prevFrame.length
+    const maxH = Math.max(prevH, nextH)
+
+    // Jump absolutely to the frame's top-left. Works regardless of where
+    // the DECSTBM path or the height-change path left the cursor.
+    buf += `\x1b[${frameTop};1H`
 
     for (let row = 0; row < maxH; row++) {
       const prevRow = row < prevH ? prevFrame[row] : []
@@ -913,6 +1112,22 @@ export function ChatInput({
         while (diffIdx < minCells && cellsEqual(prevRow[diffIdx], nextRow[diffIdx])) {
           diffIdx++
         }
+        // Last cell that differs (scanning from the end). On a fresh
+        // redraw (prevRow empty) we keep emitting through end-of-row;
+        // otherwise we cap at the last actual change so that, e.g., a
+        // spinner tick rewrites just the glyph cell instead of the
+        // entire " glyph  Thinking… (5s · ↑ 2k tokens)" suffix every
+        // 80ms. Less to write = fewer visible cells re-painting per
+        // tick = no perceptible flash on terminals where DEC 2026
+        // sync-update isn't perfectly atomic.
+        let endIdx = nextRow.length
+        if (prevRow.length > 0 && nextRow.length === prevRow.length) {
+          let last = nextRow.length - 1
+          while (last >= diffIdx && cellsEqual(prevRow[last], nextRow[last])) {
+            last--
+          }
+          endIdx = last + 1 // exclusive bound
+        }
 
         if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
           // Position cursor at diffIdx's visual column
@@ -920,9 +1135,15 @@ export function ChatInput({
           for (let c = 0; c < diffIdx; c++) col += nextRow[c].width
           buf += `\x1b[${col + 1}G`
 
-          // Emit changed cells
-          let lastStyle = ''
-          for (let c = diffIdx; c < nextRow.length; c++) {
+          // Emit changed cells. Initialize lastStyle to S_NONE (= explicit
+          // reset code) so the first cell's char doesn't inherit any SGR
+          // state left over from the previous render — without this, the
+          // diff loop's `if (cell.style !== lastStyle) buf += cell.style`
+          // branch could emit '' (no-op) for an S_NONE cell whose char
+          // then renders in whatever color was active before.
+          let lastStyle = S_NONE
+          buf += S_NONE
+          for (let c = diffIdx; c < endIdx; c++) {
             const cell = nextRow[c]
             if (cell.style !== lastStyle) {
               buf += cell.style
@@ -963,34 +1184,53 @@ export function ChatInput({
         buf += '\r\x1b[K'
       }
 
-      // Advance to the next row (existing line below → CUD; new line → LF)
+      // Advance to the next row. Always use CUD+\r (down + col 1) —
+      // never \n, which at row=termRows would cause the terminal to
+      // scroll our frame off the viewport by one row. Rows always exist
+      // because the frame is pinned to [frameTop..termRows] and those
+      // rows have already been allocated (either by the frame-height
+      // growth scroll above, or by being the same rows the previous
+      // frame occupied).
       if (row < maxH - 1) {
-        if (row < prevH - 1) {
-          buf += '\x1b[1B'
-        } else {
-          buf += '\n'
-        }
+        buf += '\x1b[1B\r'
       }
     }
 
-    // Park the cursor on the last row of the NEW frame.
-    if (maxH > nextH) {
-      buf += `\x1b[${maxH - nextH}A`
+    // Park the native terminal cursor on top of our S_INV cursor cell.
+    // If the terminal has `\x1b[?25l` correctly applied, this is a no-op
+    // visually. If it ignores our hide (observed on Windows Terminal /
+    // ConHost), the native caret ends up exactly where our inverse-video
+    // block is drawn — overlapping into a single visible cursor instead
+    // of a second phantom cursor hanging wherever the diff loop stopped.
+    if (cursorAnchor) {
+      const anchorRow = frameTop + cursorAnchor.row
+      buf += `\x1b[${anchorRow};${cursorAnchor.col}H`
     }
 
-    // Flush everything as a single write: preBuf (BSU + any erase /
-    // scrollback commits) + frame diff + SAVE_CURSOR + ESU. One write()
-    // = one atomic paint on every terminal, not just those with DEC 2026
-    // support — this is what eliminates the streaming flicker.
-    const payload = preBuf + buf + SAVE_CURSOR + ESU
+    // Flush everything as a single write: preBuf (BSU + DECSTBM scrollback
+    // insertion + any frame-height-change scrolling) + frame diff + ESU.
+    // One write() = one atomic paint on every terminal, not just those
+    // with DEC 2026 support. NOTE: we no longer tack on SAVE_CURSOR (\x1b7)
+    // at the end. That DEC save register is single-slot AND shared with
+    // Ink's log-update internals, so our save was being clobbered on every
+    // Ink tree reconcile. Instead we jump absolutely to (frameTop, 1) at
+    // the start of every render — no cross-render cursor-state dependency.
+    const payload = preBuf + buf + ESU
     debugLog(
       'chatinput.flush',
       `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
     )
+    // Optional verbose payload dump (DEBUG_STDOUT_PAYLOAD=1). Captures the
+    // exact bytes written so we can replay them and verify whether content
+    // missing from the terminal display was actually delivered.
+    if (process.env.DEBUG_STDOUT_PAYLOAD === '1') {
+      debugLog('chatinput.flush.payload', JSON.stringify(payload))
+    }
     const ok = process.stdout.write(payload)
     if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
 
     prevFrameRef.current = frame
+    lastFrameHRef.current = nextH
   })
 
   // Unmount cleanup

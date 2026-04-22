@@ -1,6 +1,6 @@
-import { defineConfig } from 'eslint/config'
 import reactHooks from 'eslint-plugin-react-hooks'
 import unusedImports from 'eslint-plugin-unused-imports'
+import { defineConfig } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 
 // Not using `recommendedTypeChecked` / `projectService: true` — type-aware
