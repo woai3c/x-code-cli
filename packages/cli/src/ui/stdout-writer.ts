@@ -33,7 +33,7 @@ const c = new Chalk({ level: 3 })
 /** Function that writes to stdout through Ink's log-update coordination. */
 export type InkWrite = (data: string) => void
 
-const RESULT_INDENT = '     '
+const RESULT_INDENT = '      '
 
 /**
  * Normalize line endings to `\n`. Critical before any terminal write:

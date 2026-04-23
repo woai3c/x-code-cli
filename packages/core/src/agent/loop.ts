@@ -99,7 +99,11 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks)
       callbacks.onTextDelta(text)
     } else if (chunk.type === 'tool-call') {
       debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
-      callbacks.onToolCall(chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
+      callbacks.onToolCall(
+        chunk.toolCallId ?? '',
+        chunk.toolName ?? '',
+        (chunk.input ?? {}) as Record<string, unknown>,
+      )
     } else if (chunk.type === 'tool-result') {
       // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')

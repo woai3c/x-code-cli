@@ -43,7 +43,7 @@ export interface DisplayToolCall {
 
 export interface AgentCallbacks {
   onTextDelta: (text: string) => void
-  onToolCall: (toolName: string, input: Record<string, unknown>) => void
+  onToolCall: (toolCallId: string, toolName: string, input: Record<string, unknown>) => void
   onToolResult: (toolCallId: string, result: string) => void
   onAskPermission: (toolCall: {
     toolCallId: string

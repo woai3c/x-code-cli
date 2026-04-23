@@ -59,7 +59,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const initializedRef = useRef(false)
-  const toolCallStartRef = useRef<number>(0)
+  /** Pending tool calls keyed by toolCallId. A single slot can't survive
+   *  parallel tool calls in one turn — the SDK emits tool-call A, tool-call
+   *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
+   *  later results fall through to an 'unknown' label. */
+  const pendingToolsRef = useRef<
+    Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number }>
+  >(new Map())
 
   /** Append a single message to `messages` (used by the stream buffer). */
   const appendMessage = useCallback((msg: DisplayMessage) => {
@@ -102,27 +108,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           if (delta) sawTextDelta = true
           appendTextDelta(delta)
         },
-        onToolCall: (toolName, input) => {
+        onToolCall: (toolCallId, toolName, input) => {
           // Flush any accumulated text to messages first, so it appears
           // in the scrollback BEFORE the tool call indicator.
           flushBuffer()
-          toolCallStartRef.current = Date.now()
+          pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
           setState((prev) => ({ ...prev, currentToolCall: { toolName, input } }))
         },
-        onToolResult: (_toolCallId, result) => {
-          const durationMs = Date.now() - toolCallStartRef.current
+        onToolResult: (toolCallId, result) => {
+          const pending = pendingToolsRef.current.get(toolCallId)
+          pendingToolsRef.current.delete(toolCallId)
+          const durationMs = pending ? Date.now() - pending.startedAt : 0
           setState((prev) => {
             const tc: DisplayToolCall = {
               id: `tc-${Date.now()}`,
-              toolName: prev.currentToolCall?.toolName ?? 'unknown',
-              input: prev.currentToolCall?.input ?? {},
+              toolName: pending?.toolName ?? 'unknown',
+              input: pending?.input ?? {},
               output: result,
               status: 'completed',
               durationMs,
             }
             return {
               ...prev,
-              currentToolCall: null,
+              currentToolCall: pendingToolsRef.current.size > 0 ? prev.currentToolCall : null,
               shellOutput: '',
               messages: [
                 ...prev.messages,
@@ -193,8 +201,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
             })
           }
         }
+        pendingToolsRef.current.clear()
         setState((prev) => ({ ...prev, isLoading: false, currentToolCall: null }))
       } catch (err) {
+        pendingToolsRef.current.clear()
         setState((prev) => ({
           ...prev,
           isLoading: false,
@@ -263,6 +273,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Clear conversation */
   const clear = useCallback(() => {
     loopStateRef.current = null
+    pendingToolsRef.current.clear()
     resetBuffer()
     // Preserve the current live model id when clearing — user expects the
     // model they just picked to stay after /clear.
