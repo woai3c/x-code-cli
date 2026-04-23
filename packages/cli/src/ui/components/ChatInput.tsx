@@ -479,6 +479,11 @@ export function ChatInput({
    *  frame on screen begins so the next DECSTBM scroll region doesn't
    *  overlap it. */
   const lastFrameHRef = useRef(0)
+  /** Last known terminal dimensions. Compared against current values in
+   *  the render effect to detect resize and compute where the OLD frame
+   *  was positioned so it can be erased before painting at the new spot. */
+  const lastTermRowsRef = useRef(0)
+  const lastTermWidthRef = useRef(0)
   /** Rows of freshly-erased blank space immediately above the frame —
    *  typically from a shrink that closed a dialog (the erase step wipes
    *  the old picker rows, leaving them blank). The next commit can write
@@ -545,6 +550,22 @@ export function ChatInput({
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
+
+  // ── Terminal resize handling ──
+  // Force a re-render tick on resize so termWidth/termRows pick up the new
+  // values. The cell matrix is invalidated but lastFrameHRef / lastTermRowsRef
+  // are kept intact — the render effect needs them to compute where the OLD
+  // frame sat so it can erase those rows before painting at the new position.
+  const [, forceRender] = useReducer((x: number) => x + 1, 0)
+  useEffect(() => {
+    if (!stdout) return
+    const onResize = () => {
+      prevFrameRef.current = []
+      forceRender()
+    }
+    stdout.on('resize', onResize)
+    return () => { stdout.off('resize', onResize) }
+  }, [stdout])
 
   // ── Fuzzy matching ──
   const matches = useMemo(() => {
@@ -1245,6 +1266,53 @@ export function ChatInput({
     if (!activeRef.current && initialContentRows > 0) {
       freeBlanksAboveFrameRef.current = Math.max(0, termRows - initialContentRows - nextH)
     }
+
+    // ── Terminal resize: erase old frame at its previous position ────────
+    //
+    // When the terminal dimensions change, the old frame must be erased
+    // before painting the new one.
+    //
+    // Height-only: the old frame position is predictable from oldTermRows.
+    //
+    // Width change: the terminal reflows ALL visible content. Old separator
+    // lines (e.g. 120 '─' chars at old width) may wrap to multiple rows
+    // when the terminal narrows, pushing them above where the new frame
+    // will be painted. We must erase those reflowed remnants WITHOUT wiping
+    // the scrollback content above (the user's conversation). Approach:
+    // estimate how many extra rows the old frame now occupies after reflow,
+    // then erase from (frameTop - extraRows) down to end of display.
+    const oldTermRows = lastTermRowsRef.current
+    const oldTermWidth = lastTermWidthRef.current
+    const didResize =
+      oldFrameH > 0 && activeRef.current &&
+      ((oldTermRows > 0 && oldTermRows !== termRows) ||
+       (oldTermWidth > 0 && oldTermWidth !== termWidth))
+    if (didResize) {
+      const widthChanged = oldTermWidth > 0 && oldTermWidth !== termWidth
+      if (widthChanged) {
+        // Estimate how many rows the old frame expanded to after reflow.
+        // The old separator lines were (oldTermWidth - 1) chars each; after
+        // reflow at the new termWidth, each wraps to ceil(oldChars / newW)
+        // rows. The frame has 2 separators + (oldFrameH - 2) normal rows
+        // (input, spinner, etc — those are short and don't wrap).
+        const oldSepLen = Math.max(0, oldTermWidth - 1)
+        const newW = Math.max(1, termWidth)
+        const sepRowsAfterReflow = Math.ceil(oldSepLen / newW)
+        // 2 separator rows expanded, the rest stayed at 1 row each
+        const reflowedFrameH = (oldFrameH - 2) + 2 * sepRowsAfterReflow
+        const extraRows = Math.max(0, reflowedFrameH - oldFrameH)
+        const eraseFrom = Math.max(1, frameTop - extraRows)
+        preBuf += `\x1b[${eraseFrom};1H\x1b[J`
+      } else {
+        // Height-only change: old frame position is predictable.
+        const oldFrameTop = Math.max(1, oldTermRows - oldFrameH + 1)
+        const eraseFrom = Math.min(oldFrameTop, frameTop)
+        preBuf += `\x1b[${eraseFrom};1H\x1b[J`
+      }
+      freeBlanksAboveFrameRef.current = 0
+    }
+    lastTermRowsRef.current = termRows
+    lastTermWidthRef.current = termWidth
 
     // ── Scrollback-commit write (inline-stream) ──────────────────────────
     //
