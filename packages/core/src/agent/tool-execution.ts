@@ -30,8 +30,14 @@ async function executeWriteTool(toolName: string, input: Record<string, unknown>
     const content = input.content as string
     reportProgress(toolCallId, `Writing ${filePath}`)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
+    const isNew = await fs.access(filePath).then(() => false, () => true)
     await fs.writeFile(filePath, content, 'utf-8')
-    return `File written: ${filePath} (${content.length} characters)`
+    const parts = content.split('\n')
+    const lineCount = content.endsWith('\n') ? parts.length - 1 : parts.length
+    if (isNew) {
+      return `File created: ${filePath} (${lineCount} lines)`
+    }
+    return `File written: ${filePath} (${lineCount} lines)`
   }
 
   if (toolName === 'edit') {

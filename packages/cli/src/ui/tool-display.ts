@@ -87,8 +87,10 @@ export function getToolResultSummary(toolName: string, output: string | undefine
   const n = normalizeName(toolName)
 
   if (n === 'writefile' || n === 'write') {
-    const lineCount = (output.match(/\n/g) || []).length + 1
-    return `Wrote ${lineCount} lines`
+    // Result format: "File created: <path> (N lines)" or "File written: <path> (N lines)"
+    const m = output.match(/\((\d+) lines?\)/)
+    if (m) return `Wrote ${m[1]} lines`
+    return 'Wrote file'
   }
 
   if (n === 'edit' || n === 'update') {
