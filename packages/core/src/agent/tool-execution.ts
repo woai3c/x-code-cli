@@ -6,7 +6,7 @@ import path from 'node:path'
 
 import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
-import { clearProgressReporter, reportProgress, setProgressReporter } from '../tools/progress.js'
+import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellConfig } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import type { LoopState } from './loop-state.js'
@@ -114,7 +114,11 @@ async function executeShell(
   proc.stderr?.on('data', onChunk)
 
   const result = await proc
-  return `exit code: ${result.exitCode}\n${result.stdout}\n${result.stderr}`.trim()
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+  if (result.exitCode !== 0) {
+    return output ? `${output}\nExit code ${result.exitCode}` : `Exit code ${result.exitCode}`
+  }
+  return output || 'Done'
 }
 
 /** Push a tool result to state and notify the UI. */

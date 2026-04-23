@@ -14,7 +14,7 @@
 import { Chalk } from 'chalk'
 import { type Token, type Tokens, marked } from 'marked'
 
-import { ACCENT_DIM as LINK_URL, BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
+import { BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
 
 const c = new Chalk({ level: 3 })
 

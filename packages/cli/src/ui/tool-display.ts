@@ -143,10 +143,10 @@ export function getToolResultSummary(toolName: string, output: string | undefine
   }
 
   if (n === 'shell' || n === 'bash') {
-    const lines = output
-      .trim()
-      .split('\n')
-      .filter((l) => l.trim())
+    let text = output.trim()
+    // Strip legacy "exit code: 0" prefix from old format results
+    text = text.replace(/^exit code: 0\n?/, '')
+    const lines = text.split('\n').filter((l) => l.trim())
     if (lines.length === 0) return 'Done'
     if (lines.length <= 4) return lines.join('\n')
     return lines.slice(0, 3).join('\n') + `\n... +${lines.length - 3} lines`

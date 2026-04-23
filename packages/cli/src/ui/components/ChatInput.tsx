@@ -469,9 +469,10 @@ export function ChatInput({
   const prevFrameRef = useRef<Cell[][]>([])
   /** Timestamp (ms) of the last stdout.write that actually hit the
    *  terminal. Used to coalesce spinner-tick writes that would fire
-   *  immediately after a scrollback-commit write — see flush section
-   *  for the 16ms-gap rule. */
+   *  immediately after a scrollback-commit write — see flush section. */
   const lastFlushTimeRef = useRef(0)
+  /** Pending deferred (non-commit) write that can be superseded by a commit. */
+  const deferredFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Height of the frame currently sitting at the bottom of the terminal
    *  (the value that prevFrameRef was last set to). Tracked separately
    *  because prevFrameRef gets reset to [] on transitions (post-hidden,
@@ -1584,38 +1585,66 @@ export function ChatInput({
     )
     debugLog('chatinput.flush.payload', JSON.stringify(payload))
 
-    // Coalesce rapid follow-up frames. Spinner ticks (80ms cadence) and
-    // streaming-chunk commits (~100ms debounce) drift into near-collision
-    // every few seconds: commit completes, spinner tick fires 1-20ms later
-    // and emits a second DEC 2026 sync envelope. Some hosts (VSCode
-    // xterm.js, Windows Terminal over ConHost) paint the two envelopes
-    // across two animation frames which users perceive as "上下抖动".
+    // ── Anti-flicker write scheduling ──────────────────────────────────
     //
-    // Rule: if this render is NOT carrying a commit or a frame-height
-    // change (preBuf is just the bare BSU), AND the terminal received a
-    // write less than 16ms ago, drop it. The next natural
-    // spinner tick (~80ms later) will paint the up-to-date frame —
-    // spinner animation loses at most one frame, invisible in practice.
-    // Keep prevFrameRef / lastFrameHRef on their previous values so the
-    // next diff runs against the state the terminal actually has.
-    const now = Date.now()
-    const isBareTick = !didCommitMessages && preBuf.length === BSU.length
-    if (isBareTick && now - lastFlushTimeRef.current < 16) {
-      debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms`)
-      return
+    // Fast tools (listDir, glob, readFile) complete in <5ms. React renders
+    // frames back-to-back:
+    //   Frame A (non-commit): shows "⠼ Running…" for the tool
+    //   Frame B (commit, ~2ms later): replaces it with the result summary
+    // Both are large redraws (~600-700 bytes). Painting both within one
+    // vsync window (16ms) causes visible flicker/jitter.
+    //
+    // Strategy:
+    //   • Commit frames (carrying new scrollback) write IMMEDIATELY — they
+    //     cancel any pending deferred write since commits involve complex
+    //     scroll/frame state that must be written atomically.
+    //   • Non-commit frames are DEFERRED by 8ms. If a commit frame arrives
+    //     within that window, the deferred frame is discarded and only the
+    //     commit frame is painted. If not, the deferred frame fires after
+    //     8ms — still fast enough for smooth spinner animation.
+    //   • Additionally, non-commit frames within 16ms of the last write
+    //     are dropped entirely (spinner coalescing).
+
+    const doFlush = () => {
+      const ok = process.stdout.write(payload)
+      if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
+      lastFlushTimeRef.current = Date.now()
+      prevFrameRef.current = frame
+      lastFrameHRef.current = nextH
     }
 
-    const ok = process.stdout.write(payload)
-    if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
-    lastFlushTimeRef.current = now
-
-    prevFrameRef.current = frame
-    lastFrameHRef.current = nextH
+    if (didCommitMessages) {
+      if (deferredFlushRef.current !== null) {
+        clearTimeout(deferredFlushRef.current)
+        deferredFlushRef.current = null
+        debugLog('chatinput.flush.deferred-cancelled', 'commit superseded deferred frame')
+      }
+      doFlush()
+    } else {
+      const now = Date.now()
+      if (now - lastFlushTimeRef.current < 16) {
+        debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms`)
+        return
+      }
+      if (deferredFlushRef.current !== null) {
+        clearTimeout(deferredFlushRef.current)
+      }
+      deferredFlushRef.current = setTimeout(() => {
+        deferredFlushRef.current = null
+        doFlush()
+        debugLog('chatinput.flush.deferred-fired', `delayed=8ms`)
+      }, 8)
+      debugLog('chatinput.flush.deferred', 'non-commit frame deferred 8ms')
+    }
   })
 
   // Unmount cleanup
   useEffect(() => {
     return () => {
+      if (deferredFlushRef.current !== null) {
+        clearTimeout(deferredFlushRef.current)
+        deferredFlushRef.current = null
+      }
       if (activeRef.current) {
         eraseRegion()
         activeRef.current = false

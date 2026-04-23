@@ -76,7 +76,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
    *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
    *  later results fall through to an 'unknown' label. */
   const pendingToolsRef = useRef<
-    Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number }>
+    Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number; showTimer: ReturnType<typeof setTimeout> | null }>
   >(new Map())
 
   /** Append a single message to `messages` (used by the stream buffer). */
@@ -121,14 +121,20 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           appendTextDelta(delta)
         },
         onToolCall: (toolCallId, toolName, input) => {
-          // Flush any accumulated text to messages first, so it appears
-          // in the scrollback BEFORE the tool call indicator.
           flushBuffer()
-          pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
-          setState((prev) => ({
-            ...prev,
-            activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
-          }))
+          const entry = { toolName, input, startedAt: Date.now(), showTimer: null as ReturnType<typeof setTimeout> | null }
+          pendingToolsRef.current.set(toolCallId, entry)
+          // Defer showing "Running…" by 4ms. Fast tools (listDir, glob,
+          // readFile) complete in <5ms — if onToolResult arrives before
+          // the timer fires, the "Running…" state is skipped entirely,
+          // avoiding a redundant commit frame that causes flicker.
+          entry.showTimer = setTimeout(() => {
+            entry.showTimer = null
+            setState((prev) => ({
+              ...prev,
+              activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
+            }))
+          }, 4)
         },
         onToolProgress: (toolCallId, message) => {
           setState((prev) => {
@@ -142,6 +148,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         onToolResult: (toolCallId, result) => {
           const pending = pendingToolsRef.current.get(toolCallId)
           pendingToolsRef.current.delete(toolCallId)
+          if (pending?.showTimer) {
+            clearTimeout(pending.showTimer)
+            pending.showTimer = null
+          }
           const durationMs = pending ? Date.now() - pending.startedAt : 0
           setState((prev) => {
             const tc: DisplayToolCall = {
@@ -225,9 +235,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
             })
           }
         }
+        for (const entry of pendingToolsRef.current.values()) {
+          if (entry.showTimer) clearTimeout(entry.showTimer)
+        }
         pendingToolsRef.current.clear()
         setState((prev) => ({ ...prev, isLoading: false, activeToolCalls: [] }))
       } catch (err) {
+        for (const entry of pendingToolsRef.current.values()) {
+          if (entry.showTimer) clearTimeout(entry.showTimer)
+        }
         pendingToolsRef.current.clear()
         setState((prev) => ({
           ...prev,
@@ -298,6 +314,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Clear conversation */
   const clear = useCallback(() => {
     loopStateRef.current = null
+    for (const entry of pendingToolsRef.current.values()) {
+      if (entry.showTimer) clearTimeout(entry.showTimer)
+    }
     pendingToolsRef.current.clear()
     resetBuffer()
     // Preserve the current live model id when clearing — user expects the
