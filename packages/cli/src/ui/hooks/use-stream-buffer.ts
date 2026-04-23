@@ -65,6 +65,17 @@ function findSafeBoundary(text: string): number {
   return lastSafe
 }
 
+// When a code fence is open, the normal `\n\n` safe-boundary logic holds
+// everything until the fence closes. For long code blocks (100+ lines) this
+// produces a single massive commit whose pre-scroll `\n`s leave visible blank
+// rows in the terminal scrollback. To avoid that, we force a line-based commit
+// once the buffer exceeds this threshold while inside an open code fence.
+// The markdown renderer's `code` token handler outputs raw text, so splitting
+// inside a fence is visually identical — the only difference is that the first
+// chunk carries the opening ``` (parsed as a `code` token by marked.lexer) and
+// subsequent chunks are plain text lines (rendered as-is by the fallback path).
+const CODE_FENCE_COMMIT_THRESHOLD = 800
+
 /**
  * Safety net: extract the text from the most recent assistant message in
  * the loop state. Used to display a reply when the stream produced no
@@ -129,6 +140,21 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
         bufferRef.current = bufferRef.current.slice(boundary)
         debugLog('buffer.commit', `chars=${chunk.length}`)
         appendMessage(makeStreamChunkMessage(chunk))
+      } else if (
+        bufferRef.current.length > CODE_FENCE_COMMIT_THRESHOLD &&
+        hasOpenMarkdownBlock(bufferRef.current)
+      ) {
+        // Large open code fence — force an intermediate commit at the last
+        // newline so the terminal doesn't have to pre-scroll 100+ blank rows
+        // in one shot. Find the last `\n` that is NOT part of a `\n\n` pair
+        // (those are handled by findSafeBoundary above) and cut there.
+        const lastNL = bufferRef.current.lastIndexOf('\n')
+        if (lastNL > 0) {
+          const chunk = bufferRef.current.slice(0, lastNL + 1)
+          bufferRef.current = bufferRef.current.slice(lastNL + 1)
+          debugLog('buffer.commit', `chars=${chunk.length} (fence-split)`)
+          appendMessage(makeStreamChunkMessage(chunk))
+        }
       }
     },
     [appendMessage],
