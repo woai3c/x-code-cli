@@ -96,7 +96,20 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
     debugLog('stdout.user', content)
-    writeUserMessage(write, content)
+    writeUserMessage(write, content, msg.kind === 'command-echo')
+    return
+  }
+
+  // Compact slash-command result — render as a tight `  ⎿  text` line so the
+  // pair `> /cmd` + result shows up as the Claude-style 2-line block instead
+  // of command + blank + indented body + blank.
+  if (msg.kind === 'command-result' && msg.content) {
+    const content = normalizeLineEndings(msg.content)
+    debugLog('stdout.command-result', content)
+    const lines = content.split('\n')
+    const head = `  ${c.gray('⎿')}  ${c.gray(lines[0] ?? '')}`
+    const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${c.gray(l)}`)
+    write(toCRLF([head, ...tail].join('\n') + '\n'))
     return
   }
 
@@ -154,8 +167,12 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
  * lines with two spaces so they align under the text that followed the `❯`
  * prompt glyph on the first line. `content` is assumed to have already been
  * normalized to use `\n` line separators.
+ *
+ * `compact` is set for slash-command echoes: we drop the trailing blank
+ * line so the `  ⎿  result` line that follows sits flush under the echo,
+ * matching Claude Code's 2-line command block.
  */
-function writeUserMessage(write: InkWrite, content: string): void {
+function writeUserMessage(write: InkWrite, content: string, compact = false): void {
   const arrow = c.hex(PROMPT_BORDER)('❯')
   const lines = content.split('\n')
   const [first = '', ...rest] = lines
@@ -164,5 +181,6 @@ function writeUserMessage(write: InkWrite, content: string): void {
   // Leading \n gives one blank row of margin-top so the echo doesn't
   // crowd against the previous assistant reply's last line of content.
   // Explicit CRLF line breaks — see toCRLF() above for rationale.
-  write(toCRLF('\n' + body + '\n\n'))
+  const trailing = compact ? '\n' : '\n\n'
+  write(toCRLF('\n' + body + trailing))
 }

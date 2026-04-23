@@ -27,6 +27,15 @@ export interface DisplayMessage {
    *  streaming text out of the bottom cell buffer (avoids row-shift jitter)
    *  by sending each complete line directly to scrollback. */
   streamingChunk?: boolean
+  /** Compact slash-command rendering, matching Claude Code's 2-line block:
+   *    > /model
+   *      ⎿  Set model to Sonnet 4.6
+   *  'command-echo' (user role) drops the trailing blank that regular user
+   *  messages append; 'command-result' (assistant role) renders with the
+   *  ⎿ prefix and a single trailing newline instead of markdown + \n\n.
+   *  Used only for short, single-line command responses. Long multi-line
+   *  output (/help, /usage) keeps the regular assistant-message path. */
+  kind?: 'command-echo' | 'command-result'
 }
 
 export interface DisplayToolCall {

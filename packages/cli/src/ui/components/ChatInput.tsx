@@ -136,12 +136,22 @@ export interface PermissionRequest {
   onResolve: (approved: boolean) => void
 }
 
+export interface SelectRequest {
+  question: string
+  options: { label: string; description: string }[]
+  onResolve: (answer: string) => void
+}
+
 interface ChatInputProps {
   /** All scrollback messages. New entries are committed to the terminal
    *  scrollback (above our cell frame) via direct stdout writes. We own the
    *  entire bottom region — Ink must NOT also write scrollback, or its
    *  log-update will fight us for cursor position. */
   messages: readonly DisplayMessage[]
+  /** Rows the startup banner (printHeader) occupies. Used to seed the
+   *  "blank rows above frame" tracker so the first dialog grow doesn't
+   *  needlessly pre-scroll rows the banner left blank. */
+  initialContentRows?: number
   onSubmit: (text: string) => void
   onInterrupt: () => void
   /** Ignore keyboard input (and hide the input cursor). */
@@ -162,6 +172,12 @@ interface ChatInputProps {
    *  erase the previous frame. With Permission inside our frame, Ink's
    *  dynamic region stays permanently empty and there's no contention. */
   permission?: PermissionRequest | null
+  /** If non-null, render a select-options dialog inside our cell buffer AND
+   *  route Up/Down/Enter to resolve it. Kept in-frame for the same reason
+   *  as `permission`: Ink's dynamic region leaves blank rows in scrollback
+   *  when a tall dialog unmounts, because terminal auto-scroll on growth
+   *  isn't reversible on shrink. */
+  selectRequest?: SelectRequest | null
   commands?: readonly SlashCommand[]
 }
 
@@ -405,6 +421,7 @@ function formatTokens(tokens: number): string {
 
 export function ChatInput({
   messages,
+  initialContentRows = 0,
   onSubmit,
   onInterrupt,
   disabled,
@@ -412,6 +429,7 @@ export function ChatInput({
   spinner,
   errorMessage,
   permission,
+  selectRequest,
   commands = [],
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
@@ -437,6 +455,13 @@ export function ChatInput({
    *  frame on screen begins so the next DECSTBM scroll region doesn't
    *  overlap it. */
   const lastFrameHRef = useRef(0)
+  /** Rows of freshly-erased blank space immediately above the frame —
+   *  typically from a shrink that closed a dialog (the erase step wipes
+   *  the old picker rows, leaving them blank). The next commit can write
+   *  new scrollback content INTO these blanks without needing to
+   *  pre-scroll the top of the viewport into real scrollback, which is
+   *  what preserves the startup banner across multiple /model cycles. */
+  const freeBlanksAboveFrameRef = useRef(0)
   /** True while a Permission/SelectOptions dialog was showing on the
    *  previous render. When it disappears we need to erase the old frame
    *  before redrawing — Ink's log.clear returns the cursor to the row
@@ -459,6 +484,16 @@ export function ChatInput({
   if (permissionKey !== lastPermissionKey) {
     setLastPermissionKey(permissionKey)
     setPermissionSelected(0)
+  }
+
+  // Selected index for the in-frame select-options dialog. Reset whenever a
+  // new dialog opens (keyed on the question string since that's what changes).
+  const [selectIndex, setSelectIndex] = useState(0)
+  const [lastSelectKey, setLastSelectKey] = useState<string | null>(null)
+  const selectKey = selectRequest ? selectRequest.question : null
+  if (selectKey !== lastSelectKey) {
+    setLastSelectKey(selectKey)
+    setSelectIndex(0)
   }
 
   // Spinner animation — self-contained so the parent doesn't have to
@@ -534,13 +569,14 @@ export function ChatInput({
     if (s) process.stdout.write(BSU + s + ESU_HIDE)
   }
 
-  const handleSubmit = () => {
-    if (!text.trim()) return
+  const handleSubmit = (override?: string) => {
+    const raw = override ?? text
+    if (!raw.trim()) return
     // Block submit while the agent is still thinking. Keystrokes still flow
     // (the keyboard stays enabled so users can pre-type the next prompt) —
     // only Enter is suppressed, matching Claude Code's behavior.
     if (spinner) return
-    const expanded = expandPasteRefs(text, pastedContents)
+    const expanded = override ? raw : expandPasteRefs(raw, pastedContents)
     // Let the normal render useEffect handle the transition. The next
     // render sees `messages.length > writtenMessageCountRef` (user-echo
     // just got appended inside onSubmit) and emits a single atomic
@@ -597,11 +633,12 @@ export function ChatInput({
         }
         return
       }
+      if (selectRequest) return // block typing while select dialog is up
       dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
       setCompletionIndex(0)
     },
     onPaste: (content) => {
-      if (permission) return // ignore pastes while Permission is up
+      if (permission || selectRequest) return // ignore pastes while a dialog is up
       const lineCount = content.split(/\r\n|\r|\n/).length
       const isLarge = lineCount >= PASTE_REF_MIN_LINES || content.length >= PASTE_REF_MIN_CHARS
       const pos = cursorRef.current
@@ -628,7 +665,34 @@ export function ChatInput({
         }
         return
       }
+      // Select-options dialog captures the same keys.
+      if (selectRequest) {
+        const len = selectRequest.options.length
+        if (key === 'up') {
+          setSelectIndex((i) => (i > 0 ? i - 1 : len - 1))
+          return
+        }
+        if (key === 'down') {
+          setSelectIndex((i) => (i < len - 1 ? i + 1 : 0))
+          return
+        }
+        if (key === 'return') {
+          const picked = selectRequest.options[selectIndex]
+          if (picked) selectRequest.onResolve(picked.label)
+          return
+        }
+        return
+      }
       if (key === 'return') {
+        // Active slash-command completion: Enter picks the highlighted
+        // command directly instead of submitting whatever's in the input
+        // (usually just `/` or a prefix), matching Claude Code's behavior.
+        // Previously the user had to hit Tab first to materialize the
+        // selection, then Enter — redundant.
+        if (currentMatch) {
+          handleSubmit(currentMatch.name)
+          return
+        }
         handleSubmit()
         return
       }
@@ -749,6 +813,7 @@ export function ChatInput({
       wasHiddenRef.current = false
       prevFrameRef.current = []
       lastFrameHRef.current = 0
+      freeBlanksAboveFrameRef.current = 0
       activeRef.current = false
     }
 
@@ -913,6 +978,37 @@ export function ChatInput({
       frame.push(noCells)
     }
 
+    // Select-options dialog — rendered inside our cell buffer, same slot
+    // as Permission. The commit path below detects "shrink from above
+    // viewport to at-or-below viewport" and does a clearTerminal + full
+    // redraw from messages state, so the tall dialog doesn't leave blank
+    // scrollback rows behind when it closes (mirrors Claude Code's
+    // log-update.ts fullResetSequence_CAUSES_FLICKER approach).
+    if (selectRequest) {
+      const qLines = selectRequest.question.split('\n')
+      for (const q of qLines) {
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells(`? ${q}`, S_ACCENT_BOLD))
+        frame.push(cells)
+      }
+      selectRequest.options.forEach((opt, i) => {
+        const active = i === selectIndex
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells(active ? '\u276f ' : '  ', active ? S_ACCENT : S_NONE))
+        cells.push(...textToCells(opt.label, active ? S_ACCENT : S_NONE))
+        if (opt.description) {
+          cells.push(...textToCells(`  \u2014 ${opt.description}`, S_DIM))
+        }
+        frame.push(cells)
+      })
+      const hint: Cell[] = []
+      hint.push({ char: ' ', style: S_NONE, width: 1 })
+      hint.push(...textToCells('\u2191\u2193 Navigate  Enter Confirm', S_DIM))
+      frame.push(hint)
+    }
+
     // Top separator
     frame.push(textToCells(sepText, S_GRAY))
 
@@ -1008,6 +1104,15 @@ export function ChatInput({
     const oldFrameH = lastFrameHRef.current
     const frameTop = Math.max(1, termRows - nextH + 1)
 
+    // First render: seed the "blanks above frame" tracker. The banner
+    // (initialContentRows) occupies the top of the viewport; everything
+    // else up to where the frame sits is blank. Subsequent grows can
+    // consume those blanks without pre-scrolling, so the banner stays
+    // in view during normal operation.
+    if (!activeRef.current && initialContentRows > 0) {
+      freeBlanksAboveFrameRef.current = Math.max(0, termRows - initialContentRows - nextH)
+    }
+
     // ── Scrollback-commit write (inline-stream) ──────────────────────────
     //
     // Writes new `content + frame` as ONE continuous stream starting at
@@ -1043,7 +1148,28 @@ export function ChatInput({
     let handledCommitWithFrame = false
     if (didCommitMessages && scrollRows > 0 && nextH > 0 && nextH < termRows) {
       const startRow = Math.max(1, termRows - scrollRows - nextH + 1)
-      const preScrollRows = oldFrameH > 0 ? Math.max(0, scrollRows + nextH - oldFrameH) : 0
+      // Normal formula: make room by scrolling top rows into real scrollback.
+      // But subtract any freshly-erased blank rows left above the frame by a
+      // recent shrink (dialog close) — those can absorb the new content
+      // without us having to sacrifice anything from the top of the viewport.
+      const rawPreScroll = oldFrameH > 0 ? Math.max(0, scrollRows + nextH - oldFrameH) : 0
+      const absorbed = Math.min(rawPreScroll, freeBlanksAboveFrameRef.current)
+      const preScrollRows = rawPreScroll - absorbed
+      // After this commit, the newly-written scrollback content sits
+      // IMMEDIATELY above the frame. Any blank rows that were previously
+      // counted are now ABOVE the new content, not adjacent to the frame —
+      // so they can no longer absorb a future grow's expansion. Reset to
+      // 0 so the next grow correctly pre-scrolls to preserve content
+      // (instead of erasing rows that contain the scrollback we just
+      // committed, as happened with /init's bottom rows on subsequent
+      // /model typing).
+      freeBlanksAboveFrameRef.current = 0
+      // When the old frame was taller than the new frame, its top is
+      // ABOVE our normal startRow, so the rows from old-frame-top down
+      // to startRow would otherwise hold stale frame text. Erase from
+      // the higher point.
+      const oldFrameTop = oldFrameH > 0 ? termRows - oldFrameH + 1 : termRows + 1
+      const eraseFrom = Math.min(startRow, oldFrameTop)
       preBuf += '\x1b[?25l'
       if (preScrollRows > 0) {
         // Full-screen scroll at termRows to push `preScrollRows` rows into
@@ -1051,11 +1177,10 @@ export function ChatInput({
         // honors — DECSTBM regions splice-discard in its InputHandler).
         preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
       }
-      // Erase from startRow to end of screen so residue from the old
-      // frame (or shifted rows left behind by pre-scroll) doesn't bleed
-      // through the `\r\n`-only advances in content (user messages have
-      // leading/trailing blank lines for margin).
-      preBuf += `\x1b[${startRow};1H\x1b[J`
+      preBuf += `\x1b[${eraseFrom};1H\x1b[J`
+      if (eraseFrom < startRow) {
+        preBuf += `\x1b[${startRow};1H`
+      }
       preBuf += scrollbackContent
       for (let i = 0; i < nextH; i++) {
         preBuf += renderRowToAnsi(frame[i]) + '\x1b[K'
@@ -1073,25 +1198,61 @@ export function ChatInput({
 
     // Frame-height change: the frame is pinned to the bottom, so when
     // H grows, its top moves UP — risking overwrite of scrollback rows
-    // that currently live there. Scroll those rows UP by delta first so
-    // the terminal preserves them in its scrollback buffer. When H
-    // shrinks, the bottom of the old frame stays exposed as "stale frame
-    // cells" above the new top — clear those rows.
+    // that currently live there.
+    //
+    // Small grows (≤3 rows — spinner appearing, permission dialog) use
+    // a full-screen scroll so the displaced content ends up preserved
+    // in the terminal's real scrollback.
+    //
+    // Large grows (≥4 rows — SelectOptions picker, completion menu with
+    // many items) are almost always sitting over blank rows in a typical
+    // session (banner + some blanks + frame at bottom). Pre-scrolling
+    // those blanks INTO real scrollback permanently consumes viewport
+    // rows that the subsequent shrink can't recover — that's the
+    // "after /model there's a big blank" complaint. We skip the
+    // pre-scroll in this case and instead erase the grow area before
+    // the cell diff repaints over it. When the frame shrinks back, the
+    // existing erase branch below clears the expanded area and the
+    // layout returns to exactly what it was before the grow.
+    //
+    // For shrinks, the bottom of the old frame stays exposed as "stale
+    // frame cells" above the new top — clear those rows.
     if (!handledCommitWithFrame && activeRef.current && oldFrameH > 0 && oldFrameH !== nextH) {
       if (nextH > oldFrameH) {
         const deltaH = nextH - oldFrameH
-        // Grow via natural full-screen scroll at termRows (the scrolled-out
-        // rows reach the terminal's real scrollback). The equivalent DECSTBM
-        // region approach is splice-discarded by xterm.js (see commit handler
-        // comment) so we'd lose `deltaH` rows of history on every spinner
-        // appear / permission-dialog-open event.
-        preBuf += `\x1b[${termRows};1H` + '\n'.repeat(deltaH)
+        // Consume as much freshly-blank space above the frame as we can —
+        // those rows can be overwritten without losing anything. Any excess
+        // expansion IS over real content, so pre-scroll that much into
+        // real scrollback to preserve it (banner, earlier messages).
+        // Without this, typing `/` to open the completion menu would wipe
+        // whatever scrollback sat right above the input (see the /usage
+        // result disappearing when /mo was typed).
+        const absorbed = Math.min(deltaH, freeBlanksAboveFrameRef.current)
+        const needsScroll = deltaH - absorbed
+        if (needsScroll > 0) {
+          preBuf += `\x1b[${termRows};1H` + '\n'.repeat(needsScroll)
+        }
+        // Pre-erase the newly-occupied rows so any stale cells (from prior
+        // renders or auto-scroll residue) don't bleed through before the
+        // diff below repaints them.
+        for (let i = 0; i < deltaH; i++) {
+          const row = termRows - nextH + 1 + i
+          preBuf += `\x1b[${row};1H\x1b[K`
+        }
+        freeBlanksAboveFrameRef.current = Math.max(
+          0,
+          freeBlanksAboveFrameRef.current - deltaH,
+        )
       } else {
         const deltaH = oldFrameH - nextH
         for (let i = 0; i < deltaH; i++) {
           const row = termRows - oldFrameH + 1 + i
           preBuf += `\x1b[${row};1H\x1b[K`
         }
+        // Remember the freshly-erased rows so the next commit can write
+        // into them instead of pre-scrolling the viewport (which would
+        // push the banner / earlier content off the top).
+        freeBlanksAboveFrameRef.current += deltaH
       }
       // Frame moved — prev cell matrix is at the wrong rows now; force
       // full redraw at the new position.

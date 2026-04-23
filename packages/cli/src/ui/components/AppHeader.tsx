@@ -31,10 +31,20 @@ const LOGO_COMPACT = `
 const LOGO_TINY = '  X-Code'
 
 /**
- * Print the startup header banner directly to stdout.
- * Call this ONCE before Ink's render() so it is never re-drawn.
+ * Return how many terminal rows the startup banner occupies. Needed by
+ * ChatInput to correctly initialize its blank-rows-above-frame tracker
+ * (otherwise the first time the completion menu / dialog grows, it
+ * would pre-scroll rows that are actually blank, wasting viewport space
+ * and pushing the banner into real scrollback unnecessarily).
  */
-export function printHeader(modelId: string): void {
+export function getHeaderRowCount(modelId: string): number {
+  return renderHeader(modelId).split('\n').length - 1 // final '\n' adds one empty split
+}
+
+/**
+ * Build the startup banner as a string.
+ */
+export function renderHeader(modelId: string): string {
   const cols = process.stdout.columns ?? 80
 
   // Pick logo based on terminal width
@@ -58,5 +68,13 @@ export function printHeader(modelId: string): void {
     '', // blank line after header
   ]
 
-  process.stdout.write(lines.join('\n') + '\n')
+  return lines.join('\n') + '\n'
+}
+
+/**
+ * Print the startup header banner directly to stdout.
+ * Call this ONCE before Ink's render() so it is never re-drawn.
+ */
+export function printHeader(modelId: string): void {
+  process.stdout.write(renderHeader(modelId))
 }

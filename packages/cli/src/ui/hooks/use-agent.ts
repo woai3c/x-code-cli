@@ -319,6 +319,32 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     [appendMessage],
   )
 
+  /** Render a slash command + its short result as a Claude-style 2-line block:
+   *    > /cmd
+   *      ⎿  result
+   *  Use for single-line command responses. For long multi-line output
+   *  (/help, /usage, /init) call addUserMessage + addInfoMessage directly. */
+  const addCommandMessage = useCallback(
+    (commandText: string, resultText: string) => {
+      const base = Date.now()
+      appendMessage({
+        id: `cmd-${base}`,
+        role: 'user',
+        content: commandText,
+        timestamp: base,
+        kind: 'command-echo',
+      })
+      appendMessage({
+        id: `cmd-res-${base}`,
+        role: 'assistant',
+        content: resultText,
+        timestamp: base,
+        kind: 'command-result',
+      })
+    },
+    [appendMessage],
+  )
+
   return {
     state,
     submit,
@@ -332,6 +358,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,
+    addCommandMessage,
     askQuestion,
   }
 }

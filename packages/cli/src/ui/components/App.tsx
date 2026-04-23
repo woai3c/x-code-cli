@@ -1,7 +1,7 @@
 // @x-code-cli/cli — Root App component
 import { useEffect } from 'react'
 
-import { Box, useApp, useStdout } from 'ink'
+import { useApp } from 'ink'
 
 import {
   MODEL_ALIASES,
@@ -16,8 +16,8 @@ import type { AgentOptions, LanguageModel } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
+import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
-import { SelectOptions } from './SelectOptions.js'
 
 interface AppProps {
   model: LanguageModel
@@ -30,12 +30,10 @@ interface AppProps {
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   { name: '/model', description: 'Pick a model (no-arg = interactive) — choice is saved' },
-  { name: '/usage', description: 'Show token usage' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
   { name: '/init', description: 'Initialize project knowledge' },
   { name: '/session save', description: 'Save current session' },
-  { name: '/plan', description: 'Enter plan mode' },
   { name: '/exit', description: 'Exit (saves session)' },
 ] as const
 
@@ -47,8 +45,6 @@ const HELP_TEXT =
 
 export function App({ model, options, initialPrompt, onCleanupReady }: AppProps) {
   const { exit } = useApp()
-  const { stdout } = useStdout()
-  const termWidth = stdout?.columns ?? 80
   const {
     state,
     submit,
@@ -61,6 +57,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,
+    addCommandMessage,
     askQuestion,
   } = useAgent(model, options)
 
@@ -103,18 +100,12 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           return
 
         case 'model':
-          echoCommand(text)
-          handleModelSwitch(arg)
-          return
-
-        case 'usage':
-          echoCommand(text)
-          handleUsage()
+          handleModelSwitch(text, arg)
           return
 
         case 'clear':
           clear()
-          addInfoMessage('Conversation cleared.')
+          addCommandMessage('/clear', 'Conversation cleared.')
           return
 
         case 'compact':
@@ -128,18 +119,11 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           return
 
         case 'session':
-          echoCommand(text)
           if (arg.toLowerCase() === 'save') {
-            await handleSessionSave()
+            await handleSessionSave(text)
           } else {
-            addInfoMessage('Unknown session command. Use `/session save`.')
+            addCommandMessage(text, 'Unknown session command. Use `/session save`.')
           }
-          return
-
-        case 'plan':
-          await submit(
-            'Please enter plan mode to explore the codebase and design an implementation plan before making changes.',
-          )
           return
 
         case 'exit':
@@ -148,8 +132,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           return
 
         default:
-          echoCommand(text)
-          addInfoMessage(`Unknown command: /${command}. Type /help for available commands.`)
+          addCommandMessage(text, `Unknown command: /${command}. Type /help for available commands.`)
           return
       }
     }
@@ -157,32 +140,40 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     await submit(text)
   }
 
+  /** Look up a human-friendly label for a model id; falls back to the raw id. */
+  function renderModelLabel(modelId: string): string {
+    for (const models of Object.values(PROVIDER_MODELS)) {
+      for (const m of models) if (m.id === modelId) return m.label
+    }
+    return modelId
+  }
+
   /**
    * Commit a model switch: rebuild the provider registry (so the new
    * provider's env-var API key is picked up), swap the live language-model
    * reference, persist to the user config, and echo a confirmation message.
    */
-  function commitModelChange(newModelId: string) {
+  function commitModelChange(commandText: string, newModelId: string) {
     try {
       const registry = createModelRegistry()
       const newModel = registry.languageModel(newModelId as `${string}:${string}`)
       switchModel(newModelId, newModel)
       saveUserConfig({ model: newModelId })
-      addInfoMessage(`Model switched to: ${newModelId}\n(saved — will be used on next startup)`)
+      addCommandMessage(commandText, `Set model to ${renderModelLabel(newModelId)}`)
     } catch (err) {
-      addInfoMessage(`Failed to switch model: ${err instanceof Error ? err.message : String(err)}`)
+      addCommandMessage(commandText, `Failed to switch model: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
-  async function handleModelSwitch(arg: string) {
+  async function handleModelSwitch(commandText: string, arg: string) {
     // With an explicit arg: keep the old scriptable path (alias or full id).
     if (arg) {
       const newModelId = resolveModelId(arg)
       if (!newModelId) {
-        addInfoMessage(`Could not resolve model: ${arg}`)
+        addCommandMessage(commandText, `Could not resolve model: ${arg}`)
         return
       }
-      commitModelChange(newModelId)
+      commitModelChange(commandText, newModelId)
       return
     }
 
@@ -199,7 +190,10 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     }
 
     if (choices.length === 0) {
-      addInfoMessage('No models available — set an API key (e.g. `ANTHROPIC_API_KEY`, `ALIBABA_API_KEY`) and restart.')
+      addCommandMessage(
+        commandText,
+        'No models available — set an API key (e.g. `ANTHROPIC_API_KEY`, `ALIBABA_API_KEY`) and restart.',
+      )
       return
     }
 
@@ -217,28 +211,17 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       // models the picker doesn't list.
       const resolved = resolveModelId(answer)
       if (!resolved) {
-        addInfoMessage(`Could not resolve model: ${answer}`)
+        addCommandMessage(commandText, `Could not resolve model: ${answer}`)
         return
       }
-      commitModelChange(resolved)
+      commitModelChange(commandText, resolved)
       return
     }
     if (picked.id === state.modelId) {
-      addInfoMessage(`Already on ${picked.id} — no change.`)
+      addCommandMessage(commandText, `Already on ${renderModelLabel(picked.id)} — no change.`)
       return
     }
-    commitModelChange(picked.id)
-  }
-
-  function handleUsage() {
-    const { usage } = state
-    addInfoMessage(
-      `Token Usage\n` +
-        `  Input:    ${usage.inputTokens.toLocaleString()} tokens\n` +
-        `  Output:   ${usage.outputTokens.toLocaleString()} tokens\n` +
-        `  Total:    ${usage.totalTokens.toLocaleString()} tokens\n` +
-        `  Model:    ${state.modelId}`,
-    )
+    commitModelChange(commandText, picked.id)
   }
 
   async function handleCompact() {
@@ -261,13 +244,9 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     }
   }
 
-  async function handleSessionSave() {
+  async function handleSessionSave(commandText: string) {
     const saved = await saveCurrentSession()
-    if (saved) {
-      addInfoMessage('Session saved.')
-    } else {
-      addInfoMessage('No active session to save.')
-    }
+    addCommandMessage(commandText, saved ? 'Session saved.' : 'No active session to save.')
   }
 
   // RENDERING ARCHITECTURE
@@ -275,59 +254,57 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
   // `ChatInput` owns the ENTIRE terminal region below the initial header:
   //   - scrollback messages are committed via direct stdout writes
   //   - spinner / input / separators / completions / errors / Permission
-  //     dialog all render into a single cell-level diff buffer
+  //     dialog / SelectOptions dialog all render into a single cell-level
+  //     diff buffer
   //
-  // Ink's dynamic region is kept EMPTY except for `SelectOptions`
-  // (askUser dialogs with a free-form "Other" text mode — too involved
-  // to reimplement in the cell buffer right now). If Ink ever writes
-  // there, its internal use of `\x1b7`/`\x1b8` clobbers our cursor
-  // anchor and leaves zombie frames on every cycle.
+  // Ink's dynamic region is ALWAYS empty — we don't render any children
+  // into Ink's own subtree. If Ink ever writes there, its internal use of
+  // `\x1b7`/`\x1b8` clobbers our cursor anchor and leaves zombie frames.
+  // Earlier versions kept SelectOptions as a direct Ink child, but when
+  // the dialog grew taller than ChatInput, its rendering caused terminal
+  // auto-scroll that left permanent blank rows in scrollback after the
+  // dialog closed — so it's been moved into ChatInput's cell buffer too.
   const permissionRequest = state.permissionQueue[0]
-  const blockingDialog = !!state.pendingQuestion
+  const selectActive = !!state.pendingQuestion
 
   return (
-    <>
-      <Box flexDirection="column" width={termWidth}>
-        {state.pendingQuestion && (
-          <SelectOptions
-            question={state.pendingQuestion.question}
-            options={state.pendingQuestion.options}
-            onSelect={resolveQuestion}
-          />
-        )}
-      </Box>
-
-      <ChatInput
-        messages={state.messages}
-        onSubmit={handleSubmit}
-        onInterrupt={exit}
-        // Lock the keyboard only while SelectOptions owns Ink's bottom
-        // region. During loading OR a Permission dialog we keep typing
-        // enabled — Permission keys (Up/Down/Enter/y/n) are handled by
-        // ChatInput itself; `spinner` tells handleSubmit to gate Enter.
-        disabled={blockingDialog}
-        hidden={blockingDialog}
-        spinner={
-          state.isLoading && !blockingDialog && !permissionRequest
-            ? {
-                label: 'Thinking',
-                mode: state.currentToolCall ? 'tool-use' : 'requesting',
-                totalTokens: state.usage.totalTokens,
-              }
-            : null
-        }
-        errorMessage={state.error}
-        permission={
-          permissionRequest
-            ? {
-                toolName: permissionRequest.toolName,
-                input: permissionRequest.input,
-                onResolve: resolvePermission,
-              }
-            : null
-        }
-        commands={SLASH_COMMANDS}
-      />
-    </>
+    <ChatInput
+      messages={state.messages}
+      initialContentRows={getHeaderRowCount(state.modelId)}
+      onSubmit={handleSubmit}
+      onInterrupt={exit}
+      // Suppress the spinner's "Thinking" line while a select dialog is up,
+      // but keep ChatInput itself visible — the dialog is rendered INSIDE
+      // its cell buffer now, not in Ink's top subtree.
+      spinner={
+        state.isLoading && !selectActive && !permissionRequest
+          ? {
+              label: 'Thinking',
+              mode: state.currentToolCall ? 'tool-use' : 'requesting',
+              totalTokens: state.usage.totalTokens,
+            }
+          : null
+      }
+      errorMessage={state.error}
+      permission={
+        permissionRequest
+          ? {
+              toolName: permissionRequest.toolName,
+              input: permissionRequest.input,
+              onResolve: resolvePermission,
+            }
+          : null
+      }
+      selectRequest={
+        state.pendingQuestion
+          ? {
+              question: state.pendingQuestion.question,
+              options: state.pendingQuestion.options,
+              onResolve: resolveQuestion,
+            }
+          : null
+      }
+      commands={SLASH_COMMANDS}
+    />
   )
 }
