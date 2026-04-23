@@ -3,11 +3,16 @@
 // API keys always come from environment variables (provider-specific keys
 // like ANTHROPIC_API_KEY / ALIBABA_API_KEY — never stored on disk).
 //
-// The default **model** can come from three sources, in precedence order:
+// The default **model** can come from four sources, in precedence order:
 //   1. `--model` CLI flag (explicit `input` arg)
-//   2. `X_CODE_MODEL` environment variable
-//   3. `~/.x-code/config.json` `model` field — written by `/model` picker
-// If none of the above, smart-default picks the first provider with a key.
+//   2. `~/.x-code/config.json` `model` field — written by `/model` picker
+//   3. `X_CODE_MODEL` environment variable
+//   4. Smart default: first provider (by PROVIDER_DETECTION_ORDER) with a key
+//
+// The picker's choice beats the env var so that `/model` "sticks" across
+// restarts — otherwise a user who had `X_CODE_MODEL` set in their shell /
+// .env file would see their `/model` selection silently reverted next
+// launch (reported bug).
 import fsSync from 'node:fs'
 import path from 'node:path'
 
@@ -49,15 +54,15 @@ export function getAvailableProviders(): string[] {
 /**
  * Resolve a model ID with four levels of precedence:
  *   1. Explicit `input` (e.g. --model CLI flag)
- *   2. `X_CODE_MODEL` environment variable
- *   3. `~/.x-code/config.json` `model` field (written by the /model picker)
+ *   2. `~/.x-code/config.json` `model` field (written by the /model picker)
+ *   3. `X_CODE_MODEL` environment variable
  *   4. Smart default: first provider (by PROVIDER_DETECTION_ORDER) with an API key
  *
  * Aliases in MODEL_ALIASES (e.g. "sonnet" → "anthropic:claude-sonnet-4-5")
  * are expanded at all levels. Returns null if no provider is configured.
  */
 export function resolveModelId(input?: string): string | null {
-  const explicit = input ?? process.env.X_CODE_MODEL ?? loadUserConfig().model
+  const explicit = input ?? loadUserConfig().model ?? process.env.X_CODE_MODEL
   if (explicit) {
     return MODEL_ALIASES[explicit] ?? explicit
   }
