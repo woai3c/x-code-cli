@@ -70,12 +70,29 @@ function formatToolCall(tc: DisplayToolCall): string {
 
   if (!resultSummary) return line1
 
-  const lines = resultSummary.split('\n')
-  const formatted = lines.map((l, i) => (i === 0 ? l : RESULT_INDENT + l)).join('\n')
-  const bodyColor = isDenied ? c.hex(ERROR) : c.gray
+  // Render the result through the markdown pipeline so tool outputs with
+  // headings / lists / inline code / etc. display styled instead of as
+  // raw `### ...` / `**...**` characters. Denied results stay as plain
+  // red text — denying doesn't produce tool output to render anyway.
+  const rendered = isDenied
+    ? c.hex(ERROR)(resultSummary)
+    : renderMarkdown(resultSummary).replace(/\n+$/, '')
+
+  // Strip blank lines — markdown rendering inserts paragraph spacing
+  // between blocks, which makes the tool-result summary look sparse
+  // (heading, blank, URL, blank, "... +7 lines"). We want a tight
+  // 2-3 line summary, not a paragraphed body.
+  const lines = normalizeLineEndings(rendered)
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
   const durSuffix = durationStr ? c.gray(` (${durationStr})`) : ''
-  const line2 = `   ${c.gray('⎿')}  ${bodyColor(formatted)}${durSuffix}`
-  return `${line1}\n${line2}`
+  const head = `   ${c.gray('⎿')}  ${lines[0] ?? ''}`
+  const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${l}`)
+  // Duration goes on the last visible line of the body so it reads like
+  // "... +13 lines (1.2s)" on truncated summaries.
+  const combined = tail.length > 0 ? [head, ...tail] : [head]
+  combined[combined.length - 1] = combined[combined.length - 1] + durSuffix
+  return `${line1}\n${combined.join('\n')}`
 }
 
 /** Replace every LF with CRLF. Defensive against terminals where stdout's

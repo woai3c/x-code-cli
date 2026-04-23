@@ -171,14 +171,19 @@ function formatToken(
       const content = (h.tokens ?? [])
         .map((t) => formatToken(t, 0, null, null))
         .join('')
+      // Single trailing EOL; blank row (if any) after the heading is
+      // supplied by the adjacent `space` token, not by us doubling up.
       if (h.depth === 1) {
-        return c.bold.italic.underline(content) + EOL + EOL
+        return c.bold.italic.underline(content) + EOL
       }
-      return c.bold(content) + EOL + EOL
+      return c.bold(content) + EOL
     }
 
     case 'hr':
-      return '---'
+      // `---` needs its own terminator — missing it made `hr` emit no
+      // newline, and the next block's content landed on the same row
+      // as the rule.
+      return c.hex('#999999')('\u2500'.repeat(20)) + EOL
 
     case 'image':
       return (token as Tokens.Image).href ?? ''
@@ -193,13 +198,14 @@ function formatToken(
         .join('')
       const href = l.href ?? ''
       const plain = stripAnsi(linkText)
-      // No OSC 8 — emitting the hyperlink start/end sequences leaked into
-      // subsequent Ink frames on some terminals and desynced the input
-      // cursor. Render as underlined text followed by the URL in dim.
-      if (plain && plain !== href) {
-        return `${c.hex(LINK).underline(linkText)} (${c.hex(LINK_URL)(href)})`
-      }
-      return c.hex(LINK).underline(href)
+      const styled = c.hex(LINK).underline(plain && plain !== href ? linkText : href)
+      // OSC 8 hyperlink: modern terminals render the display text as a
+      // clickable link that reveals `href` on hover / Ctrl+click. Older
+      // terminals that don't support OSC 8 strip the escape bytes and
+      // just show the underlined display text — graceful degradation in
+      // both directions. Emitting the raw URL inline produced a cluttered
+      // `text (url)text (url)...` output for web-fetch results.
+      return href ? `\x1b]8;;${href}\x1b\\${styled}\x1b]8;;\x1b\\` : styled
     }
 
     case 'list': {
@@ -245,10 +251,17 @@ function formatToken(
         return tx.text
       }
       if (parent?.type === 'list_item') {
+        // Visually distinct bullet so the rendered output can't be
+        // confused with the raw markdown source. Unordered items get a
+        // coloured U+2022 •; ordered items keep "N." but with the
+        // digits accented. Claude Code's own render does the same (any
+        // unicode marker makes it obvious marked.lexer actually parsed
+        // the list — otherwise users see `-` both before and after
+        // rendering and assume nothing happened).
         const marker =
           orderedListNumber === null
-            ? '-'
-            : `${getListNumber(listDepth, orderedListNumber)}.`
+            ? c.hex(BLUE_PURPLE)('\u2022')
+            : c.hex(BLUE_PURPLE)(`${getListNumber(listDepth, orderedListNumber)}.`)
         const content = tx.tokens
           ? tx.tokens
               .map((t) => formatToken(t, listDepth, orderedListNumber, token))
@@ -262,51 +275,88 @@ function formatToken(
     case 'table': {
       const tb = token as Tokens.Table
 
-      const displayTextOf = (tokens?: Token[]): string =>
-        stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join(''))
-
-      const columnWidths = tb.header.map((header, index) => {
-        let maxWidth = displayTextOf(header.tokens).length
-        for (const row of tb.rows) {
-          const cellLength = displayTextOf(row[index]?.tokens).length
-          maxWidth = Math.max(maxWidth, cellLength)
+      // Width is measured in display columns (CJK chars take 2), not
+      // code-unit length. Using `.length` made every `运算`-style header
+      // count as 2 — the separator came out too short and the right
+      // border walked leftward on each subsequent row.
+      const displayWidthOf = (tokens?: Token[]): number => {
+        const text = stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join(''))
+        let w = 0
+        for (const ch of text) {
+          const cp = ch.codePointAt(0) ?? 0
+          // Rough CJK / full-width range: CJK Unified, full-width forms,
+          // Hangul, kana, CJK symbols / punctuation. Matches cells-width
+          // used by countContentRows in ChatInput.
+          if (
+            (cp >= 0x1100 && cp <= 0x115f) ||
+            (cp >= 0x2e80 && cp <= 0x9fff) ||
+            (cp >= 0xa000 && cp <= 0xa4cf) ||
+            (cp >= 0xac00 && cp <= 0xd7a3) ||
+            (cp >= 0xf900 && cp <= 0xfaff) ||
+            (cp >= 0xfe30 && cp <= 0xfe4f) ||
+            (cp >= 0xff00 && cp <= 0xff60) ||
+            (cp >= 0xffe0 && cp <= 0xffe6)
+          ) {
+            w += 2
+          } else {
+            w += 1
+          }
         }
-        return Math.max(maxWidth, 3)
+        return w
+      }
+
+      const colWidths = tb.header.map((header, index) => {
+        let max = displayWidthOf(header.tokens)
+        for (const row of tb.rows) {
+          max = Math.max(max, displayWidthOf(row[index]?.tokens))
+        }
+        return Math.max(max, 3)
       })
 
-      let out = '| '
-      tb.header.forEach((header, index) => {
-        const content = (header.tokens ?? [])
+      // Box-drawing characters: a proper CLI table instead of echoing
+      // the markdown pipes back to the user.
+      const TL = '\u250c', TR = '\u2510', TM = '\u252c'
+      const BL = '\u2514', BR = '\u2518', BM = '\u2534'
+      const ML = '\u251c', MR = '\u2524', MM = '\u253c'
+      const H = '\u2500', V = '\u2502'
+
+      const makeDivider = (left: string, mid: string, right: string): string =>
+        left + colWidths.map((w) => H.repeat(w + 2)).join(mid) + right + EOL
+
+      const padCell = (cell: { tokens?: Token[] }, width: number, align: string | null | undefined): string => {
+        const content = (cell.tokens ?? [])
           .map((t) => formatToken(t, 0, null, null))
           .join('')
-        const displayText = displayTextOf(header.tokens)
-        const width = columnWidths[index]!
-        const align = tb.align?.[index]
-        out += padAligned(content, displayText.length, width, align) + ' | '
-      })
-      out = out.trimEnd() + EOL
+        const displayWidth = displayWidthOf(cell.tokens)
+        return padAligned(content, displayWidth, width, align)
+      }
 
-      out += '|'
-      columnWidths.forEach((width) => {
-        out += '-'.repeat(width + 2) + '|'
+      const dim = (s: string) => c.hex('#999999')(s)
+      let out = dim(makeDivider(TL, TM, TR))
+
+      out += dim(V) + ' '
+      tb.header.forEach((header, index) => {
+        if (index > 0) out += ' ' + dim(V) + ' '
+        out += c.bold(padCell(header, colWidths[index]!, tb.align?.[index]))
       })
-      out += EOL
+      out += ' ' + dim(V) + EOL
+
+      out += dim(makeDivider(ML, MM, MR))
 
       tb.rows.forEach((row) => {
-        out += '| '
+        out += dim(V) + ' '
         row.forEach((cell, index) => {
-          const content = (cell.tokens ?? [])
-            .map((t) => formatToken(t, 0, null, null))
-            .join('')
-          const displayText = displayTextOf(cell.tokens)
-          const width = columnWidths[index]!
-          const align = tb.align?.[index]
-          out += padAligned(content, displayText.length, width, align) + ' | '
+          if (index > 0) out += ' ' + dim(V) + ' '
+          out += padCell(cell, colWidths[index]!, tb.align?.[index])
         })
-        out = out.trimEnd() + EOL
+        out += ' ' + dim(V) + EOL
       })
 
-      return out + EOL
+      out += dim(makeDivider(BL, BM, BR))
+      // `out` already ends with EOL from the final divider — returning
+      // `out + EOL` added an extra blank row that the adjacent `space`
+      // token then doubled up.
+      return out
     }
 
     case 'escape':

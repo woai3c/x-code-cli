@@ -1,42 +1,69 @@
 // @x-code-cli/cli — Streaming-text buffer management
 //
-// Two-stage buffering:
+// Deltas accumulate in `bufferRef`. After every delta we look for the
+// latest `\n\n` (paragraph break) position whose prefix does NOT end
+// inside an open multi-line markdown structure (table or code fence),
+// and commit everything up to that point as a `streamingChunk` message.
+// Everything after the cut point stays in the buffer, merging with
+// subsequent deltas until the next safe boundary is found (or the
+// stream ends and `flushBuffer()` force-drains the remainder).
 //
-//   1. `bufferRef` — active, UNTERMINATED text. Deltas append here; as
-//      soon as the buffer contains a `\n`, the newly-completed line(s)
-//      move into the pending batch. The trailing partial line stays put
-//      until it's either completed by a later delta or `flushBuffer()`
-//      is called.
+// Why the open-block check: marked's GFM table grammar requires the
+// header + separator + rows to land in the SAME lexer pass. Committing
+// `| a | b |\n` on its own parses as a paragraph; the user sees raw
+// pipes. So paragraphs stream out (good UX — Claude Code does the same
+// via live React re-renders), but once a table row or code fence has
+// opened in the buffer, we hold everything until the structure closes.
 //
-//   2. `pendingRef` — complete lines waiting for the COMMIT_DEBOUNCE_MS
-//      timer. The FIRST line to arrive arms the timer; further lines in
-//      the window accumulate without re-arming. When the timer fires,
-//      the whole batch emits as ONE `streamingChunk: true` message.
-//
-// Why batch: each streamingChunk commit triggers ChatInput's useEffect
-// to `eraseRegion + writeMessageToStdout + redraw frame` in one atomic
-// payload. Even though each payload is BSU/ESU-wrapped, the TERMINAL
-// still has to physically scroll when new content pushes past the
-// bottom row — and that scroll is visible as a brief "flash" on
-// Windows Terminal. Committing every line separately gave roughly one
-// flash every 1-2 seconds (observed in the field as "渲染几行就会闪
-// 烁一下"). Bundling lines into 100ms batches cuts that rate by 3-5×
-// with no perceptible delay added to the scrollback progress.
-//
-// Immediate flushes (not debounced):
-//   - `flushBuffer()` — tool-call / end-of-turn boundary. User expects
-//     to see accumulated text BEFORE the next transition UI appears.
-//   - Paragraph break `\n\n` in the stream — natural boundary, makes
-//     long outputs feel "chunky" rather than trickle-by-trickle.
+// A simpler "buffer the whole response" approach kills streaming UX
+// entirely. A simpler "emit per-newline" approach breaks tables. This
+// safe-boundary cut is the middle path.
 import { useCallback, useRef } from 'react'
 
 import type { DisplayMessage, ModelMessage } from '@x-code-cli/core'
 import { debugLog } from '@x-code-cli/core'
 
-/** Debounce window for batched streamingChunk commits. 100ms is below
- *  human flicker-detection threshold (we perceive motion as continuous
- *  around 60-80ms cadence); anything longer makes the user wait visibly. */
-const COMMIT_DEBOUNCE_MS = 100
+/** Does `text` end inside an open multi-line markdown structure that
+ *  the renderer needs whole to format correctly?
+ *
+ *  - Code fence: odd number of ``` at start-of-line = fence is open.
+ *  - Table: the IMMEDIATELY-LAST line (not past blanks) starts with
+ *    `|`. A blank line after the rows terminates the table in GFM,
+ *    so once `...|\n\n` arrives the table is closed. */
+function hasOpenMarkdownBlock(text: string): boolean {
+  const fences = text.match(/^```/gm)
+  if (fences && fences.length % 2 !== 0) return true
+
+  const lines = text.split('\n')
+  // Strip the ONE trailing '' that `split('\n')` produces for text
+  // ending in a newline — that's a split artifact, not a real blank line.
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  if (lines.length === 0) return false
+
+  const lastLine = lines[lines.length - 1]
+  if (lastLine.trim() === '') return false
+  if (lastLine.trimStart().startsWith('|')) return true
+  return false
+}
+
+/** Return the position just past the LAST safe `\n\n` in `text`, or -1
+ *  if none exists. "Safe" means the prefix up to that `\n\n` doesn't
+ *  end inside an open multi-line block — committing that prefix gives
+ *  the markdown renderer something it can fully format. */
+function findSafeBoundary(text: string): number {
+  let lastSafe = -1
+  let scan = 0
+  while (scan < text.length) {
+    const found = text.indexOf('\n\n', scan)
+    if (found < 0) break
+    const prefix = text.slice(0, found + 2)
+    if (!hasOpenMarkdownBlock(prefix)) {
+      lastSafe = found + 2
+    }
+    scan = found + 1
+  }
+  return lastSafe
+}
 
 /**
  * Safety net: extract the text from the most recent assistant message in
@@ -87,83 +114,39 @@ function makeStreamChunkMessage(content: string): DisplayMessage {
 }
 
 export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): StreamBufferApi {
-  /** Active buffer — text not yet terminated by `\n`. */
+  /** Accumulating buffer — holds everything since the last safe-boundary
+   *  commit (or last flush). */
   const bufferRef = useRef<string>('')
-  /** Pending batch — complete lines waiting for the debounce timer. */
-  const pendingRef = useRef<string>('')
-  /** Debounce timer handle. `null` = no timer armed. */
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  /** Commit `pendingRef` as a single streamingChunk. Clears the timer
-   *  so the next line re-arms from scratch. Safe to call even when
-   *  the batch is empty (no-op). */
-  const drainPending = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-    const batch = pendingRef.current
-    if (!batch) return
-    pendingRef.current = ''
-    debugLog('buffer.commit', `lines=${batch.split('\n').length - 1}`)
-    appendMessage(makeStreamChunkMessage(batch))
-  }, [appendMessage])
 
   const appendTextDelta = useCallback(
     (delta: string) => {
       if (!delta) return
       debugLog('buffer.append', delta)
       bufferRef.current += delta
-
-      // Move every complete line from active buffer → pending batch.
-      let hasParagraphBreak = false
-      while (true) {
-        const nl = bufferRef.current.indexOf('\n')
-        if (nl < 0) break
-        const line = bufferRef.current.slice(0, nl + 1)
-        bufferRef.current = bufferRef.current.slice(nl + 1)
-        pendingRef.current += line
-        // A completely-empty line = paragraph break. Flush immediately
-        // on it so the user sees a natural "paragraph finished" beat
-        // before we go back to 100ms-batched accumulation.
-        if (line === '\n') hasParagraphBreak = true
-      }
-
-      if (hasParagraphBreak) {
-        drainPending()
-        return
-      }
-
-      // Arm the debounce timer if there's something pending AND no
-      // timer is already running. Subsequent deltas within the window
-      // just pile more lines onto the batch.
-      if (pendingRef.current && timerRef.current === null) {
-        timerRef.current = setTimeout(drainPending, COMMIT_DEBOUNCE_MS)
+      const boundary = findSafeBoundary(bufferRef.current)
+      if (boundary > 0) {
+        const chunk = bufferRef.current.slice(0, boundary)
+        bufferRef.current = bufferRef.current.slice(boundary)
+        debugLog('buffer.commit', `chars=${chunk.length}`)
+        appendMessage(makeStreamChunkMessage(chunk))
       }
     },
-    [drainPending],
+    [appendMessage],
   )
 
   const flushBuffer = useCallback(() => {
-    // Fold the trailing partial line (if any) into the pending batch,
-    // then drain synchronously. Called on tool-call / turn-end so the
-    // user sees the final bit before the next UI transition.
-    const tail = bufferRef.current
-    if (tail) {
-      bufferRef.current = ''
-      pendingRef.current += tail.endsWith('\n') ? tail : tail + '\n'
-      debugLog('buffer.flush-tail', tail)
-    }
-    drainPending()
-  }, [drainPending])
+    // End-of-turn / tool-call boundary — no more deltas are coming, so
+    // drain whatever's left (even if it's an unclosed table, there's
+    // nothing more to hold for).
+    const content = bufferRef.current
+    if (!content) return
+    bufferRef.current = ''
+    debugLog('buffer.commit', `chars=${content.length} (flush)`)
+    appendMessage(makeStreamChunkMessage(content))
+  }, [appendMessage])
 
   const resetBuffer = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
     bufferRef.current = ''
-    pendingRef.current = ''
   }, [])
 
   return { appendTextDelta, flushBuffer, resetBuffer }
