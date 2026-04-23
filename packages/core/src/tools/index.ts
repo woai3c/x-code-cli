@@ -1,8 +1,6 @@
 // @x-code-cli/core — Tool registry (unified export)
 import { askUser } from './ask-user.js'
 import { edit } from './edit.js'
-import { enterPlanMode } from './enter-plan-mode.js'
-import { exitPlanMode } from './exit-plan-mode.js'
 import { glob } from './glob.js'
 import { grep } from './grep.js'
 import { listDir } from './list-dir.js'
@@ -25,8 +23,6 @@ export const toolRegistry = {
   webFetch,
   askUser,
   saveKnowledge,
-  enterPlanMode,
-  exitPlanMode,
 }
 
 export {
@@ -41,8 +37,6 @@ export {
   webFetch,
   askUser,
   saveKnowledge,
-  enterPlanMode,
-  exitPlanMode,
 }
 
 /** Max characters for tool results before truncation */

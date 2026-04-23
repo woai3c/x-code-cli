@@ -10,7 +10,6 @@ import { getShellConfig } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import type { LoopState } from './loop-state.js'
 import { toolResultMessage } from './messages.js'
-import { ensurePlansDir, generatePlanId, getPlanPath } from './plan-mode.js'
 
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
@@ -114,39 +113,6 @@ async function handleToolCall(
   callbacks: AgentCallbacks,
 ): Promise<void> {
   const { toolName, input, toolCallId } = tc
-
-  // ── Plan mode tools ──
-  if (toolName === 'enterPlanMode') {
-    state.planMode = true
-    state.planId = generatePlanId(typeof input.topic === 'string' ? input.topic : undefined)
-    await ensurePlansDir()
-    pushToolResult(
-      state,
-      callbacks,
-      toolCallId,
-      toolName,
-      `Plan mode activated. Plan ID: ${state.planId}. Use only read-only tools. Save plan to ${getPlanPath(state.planId)}`,
-    )
-    return
-  }
-
-  if (toolName === 'exitPlanMode') {
-    state.planMode = false
-    let output: string
-    if (state.planId) {
-      const planPath = getPlanPath(state.planId)
-      try {
-        const planContent = await fs.readFile(planPath, 'utf-8')
-        output = `Plan ready for review:\n\n${planContent}`
-      } catch {
-        output = 'Plan mode exited. No plan file found.'
-      }
-    } else {
-      output = 'Plan mode exited.'
-    }
-    pushToolResult(state, callbacks, toolCallId, toolName, output)
-    return
-  }
 
   // ── askUser tool ──
   if (toolName === 'askUser') {

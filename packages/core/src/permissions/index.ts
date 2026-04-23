@@ -51,8 +51,6 @@ const rules: Record<string, (input: PermissionInput) => PermissionLevel> = {
   saveKnowledge: () => 'always-allow',
   edit: () => 'ask',
   writeFile: () => 'ask',
-  enterPlanMode: () => 'always-allow',
-  exitPlanMode: () => 'always-allow',
   shell: resolveShellPermission,
 }
 

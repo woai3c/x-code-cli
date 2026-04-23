@@ -21,25 +21,6 @@ You have access to these tools:
 - webFetch: Fetch and extract content from URLs
 - askUser: Ask the user clarifying questions with choices
 - saveKnowledge: Save project/user knowledge facts to persistent memory
-- enterPlanMode: Enter plan mode to explore codebase and design implementation plan before coding
-- exitPlanMode: Signal that plan is complete and ready for user review
-
-## Planning (enterPlanMode)
-Call enterPlanMode for non-trivial implementation tasks when ANY of these apply:
-- New feature implementation: meaningful new functionality, not just a tweak
-- Multiple valid approaches: several reasonable ways to solve the problem
-- Code modifications affecting behavior or structure: refactors, API changes
-- Architectural decisions: choosing patterns, technologies, or data models
-- Multi-file changes: likely touching more than 2-3 files
-- Unclear requirements: need to explore the codebase before understanding scope
-- User preferences matter: multiple reasonable directions, user should weigh in
-
-Do NOT use enterPlanMode for:
-- Single-line or few-line fixes with obvious implementation
-- Adding a single function with clear, specific requirements
-- Very specific, detailed instructions where the approach is unambiguous
-- Pure research or exploration questions (just answer directly)
-- Simple bug fixes where the root cause and fix are clear
 
 ## Response Format
 - IMPORTANT: You MUST NOT use any emojis, icons, or special Unicode symbols (such as ✅❌📦🔧🔍📋🤔💡⚡🚀 etc.) in your responses, plans, or generated code. Use plain text markers like numbers, dashes, or asterisks instead. This is a strict requirement.
@@ -109,17 +90,9 @@ If you find a saved memory contradicts what you now observe, delete or update it
 - Working Directory: {cwd}
 - Is Git Repo: {isGitRepo}`
 
-/** Plan mode overlay prompt — injected when plan mode is active */
-export const PLAN_MODE_PROMPT = `
-Plan mode is active. You MUST NOT make any edits to project code, execute write commands, or make any changes to user files.
-Only use read-only tools: readFile, glob, grep, listDir, webSearch, webFetch.
-The ONLY exception: use writeFile to save your plan to .x-code/plans/{plan-id}.md.
-When the plan is ready, call exitPlanMode.`
-
 /** Build the full system prompt with dynamic values and optional knowledge context */
 export function buildSystemPrompt(options?: {
   knowledgeContext?: string
-  planMode?: boolean
   modelId?: string
   isGitRepo?: boolean
 }): string {
@@ -130,10 +103,6 @@ export function buildSystemPrompt(options?: {
     .replace(/\{cwd\}/g, process.cwd())
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
     .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')
-
-  if (options?.planMode) {
-    prompt += '\n' + PLAN_MODE_PROMPT
-  }
 
   if (options?.knowledgeContext) {
     prompt += '\n\n' + options.knowledgeContext

@@ -22,9 +22,9 @@ vi.mock('turndown', () => ({
 }))
 
 describe('toolRegistry', () => {
-  it('contains all 13 tools', () => {
+  it('contains all 11 tools', () => {
     const toolNames = Object.keys(toolRegistry)
-    expect(toolNames).toHaveLength(13)
+    expect(toolNames).toHaveLength(11)
     expect(toolNames).toContain('readFile')
     expect(toolNames).toContain('writeFile')
     expect(toolNames).toContain('edit')
@@ -36,8 +36,6 @@ describe('toolRegistry', () => {
     expect(toolNames).toContain('webFetch')
     expect(toolNames).toContain('askUser')
     expect(toolNames).toContain('saveKnowledge')
-    expect(toolNames).toContain('enterPlanMode')
-    expect(toolNames).toContain('exitPlanMode')
   })
 
   it('each tool has a description', () => {

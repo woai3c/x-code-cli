@@ -18,11 +18,6 @@ describe('getPermissionLevel', () => {
     expect(getPermissionLevel('writeFile', {})).toBe('ask')
   })
 
-  it('returns always-allow for plan mode tools', () => {
-    expect(getPermissionLevel('enterPlanMode', {})).toBe('always-allow')
-    expect(getPermissionLevel('exitPlanMode', {})).toBe('always-allow')
-  })
-
   it('returns ask for unknown tools', () => {
     expect(getPermissionLevel('unknownTool', {})).toBe('ask')
   })

@@ -255,7 +255,6 @@ export async function agentLoop(
 
     const systemPrompt = buildSystemPrompt({
       knowledgeContext: fullKnowledgeContext,
-      planMode: state.planMode,
       modelId: options.modelId,
       isGitRepo,
     })

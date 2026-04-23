@@ -8,8 +8,6 @@ export interface LoopState {
   tokenUsage: TokenUsage
   /** Real input-token count from the most recent API response, used to trigger compression. */
   lastInputTokens: number
-  planMode: boolean
-  planId: string | null
   sessionId: string
   startedAt: string
   filesModified: Set<string>
@@ -21,8 +19,6 @@ export function createLoopState(): LoopState {
     messages: [],
     tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     lastInputTokens: 0,
-    planMode: false,
-    planId: null,
     sessionId: Date.now().toString(36),
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
