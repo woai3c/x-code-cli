@@ -850,42 +850,93 @@ export function ChatInput({
     const sepChar = '\u2500'
     const sepText = sepChar.repeat(Math.max(0, termWidth - 1))
 
-    // ── Input display lines (with viewport windowing) ──
+    // ── Input display lines (with soft-wrap + viewport windowing) ──
+    // Raw lines are split by explicit `\n` only. Each raw line is then
+    // soft-wrapped at vpWidth columns into one or more visual lines, so
+    // the input doesn't run off the right edge of the terminal. The
+    // cursor's character offset is mapped into the matching (visualLine,
+    // visualCol) pair for the render/diff paths below.
     const rawLines = text.length === 0 ? [''] : text.split('\n')
 
-    let rawCursorLine = 0,
-      cursorCol = cursor
+    type VisualLine = { text: string; rawLineIdx: number; startCol: number }
+    const visualLines: VisualLine[] = []
+    for (let r = 0; r < rawLines.length; r++) {
+      const line = rawLines[r]
+      if (line.length === 0) {
+        visualLines.push({ text: '', rawLineIdx: r, startCol: 0 })
+        continue
+      }
+      let pos = 0
+      while (pos < line.length) {
+        const chunk = sliceByWidth(line.slice(pos), vpWidth)
+        const advance = chunk.length > 0 ? chunk.length : line.length - pos // wide-char-overflow safety
+        visualLines.push({ text: chunk, rawLineIdx: r, startCol: pos })
+        pos += advance
+      }
+    }
+
+    // Locate cursor in visual coordinates. Scan visual lines in order:
+    // the cursor lies inside the first visual line whose raw range
+    // `[startCol, startCol + text.length]` contains `cursorCol` for the
+    // matching rawLineIdx. When cursor is at the end of a wrapped line
+    // that continues to the next visual line (startCol + text.length ===
+    // cursorCol AND the next visual line has the same rawLineIdx), we
+    // prefer the next line's leading position for UX parity with shell
+    // prompts.
+    let visCursorLine = 0
+    let visCursorCol = 0
     {
+      let rawCursorLine = 0,
+        cursorColInRaw = cursor
       let charsSoFar = 0
       for (let i = 0; i < rawLines.length; i++) {
         if (cursor >= charsSoFar && cursor <= charsSoFar + rawLines[i].length) {
           rawCursorLine = i
-          cursorCol = cursor - charsSoFar
+          cursorColInRaw = cursor - charsSoFar
           break
         }
         charsSoFar += rawLines[i].length + 1
+      }
+      for (let v = 0; v < visualLines.length; v++) {
+        const vl = visualLines[v]
+        if (vl.rawLineIdx !== rawCursorLine) continue
+        const endCol = vl.startCol + vl.text.length
+        const isLastChunkOfRawLine =
+          v + 1 >= visualLines.length || visualLines[v + 1].rawLineIdx !== rawCursorLine
+        if (
+          cursorColInRaw >= vl.startCol &&
+          (cursorColInRaw < endCol || (cursorColInRaw === endCol && isLastChunkOfRawLine))
+        ) {
+          visCursorLine = v
+          visCursorCol = cursorColInRaw - vl.startCol
+          break
+        }
       }
     }
 
     let displayLines: string[]
     let cursorLine: number
-    if (rawLines.length <= MAX_VISIBLE_LINES) {
-      displayLines = rawLines
-      cursorLine = rawCursorLine
+    if (visualLines.length <= MAX_VISIBLE_LINES) {
+      displayLines = visualLines.map((v) => v.text)
+      cursorLine = visCursorLine
     } else {
-      let start = rawCursorLine - Math.floor(MAX_VISIBLE_LINES / 2)
-      start = Math.max(0, Math.min(start, rawLines.length - MAX_VISIBLE_LINES))
-      displayLines = rawLines.slice(start, start + MAX_VISIBLE_LINES)
-      cursorLine = rawCursorLine - start
+      let start = visCursorLine - Math.floor(MAX_VISIBLE_LINES / 2)
+      start = Math.max(0, Math.min(start, visualLines.length - MAX_VISIBLE_LINES))
+      displayLines = visualLines.slice(start, start + MAX_VISIBLE_LINES).map((v) => v.text)
+      cursorLine = visCursorLine - start
       if (start > 0) {
         displayLines[0] = `\u2026 (+${start} above)`
         if (cursorLine === 0) cursorLine = -1
       }
-      if (start + MAX_VISIBLE_LINES < rawLines.length) {
-        displayLines[displayLines.length - 1] = `\u2026 (+${rawLines.length - start - MAX_VISIBLE_LINES} below)`
+      if (start + MAX_VISIBLE_LINES < visualLines.length) {
+        displayLines[displayLines.length - 1] = `\u2026 (+${visualLines.length - start - MAX_VISIBLE_LINES} below)`
         if (cursorLine === displayLines.length - 1) cursorLine = -1
       }
     }
+    // `cursorCol` below refers to the visual column within the display
+    // line — preserve the existing name so the input-rendering block
+    // (cursor placement, long-line truncation) doesn't need changes.
+    const cursorCol = visCursorCol
 
     // ── Build 2D cell frame ──
     const frame: Cell[][] = []
