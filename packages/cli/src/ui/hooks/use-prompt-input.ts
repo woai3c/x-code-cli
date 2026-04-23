@@ -38,10 +38,23 @@ const PASTE_END = '\x1b[201~'
 // between characters of a paste, so it cleanly separates the two.
 const PASTE_DEBOUNCE_MS = 30
 
-// When the debounce window closes, a buffer of this size or larger — or
-// one containing a newline — is classified as a paste. Smaller buffers
-// are treated as normal typing.
-const PASTE_SIZE_THRESHOLD = 8
+// Maximum time a keystroke is allowed to sit in the debounce buffer before
+// it MUST be flushed — even if more events keep arriving. Without this
+// cap, holding a key (OS repeat at ~33 ms / 30 Hz) reset the debounce
+// timer on every repeat event, so nothing ever flushed until the user
+// released the key — the user felt a freeze / one-shot catch-up on
+// release. 50 ms is below human "instant" perception threshold but high
+// enough that a sub-ms paste burst still coalesces.
+const MAX_BATCH_MS = 50
+
+// Any stdin chunk >= this size (or containing a newline) is suspected
+// to be a paste and goes through the debounce buffer so consecutive
+// fragments merge into a single onPaste event. Chunks below this size
+// are treated as normal typing and dispatched IMMEDIATELY — this
+// matches Claude Code's PASTE_THRESHOLD (800) approach. Holding down
+// a key produces single-char stdin events; with the old low threshold
+// (8) every keystroke went through the debounce and felt laggy.
+const PASTE_SIZE_THRESHOLD = 32
 
 export type PromptKey =
   | 'return'
@@ -99,6 +112,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
   // Debounce buffer + timer for the fallback path.
   const pendingTextRef = useRef<string>('')
   const pendingTimerRef = useRef<NodeJS.Timeout | null>(null)
+  /** Wall-clock time (ms since epoch) when the currently-buffered burst
+   *  started. 0 means no burst in progress. Used to cap the debounce
+   *  delay at MAX_BATCH_MS so sustained key-repeat events flush
+   *  periodically instead of indefinitely resetting the timer. */
+  const pendingBurstStartRef = useRef<number>(0)
 
   // Ctrl+C must work even when the input is disabled (e.g. during loading).
   // We always listen on stdin for \x03 and route it to onInterrupt.
@@ -134,28 +152,12 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     // return" and overwrites previous characters, which was producing
     // the "optimizations Claude Managed Agents is currently in beta"
     // splicing pattern in echoed pastes.
-    // Pending backspace count — batched with the debounce timer so rapid
-    // IME correction sequences (multiple backspaces + committed char) merge
-    // into a single render instead of flashing through intermediate states.
-    const pendingBackspacesRef = { count: 0 }
-
-    const flushBackspaces = (): void => {
-      const n = pendingBackspacesRef.count
-      if (n === 0) return
-      pendingBackspacesRef.count = 0
-      for (let i = 0; i < n; i++) {
-        handlersRef.current.onKey('backspace')
-      }
-    }
-
     const flushPending = (): void => {
       if (pendingTimerRef.current) {
         clearTimeout(pendingTimerRef.current)
         pendingTimerRef.current = null
       }
-      // Flush queued backspaces FIRST, then text — this is the order they
-      // arrived (IME: backspaces to delete pinyin, then committed chars).
-      flushBackspaces()
+      pendingBurstStartRef.current = 0
       const raw = pendingTextRef.current
       if (!raw) return
       pendingTextRef.current = ''
@@ -169,17 +171,27 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       }
     }
 
-    // Queue text into the debounce buffer and (re)start the flush timer.
-    const queueText = (data: string): void => {
-      pendingTextRef.current += data
+    // Compute the next timer delay — debounce from the most recent event,
+    // but capped so the buffer can't sit for more than MAX_BATCH_MS after
+    // its first character (otherwise a held key perpetually resets the
+    // debounce and never flushes until release).
+    const armFlushTimer = (): void => {
+      if (pendingBurstStartRef.current === 0) {
+        pendingBurstStartRef.current = Date.now()
+      }
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
-      pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
+      const elapsed = Date.now() - pendingBurstStartRef.current
+      const remaining = Math.max(0, MAX_BATCH_MS - elapsed)
+      const delay = Math.min(PASTE_DEBOUNCE_MS, remaining)
+      pendingTimerRef.current = setTimeout(flushPending, delay)
     }
 
-    const queueBackspace = (): void => {
-      pendingBackspacesRef.count++
-      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
-      pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
+    // Queue text into the debounce buffer and (re)start the flush timer.
+    // Only used for chunks large enough to look like a paste; normal
+    // typing bypasses the buffer entirely (see processNormalInput).
+    const queueText = (data: string): void => {
+      pendingTextRef.current += data
+      armFlushTimer()
     }
 
     // Dispatch a special key. Always force-flushes pending text first so
@@ -203,9 +215,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
           pendingTextRef.current = pendingTextRef.current.slice(0, -1)
           return
         }
-        // Queue backspace with the same debounce timer so IME correction
-        // sequences (rapid backspaces + committed char) batch into one render.
-        queueBackspace()
+        // Dispatch immediately so holding backspace feels responsive
+        // (previously queueBackspace sat in the debounce buffer and
+        // the timer kept resetting on every repeat event, freezing
+        // the delete visually until the key was released).
+        dispatchKey('backspace')
         return
       }
       if (data === '\t') return dispatchKey('tab')
@@ -236,9 +250,22 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       // "\x1b[…" text in the input.
       if (data.startsWith('\x1b')) return
 
-      // Printable text — buffer with debounce so a paste burst batches
-      // into a single onPaste call.
-      queueText(data)
+      // Printable text. Two paths:
+      //  - Large or multi-line chunks go through the debounce buffer so
+      //    a paste split across several stdin events (non-bracketed
+      //    terminals sometimes fragment) merges into one onPaste call.
+      //  - Small single-keystroke chunks dispatch IMMEDIATELY. Holding
+      //    down a key fires stdin events at ~30 Hz and debouncing each
+      //    one made the input feel frozen / stutter. Claude Code does
+      //    the same (their usePasteHandler bypasses the paste buffer
+      //    for input.length < PASTE_THRESHOLD).
+      if (data.length >= PASTE_SIZE_THRESHOLD || data.includes('\n')) {
+        queueText(data)
+      } else {
+        // Preserve ordering: drain any already-buffered text first.
+        flushPending()
+        handlersRef.current.onText(data)
+      }
     }
 
     // Top-level stdin data handler. Walks the chunk looking for bracketed
