@@ -1,7 +1,7 @@
 // @x-code-cli/cli — Agent state management hook
 import { useCallback, useRef, useState } from 'react'
 
-import { agentLoop, compressMessages, initMemories, saveSession } from '@x-code-cli/core'
+import { agentLoop, classifyApiError, compressMessages, initMemories, saveSession } from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,
@@ -233,7 +233,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           ...prev,
           isLoading: false,
           activeToolCalls: [],
-          error: err instanceof Error ? err.message : String(err),
+          error: classifyApiError(err).message,
         }))
       }
     },

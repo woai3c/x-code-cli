@@ -7,6 +7,8 @@ const CONTEXT_TOO_LONG_PATTERNS = [
   'token limit',
   'prompt is too long',
   'prompt_too_long',
+  'input tokens',
+  'context window',
 ] as const
 
 /** Extract HTTP status from "status code 400", "(400)", or "400 ..." */
@@ -29,9 +31,31 @@ export interface ClassifiedError {
   retryable: boolean
 }
 
+/**
+ * Extract a meaningful error message from AI SDK errors. TypeValidationError
+ * (thrown when a provider returns non-standard JSON — e.g. Alibaba returning
+ * an error object instead of an SSE stream) embeds the real provider message
+ * inside its `.value` property. We dig it out so classifyApiError can pattern-
+ * match on the actual provider error, not the Zod validation wrapper.
+ */
+function extractErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const msg = err.message
+  // AI SDK TypeValidationError: the real provider error lives in `.value`
+  const val = (err as unknown as Record<string, unknown>).value
+  if (val && typeof val === 'object') {
+    const inner = (val as Record<string, unknown>).error
+    if (inner && typeof inner === 'object') {
+      const innerMsg = (inner as Record<string, string>).message
+      if (typeof innerMsg === 'string') return innerMsg
+    }
+  }
+  return msg
+}
+
 /** Classify API error and return a user-friendly recovery message. */
 export function classifyApiError(err: unknown): ClassifiedError {
-  const msg = err instanceof Error ? err.message : String(err)
+  const msg = extractErrorMessage(err)
   const status = extractHttpStatus(msg)
 
   if (isContextTooLongError(err)) {
@@ -81,10 +105,15 @@ export function classifyApiError(err: unknown): ClassifiedError {
       retryable: false,
     }
   }
-  if (msg.includes('Invalid max_tokens') || msg.includes('max_tokens')) {
+  if (
+    msg.includes('Invalid max_tokens') ||
+    msg.includes('Range of max_tokens') ||
+    msg.includes('InvalidParameter') ||
+    (msg.includes('max_tokens') && (msg.includes('invalid') || msg.includes('Invalid') || msg.includes('range') || msg.includes('Range')))
+  ) {
     return {
       message:
-        'The configured max_tokens exceeds this model\'s ceiling. This usually means the model ID is missing a ceiling entry in getMaxOutputTokens — please report it, or switch to another model with /model.',
+        'The configured max_tokens exceeds this model\'s limit. Try switching to a different model with /model, or report this issue so we can add the correct ceiling.',
       retryable: false,
     }
   }
@@ -107,5 +136,18 @@ export function classifyApiError(err: unknown): ClassifiedError {
       retryable: true,
     }
   }
+  // AI SDK TypeValidationError — provider returned a non-standard response
+  // (e.g. an error JSON body instead of a valid SSE stream). Surface the
+  // provider's error message rather than the raw Zod validation dump.
+  if (
+    (err instanceof Error && err.constructor.name === 'AI_TypeValidationError') ||
+    msg.includes('Type validation failed')
+  ) {
+    return {
+      message: `Provider returned an error: ${msg}. Try a different model with /model.`,
+      retryable: false,
+    }
+  }
+
   return { message: msg, retryable: false }
 }

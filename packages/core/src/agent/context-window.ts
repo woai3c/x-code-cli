@@ -42,9 +42,14 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // DeepSeek
   ['deepseek:deepseek-chat', 64000],
   ['deepseek:deepseek-reasoner', 131072],
-  // Alibaba
-  ['alibaba:qwen-max', 128000],
-  ['alibaba:qwen-plus', 128000],
+  // Alibaba — qwen-turbo older alias versions can have 131k; latest Qwen3-based
+  // turbo/plus support up to 1M but the alias may resolve to smaller versions.
+  ['alibaba:qwen-turbo', 131072],
+  ['alibaba:qwen-plus', 131072],
+  ['alibaba:qwen-max', 262144],
+  ['alibaba:qwen3-max', 262144],
+  ['alibaba:qwen3-coder-plus', 262144],
+  ['alibaba:qwq-plus', 131072],
   // xAI
   ['xai:grok-3', 131072],
   ['xai:grok-3-mini', 131072],
@@ -86,11 +91,20 @@ export function getCompressionThreshold(modelId: string): number {
  * For models without an explicit entry, we fall back to a high default that
  * the AI SDK will clamp for known providers.
  */
-const DEFAULT_MAX_OUTPUT_TOKENS = 32000
+const DEFAULT_MAX_OUTPUT_TOKENS = 16384
 const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
   // DeepSeek: chat is 8k, reasoner is 32k (reasoning + output share the budget).
   ['deepseek:deepseek-chat', 8192],
   ['deepseek:deepseek-reasoner', 32000],
+  // Alibaba — qwen-turbo rejects anything above 16384; other Qwen3 models
+  // support 32768 (non-thinking) / 81920 (thinking mode). We cap at the
+  // non-thinking ceiling so the request always succeeds.
+  ['alibaba:qwen-turbo', 16384],
+  ['alibaba:qwen-plus', 32000],
+  ['alibaba:qwen-max', 32000],
+  ['alibaba:qwen3-max', 32000],
+  ['alibaba:qwen3-coder-plus', 32000],
+  ['alibaba:qwq-plus', 32000],
 ])
 
 /** Resolve the max_tokens ceiling we send to the provider. */
