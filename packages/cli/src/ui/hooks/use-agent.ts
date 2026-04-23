@@ -27,10 +27,22 @@ interface PendingQuestion {
   resolve: (answer: string) => void
 }
 
+/** In-flight tool call visible in the live/dynamic UI area. Multiple entries
+ *  exist simultaneously when the model issues parallel tool calls in one
+ *  turn. The `progress` field holds the LATEST streamed progress message
+ *  from `onToolProgress` — it replaces the generic "Running..." fallback
+ *  in the `⎿` line, mirroring Claude Code's live tool status updates. */
+export interface ActiveToolCall {
+  id: string
+  toolName: string
+  input: Record<string, unknown>
+  progress?: string
+}
+
 export interface AgentState {
   messages: DisplayMessage[]
   isLoading: boolean
-  currentToolCall: { toolName: string; input: Record<string, unknown> } | null
+  activeToolCalls: ActiveToolCall[]
   shellOutput: string
   permissionQueue: PendingPermission[]
   pendingQuestion: PendingQuestion | null
@@ -43,7 +55,7 @@ export interface AgentState {
 const initialState: Omit<AgentState, 'modelId'> = {
   messages: [],
   isLoading: false,
-  currentToolCall: null,
+  activeToolCalls: [],
   shellOutput: '',
   permissionQueue: [],
   pendingQuestion: null,
@@ -113,7 +125,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           // in the scrollback BEFORE the tool call indicator.
           flushBuffer()
           pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
-          setState((prev) => ({ ...prev, currentToolCall: { toolName, input } }))
+          setState((prev) => ({
+            ...prev,
+            activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
+          }))
+        },
+        onToolProgress: (toolCallId, message) => {
+          setState((prev) => {
+            const idx = prev.activeToolCalls.findIndex((t) => t.id === toolCallId)
+            if (idx < 0) return prev
+            const next = prev.activeToolCalls.slice()
+            next[idx] = { ...next[idx], progress: message }
+            return { ...prev, activeToolCalls: next }
+          })
         },
         onToolResult: (toolCallId, result) => {
           const pending = pendingToolsRef.current.get(toolCallId)
@@ -130,7 +154,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
             }
             return {
               ...prev,
-              currentToolCall: pendingToolsRef.current.size > 0 ? prev.currentToolCall : null,
+              activeToolCalls: prev.activeToolCalls.filter((t) => t.id !== toolCallId),
               shellOutput: '',
               messages: [
                 ...prev.messages,
@@ -202,12 +226,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           }
         }
         pendingToolsRef.current.clear()
-        setState((prev) => ({ ...prev, isLoading: false, currentToolCall: null }))
+        setState((prev) => ({ ...prev, isLoading: false, activeToolCalls: [] }))
       } catch (err) {
         pendingToolsRef.current.clear()
         setState((prev) => ({
           ...prev,
           isLoading: false,
+          activeToolCalls: [],
           error: err instanceof Error ? err.message : String(err),
         }))
       }

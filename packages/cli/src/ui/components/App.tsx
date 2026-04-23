@@ -280,11 +280,12 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
         state.isLoading && !selectActive && !permissionRequest
           ? {
               label: 'Thinking',
-              mode: state.currentToolCall ? 'tool-use' : 'requesting',
+              mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
               totalTokens: state.usage.totalTokens,
             }
           : null
       }
+      activeToolCalls={state.activeToolCalls}
       errorMessage={state.error}
       permission={
         permissionRequest

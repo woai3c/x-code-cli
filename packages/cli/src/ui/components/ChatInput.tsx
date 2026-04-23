@@ -32,9 +32,11 @@ import { useStdout } from 'ink'
 import { debugLog, getPermissionLevel } from '@x-code-cli/core'
 import type { DisplayMessage } from '@x-code-cli/core'
 
+import type { ActiveToolCall } from '../hooks/use-agent.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { writeMessageToStdout } from '../stdout-writer.js'
+import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -161,6 +163,12 @@ interface ChatInputProps {
   hidden?: boolean
   /** If non-null, render a spinner line above the input. */
   spinner?: SpinnerState | null
+  /** In-flight tool calls. When non-empty, rendered in place of the generic
+   *  "Thinking..." spinner: each call shows its own bullet + progress line
+   *  (`● Tool(preview)` / `⎿ ⠋ progressText`). Progress text streams in via
+   *  `onToolProgress`. Commits to scrollback via the regular tool-result
+   *  DisplayMessage path once the tool finishes. */
+  activeToolCalls?: readonly ActiveToolCall[]
   /** Optional error string shown as a dedicated row above the spinner. */
   errorMessage?: string | null
   /** If non-null, render a Permission dialog inside our cell buffer AND
@@ -268,6 +276,21 @@ const S_ACCENT_BOLD = '\x1b[38;2;215;119;87;1m'
 const S_ACCENT_DIM = '\x1b[38;2;153;153;153m' // inactive rgb(153,153,153) #999999
 const S_SPINNER = '\x1b[38;2;147;165;255m' // claudeBlue rgb(147,165,255) #93a5ff
 const S_SUCCESS = '\x1b[38;2;78;186;101;1m' // success rgb(78,186,101) #4eba65
+// Non-bold variant of SUCCESS — used for the live tool `●` bullet so it
+// matches the committed `stdout-writer.formatToolCall` output exactly
+// (`c.hex(SUCCESS)('●')` is non-bold there). If live used the bold variant,
+// the dot would visibly "de-bold" at the moment the tool finishes.
+const S_SUCCESS_DOT = '\x1b[0m\x1b[38;2;78;186;101m'
+// Bold with NO foreground color — matches committed `c.bold(label)`.
+// Must start with `\x1b[0m` to reset any prior foreground so bold doesn't
+// inherit a color from the preceding cell (same reasoning as S_DIM).
+const S_BOLD = '\x1b[0m\x1b[1m'
+// BLUE_PURPLE (permission rgb(177,185,249) #b1b9f9) — used for the
+// `(preview)` inside the live tool bubble to match committed
+// `c.hex(BLUE_PURPLE)('(...)')`. Previously used S_SPINNER blue here
+// (147,165,255) which is a DIFFERENT shade, producing a visible
+// color shift at the live→committed handoff.
+const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;177;185;249m'
 const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
 const S_ERROR_FG = '\x1b[38;2;255;107;128m' // error rgb(255,107,128) #ff6b80
@@ -427,6 +450,7 @@ export function ChatInput({
   disabled,
   hidden,
   spinner,
+  activeToolCalls,
   errorMessage,
   permission,
   selectRequest,
@@ -957,9 +981,17 @@ export function ChatInput({
     // stable as output grows: spinner / separators / input never shift
     // position, so there's no row-shift jitter.)
 
-    // Spinner / "Thinking..." line. Pinned just above the input box
+    // Spinner / tool-status line. Pinned just above the input box
     // (below any permission dialog) so it always sits at the very bottom
     // of the dynamic area — matches Claude Code's layout.
+    //
+    // When tools are running we replace the generic "Thinking..." line with
+    // a live tool-status block, one 2-row group per in-flight tool call:
+    //    ● ToolName(preview)
+    //    ⎿ ⠋ progressText          (← replaced by onToolProgress stream)
+    // Mirrors Claude Code's AssistantToolUseMessage + renderToolUseProgress
+    // flow. Elapsed/token meta moves onto the LAST progress line so the
+    // block stays compact (no separate Thinking row competing for space).
     if (spinner) {
       const glyph = SPINNER_FRAMES[spinnerFrame]
       const arrow = spinner.mode === 'requesting' ? '↑' : '↓'
@@ -980,18 +1012,68 @@ export function ChatInput({
       // message already ends with `\n\n` → one blank row is ALREADY
       // there, and adding another would make the gap look too large.
       if (permission) frame.push([])
-      // Build the whole prefix (` ${glyph} ${label}...`) under ONE style
-      // (S_SPINNER) instead of alternating S_NONE / S_SPINNER per cell.
-      // Why: each cell with a different style emits an SGR escape in the
-      // diff loop, and on terminals that don't perfectly atomize DEC
-      // 2026 sync-update those escapes arrive with visible spacing —
-      // the user perceives the "Thinking" label flashing default-color
-      // → blue → default → blue as the spaces in between trigger
-      // resets. Keeping one continuous SGR run for the whole prefix
-      // makes the row paint as one solid blue stripe.
-      const cells: Cell[] = textToCells(` ${glyph} ${spinner.label}...`, S_SPINNER)
-      if (meta) cells.push(...textToCells(meta, S_DIM))
-      frame.push(cells)
+
+      const tools = activeToolCalls ?? []
+      if (tools.length > 0) {
+        // IMPORTANT: the live tool bubble MUST use the same colour/weight
+        // scheme as `stdout-writer.formatToolCall` emits for committed
+        // scrollback — otherwise when the tool finishes and its line
+        // switches from live-area to scrollback, the user sees a visible
+        // colour flash (orange → default for label, orange → green for
+        // bullet, etc.). Claude Code avoids this by rendering in-flight
+        // and resolved through the SAME React component; we have two
+        // rendering paths (ink-like cells here vs chalk stdout there)
+        // so we align the styles by hand.
+        //
+        // Layout mirrors committed:
+        //    ` ● ToolName(preview)`
+        //      ⎿  ⠋ progress text               ← only live, vanishes at commit
+        tools.forEach((tc, idx) => {
+          const label = getToolLabel(tc.toolName)
+          const preview = getToolInputPreview(tc.toolName, tc.input)
+
+          const row1: Cell[] = []
+          row1.push({ char: ' ', style: S_NONE, width: 1 })
+          row1.push(...textToCells('●', S_SUCCESS_DOT))
+          row1.push({ char: ' ', style: S_NONE, width: 1 })
+          row1.push(...textToCells(label, S_BOLD))
+          if (preview) {
+            const trimmed = preview.length > 80 ? preview.slice(0, 77) + '...' : preview
+            row1.push(...textToCells(`(${trimmed})`, S_BLUE_PURPLE))
+          }
+          frame.push(row1)
+
+          // Row 2: ⎿ + spinner glyph + progress text. This is the ONLY
+          // "is running" signal — when the tool finishes, row2 goes away
+          // and the committed scrollback entry keeps row1 plus a result
+          // summary in its place.
+          const row2: Cell[] = []
+          row2.push(...textToCells('   ', S_NONE))
+          row2.push(...textToCells('⎿', S_DIM))
+          row2.push({ char: ' ', style: S_NONE, width: 1 })
+          row2.push({ char: ' ', style: S_NONE, width: 1 })
+          row2.push(...textToCells(glyph, S_SPINNER))
+          row2.push({ char: ' ', style: S_NONE, width: 1 })
+          row2.push(...textToCells(tc.progress ?? 'Running...', S_DIM))
+          if (idx === tools.length - 1 && meta) {
+            row2.push(...textToCells(meta, S_DIM))
+          }
+          frame.push(row2)
+        })
+      } else {
+        // Build the whole prefix (` ${glyph} ${label}...`) under ONE style
+        // (S_SPINNER) instead of alternating S_NONE / S_SPINNER per cell.
+        // Why: each cell with a different style emits an SGR escape in the
+        // diff loop, and on terminals that don't perfectly atomize DEC
+        // 2026 sync-update those escapes arrive with visible spacing —
+        // the user perceives the "Thinking" label flashing default-color
+        // → blue → default → blue as the spaces in between trigger
+        // resets. Keeping one continuous SGR run for the whole prefix
+        // makes the row paint as one solid blue stripe.
+        const cells: Cell[] = textToCells(` ${glyph} ${spinner.label}...`, S_SPINNER)
+        if (meta) cells.push(...textToCells(meta, S_DIM))
+        frame.push(cells)
+      }
     }
 
     // Permission dialog — rendered ABOVE the input box (between spinner

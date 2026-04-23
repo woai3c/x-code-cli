@@ -6,6 +6,8 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { reportProgress } from './progress.js'
+
 const execFileAsync = promisify(execFile)
 
 let _rgPath: string | null = null
@@ -32,7 +34,7 @@ export const grep = tool({
     glob: z.string().optional().describe('Glob pattern to filter files (e.g. "*.ts", "*.{ts,tsx}")'),
     maxResults: z.number().optional().describe('Max number of results (default: 50)'),
   }),
-  execute: async ({ pattern, path: searchPath, glob: globPattern, maxResults }) => {
+  execute: async ({ pattern, path: searchPath, glob: globPattern, maxResults }, { toolCallId }) => {
     try {
       const rgPath = getRipgrepPath()
       const args = ['--no-heading', '--line-number', '--color', 'never', '--max-count', String(maxResults ?? 50)]
@@ -42,11 +44,14 @@ export const grep = tool({
       args.push(pattern)
       args.push(searchPath ?? process.cwd())
 
+      reportProgress(toolCallId, `Searching for /${pattern}/`)
       const { stdout } = await execFileAsync(rgPath, args, {
         maxBuffer: 1024 * 1024,
         timeout: 30000,
       })
-      return stdout.trim() || 'No matches found.'
+      const out = stdout.trim()
+      if (!out) return 'No matches found.'
+      return out
     } catch (err) {
       if (err && typeof err === 'object' && 'code' in err && err.code === 1) {
         return 'No matches found.'

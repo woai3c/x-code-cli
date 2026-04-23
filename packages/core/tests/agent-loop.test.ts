@@ -52,6 +52,7 @@ describe('agent loop', () => {
     mockCallbacks = {
       onTextDelta: vi.fn(),
       onToolCall: vi.fn(),
+      onToolProgress: vi.fn(),
       onToolResult: vi.fn(),
       onAskPermission: vi.fn().mockResolvedValue(true),
       onAskUser: vi.fn().mockResolvedValue('option1'),

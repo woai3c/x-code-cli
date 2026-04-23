@@ -7,6 +7,8 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { reportProgress } from './progress.js'
+
 const FETCH_TIMEOUT_MS = 15_000
 // Markdown returned to the model. Bumped from 30 KB (which cut docs pages in half)
 // but kept well under the model's context budget: ~100 KB ≈ ~25 K tokens, roughly
@@ -90,11 +92,15 @@ export const webFetch = tool({
     url: z.string().url().describe('The URL to fetch'),
     prompt: z.string().optional().describe('What information to extract from the page'),
   }),
-  execute: async ({ url, prompt }) => {
+  execute: async ({ url, prompt }, { toolCallId }) => {
     try {
       const cached = cacheGet(url)
-      if (cached) return formatOutput(url, cached, prompt)
+      if (cached) {
+        reportProgress(toolCallId, 'Using cached copy')
+        return formatOutput(url, cached, prompt)
+      }
 
+      reportProgress(toolCallId, `Fetching ${url}`)
       let response = await doFetch(url, BROWSER_UA)
 
       // Cloudflare bot-challenge fallback: on 403 + cf-mitigated header, retry with

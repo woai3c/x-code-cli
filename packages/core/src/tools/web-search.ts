@@ -3,6 +3,7 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { reportProgress } from './progress.js'
 import { getShellConfig } from './shell-utils.js'
 
 const YEAR = new Date().getFullYear()
@@ -99,13 +100,14 @@ export const webSearch = tool({
     query: z.string().describe('The search query'),
     maxResults: z.number().optional().describe('Max results (default: 5)'),
   }),
-  execute: async ({ query, maxResults }) => {
+  execute: async ({ query, maxResults }, { toolCallId }) => {
     const n = maxResults ?? 5
     const hasTavily = !!process.env.TAVILY_API_KEY
     const hasBrave = !!process.env.BRAVE_API_KEY
 
     if (!hasTavily && !hasBrave) return buildMissingKeyError()
 
+    reportProgress(toolCallId, `Searching: ${query}`)
     try {
       const results = hasTavily ? await searchWithTavily(query, n) : await searchWithBrave(query, n)
       return formatResults(results)

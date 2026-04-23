@@ -53,6 +53,10 @@ export interface DisplayToolCall {
 export interface AgentCallbacks {
   onTextDelta: (text: string) => void
   onToolCall: (toolCallId: string, toolName: string, input: Record<string, unknown>) => void
+  /** Streamed progress messages emitted by a tool while it runs (e.g.
+   *  "Searching: query" → "Found 5 results"). Only the LATEST message is
+   *  shown in the live UI; the final summary comes through onToolResult. */
+  onToolProgress: (toolCallId: string, message: string) => void
   onToolResult: (toolCallId: string, result: string) => void
   onAskPermission: (toolCall: {
     toolCallId: string

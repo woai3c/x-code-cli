@@ -323,7 +323,11 @@ function formatToken(
       const makeDivider = (left: string, mid: string, right: string): string =>
         left + colWidths.map((w) => H.repeat(w + 2)).join(mid) + right + EOL
 
-      const padCell = (cell: { tokens?: Token[] }, width: number, align: string | null | undefined): string => {
+      const padCell = (
+        cell: { tokens?: Token[] },
+        width: number,
+        align: 'left' | 'center' | 'right' | null | undefined,
+      ): string => {
         const content = (cell.tokens ?? [])
           .map((t) => formatToken(t, 0, null, null))
           .join('')

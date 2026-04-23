@@ -5,6 +5,8 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { reportProgress } from './progress.js'
+
 export const readFile = tool({
   description: 'Read the contents of a file at the given path. Returns the file content with line numbers.',
   inputSchema: z.object({
@@ -12,8 +14,9 @@ export const readFile = tool({
     offset: z.number().optional().describe('Start line (1-based)'),
     limit: z.number().optional().describe('Max lines to read'),
   }),
-  execute: async ({ filePath, offset, limit }) => {
+  execute: async ({ filePath, offset, limit }, { toolCallId }) => {
     try {
+      reportProgress(toolCallId, `Reading ${filePath}`)
       const content = await fs.readFile(filePath, 'utf-8')
       const lines = content.split('\n')
       const start = (offset ?? 1) - 1

@@ -7,6 +7,7 @@ import type { LanguageModel, ModelMessage } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
+import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
@@ -99,15 +100,20 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks)
       callbacks.onTextDelta(text)
     } else if (chunk.type === 'tool-call') {
       debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
-      callbacks.onToolCall(
-        chunk.toolCallId ?? '',
-        chunk.toolName ?? '',
-        (chunk.input ?? {}) as Record<string, unknown>,
-      )
+      const toolCallId = chunk.toolCallId ?? ''
+      // Register the progress side-channel BEFORE tools start executing —
+      // AI SDK will synchronously invoke `execute(input, { toolCallId })`
+      // for auto-executed tools right after this event, and those tools
+      // call reportProgress(toolCallId, ...) to stream status updates.
+      if (toolCallId) {
+        setProgressReporter(toolCallId, (msg) => callbacks.onToolProgress(toolCallId, msg))
+      }
+      callbacks.onToolCall(toolCallId, chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
     } else if (chunk.type === 'tool-result') {
       // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
       debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
+      if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
     } else {
       debugLog('stream.other-chunk', chunk.type)

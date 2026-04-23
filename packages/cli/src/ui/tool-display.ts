@@ -126,6 +126,20 @@ export function getToolResultSummary(toolName: string, output: string | undefine
     return `${lines.length} result${lines.length !== 1 ? 's' : ''}`
   }
 
+  // Web tools — compact one-line status in scrollback, matching Claude
+  // Code's pattern. The "which websites" info lives on the STREAMING
+  // progress line (⎿ ⠋ Found N results: host1, host2, host3) while the
+  // tool is in-flight; once it finishes we collapse to a tight summary
+  // so the history stays readable. Duration is appended by
+  // stdout-writer.formatToolCall → `Did 1 search (6s)` / `Fetched page (1.2s)`.
+  if (n === 'websearch') {
+    return 'Did 1 search'
+  }
+
+  if (n === 'webfetch') {
+    return 'Fetched page'
+  }
+
   if (n === 'shell' || n === 'bash') {
     const lines = output
       .trim()
