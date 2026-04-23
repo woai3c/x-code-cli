@@ -11,7 +11,7 @@ import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
-import { estimateTokenCount, getCompressionThreshold } from './context-window.js'
+import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
 import { ensureReasoningContentParts } from './provider-compat.js'
@@ -166,18 +166,25 @@ async function runTurn(
       maxRetries: 3,
       abortSignal: options.abortSignal,
       // Explicit ceiling so provider defaults don't silently truncate long
-      // replies. Anthropic defaults to 4096 which is easily blown by a
-      // reasoning model (reasoning + output share the budget) producing a
-      // long-form answer. 32000 covers DeepSeek-reasoner at its max, Claude
-      // well within hard cap, and the AI SDK clamps the value down for
-      // providers with a lower ceiling (e.g. GPT-4.1 → 16k) instead of
-      // failing the request — so one global value is safe for all targets.
-      maxOutputTokens: 32000,
+      // replies. Most providers clamp a too-high value, but some reject it
+      // outright (deepseek-chat caps at 8192 — requesting more returns
+      // HTTP 400). getMaxOutputTokens applies per-model ceilings; unknown
+      // models fall through to 32000.
+      maxOutputTokens: getMaxOutputTokens(options.modelId),
     }) as unknown as StreamResult
   } catch (err) {
     callbacks.onError(new Error(classifyApiError(err).message))
     return { kind: 'error' }
   }
+
+  // Pre-attach .catch(noop) handlers to every sibling promise the SDK exposes
+  // (response/usage/finishReason/toolCalls) BEFORE we await the stream. On
+  // request failure the SDK rejects all of them in the same tick — if we wait
+  // for fullStream to throw and only then drain, Node's unhandled-rejection
+  // sweep can run first and terminate the process. Attaching catch handlers
+  // early is idempotent: a later `await result.response` still rejects and
+  // propagates normally through our error path.
+  drainStreamResult(result)
 
   try {
     await streamChunksToUI(result, callbacks)

@@ -332,6 +332,26 @@ function readStdin(): Promise<string> {
   })
 }
 
+// ── Rejection safety net ────────────────────────────────────────────────
+// Node 15+ terminates the process on unhandled rejection by default. The
+// AI SDK creates several promises (response, usage, finishReason, toolCalls,
+// the stream's internal flush) that can reject independently when a request
+// fails — we try to drain them in loop.ts, but timing races or a new SDK
+// path can still leak one. Without this handler, a provider-side error
+// (insufficient balance, bad max_tokens, upstream 5xx) would kill the
+// REPL mid-session. We swallow the rejection and let the loop's onError
+// path render a friendly message instead.
+process.on('unhandledRejection', (reason) => {
+  if (process.env.XC_DEBUG) {
+    console.error('[unhandledRejection]', reason)
+  }
+})
+process.on('uncaughtException', (err) => {
+  if (process.env.XC_DEBUG) {
+    console.error('[uncaughtException]', err)
+  }
+})
+
 // ── SIGINT handler ──────────────────────────────────────────────────────
 // Only a safety net: sets exitCode=0 so if the process exits before
 // gracefulShutdown() runs, the exit code is still 0. On double Ctrl+C,

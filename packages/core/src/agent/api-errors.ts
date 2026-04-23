@@ -62,9 +62,29 @@ export function classifyApiError(err: unknown): ClassifiedError {
       retryable: false,
     }
   }
+  if (
+    status === 402 ||
+    msg.includes('Insufficient Balance') ||
+    msg.includes('insufficient_balance') ||
+    msg.includes('insufficient_quota') ||
+    msg.includes('exceeded your current quota')
+  ) {
+    return {
+      message:
+        'API account balance insufficient (402). Top up your provider account, or switch to a different provider with /model.',
+      retryable: false,
+    }
+  }
   if (status === 403 || msg.includes('Forbidden')) {
     return {
       message: 'API access forbidden (403). Your API key may not have permission for this model.',
+      retryable: false,
+    }
+  }
+  if (msg.includes('Invalid max_tokens') || msg.includes('max_tokens')) {
+    return {
+      message:
+        'The configured max_tokens exceeds this model\'s ceiling. This usually means the model ID is missing a ceiling entry in getMaxOutputTokens — please report it, or switch to another model with /model.',
       retryable: false,
     }
   }

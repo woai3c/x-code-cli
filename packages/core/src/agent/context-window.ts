@@ -80,6 +80,25 @@ export function getCompressionThreshold(modelId: string): number {
 }
 
 /**
+ * Per-model cap on max_tokens (reply size). Some providers reject requests
+ * that exceed their ceiling rather than clamping silently — e.g. deepseek-chat
+ * returns HTTP 400 "Invalid max_tokens value, the valid range is [1, 8192]".
+ * For models without an explicit entry, we fall back to a high default that
+ * the AI SDK will clamp for known providers.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 32000
+const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
+  // DeepSeek: chat is 8k, reasoner is 32k (reasoning + output share the budget).
+  ['deepseek:deepseek-chat', 8192],
+  ['deepseek:deepseek-reasoner', 32000],
+])
+
+/** Resolve the max_tokens ceiling we send to the provider. */
+export function getMaxOutputTokens(modelId: string): number {
+  return MODEL_MAX_OUTPUT_TOKENS.get(modelId) ?? DEFAULT_MAX_OUTPUT_TOKENS
+}
+
+/**
  * Estimate total token count from messages using character length.
  * This is intentionally conservative (over-counting) to serve as a safety net
  * that fires before the real API limit is hit.
