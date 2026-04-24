@@ -7,12 +7,14 @@ import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
+import { applyCacheControl } from '../providers/cache-control.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
+import { lightCompactMessages } from './light-compact.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
 import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
@@ -20,6 +22,7 @@ import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { processToolCalls } from './tool-execution.js'
+import { truncateToolResultsInMessages } from './tool-result-sanitize.js'
 
 export type { LoopState } from './loop-state.js'
 
@@ -46,6 +49,12 @@ export async function compressMessages(messages: ModelMessage[], model: Language
 /**
  * Proactive compression: compress when either the last real input-token count
  * or the character-based estimate has crossed the threshold.
+ *
+ * Runs a light O(n) compaction first (drops loop-guard pairs — no LLM call,
+ * no network). If that brings us back under the threshold, we skip the
+ * expensive LLM-summary path entirely. This is the difference between a
+ * $0 10ms pass and a full summarisation round trip — for loop-induced
+ * bloat (by far the common case), the light path is enough.
  */
 async function checkAndCompressContext(
   state: LoopState,
@@ -54,8 +63,17 @@ async function checkAndCompressContext(
   callbacks: AgentCallbacks,
 ): Promise<void> {
   const needsCompression = state.lastInputTokens > threshold || estimateTokenCount(state.messages) > threshold
-
   if (!needsCompression || state.messages.length <= KEEP_RECENT) return
+
+  const light = lightCompactMessages(state.messages)
+  if (light.dropped > 0) {
+    state.messages = light.messages
+    const stillOver = estimateTokenCount(state.messages) > threshold
+    callbacks.onContextCompressed(
+      `Dropped ${light.dropped} looped tool-call message(s) to reclaim context${stillOver ? ' — still over threshold, summarising' : ''}.`,
+    )
+    if (!stillOver) return
+  }
 
   try {
     const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
@@ -131,6 +149,16 @@ async function collectTurnResponse(
   callbacks: AgentCallbacks,
 ): Promise<string> {
   const response = await result.response
+  // CRITICAL: auto-executed tools (readFile / grep / glob / listDir / webFetch
+  // / webSearch) return their results through `response.messages` without
+  // passing through the manual `pushToolResult` path. Without a sanitizer
+  // pass here, reading an 800-line file or a grep that matched 2k times dumps
+  // the full content into `state.messages` and then rides along on every
+  // subsequent turn. The worst realized case before this sanitizer was a
+  // 9M-token context built from cumulative failed-shell stacks + unsliced
+  // file reads. Truncate here so the messages we persist match the per-tool
+  // budget used elsewhere in the loop.
+  truncateToolResultsInMessages(response.messages)
   state.messages.push(...response.messages)
   ensureReasoningContentParts(state.messages, modelId)
 
@@ -168,12 +196,23 @@ async function runTurn(
   // helper based on their capability flags.
   await downgradeBinaryPartsForProvider(state.messages, options.modelId)
 
+  // Per-provider prompt caching: Anthropic gets cache_control breakpoints on
+  // the system prompt + last two messages; OpenAI gets a stable
+  // promptCacheKey keyed on sessionId; OpenAI-compatible providers rely on
+  // the system-prompt cache in LoopState keeping the prefix byte-stable.
+  const cached = applyCacheControl({
+    system: systemPrompt,
+    messages: state.messages,
+    modelId: options.modelId,
+    sessionId: state.sessionId,
+  })
+
   let result: StreamResult
   try {
     result = streamText({
       model,
-      system: systemPrompt,
-      messages: state.messages,
+      system: cached.system,
+      messages: cached.messages,
       tools: toolRegistry,
       maxRetries: 3,
       abortSignal: options.abortSignal,
@@ -182,6 +221,12 @@ async function runTurn(
       // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;
       // unknown models fall through to the module-level default.
       maxOutputTokens: getMaxOutputTokens(options.modelId),
+      // AI SDK types `providerOptions` as `SharedV3ProviderOptions` (nested
+      // JSONObject). Our cache-control helper returns a looser
+      // `Record<string, unknown>` shape because provider-specific field sets
+      // drift too fast to keep a strict union in sync. The runtime contract
+      // is narrow JSON and we cast here at the single call site.
+      providerOptions: cached.providerOptions as Parameters<typeof streamText>[0]['providerOptions'],
     }) as unknown as StreamResult
   } catch (err) {
     callbacks.onError(new Error(classifyApiError(err).message))
@@ -264,11 +309,20 @@ export async function agentLoop(
 
     await checkAndCompressContext(state, model, compressionThreshold, callbacks)
 
-    const systemPrompt = buildSystemPrompt({
-      knowledgeContext: fullKnowledgeContext,
-      modelId: options.modelId,
-      isGitRepo,
-    })
+    // Build the system prompt once per session and reuse it across turns.
+    // Stable byte-level prefix is a prerequisite for OpenAI-compatible
+    // providers' automatic prefix caching (DeepSeek, Moonshot, Alibaba,
+    // Zhipu, xAI). If this string changes between turns — e.g. because
+    // buildSystemPrompt interpolates a fresh timestamp — the cache misses
+    // every request.
+    if (!state.systemPromptCache) {
+      state.systemPromptCache = buildSystemPrompt({
+        knowledgeContext: fullKnowledgeContext,
+        modelId: options.modelId,
+        isGitRepo,
+      })
+    }
+    const systemPrompt = state.systemPromptCache
 
     const outcome = await runTurn(state, model, options, systemPrompt, callbacks)
 

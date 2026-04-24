@@ -31,9 +31,35 @@ function mediaTypeFor(filePath: string): string {
   return 'image/png'
 }
 
+/** Threshold above which a no-args readFile call returns a partial head plus a
+ *  hint to re-read specific ranges. Picked empirically: 500 lines of code is
+ *  a realistic ceiling for "skim the whole thing", and anything bigger is
+ *  almost always used with grep first. */
+const LARGE_FILE_LINE_THRESHOLD = 500
+
 async function readTextResult(filePath: string, offset?: number, limit?: number): Promise<string> {
   const content = await fs.readFile(filePath, 'utf-8')
   const lines = content.split('\n')
+  const totalLines = lines.length
+
+  // When the caller passes neither offset nor limit and the file is large,
+  // return only the head and tell the model how to request the rest. Without
+  // this guard, models happily read 2000-line files "just to see what's in
+  // there" and the full content rides along on every subsequent turn. The
+  // downstream truncator (tool-result-sanitize) would eventually clip this,
+  // but doing it at the tool level preserves intent — the model sees
+  // explicitly that the file was large and that it should narrow the range.
+  const userSpecifiedRange = offset != null || limit != null
+  if (!userSpecifiedRange && totalLines > LARGE_FILE_LINE_THRESHOLD) {
+    const head = lines.slice(0, LARGE_FILE_LINE_THRESHOLD)
+    const body = head.map((line, i) => `${i + 1}\t${line}`).join('\n')
+    return (
+      body +
+      `\n\n[readFile: showing first ${LARGE_FILE_LINE_THRESHOLD}/${totalLines} lines. ` +
+      `Call readFile again with offset/limit to view other ranges, or use grep to find specific symbols.]`
+    )
+  }
+
   const start = (offset ?? 1) - 1
   const end = limit ? start + limit : lines.length
   const sliced = lines.slice(start, end)

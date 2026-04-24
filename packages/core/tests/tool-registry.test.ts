@@ -2,7 +2,7 @@
 // Note: Uses dynamic import to handle module resolution issues in test environment
 import { describe, expect, it, vi } from 'vitest'
 
-import { MAX_TOOL_RESULT_CHARS, toolRegistry, truncateToolResult } from '../src/tools/index.js'
+import { MAX_TOOL_RESULT_BYTES, toolRegistry, truncateToolResult } from '../src/tools/index.js'
 
 // Mock cheerio + turndown to avoid module resolution issues in test env
 vi.mock('cheerio', () => ({
@@ -73,13 +73,13 @@ describe('truncateToolResult', () => {
     expect(truncateToolResult(short)).toBe(short)
   })
 
-  it('does not truncate results at exactly the limit', () => {
-    const exact = 'x'.repeat(MAX_TOOL_RESULT_CHARS)
+  it('does not truncate results at exactly the byte limit', () => {
+    const exact = 'x'.repeat(MAX_TOOL_RESULT_BYTES)
     expect(truncateToolResult(exact)).toBe(exact)
   })
 
   it('truncates long results keeping head and tail', () => {
-    const long = 'x'.repeat(MAX_TOOL_RESULT_CHARS + 1000)
+    const long = 'x'.repeat(MAX_TOOL_RESULT_BYTES + 1000)
     const result = truncateToolResult(long)
     expect(result.length).toBeLessThan(long.length)
     expect(result).toContain('truncated')

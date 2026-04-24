@@ -12,6 +12,14 @@ export interface LoopState {
   startedAt: string
   filesModified: Set<string>
   turnCount: number
+  /** Rolling record of recently executed tool calls, keyed by a hash of the
+   *  tool name + stable-stringified input. Used by the doom-loop guard to
+   *  detect when the model is looping on the same failing call. */
+  recentToolCalls: Array<{ toolName: string; hash: string }>
+  /** Cached system prompt text — rebuilt once per session so the prefix
+   *  stays byte-stable across turns, enabling automatic prefix-caching on
+   *  OpenAI-compatible providers (DeepSeek, Moonshot, Alibaba, …). */
+  systemPromptCache: string | null
 }
 
 export function createLoopState(): LoopState {
@@ -23,5 +31,7 @@ export function createLoopState(): LoopState {
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
     turnCount: 0,
+    recentToolCalls: [],
+    systemPromptCache: null,
   }
 }

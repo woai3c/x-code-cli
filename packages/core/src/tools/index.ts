@@ -39,13 +39,10 @@ export {
   saveKnowledge,
 }
 
-/** Max characters for tool results before truncation */
-export const MAX_TOOL_RESULT_CHARS = 30000
-
-/** Truncate tool result, keeping head and tail */
-export function truncateToolResult(result: string): string {
-  if (result.length <= MAX_TOOL_RESULT_CHARS) return result
-  const half = Math.floor(MAX_TOOL_RESULT_CHARS / 2)
-  const truncatedChars = result.length - MAX_TOOL_RESULT_CHARS
-  return result.slice(0, half) + `\n\n... [truncated ${truncatedChars} characters] ...\n\n` + result.slice(-half)
-}
+export {
+  MAX_TOOL_RESULT_LINES,
+  MAX_TOOL_RESULT_BYTES,
+  MAX_AGGREGATE_TOOL_RESULT_BYTES,
+  truncateToolResult,
+} from './truncate.js'
+export type { TruncateOptions } from './truncate.js'
