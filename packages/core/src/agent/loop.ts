@@ -173,9 +173,8 @@ async function runTurn(
       abortSignal: options.abortSignal,
       // Explicit ceiling so provider defaults don't silently truncate long
       // replies. Most providers clamp a too-high value, but some reject it
-      // outright (deepseek-chat caps at 8192 — requesting more returns
-      // HTTP 400). getMaxOutputTokens applies per-model ceilings; unknown
-      // models fall through to 32000.
+      // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;
+      // unknown models fall through to the module-level default.
       maxOutputTokens: getMaxOutputTokens(options.modelId),
     }) as unknown as StreamResult
   } catch (err) {

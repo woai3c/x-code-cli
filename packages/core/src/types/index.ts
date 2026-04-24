@@ -119,13 +119,13 @@ export interface SessionSummary {
 // ─── Model aliases ───
 
 export const MODEL_ALIASES: Record<string, string> = {
-  sonnet: 'anthropic:claude-sonnet-4-5',
-  opus: 'anthropic:claude-opus-4-6',
+  sonnet: 'anthropic:claude-sonnet-4-6',
+  opus: 'anthropic:claude-opus-4-7',
   haiku: 'anthropic:claude-haiku-4-5',
   gpt4: 'openai:gpt-4.1',
   gemini: 'google:gemini-2.5-pro',
-  deepseek: 'deepseek:deepseek-chat',
-  r1: 'deepseek:deepseek-reasoner',
+  deepseek: 'deepseek:deepseek-v4-flash',
+  'deepseek-pro': 'deepseek:deepseek-v4-pro',
   qwen: 'alibaba:qwen-max',
   glm: 'zhipu:glm-4-plus',
   kimi: 'moonshotai:kimi-k2.5',
@@ -134,9 +134,9 @@ export const MODEL_ALIASES: Record<string, string> = {
 // ─── Provider detection order (for smart defaults) ───
 
 export const PROVIDER_DETECTION_ORDER = [
-  { envKey: 'ANTHROPIC_API_KEY', defaultModel: 'anthropic:claude-sonnet-4-5' },
+  { envKey: 'ANTHROPIC_API_KEY', defaultModel: 'anthropic:claude-sonnet-4-6' },
   { envKey: 'OPENAI_API_KEY', defaultModel: 'openai:gpt-4.1' },
-  { envKey: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek:deepseek-chat' },
+  { envKey: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek:deepseek-v4-flash' },
   { envKey: 'ALIBABA_API_KEY', defaultModel: 'alibaba:qwen-max' },
   { envKey: 'GOOGLE_GENERATIVE_AI_API_KEY', defaultModel: 'google:gemini-2.5-pro' },
   { envKey: 'XAI_API_KEY', defaultModel: 'xai:grok-3' },
@@ -165,11 +165,15 @@ export interface ProviderModel {
 export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
   anthropic: [
     {
-      id: 'anthropic:claude-sonnet-4-5',
-      label: 'Sonnet 4.5',
-      description: 'Balanced default — good for coding + reasoning',
+      id: 'anthropic:claude-sonnet-4-6',
+      label: 'Sonnet 4.6',
+      description: 'Balanced default — good for coding + reasoning, 1M context',
     },
-    { id: 'anthropic:claude-opus-4-6', label: 'Opus 4.6', description: 'Most capable, slower and pricier' },
+    {
+      id: 'anthropic:claude-opus-4-7',
+      label: 'Opus 4.7',
+      description: 'Most capable, strongest at agentic coding, 1M context',
+    },
     { id: 'anthropic:claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest, cheapest — shorter replies' },
   ],
   openai: [
@@ -179,8 +183,16 @@ export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
     { id: 'openai:o4-mini', label: 'o4-mini', description: 'Smaller reasoning model' },
   ],
   deepseek: [
-    { id: 'deepseek:deepseek-chat', label: 'DeepSeek V3 (chat)', description: 'General-purpose, 64k context' },
-    { id: 'deepseek:deepseek-reasoner', label: 'DeepSeek R1', description: 'Reasoning model, 128k context' },
+    {
+      id: 'deepseek:deepseek-v4-flash',
+      label: 'DeepSeek V4 Flash',
+      description: 'Fast, efficient general-purpose, 1M context',
+    },
+    {
+      id: 'deepseek:deepseek-v4-pro',
+      label: 'DeepSeek V4 Pro',
+      description: 'Flagship, stronger reasoning, 1M context',
+    },
   ],
   alibaba: [
     { id: 'alibaba:qwen-max', label: 'Qwen Max', description: 'Strongest general Qwen, 128k context' },

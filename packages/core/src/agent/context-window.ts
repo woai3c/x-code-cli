@@ -27,8 +27,8 @@ const DEFAULT_CONTEXT_WINDOW = 128000
 /** Context window sizes per model (tokens). */
 const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // Anthropic
-  ['anthropic:claude-opus-4-6', 200000],
-  ['anthropic:claude-sonnet-4-5', 200000],
+  ['anthropic:claude-opus-4-7', 1000000],
+  ['anthropic:claude-sonnet-4-6', 1000000],
   ['anthropic:claude-haiku-4-5', 200000],
   // OpenAI
   ['openai:gpt-4.1', 1047576],
@@ -40,15 +40,16 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   ['google:gemini-2.5-pro', 1000000],
   ['google:gemini-2.5-flash', 1000000],
   // DeepSeek
-  ['deepseek:deepseek-chat', 64000],
-  ['deepseek:deepseek-reasoner', 131072],
-  // Alibaba — qwen-turbo older alias versions can have 131k; latest Qwen3-based
-  // turbo/plus support up to 1M but the alias may resolve to smaller versions.
-  ['alibaba:qwen-turbo', 131072],
+  ['deepseek:deepseek-v4-flash', 1000000],
+  ['deepseek:deepseek-v4-pro', 1000000],
+  // Alibaba — per DashScope docs: qwen-turbo and qwen3-coder-plus extend to 1M;
+  // qwen-max still caps at 32k (use qwen3-max for 256k). Values verified against
+  // https://help.aliyun.com/zh/model-studio/models.
+  ['alibaba:qwen-turbo', 1000000],
   ['alibaba:qwen-plus', 131072],
-  ['alibaba:qwen-max', 262144],
+  ['alibaba:qwen-max', 32768],
   ['alibaba:qwen3-max', 262144],
-  ['alibaba:qwen3-coder-plus', 262144],
+  ['alibaba:qwen3-coder-plus', 1000000],
   ['alibaba:qwq-plus', 131072],
   // xAI
   ['xai:grok-3', 131072],
@@ -61,10 +62,10 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
 
 /** Provider-level fallback context windows. */
 const PROVIDER_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
-  ['anthropic', 200000],
+  ['anthropic', 1000000],
   ['openai', 128000],
   ['google', 1000000],
-  ['deepseek', 64000],
+  ['deepseek', 1000000],
   ['alibaba', 128000],
   ['xai', 128000],
   ['zhipu', 128000],
@@ -86,22 +87,23 @@ export function getCompressionThreshold(modelId: string): number {
 
 /**
  * Per-model cap on max_tokens (reply size). Some providers reject requests
- * that exceed their ceiling rather than clamping silently — e.g. deepseek-chat
- * returns HTTP 400 "Invalid max_tokens value, the valid range is [1, 8192]".
+ * that exceed their ceiling rather than clamping silently.
  * For models without an explicit entry, we fall back to a high default that
  * the AI SDK will clamp for known providers.
  */
 const DEFAULT_MAX_OUTPUT_TOKENS = 16384
 const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
-  // DeepSeek: chat is 8k, reasoner is 32k (reasoning + output share the budget).
-  ['deepseek:deepseek-chat', 8192],
-  ['deepseek:deepseek-reasoner', 32000],
+  // DeepSeek V4: both flash and pro advertise up to 384K output tokens.
+  // We cap at a generous but conservative 131072 to avoid edge-case 400s.
+  ['deepseek:deepseek-v4-flash', 131072],
+  ['deepseek:deepseek-v4-pro', 131072],
   // Alibaba — qwen-turbo rejects anything above 16384; other Qwen3 models
   // support 32768 (non-thinking) / 81920 (thinking mode). We cap at the
-  // non-thinking ceiling so the request always succeeds.
+  // non-thinking ceiling so the request always succeeds. qwen-max only has a
+  // 32k context window, so we keep its output ceiling well below that.
   ['alibaba:qwen-turbo', 16384],
   ['alibaba:qwen-plus', 32000],
-  ['alibaba:qwen-max', 32000],
+  ['alibaba:qwen-max', 8192],
   ['alibaba:qwen3-max', 32000],
   ['alibaba:qwen3-coder-plus', 32000],
   ['alibaba:qwq-plus', 32000],

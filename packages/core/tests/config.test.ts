@@ -32,13 +32,13 @@ describe('resolveModelId', () => {
   })
 
   it('resolves from CLI argument', () => {
-    expect(resolveModelId('anthropic:claude-sonnet-4-5')).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId('anthropic:claude-sonnet-4-6')).toBe('anthropic:claude-sonnet-4-6')
   })
 
   it('resolves alias from CLI argument', () => {
-    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-5')
-    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-4-6')
-    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-chat')
+    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-6')
+    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-4-7')
+    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-v4-flash')
   })
 
   it('falls back to env var X_CODE_MODEL', () => {
@@ -48,17 +48,17 @@ describe('resolveModelId', () => {
 
   it('resolves alias from X_CODE_MODEL env var', () => {
     process.env.X_CODE_MODEL = 'sonnet'
-    expect(resolveModelId()).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId()).toBe('anthropic:claude-sonnet-4-6')
   })
 
   it('CLI argument takes precedence over X_CODE_MODEL', () => {
     process.env.X_CODE_MODEL = 'openai:gpt-4.1'
-    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-6')
   })
 
   it('falls back to smart default from env API key', () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    expect(resolveModelId()).toBe('anthropic:claude-sonnet-4-5')
+    expect(resolveModelId()).toBe('anthropic:claude-sonnet-4-6')
   })
 
   it('follows provider detection order', () => {
@@ -71,7 +71,7 @@ describe('resolveModelId', () => {
   })
 
   it('returns model even if provider key missing when explicitly requested', () => {
-    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-chat')
+    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-v4-flash')
   })
 })
 
