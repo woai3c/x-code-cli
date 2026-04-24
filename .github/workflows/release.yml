@@ -31,8 +31,8 @@ jobs:
 
       - name: Publish to npm
         run: |
-          cd packages/core && npm publish --provenance --access public
-          cd ../cli && npm publish --provenance --access public
+          cd packages/core && pnpm publish --provenance --access public --no-git-checks
+          cd ../cli && pnpm publish --provenance --access public --no-git-checks
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
