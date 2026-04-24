@@ -492,6 +492,21 @@ export function ChatInput({
    *  pre-scroll the top of the viewport into real scrollback, which is
    *  what preserves the startup banner across multiple /model cycles. */
   const freeBlanksAboveFrameRef = useRef(0)
+  /** Reserves vertical space inside the tool-running frame when a permission
+   *  dialog just closed but its approved tool hasn't committed a result yet.
+   *  Without the reservation the frame snaps 7→5 rows (permission was 4 rows,
+   *  tool rows are 2) and the now-empty top 2 rows of the old permission
+   *  region flash as blank lines between the last committed scrollback entry
+   *  and the running tool — for a beat the user sees "Running..." pinned to
+   *  the bottom with a gap above, until the tool finishes and its commit
+   *  backfills those rows. The reservation holds the frame at the old size
+   *  so the in-progress tool row stays painted WHERE the permission title
+   *  used to be; the blank rows move below the tool (between tool and
+   *  input), which the next commit / grow consumes cleanly. Cleared on any
+   *  commit (the tool result lands in the reserved slot) or when a new
+   *  permission arrives (that permission re-fills the slot itself). */
+  const permissionSlotReserveRef = useRef(0)
+  const prevHadPermissionRef = useRef(false)
   /** True while a Permission/SelectOptions dialog was showing on the
    *  previous render. When it disappears we need to erase the old frame
    *  before redrawing — Ink's log.clear returns the cursor to the row
@@ -891,6 +906,28 @@ export function ChatInput({
 
     activeRef.current = true
 
+    // Keep the permission-slot reservation alive only until the first commit
+    // after the permission closed (that commit carries the approved tool's
+    // result and overwrites the reserved rows). A fresh permission also
+    // clears the reservation — the new dialog owns the slot directly.
+    //
+    // Only reserve when exactly ONE tool is pending. Two tools happen to
+    // produce the same frame height as the permission (2×2 + 3 input = 7 =
+    // 4 permission + 3 input) so no reservation is needed; three or more
+    // tools make the frame LARGER than the permission, which is a grow
+    // (handled correctly by the existing freeBlanks/preScroll path);
+    // zero tools means the approved tool was denied or hasn't produced an
+    // onToolCall yet — reserving blank rows there would just shift the
+    // gap around rather than eliminate it.
+    const hadPermissionLastRender = prevHadPermissionRef.current
+    const runningToolCount = activeToolCalls?.length ?? 0
+    if (didCommitMessages || permission) {
+      permissionSlotReserveRef.current = 0
+    } else if (hadPermissionLastRender && !permission && runningToolCount === 1) {
+      permissionSlotReserveRef.current = 2
+    }
+    prevHadPermissionRef.current = !!permission
+
     const PROMPT_WIDTH = 2
     const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
     const sepChar = '\u2500'
@@ -1164,6 +1201,15 @@ export function ChatInput({
       frame.push(hint)
     }
 
+    // Reserved padding left over from a permission dialog that just closed.
+    // Sits between the in-progress tool rows (above) and the input
+    // separators (below) so the frame keeps the dialog's total height
+    // until the approved tool's result commits and slides into the
+    // reserved space.
+    for (let i = 0; i < permissionSlotReserveRef.current; i++) {
+      frame.push([])
+    }
+
     // Top separator
     frame.push(textToCells(sepText, S_GRAY))
 
@@ -1346,32 +1392,47 @@ export function ChatInput({
     // frame-redraw phase, no flicker.
     //
     // Cursor is hidden for the duration of the write.
+    // Deferred-flush staging for freeBlanksAboveFrameRef. Two renders with
+    // the same (oldFrameH → nextH) transition used to each apply `+=
+    // deltaH` against the live ref before either one's stdout write ran —
+    // so on a shrink that got re-rendered once before its deferred flush
+    // fired, the blank-row credit doubled. Accumulating the target in a
+    // local and committing it in doFlush makes the mutation idempotent:
+    // every render of the same state computes the same target, only the
+    // one whose payload actually writes applies it. Symptom it cured:
+    // 3+ persistent blank lines appearing after every Bash approval.
+    let pendingFreeBlanks = freeBlanksAboveFrameRef.current
     const scrollRows = didCommitMessages ? countContentRows(scrollbackContent, termWidth) : 0
     let handledCommitWithFrame = false
     if (didCommitMessages && scrollRows > 0 && nextH > 0 && nextH < termRows) {
-      const startRow = Math.max(1, termRows - scrollRows - nextH + 1)
-      // Normal formula: make room by scrolling top rows into real scrollback.
-      // But subtract any freshly-erased blank rows left above the frame by a
-      // recent shrink (dialog close) — those can absorb the new content
-      // without us having to sacrifice anything from the top of the viewport.
-      const rawPreScroll = oldFrameH > 0 ? Math.max(0, scrollRows + nextH - oldFrameH) : 0
-      const absorbed = Math.min(rawPreScroll, freeBlanksAboveFrameRef.current)
-      const preScrollRows = rawPreScroll - absorbed
-      // After this commit, the newly-written scrollback content sits
-      // IMMEDIATELY above the frame. Any blank rows that were previously
-      // counted are now ABOVE the new content, not adjacent to the frame —
-      // so they can no longer absorb a future grow's expansion. Reset to
-      // 0 so the next grow correctly pre-scrolls to preserve content
-      // (instead of erasing rows that contain the scrollback we just
-      // committed, as happened with /init's bottom rows on subsequent
-      // /model typing).
-      freeBlanksAboveFrameRef.current = 0
-      // When the old frame was taller than the new frame, its top is
-      // ABOVE our normal startRow, so the rows from old-frame-top down
-      // to startRow would otherwise hold stale frame text. Erase from
-      // the higher point.
-      const oldFrameTop = oldFrameH > 0 ? termRows - oldFrameH + 1 : termRows + 1
-      const eraseFrom = Math.min(startRow, oldFrameTop)
+      // Available rows we already "own" above the current frame: the old
+      // frame itself (about to be overwritten) plus any blank rows left
+      // by a recent shrink (dialog close). If the new content+frame fits
+      // within that space, no full-screen scroll is needed. If it doesn't,
+      // pre-scroll the shortfall into real terminal scrollback history.
+      const freeBlanks = oldFrameH > 0 ? freeBlanksAboveFrameRef.current : 0
+      const availSpace = oldFrameH + freeBlanks
+      const preScrollRows = oldFrameH > 0 ? Math.max(0, scrollRows + nextH - availSpace) : 0
+      // Write scrollbackContent DIRECTLY after the last row of real
+      // scrollback — this consumes the free-blank region row-by-row
+      // instead of leaving it stranded as a visible gap between the
+      // earlier history and the newly committed content. The previous
+      // formula placed content immediately above the new frame, which
+      // left any excess free-blanks above it; on the next grow those
+      // blank rows would be pre-scrolled into real terminal history
+      // permanently, producing the "tool result, then 5-8 blank lines,
+      // then next tool result" pattern in scrollback.
+      const startRow = oldFrameH > 0
+        ? Math.max(1, termRows - availSpace - preScrollRows + 1)
+        : Math.max(1, termRows - scrollRows - nextH + 1)
+      // Any rows between the end of scrollbackContent and the new frame
+      // top remain blank and become the new "free blanks above frame" —
+      // a subsequent commit will consume them the same way this one
+      // consumed the previous batch.
+      const leftoverBlanks = oldFrameH > 0
+        ? Math.max(0, availSpace + preScrollRows - scrollRows - nextH)
+        : 0
+      pendingFreeBlanks = leftoverBlanks
       preBuf += '\x1b[?25l'
       if (preScrollRows > 0) {
         // Full-screen scroll at termRows to push `preScrollRows` rows into
@@ -1379,11 +1440,20 @@ export function ChatInput({
         // honors — DECSTBM regions splice-discard in its InputHandler).
         preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
       }
-      preBuf += `\x1b[${eraseFrom};1H\x1b[J`
-      if (eraseFrom < startRow) {
-        preBuf += `\x1b[${startRow};1H`
-      }
+      // Erase from startRow to the bottom of the screen. startRow is at
+      // or above the (post-scroll) top of the old frame, so this clears
+      // both the shifted old-frame cells and the leftover-blank region.
+      preBuf += `\x1b[${startRow};1H\x1b[J`
       preBuf += scrollbackContent
+      // scrollbackContent lands the cursor at col 1 of the row immediately
+      // below its last row. That matches the new frame top only when
+      // leftoverBlanks === 0; otherwise we must jump to the frame top so
+      // the renderRowToAnsi loop below draws frame rows pinned to the
+      // bottom with the blank gap sitting above them (where the next
+      // commit will consume it).
+      if (leftoverBlanks > 0) {
+        preBuf += `\x1b[${termRows - nextH + 1};1H`
+      }
       for (let i = 0; i < nextH; i++) {
         preBuf += renderRowToAnsi(frame[i]) + '\x1b[K'
         if (i < nextH - 1) preBuf += '\r\n'
@@ -1441,20 +1511,33 @@ export function ChatInput({
           const row = termRows - nextH + 1 + i
           preBuf += `\x1b[${row};1H\x1b[K`
         }
-        freeBlanksAboveFrameRef.current = Math.max(
-          0,
-          freeBlanksAboveFrameRef.current - deltaH,
-        )
+        pendingFreeBlanks = Math.max(0, freeBlanksAboveFrameRef.current - deltaH)
       } else {
         const deltaH = oldFrameH - nextH
-        for (let i = 0; i < deltaH; i++) {
-          const row = termRows - oldFrameH + 1 + i
-          preBuf += `\x1b[${row};1H\x1b[K`
+        // When shrinking INTO a permission dialog, skip erasing the top
+        // deltaH rows of the old frame. Those rows held tool-progress
+        // content (`● ToolName / ⎿ Running...`) — the permission is
+        // about one of those tools. Leaving them visible keeps useful
+        // context above the dialog instead of flashing 2+ blank rows
+        // during the approval window. The subsequent commit (when the
+        // approved tool finishes) writes to scrollback via
+        // `\x1b[startRow;1H\x1b[J` which clears whatever's there before
+        // drawing, so there's no double-paint once the tool result
+        // lands. Other shrinks (permission close, menu close) still
+        // erase — there we WANT the old dialog/menu gone.
+        if (!permission) {
+          for (let i = 0; i < deltaH; i++) {
+            const row = termRows - oldFrameH + 1 + i
+            preBuf += `\x1b[${row};1H\x1b[K`
+          }
         }
-        // Remember the freshly-erased rows so the next commit can write
-        // into them instead of pre-scrolling the viewport (which would
-        // push the banner / earlier content off the top).
-        freeBlanksAboveFrameRef.current += deltaH
+        // Remember those rows so the next commit can write into them
+        // instead of pre-scrolling the viewport (which would push the
+        // banner / earlier content off the top). This still applies in
+        // the skip-erase branch above — the rows hold stale content but
+        // the next commit's `\x1b[J` erases before writing, making them
+        // effectively "free" for commit placement.
+        pendingFreeBlanks = freeBlanksAboveFrameRef.current + deltaH
       }
       // Frame moved — prev cell matrix is at the wrong rows now; force
       // full redraw at the new position.
@@ -1611,6 +1694,7 @@ export function ChatInput({
       lastFlushTimeRef.current = Date.now()
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
+      freeBlanksAboveFrameRef.current = pendingFreeBlanks
     }
 
     if (didCommitMessages) {
@@ -1622,7 +1706,19 @@ export function ChatInput({
       doFlush()
     } else {
       const now = Date.now()
-      if (now - lastFlushTimeRef.current < 16) {
+      // Only coalesce identical-height frames (spinner ticks, single-cell
+      // input edits). A frame-height change signals a structural update —
+      // dialog opening/closing, error row appearing, etc. — and must paint
+      // even when it lands within 16ms of the previous write. Coalescing
+      // a height-changing frame used to strand the UI on the old frame
+      // when the event that triggered it (e.g. stream end → permission
+      // prompt render) also happened to be the last thing that would ever
+      // re-render: the spinner interval clears on `spinner === null`, no
+      // further React ticks arrive, and the dropped payload carrying the
+      // prompt is never retried. Symptom: tool-call row stuck showing
+      // "⠴ Running... (↓ N tokens)" forever with frozen input.
+      const isSpinnerTick = nextH === lastFrameHRef.current
+      if (isSpinnerTick && now - lastFlushTimeRef.current < 16) {
         debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms`)
         return
       }
