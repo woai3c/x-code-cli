@@ -145,7 +145,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
             return { ...prev, activeToolCalls: next }
           })
         },
-        onToolResult: (toolCallId, result) => {
+        onToolResult: (toolCallId, result, isError) => {
           const pending = pendingToolsRef.current.get(toolCallId)
           pendingToolsRef.current.delete(toolCallId)
           if (pending?.showTimer) {
@@ -159,7 +159,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
               toolName: pending?.toolName ?? 'unknown',
               input: pending?.input ?? {},
               output: result,
-              status: 'completed',
+              status: isError ? 'error' : 'completed',
               durationMs,
             }
             return {

@@ -62,9 +62,11 @@ function formatToolCall(tc: DisplayToolCall): string {
   const inputPreview = getToolInputPreview(tc.toolName, tc.input)
   const resultSummary = getToolResultSummary(tc.toolName, tc.output, tc.status)
   const isDenied = tc.status === 'denied'
+  const isError = tc.status === 'error'
+  const isFailure = isDenied || isError
   const durationStr = tc.durationMs != null ? formatDuration(tc.durationMs) : null
 
-  const dotColor = isDenied ? ERROR : SUCCESS
+  const dotColor = isFailure ? ERROR : SUCCESS
   const previewSuffix = inputPreview ? c.hex(BLUE_PURPLE)(`(${inputPreview})`) : ''
   const line1 = ` ${c.hex(dotColor)('●')} ${c.bold(label)}${previewSuffix}`
 
@@ -72,10 +74,12 @@ function formatToolCall(tc: DisplayToolCall): string {
 
   // Render the result through the markdown pipeline so tool outputs with
   // headings / lists / inline code / etc. display styled instead of as
-  // raw `### ...` / `**...**` characters. Denied results stay as plain
-  // red text — denying doesn't produce tool output to render anyway.
-  const rendered = isDenied
-    ? c.hex(ERROR)(resultSummary)
+  // raw `### ...` / `**...**` characters. Denied AND errored results
+  // render as plain red text so failures stand out in scrollback —
+  // matches Claude Code's behavior of coloring the stderr/exit-code
+  // block in red for non-zero shell exits.
+  const rendered = isFailure
+    ? resultSummary
     : renderMarkdown(resultSummary).replace(/\n+$/, '')
 
   // Strip blank lines — markdown rendering inserts paragraph spacing
@@ -86,8 +90,12 @@ function formatToolCall(tc: DisplayToolCall): string {
     .split('\n')
     .filter((l) => l.trim().length > 0)
   const durSuffix = durationStr ? c.gray(` (${durationStr})`) : ''
-  const head = `   ${c.gray('⎿')}  ${lines[0] ?? ''}`
-  const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${l}`)
+  // Errored lines get the ERROR hex color applied AFTER line splitting —
+  // applying it before splitting would split on ANSI-reset sequences
+  // embedded mid-style and leave half the body uncolored. Apply per line.
+  const paint = isFailure ? (s: string) => c.hex(ERROR)(s) : (s: string) => s
+  const head = `   ${c.gray('⎿')}  ${paint(lines[0] ?? '')}`
+  const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${paint(l)}`)
   // Duration goes on the last visible line of the body so it reads like
   // "... +13 lines (1.2s)" on truncated summaries.
   const combined = tail.length > 0 ? [head, ...tail] : [head]

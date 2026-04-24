@@ -69,7 +69,7 @@ async function executeShell(
   timeout: number,
   callbacks: AgentCallbacks,
   toolCallId: string,
-): Promise<string> {
+): Promise<{ output: string; isError: boolean }> {
   const { executable, args, type } = getShellConfig()
 
   // On Windows, force the console codepage to UTF-8 (65001) at the OS level
@@ -116,9 +116,10 @@ async function executeShell(
   const result = await proc
   const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
   if (result.exitCode !== 0) {
-    return output ? `${output}\nExit code ${result.exitCode}` : `Exit code ${result.exitCode}`
+    const text = output ? `${output}\nExit code ${result.exitCode}` : `Exit code ${result.exitCode}`
+    return { output: text, isError: true }
   }
-  return output || 'Done'
+  return { output: output || 'Done', isError: false }
 }
 
 /** Push a tool result to state and notify the UI. */
@@ -128,6 +129,7 @@ function pushToolResult(
   toolCallId: string,
   toolName: string,
   output: string,
+  isError = false,
 ): void {
   state.messages.push(toolResultMessage(toolCallId, toolName, output))
   // Clear the progress reporter for manually-dispatched tools (shell,
@@ -135,7 +137,7 @@ function pushToolResult(
   // stream's `tool-result` event and are cleared there — this call is
   // a no-op in that case since the reporter would already be gone.
   clearProgressReporter(toolCallId)
-  callbacks.onToolResult(toolCallId, output)
+  callbacks.onToolResult(toolCallId, output, isError)
 }
 
 type ToolCall = { toolName: string; toolCallId: string; input: Record<string, unknown> }
@@ -173,22 +175,30 @@ async function handleToolCall(
 
   // ── Execute tool ──
   let output: string
+  let isError = false
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
       output = await executeWriteTool(toolName, input, toolCallId)
-      state.filesModified.add(input.filePath as string)
+      // executeWriteTool returns "Error: ..." strings for in-band failures
+      // (missing match, non-unique match) rather than throwing — surface
+      // those as errored results so the scrollback line flips to red.
+      if (output.startsWith('Error:')) isError = true
+      else state.filesModified.add(input.filePath as string)
     } else if (toolName === 'shell') {
       const timeout = (input.timeout as number) ?? 30000
-      output = await executeShell(input.command as string, timeout, callbacks, toolCallId)
+      const shellResult = await executeShell(input.command as string, timeout, callbacks, toolCallId)
+      output = shellResult.output
+      isError = shellResult.isError
     } else {
       // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
       return
     }
   } catch (err) {
     output = `Error: ${err instanceof Error ? err.message : String(err)}`
+    isError = true
   }
 
-  pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(output))
+  pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(output), isError)
 }
 
 /** Handle all tool calls from a single model turn, sequentially. */

@@ -43,7 +43,11 @@ export interface DisplayToolCall {
   toolName: string
   input: Record<string, unknown>
   output?: string
-  status: 'pending' | 'running' | 'completed' | 'denied'
+  /** `error` marks a tool that finished but with a non-zero exit / thrown
+   *  exception — the stdout-writer renders its result body in red so
+   *  failures stand out in scrollback. `denied` is reserved for the
+   *  permission-denial path. */
+  status: 'pending' | 'running' | 'completed' | 'denied' | 'error'
   /** How long the tool call took to execute (milliseconds) */
   durationMs?: number
 }
@@ -57,7 +61,7 @@ export interface AgentCallbacks {
    *  "Searching: query" → "Found 5 results"). Only the LATEST message is
    *  shown in the live UI; the final summary comes through onToolResult. */
   onToolProgress: (toolCallId: string, message: string) => void
-  onToolResult: (toolCallId: string, result: string) => void
+  onToolResult: (toolCallId: string, result: string, isError?: boolean) => void
   onAskPermission: (toolCall: {
     toolCallId: string
     toolName: string
