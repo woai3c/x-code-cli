@@ -42,23 +42,18 @@ const entitiesFixPlugin = {
   },
 }
 
-// Plugin to fix signal-exit ESM/CJS interop.
-// signal-exit@4 (what's actually installed via Ink's dep tree) has NO default
-// export in either its ESM or CJS build — only named `onExit`. Earlier versions
-// had `module.exports = fn` which esbuild's CJS→ESM synth would sometimes
-// expose as a default, depending on which file esbuild's module graph
-// resolved to that build. That's what caused the intermittent
-// "No matching export ... for import 'default'" failures: same shim, but
-// esbuild's parallel worker state / cache decided between ESM (truly no
-// default) and CJS (synthetic default) non-deterministically.
-// Fix: re-export the real named `onExit` under both names so consumers
-// using `import { onExit }` and `import onExit` (default) both work — and
-// the import from the real module is a named one that exists in every build.
+// Plugin to fix signal-exit ESM/CJS interop across v3 and v4.
+// v3 ships `module.exports = fn` (no named `onExit`) — used by Ink@6.6.9.
+// v4 ships `{ onExit }` (no default) — used by execa@9.
+// Both versions coexist in the tree (pnpm scopes them per-consumer, Node ESM
+// finds each one correctly at dev time). esbuild resolves `signal-exit` once
+// per import site, so the shim below normalizes both shapes — `import onExit`
+// and `import { onExit }` both yield the function regardless of which version
+// was picked.
 const signalExitFixPlugin = {
   name: 'fix-signal-exit-default',
   setup(build) {
     build.onResolve({ filter: /^signal-exit$/ }, (args) => {
-      // Don't intercept imports from our own shim (breaks recursion)
       if (args.namespace === 'signal-exit-shim') return
       return {
         path: args.path,
@@ -67,7 +62,13 @@ const signalExitFixPlugin = {
       }
     })
     build.onLoad({ filter: /.*/, namespace: 'signal-exit-shim' }, (args) => ({
-      contents: `export { onExit, onExit as default } from 'signal-exit';`,
+      contents: `
+        import * as _m from 'signal-exit';
+        const _raw = _m.default ?? _m;
+        const _fn = typeof _raw === 'function' ? _raw : (_raw.onExit ?? _m.onExit);
+        export { _fn as onExit };
+        export default _fn;
+      `,
       loader: 'js',
       resolveDir: args.pluginData.resolveDir,
     }))
