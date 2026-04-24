@@ -140,3 +140,9 @@ vite.config.ts.timestamp-*
 
 .claude
 packages/cli/.x-code/plans/*
+
+# Copied into packages at publish time by CI — not source
+packages/cli/README.md
+packages/cli/README.en.md
+packages/cli/LICENSE
+packages/core/LICENSE

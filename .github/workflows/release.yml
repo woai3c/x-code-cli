@@ -29,6 +29,13 @@ jobs:
 
       - run: pnpm build
 
+      - name: Copy README and LICENSE into packages
+        run: |
+          cp LICENSE packages/core/LICENSE
+          cp LICENSE packages/cli/LICENSE
+          cp README.md packages/cli/README.md
+          cp README.en.md packages/cli/README.en.md
+
       - name: Publish to npm
         run: |
           cd packages/core && pnpm publish --provenance --access public --no-git-checks
