@@ -76,5 +76,20 @@ export function renderHeader(modelId: string): string {
  * Call this ONCE before Ink's render() so it is never re-drawn.
  */
 export function printHeader(modelId: string): void {
+  // Push the terminal viewport's existing content into scrollback and park
+  // the cursor at (1,1) before writing. Without this, when startup runs
+  // after noisy preamble (pnpm dev build logs, the user's command echo,
+  // etc.) the cursor sits near the bottom of the viewport — the banner
+  // lands there too, and ChatInput's bottom-pinned frame paints OVER the
+  // banner's last rows. That's why only the top half of the logo showed.
+  //
+  // `\n`×(rows-1) auto-scrolls prior viewport content into real scrollback
+  // history (still accessible by scrolling up in the terminal); `\x1b[H`
+  // then homes the cursor so the banner writes at row 1, leaving all rows
+  // below it blank for ChatInput to use as its pin-to-bottom territory.
+  const rows = process.stdout.rows ?? 25
+  if (process.stdout.isTTY && rows > 1) {
+    process.stdout.write('\n'.repeat(rows - 1) + '\x1b[H')
+  }
   process.stdout.write(renderHeader(modelId))
 }

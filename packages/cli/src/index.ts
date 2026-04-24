@@ -174,6 +174,20 @@ async function main() {
   // Combine prompt with stdin
   const fullPrompt = [stdinContent, prompt].filter(Boolean).join('\n\n')
 
+  // Print mode: bypass Ink entirely. Mounting the TUI refs raw stdin, which
+  // keeps the Node event loop alive past the queued unmount — that's why -p
+  // used to hang until a keypress. See packages/cli/src/print.ts.
+  if (argv.print) {
+    if (!fullPrompt) {
+      console.error('Error: -p / --print requires a prompt (as an argument or via stdin).')
+      process.exit(1)
+    }
+    const { runPrintMode } = await import('./print.js')
+    const code = await runPrintMode(model, options, fullPrompt)
+    resetTerminal()
+    process.exit(code)
+  }
+
   // Heads-up: WebSearch needs a key. Print once, before Ink takes over, so
   // the hint lands in scrollback above the TUI. Not fatal — WebFetch still
   // works key-less, and the tool itself returns a detailed error if invoked

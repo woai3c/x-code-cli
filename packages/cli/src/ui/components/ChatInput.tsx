@@ -904,6 +904,15 @@ export function ChatInput({
       writtenMessageCountRef.current = messages.length
     }
 
+    // Capture "is this the first active paint?" BEFORE we flip activeRef.
+    // The freeBlanks-seeding check below needs to know this, but the old
+    // `!activeRef.current` guard down at the seeding site was always false
+    // by the time it ran (we set activeRef=true just below), so the banner's
+    // above-frame blank-row credit never got seeded — and the first commit
+    // would pre-scroll through the banner rows instead of consuming the
+    // unowned blanks between banner and frame. Symptom: starting with an
+    // initial prompt (`xc "hi"`) clipped the top half of the logo.
+    const isFirstPaint = !activeRef.current
     activeRef.current = true
 
     // Keep the permission-slot reservation alive only until the first commit
@@ -1310,7 +1319,7 @@ export function ChatInput({
     // else up to where the frame sits is blank. Subsequent grows can
     // consume those blanks without pre-scrolling, so the banner stays
     // in view during normal operation.
-    if (!activeRef.current && initialContentRows > 0) {
+    if (isFirstPaint && initialContentRows > 0) {
       freeBlanksAboveFrameRef.current = Math.max(0, termRows - initialContentRows - nextH)
     }
 

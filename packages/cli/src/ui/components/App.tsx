@@ -73,12 +73,10 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle print mode — exit after first response
-  useEffect(() => {
-    if (options.printMode && !state.isLoading && state.messages.length > 1) {
-      cleanup().then(() => exit())
-    }
-  }, [state.isLoading, state.messages.length, options.printMode]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Print mode no longer flows through Ink — see packages/cli/src/print.ts.
+  // The earlier effect tried to `cleanup().then(exit)` here, but the raw-stdin
+  // ref from usePromptInput kept the event loop alive past unmount, so exit
+  // would hang until a keypress or terminal resize.
 
   /** Echo a slash command to the message history (so the user can see what they typed) */
   function echoCommand(text: string) {
