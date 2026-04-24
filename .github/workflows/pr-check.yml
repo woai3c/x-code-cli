@@ -57,6 +57,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
 
+  test:
+    name: Test (${{ matrix.os }})
+    # Windows is mandatory: shell-provider.test.ts exercises the PowerShell
+    # -EncodedCommand path which only runs on win32. Linux covers the POSIX
+    # bash/zsh path. Without both, the platform-specific regression tests
+    # get silently skipped on whichever OS is missing.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
   commitlint:
     name: Commit Message Check
     runs-on: ubuntu-latest

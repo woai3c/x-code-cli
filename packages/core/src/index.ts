@@ -33,7 +33,8 @@ export { classifyApiError } from './agent/api-errors.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'
-export { getShellConfig } from './tools/shell-utils.js'
+export { getShellProvider } from './tools/shell-provider.js'
+export type { ShellProvider, ShellType } from './tools/shell-provider.js'
 
 // Permissions
 export { checkPermission, getPermissionLevel } from './permissions/index.js'

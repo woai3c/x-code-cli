@@ -1,15 +1,16 @@
 // Tests for shell utility functions
 import { describe, expect, it } from 'vitest'
 
-import { getShellConfig, isDestructive, isReadOnly, splitShellCommands } from '../src/tools/shell-utils.js'
+import { getShellProvider } from '../src/tools/shell-provider.js'
+import { isDestructive, isReadOnly, splitShellCommands } from '../src/tools/shell-utils.js'
 
-describe('getShellConfig', () => {
-  it('returns a valid shell config', () => {
-    const config = getShellConfig()
-    expect(config).toHaveProperty('executable')
-    expect(config).toHaveProperty('args')
-    expect(config).toHaveProperty('type')
-    expect(['bash', 'zsh', 'powershell']).toContain(config.type)
+describe('getShellProvider', () => {
+  it('returns a provider with a valid shell type', () => {
+    const provider = getShellProvider()
+    expect(provider).toHaveProperty('type')
+    expect(provider).toHaveProperty('spawn')
+    expect(typeof provider.spawn).toBe('function')
+    expect(['bash', 'zsh', 'powershell']).toContain(provider.type)
   })
 })
 

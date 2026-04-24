@@ -1,29 +1,9 @@
-// @x-code-cli/core — Cross-platform shell detection and abstraction
-import os from 'node:os'
-
-export type ShellType = 'powershell' | 'bash' | 'zsh'
-
-export interface ShellConfig {
-  executable: string
-  args: string[]
-  type: ShellType
-}
-
-export function getShellConfig(): ShellConfig {
-  if (os.platform() === 'win32') {
-    // Git Bash / MSYS2 / Cygwin set SHELL to a Unix-style path (e.g. /usr/bin/bash).
-    // Prefer that shell when available so the Unix tool ecosystem works as expected.
-    const shell = process.env.SHELL
-    if (shell && /\b(bash|zsh)$/i.test(shell)) {
-      const type: ShellType = shell.endsWith('zsh') ? 'zsh' : 'bash'
-      return { executable: shell, args: ['-c'], type }
-    }
-    return { executable: 'powershell.exe', args: ['-NoProfile', '-Command'], type: 'powershell' }
-  }
-  const userShell = process.env.SHELL ?? '/bin/bash'
-  const type: ShellType = userShell.endsWith('zsh') ? 'zsh' : 'bash'
-  return { executable: userShell, args: ['-c'], type }
-}
+// @x-code-cli/core — Shell command semantic helpers (shell-agnostic).
+//
+// Splitting a compound command into sub-commands and classifying each as
+// read-only / destructive is used only for permission checks. The execution
+// side (spawning the shell process) lives in shell-provider.ts.
+export type { ShellType } from './shell-provider.js'
 
 /** Split compound shell commands by pipe/chain operators for permission checking */
 export function splitShellCommands(cmd: string): string[] {

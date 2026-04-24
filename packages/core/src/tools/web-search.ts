@@ -4,7 +4,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { reportProgress } from './progress.js'
-import { getShellConfig } from './shell-utils.js'
+import { getShellProvider } from './shell-provider.js'
 
 const YEAR = new Date().getFullYear()
 const BRAVE_TIMEOUT_MS = 15_000
@@ -46,7 +46,7 @@ async function searchWithBrave(query: string, maxResults: number): Promise<Searc
 }
 
 function buildMissingKeyError(): string {
-  const { type } = getShellConfig()
+  const { type } = getShellProvider()
   let setupBlock: string
 
   if (type === 'powershell') {

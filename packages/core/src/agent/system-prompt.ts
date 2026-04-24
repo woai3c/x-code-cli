@@ -1,5 +1,5 @@
 // @x-code-cli/core — System Prompt management
-import { getShellConfig } from '../tools/shell-utils.js'
+import { getShellProvider } from '../tools/shell-provider.js'
 
 const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal. You are powered by the {model} model.
 
@@ -96,10 +96,10 @@ export function buildSystemPrompt(options?: {
   modelId?: string
   isGitRepo?: boolean
 }): string {
-  const shellConfig = getShellConfig()
+  const shellProvider = getShellProvider()
 
   let prompt = BASE_SYSTEM_PROMPT.replace(/\{platform\}/g, process.platform)
-    .replace(/\{shell\}/g, shellConfig.type)
+    .replace(/\{shell\}/g, shellProvider.type)
     .replace(/\{cwd\}/g, process.cwd())
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
     .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')

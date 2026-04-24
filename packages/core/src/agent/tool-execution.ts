@@ -1,13 +1,11 @@
 // @x-code-cli/core — Tool execution & dispatch
-import { execa } from 'execa'
-
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
-import { getShellConfig } from '../tools/shell-utils.js'
+import { getShellProvider } from '../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import type { LoopState } from './loop-state.js'
 import { toolResultMessage } from './messages.js'
@@ -70,29 +68,7 @@ async function executeShell(
   callbacks: AgentCallbacks,
   toolCallId: string,
 ): Promise<{ output: string; isError: boolean }> {
-  const { executable, args, type } = getShellConfig()
-
-  // On Windows, force the console codepage to UTF-8 (65001) at the OS level
-  // BEFORE PowerShell starts parsing the command. This ensures even parse errors
-  // (e.g. `&&` on PS 5.1) produce UTF-8 output instead of GBK garbled text.
-  // We wrap via `cmd.exe /c "chcp 65001 >nul && powershell ..."` because
-  // [Console]::OutputEncoding only takes effect after parsing completes.
-  let proc
-  if (type === 'powershell') {
-    const escapedCommand = command.replace(/"/g, '\\"')
-    const psCmd = `chcp 65001 >nul && ${executable} ${args.join(' ')} "${escapedCommand}"`
-    proc = execa('cmd.exe', ['/c', psCmd], {
-      timeout,
-      reject: false,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    })
-  } else {
-    proc = execa(executable, [...args, command], {
-      timeout,
-      reject: false,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    })
-  }
+  const proc = getShellProvider().spawn(command, { timeout })
 
   reportProgress(toolCallId, 'Running command...')
 
