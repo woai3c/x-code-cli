@@ -1,3 +1,104 @@
+## v0.1.4 (2026-04-24)
+
+### Features
+
+- render failed tool results in red (3b68760)
+- upgrade to latest model ids and fix context windows (a699d89)
+- optimize all tool output format (1232cfc)
+- markdown tables, lists, tool results + streaming-safe drain (53e54ca)
+- soft-wrap long lines at viewport width (5685d72)
+- compact slash-command rendering + SelectOptions in cell buffer (3898884)
+- interactive /model picker + persist choice to ~/.x-code/config.json (ffa11ff)
+- auto-continue on length finishReason + raise maxOutputTokens (7878568)
+- add Brave fallback + fix over-compressed summaries (fcf6f3d)
+- name plan files by topic slug + timestamp (e21deb9)
+- improve no-API-key UX and raise input line cap (87bcd8f)
+- up/down arrow and PageUp/PageDown cursor movement in input (8cab8ff)
+- add cursor navigation to input box (baa0884)
+- rewrite input and message rendering pipeline (a184454)
+- improve webFetch + webSearch with caching, CF fallback, year injection (3fce43d)
+- frame prompt input with top/bottom rules and fix version (73e51d1)
+- overhaul terminal UI inspired by Claude Code (#3) (7b1ca5d)
+
+### Bug Fixes
+
+- blanks and hang around permission prompts (9a1559b)
+- terminal occasionally flickers and jitters when rendering content. (83040a1)
+- writeFile tool result shows correct line count instead of always 1 lines (c5f711a)
+- eliminate large blank areas that appear during the rendering process (4891fad)
+- an error occurs in rendering area content when resizing terminal height or width (d42ca0a)
+- ali model api error (50c614e)
+- dispatch typing/backspace immediately, debounce only pastes (58a152a)
+- /model picker choice beats X_CODE_MODEL env var (a1a3533)
+- pre-drain stream-result promises to close the rejection race (0cb20d5)
+- pair tool results with calls by id; align continuation indent (411e83c)
+- eliminate the issue of two pointers (68c250d)
+- drop fake inverse-video cursor, show real caret instead (81a6ae4)
+- terminal UI occasionally has a jitter problem when inputting text (#5) (ae98ecf)
+- DECSTBM scrollback insertion, cursor-position-neutral (570a541)
+- adjust state during render instead of setState-in-effect (f087f9e)
+- gate auto-memory writes + validate category whitelist (074e590)
+- pin signal-exit shim to the real named export (6a424e4)
+- fast Ctrl+C exit + drop token summary print (100bbe1)
+- eliminate bottom-region flicker + margin-top on user echo (d8f9b66)
+- prevent Ctrl+C hang by symmetric raw-mode cleanup + terminal reset (624edc4)
+- tui rendering error (0e737f3)
+- ChatInput owns bottom region to eliminate render jitter (363c79f)
+- eliminate CJK input render jitter (#4) (cc0ce37)
+- avoid exact-terminal-width separator to prevent intermittent jitter (bc34659)
+- permission UI rendering and plan mode entry logic (6e1691b)
+- replace Ink border Box with manual separator lines (0bdfd13)
+- CJK-aware viewport and double-ESC to clear input (efea0e0)
+- cursor visible on overflow, Ctrl+C works during loading, Mac ⌃C (d91181a)
+- add viewport for long input lines to prevent border artifacts (795369a)
+- prevent cursor from wrapping to next line in input box (a4502a7)
+- align permission UI, error handling, context compression, and exit with Claude Code (f7a9fd3)
+- improve cross-platform compatibility and unify global config directory (fdbb59e)
+- restore first-turn reply and sync theme with Claude Code (0443742)
+- signal-exit ESM/CJS interop in esbuild plugin (92afff7)
+
+### Refactors
+
+- align with the claude code markdown renderer (60cdedd)
+- split large modules, consolidate theme, cache perms (e9bd3b5)
+- drop config.json in favor of env-only configuration (d746666)
+- adopt AGENTS.md convention for project knowledge (2b558b7)
+- align color theme with Claude Code's dark palette (dc3c62d)
+- drive context compression by real API token usage (68a3c72)
+- remove dead streamingText state and unused components (f47046e)
+- drop auto cost estimation; sync code-flow doc (40b5060)
+
+### Documentation
+
+- rewrite README with bilingual (zh-CN default + English) versions (160e3b8)
+- update docs (eefcb64)
+- sync with recent code changes (exit flow, web-search, length continuation, build fix) (da79925)
+- sync knowledge system docs and add Q&A reference (9c358d7)
+- sync documentation with latest code changes (67ab350)
+- show persistent env-var setup instead of session-only examples (32450f2)
+- sync all docs with current implementation (84d1818)
+- update docs description (9aa2398)
+- add code-flow-analysis.md (c32b520)
+- update docs (46214b6)
+- add tools-comparison md (9f84cae)
+
+### Chores
+
+- udpate readme files (55a2611)
+- update readme file (9280848)
+- update readme doc names (7ebda48)
+- remove plan-mode tools and related scaffolding (1ed61ae)
+- remove DEBUG_STDOUT_PAYLOAD env (83313d5)
+- DEBUG_STDOUT=1 taps stream/buffer/stdout pipeline (4a5435e)
+- add source.removeUnusedImports for JSX React imports (2ee73f8)
+- repair fixAll-on-save and drop deprecated tseslint.config (7d704a6)
+- satisfy eslint react-hooks rules (56f1221)
+- add x-code files (e606ba1)
+
+### Other Changes
+
+- back out DECSTBM history insertion (d228dc8)
+
 ## v0.1.3 (2026-04-04)
 
 ### Bug Fixes
