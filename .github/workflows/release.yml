@@ -41,8 +41,11 @@ jobs:
           cd packages/core && pnpm publish --provenance --access public --no-git-checks
           cd ../cli && pnpm publish --provenance --access public --no-git-checks
 
+      - name: Extract latest changelog section
+        run: awk '/^## v/{c++} c==1' CHANGELOG.md > RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           generate_release_notes: false
