@@ -1,6 +1,6 @@
 # X-Code CLI
 
-[简体中文](./README.md) · [English](./README_EN.md)
+[简体中文](./README.md) · [English](./README.en.md)
 
 **X-Code CLI** is an AI coding assistant that runs in your terminal. Talk to your codebase in natural language and let it read, modify, debug, and build your project — all without leaving the command line.
 
@@ -36,25 +36,25 @@ After installation, launch with the `xc` or `x-code` command.
 
 You need at least one provider API key:
 
-| Variable                       | Provider                     |
-| ------------------------------ | ---------------------------- |
-| `ANTHROPIC_API_KEY`            | Anthropic (Claude)           |
-| `OPENAI_API_KEY`               | OpenAI (GPT)                 |
-| `DEEPSEEK_API_KEY`             | DeepSeek                     |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google (Gemini)              |
-| `ALIBABA_API_KEY`              | Alibaba (Qwen)               |
-| `XAI_API_KEY`                  | xAI (Grok)                   |
-| `ZHIPU_API_KEY`                | Zhipu (GLM)                  |
-| `MOONSHOT_API_KEY`             | Moonshot (Kimi)              |
+| Variable                       | Provider           |
+| ------------------------------ | ------------------ |
+| `ANTHROPIC_API_KEY`            | Anthropic (Claude) |
+| `OPENAI_API_KEY`               | OpenAI (GPT)       |
+| `DEEPSEEK_API_KEY`             | DeepSeek           |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google (Gemini)    |
+| `ALIBABA_API_KEY`              | Alibaba (Qwen)     |
+| `XAI_API_KEY`                  | xAI (Grok)         |
+| `ZHIPU_API_KEY`                | Zhipu (GLM)        |
+| `MOONSHOT_API_KEY`             | Moonshot (Kimi)    |
 
 ### Web Search Keys (optional)
 
 To enable web search (the `web_search` tool), set **either one** of the following:
 
-| Variable         | Provider                                       |
-| ---------------- | ---------------------------------------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                   |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/)  |
+| Variable         | Provider                                      |
+| ---------------- | --------------------------------------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) |
 
 **How to configure your API key**
 

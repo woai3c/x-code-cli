@@ -1,6 +1,6 @@
 # X-Code CLI
 
-[简体中文](./README.md) · [English](./README_EN.md)
+[简体中文](./README.md) · [English](./README.en.md)
 
 **X-Code CLI** 是一款运行在终端中的 AI 编码助手。你可以用自然语言与代码库对话，让它帮你阅读、修改、调试和构建项目，而无需离开命令行。
 
@@ -36,25 +36,25 @@ yarn global add @x-code-cli/cli
 
 至少配置一个模型厂商的 API Key 即可使用：
 
-| 环境变量                       | 厂商                    |
-| ------------------------------ | ----------------------- |
-| `ANTHROPIC_API_KEY`            | Anthropic（Claude）     |
-| `OPENAI_API_KEY`               | OpenAI（GPT）           |
-| `DEEPSEEK_API_KEY`             | DeepSeek                |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google（Gemini）        |
-| `ALIBABA_API_KEY`              | 阿里通义（Qwen）        |
-| `XAI_API_KEY`                  | xAI（Grok）             |
-| `ZHIPU_API_KEY`                | 智谱（GLM）             |
-| `MOONSHOT_API_KEY`             | Moonshot（Kimi）        |
+| 环境变量                       | 厂商                |
+| ------------------------------ | ------------------- |
+| `ANTHROPIC_API_KEY`            | Anthropic（Claude） |
+| `OPENAI_API_KEY`               | OpenAI（GPT）       |
+| `DEEPSEEK_API_KEY`             | DeepSeek            |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google（Gemini）    |
+| `ALIBABA_API_KEY`              | 阿里通义（Qwen）    |
+| `XAI_API_KEY`                  | xAI（Grok）         |
+| `ZHIPU_API_KEY`                | 智谱（GLM）         |
+| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    |
 
 ### 网页搜索 Key（可选）
 
 如需启用网页搜索（`web_search` 工具），从下面两个里**任选一个**配置即可：
 
-| 环境变量          | 提供方                    |
-| ----------------- | ------------------------- |
-| `TAVILY_API_KEY`  | [Tavily](https://tavily.com) |
-| `BRAVE_API_KEY`   | [Brave Search](https://brave.com/search/api/) |
+| 环境变量         | 提供方                                        |
+| ---------------- | --------------------------------------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) |
 
 **如何配置 API Key**
 
@@ -150,17 +150,17 @@ xc [options] [prompt]
 
 ## 斜杠命令
 
-| 命令            | 说明                              |
-| --------------- | --------------------------------- |
-| `/help`         | 查看所有可用命令                  |
+| 命令             | 说明                              |
+| ---------------- | --------------------------------- |
+| `/help`          | 查看所有可用命令                  |
 | `/model [alias]` | 切换模型或查看可用模型列表        |
-| `/usage`        | 查看 Token 用量（输入/输出/总计） |
-| `/clear`        | 清空当前会话                      |
-| `/compact`      | 手动压缩上下文                    |
-| `/init`         | 初始化项目知识库                  |
-| `/session save` | 保存当前会话（不退出）            |
-| `/plan`         | 进入计划模式                      |
-| `/exit`         | 保存会话并退出                    |
+| `/usage`         | 查看 Token 用量（输入/输出/总计） |
+| `/clear`         | 清空当前会话                      |
+| `/compact`       | 手动压缩上下文                    |
+| `/init`          | 初始化项目知识库                  |
+| `/session save`  | 保存当前会话（不退出）            |
+| `/plan`          | 进入计划模式                      |
+| `/exit`          | 保存会话并退出                    |
 
 ## 项目结构
 
