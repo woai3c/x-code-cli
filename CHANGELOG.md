@@ -1,3 +1,9 @@
+## v0.1.7 (2026-04-24)
+
+### Bug Fixes
+
+- normalize signal-exit v3/v4 interop in esbuild shim (59e9ac6)
+
 ## v0.1.6 (2026-04-24)
 
 ### Bug Fixes
