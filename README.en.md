@@ -34,6 +34,10 @@ After installation, launch with the `xc` or `x-code` command.
 
 ## Configure API Keys
 
+> **Important**: X-Code CLI does **not** ship with a built-in free model — **it won't run until you configure an API key**. Sign up with any provider below to get one.
+>
+> **Recommended: [DeepSeek](https://platform.deepseek.com/)** — cheap, reliable, strong coding ability, and free credits on signup. The best starting point for first-time users.
+
 You need at least one provider API key:
 
 | Variable                       | Provider           |

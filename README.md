@@ -34,6 +34,10 @@ yarn global add @x-code-cli/cli
 
 ## 配置 API Key
 
+> **必读**：X-Code CLI 没有内置免费模型，**未配置 API Key 将无法使用**。你需要自行到下方任意一家厂商注册账号并获取 API Key。
+>
+> **推荐 [DeepSeek](https://platform.deepseek.com/)**：价格便宜、国内访问稳定、代码能力足以覆盖日常开发，注册即送额度，是首次尝试本工具的最佳选择。
+
 至少配置一个模型厂商的 API Key 即可使用：
 
 | 环境变量                       | 厂商                |
