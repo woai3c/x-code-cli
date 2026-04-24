@@ -1,3 +1,11 @@
+## v0.1.6 (2026-04-24)
+
+### Bug Fixes
+
+- remove repeat changelog (bf251a4)
+- deepseek-v4 multi-turn thinking mode 400 error (ef0f9da)
+- -p mode cannot show product logo correctly (be61dcf)
+
 ## v0.1.5 (2026-04-24)
 
 ### Chores
