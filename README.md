@@ -166,6 +166,37 @@ xc [options] [prompt]
 | `/plan`          | 进入计划模式                      |
 | `/exit`          | 保存会话并退出                    |
 
+## 文件附件
+
+在提示词里引用文件路径，CLI 会自动把内容送给模型：
+
+```bash
+# @ 语法，显式附加
+> 看看 @D:\code\app\src\main.ts 里的 main 函数
+
+# 裸绝对路径也能识别（需带扩展名）
+> 总结一下 /home/me/report.pdf 的要点
+
+# 图片、PDF、docx、xlsx、pptx 都支持
+> 这张截图里哪里不对？@D:\screenshots\bug.png
+```
+
+各模型的支持情况：
+
+| 类型                 | Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM | DeepSeek          |
+| -------------------- | ------------------------------------------------ | ----------------- |
+| 文本代码文件         | 直接内联                                         | 直接内联          |
+| 文本型 PDF           | 本地抽文本（省 token）                           | 本地抽文本        |
+| 扫描型 PDF           | 作为 PDF 原生识别                                | 本地栅格化 + OCR  |
+| docx / xlsx / pptx   | 本地抽文本                                       | 本地抽文本        |
+| 图片 (png/jpg/...)   | 多模态原生识别                                   | 本地 OCR 兜底     |
+
+**DeepSeek 图片识别提醒**：DeepSeek 官方 API 不支持多模态视觉输入，CLI 会用 tesseract.js 本地 OCR 抽取图片里的文字作为降级方案。这意味着：
+
+- 只能拿到**图片中的文字**；颜色、布局、图表、照片内容都看不见
+- 中文 OCR 准确率一般，复杂排版或手写字容易出错
+- 图片要看结构/设计/视觉内容时，**建议切换到 Claude / Kimi / Qwen-VL / GLM-4V** 等多模态模型（`/model` 一键切换）
+
 ## 项目结构
 
 ```text

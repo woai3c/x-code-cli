@@ -1,7 +1,15 @@
 // @x-code-cli/cli — Agent state management hook
 import { useCallback, useRef, useState } from 'react'
 
-import { agentLoop, classifyApiError, compressMessages, initMemories, saveSession } from '@x-code-cli/core'
+import {
+  agentLoop,
+  buildUserContent,
+  capabilitiesOf,
+  classifyApiError,
+  compressMessages,
+  initMemories,
+  saveSession,
+} from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,
@@ -210,8 +218,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
       }
 
       try {
+        // Resolve any @path / bare-path references in the input into proper
+        // content parts (images for multimodal providers, extracted text for
+        // PDF/Office/non-vision providers). Falls through to the plain-string
+        // fast path when nothing attachable is detected.
+        const content = await buildUserContent(text, capabilitiesOf(modelIdRef.current))
+
         loopStateRef.current = await agentLoop(
-          text,
+          content,
           modelRef.current,
           { ...options, modelId: modelIdRef.current, abortSignal: controller.signal },
           callbacks,

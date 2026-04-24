@@ -166,6 +166,37 @@ xc [options] [prompt]
 | `/plan`          | Enter plan mode                           |
 | `/exit`          | Save session and exit                     |
 
+## File Attachments
+
+Mention a file path in your prompt and the CLI attaches its contents automatically:
+
+```bash
+# Explicit @-mention
+> what does @D:\code\app\src\main.ts do in its main function?
+
+# Bare absolute paths (must include an extension) work too
+> summarize the key points in /home/me/report.pdf
+
+# Images, PDFs, docx, xlsx, pptx are all supported
+> what's wrong in this screenshot? @D:\screenshots\bug.png
+```
+
+Per-provider support:
+
+| Kind                 | Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM | DeepSeek             |
+| -------------------- | ------------------------------------------------ | -------------------- |
+| Source / text files  | Inlined                                          | Inlined              |
+| Text PDF             | Extracted locally (saves tokens)                 | Extracted locally    |
+| Scanned PDF          | Native PDF input                                 | Local raster + OCR   |
+| docx / xlsx / pptx   | Extracted locally                                | Extracted locally    |
+| Images (png/jpg/...) | Native vision                                    | Local OCR fallback   |
+
+**Heads-up on DeepSeek and images**: the DeepSeek API has no multimodal vision input, so the CLI falls back to local OCR via `tesseract.js` to pull text out of images. That means:
+
+- You only get the **text printed in the image**; colors, layout, diagrams, photos, and any non-textual content are invisible to the model.
+- CJK OCR accuracy is mediocre, and stylized or handwritten text often fails.
+- For anything where you need the model to actually *see* the image, **switch to Claude / Kimi / Qwen-VL / GLM-4V** or another multimodal model (`/model` swaps instantly).
+
 ## Project Structure
 
 ```text

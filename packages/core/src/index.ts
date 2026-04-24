@@ -30,6 +30,12 @@ export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
 export { classifyApiError } from './agent/api-errors.js'
+export { buildUserContent, extractFileReferences, ingestFile, classifyFile } from './agent/file-ingest.js'
+export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'
+
+// Provider capabilities
+export { capabilitiesOf, providerOf } from './providers/capabilities.js'
+export type { ProviderCapabilities } from './providers/capabilities.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'

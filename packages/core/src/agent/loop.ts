@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { generateText, streamText } from 'ai'
-import type { LanguageModel, ModelMessage } from 'ai'
+import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
@@ -15,7 +15,7 @@ import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
-import { ensureReasoningContentParts } from './provider-compat.js'
+import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
@@ -162,6 +162,12 @@ async function runTurn(
   systemPrompt: string,
   callbacks: AgentCallbacks,
 ): Promise<TurnOutcome> {
+  // Text-only providers (DeepSeek, custom) would 400 on any surviving
+  // image/file parts. Rewrite those parts to OCR'd text in-place before
+  // the stream starts. Multimodal providers short-circuit inside the
+  // helper based on their capability flags.
+  await downgradeBinaryPartsForProvider(state.messages, options.modelId)
+
   let result: StreamResult
   try {
     result = streamText({
@@ -222,7 +228,7 @@ async function runTurn(
 
 /** Main agent loop. */
 export async function agentLoop(
-  userMessage: string,
+  userMessage: UserContent,
   model: LanguageModel,
   options: AgentOptions,
   callbacks: AgentCallbacks,
