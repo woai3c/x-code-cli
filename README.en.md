@@ -4,12 +4,12 @@
 
 **X-Code CLI** is an AI coding assistant that runs in your terminal. Talk to your codebase in natural language and let it read, modify, debug, and build your project — all without leaving the command line.
 
-It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 13 built-in tools (file I/O, shell execution, code search, etc.), and offers advanced capabilities such as a permission model, plan mode, context compression, and a knowledge system.
+It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 11 built-in tools (file I/O, shell execution, code search, etc.), and offers advanced capabilities such as a permission model, plan mode, context compression, and a knowledge system.
 
 ## Highlights
 
 - **Multi-model support** — 8 built-in providers plus any OpenAI-compatible custom endpoint
-- **13 built-in tools** — covers file, shell, search, web fetch, and other day-to-day dev tasks
+- **11 built-in tools** — covers file, shell, search, web fetch, and other day-to-day dev tasks
 - **3-level permission model** — safe by default; ask before writing, or use `--trust` to skip
 - **Streaming output** — see results as they generate
 - **Context compression** — long chats are auto-compressed to stay within token limits
@@ -174,7 +174,7 @@ x-code-cli/
 │   │       ├── knowledge/    Knowledge loader, auto-memory, session, project scan
 │   │       ├── permissions/  3-level permission system
 │   │       ├── providers/    AI SDK provider registry (8+)
-│   │       ├── tools/        13 tool implementations
+│   │       ├── tools/        11 tool implementations
 │   │       └── types/        Public TypeScript interfaces
 │   │
 │   └── cli/         @x-code-cli/cli     Terminal UI
