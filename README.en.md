@@ -53,12 +53,16 @@ You need at least one provider API key:
 
 ### Web Search Keys (optional)
 
-To enable web search (the `web_search` tool), set **either one** of the following:
+To enable web search (the `web_search` tool), set **either one** of the following. **Both providers have a free tier — no payment required for everyday use**:
 
-| Variable         | Provider                                      |
-| ---------------- | --------------------------------------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) |
+| Variable         | Provider                                      | Free quota                                                       | Signup friction                  |
+| ---------------- | --------------------------------------------- | ---------------------------------------------------------------- | -------------------------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | **1,000 credits / month** (basic search = 1 credit, so 1000 searches/mo) | Email signup, **no credit card** |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | **$5 free credit / month** (Search at $5 per 1k requests = ~1000 searches/mo) | Credit card required to activate |
+
+> **For first-time setup we recommend Tavily** — lighter signup, and the response format is purpose-built for LLMs (clean summaries instead of raw SERP snippets). If you set both, Tavily wins; Brave is the automatic fallback.
+>
+> Quota figures come from the official docs ([Tavily](https://docs.tavily.com/documentation/api-credits), [Brave](https://brave.com/search/api/)) and may change — check the linked pages for current numbers.
 
 **How to configure your API key**
 
@@ -209,6 +213,24 @@ Per-provider support:
 - The sub-agent returns **a text description**, not true multimodal interaction — DeepSeek cannot ask follow-up questions about the image (e.g. "what color is the button in the top-right?" will fail).
 - For complex UI reproduction or pixel-level layout review, the description loses detail.
 - For those cases, `/model` switch directly to Claude / Gemini / GLM-4V or another multimodal model and continue the conversation there.
+
+## Troubleshooting
+
+To capture a debug log when reporting a bug, launch with `DEBUG_STDOUT=1`:
+
+```bash
+DEBUG_STDOUT=1 xc
+```
+
+The log lives under your home directory:
+
+- **Path**: `~/.x-code/logs/debug.log` (with rotated `debug.log.1`)
+- **Size cap**: 10 MB per file, ~20 MB total with rotation — oldest data is overwritten automatically
+- **Capacity guide**: ~5 MB of debug log per ~50-turn agent run, so a typical multi-turn need fits entirely in the active file; rotation only triggers past ~100 turns
+- **Line guarantee**: each entry is capped at 1 KB (truncated with a marker if longer), so each rotation cycle holds **≥ 20,000 lines**
+- **View**: `tail -f ~/.x-code/logs/debug.log`, or attach the file to your issue
+
+The log file is written only when `DEBUG_STDOUT=1` is set; default runs incur zero overhead.
 
 ## Project Structure
 

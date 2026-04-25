@@ -53,12 +53,16 @@ yarn global add @x-code-cli/cli
 
 ### 网页搜索 Key（可选）
 
-如需启用网页搜索（`web_search` 工具），从下面两个里**任选一个**配置即可：
+如需启用网页搜索（`web_search` 工具），从下面两个里**任选一个**配置即可。**两家都有免费额度，不用花钱**：
 
-| 环境变量         | 提供方                                        |
-| ---------------- | --------------------------------------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) |
+| 环境变量         | 提供方                                        | 免费额度                                                   | 注册门槛                |
+| ---------------- | --------------------------------------------- | ---------------------------------------------------------- | ----------------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | **每月 1,000 credits**（基础搜索 1 credit/次，即 1000 次/月）  | 邮箱注册即可，**无需信用卡** |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | **每月 $5 免费额度**（Search 端点 $5/1000 次，即 1000 次/月） | 需要绑定信用卡才能开通  |
+
+> **首次配置推荐 Tavily** —— 注册更轻量，且专门为 LLM 优化过返回格式（已清洗的摘要，不是原始 SERP）。两个都配会优先走 Tavily，缺失时回退 Brave。
+>
+> 额度数据来自官方文档（[Tavily](https://docs.tavily.com/documentation/api-credits) / [Brave](https://brave.com/search/api/)），可能随时调整，以官方页面为准。
 
 **如何配置 API Key**
 
@@ -209,6 +213,24 @@ xc [options] [prompt]
 - 辅助模型给的是**一段文字描述**,不是真正的多模态对话 — DeepSeek 没法对图追问("左上角按钮什么颜色?"会失败)
 - 复杂 UI 还原、像素级布局校验等任务,描述会丢细节
 - 这类场景请直接 `/model` 切到 Claude / Gemini / GLM-4V 等多模态模型,在那里完成对话
+
+## 排查问题
+
+遇到 bug 想抓日志,加上 `DEBUG_STDOUT=1` 启动:
+
+```bash
+DEBUG_STDOUT=1 xc
+```
+
+日志写在全局目录下:
+
+- **位置**: `~/.x-code/logs/debug.log`(以及滚动过的 `debug.log.1`)
+- **大小上限**: 单文件 10MB,加滚动备份共 ~20MB,自动覆盖最旧的
+- **容量参考**: 一次需求约 50 轮对话产生 ~5MB 日志,**单个 active 文件能完整装下**;100+ 轮才会触发滚动
+- **行数保证**: 单条 entry 最长 1KB(超出截断并标注),滚动周期内**至少 2 万行**
+- **查看**: `tail -f ~/.x-code/logs/debug.log` 或附到 Issue 里
+
+只在 `DEBUG_STDOUT=1` 时才写文件,默认零开销。
 
 ## 项目结构
 
