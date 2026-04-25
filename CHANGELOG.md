@@ -1,3 +1,14 @@
+## v0.1.9 (2026-04-25)
+
+### Features
+
+- /usage shows token + cache-hit stats per session (f58b8f2)
+
+### Chores
+
+- prep for publish — debug log + search-key docs (23fb9b9)
+- gitignore .x-code/ project state (c7ff756)
+
 ## v0.1.8 (2026-04-25)
 
 ### Features
