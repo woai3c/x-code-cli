@@ -11,6 +11,14 @@ export interface TokenUsage {
   inputTokens: number
   outputTokens: number
   totalTokens: number
+  /** Cached prompt tokens read (Anthropic cache_read, OpenAI cached_tokens, etc.).
+   *  Billed at a fraction of normal input rate — ratio depends on the provider.
+   *  Already counted in `inputTokens`; this field is purely informational. */
+  cacheReadTokens: number
+  /** Tokens written to provider-side cache (Anthropic cache_creation_input_tokens).
+   *  Billed at a premium over normal input rate but unlocks cheap reads on
+   *  subsequent turns. Zero on providers that don't separate creation from read. */
+  cacheCreationTokens: number
 }
 
 // ─── Display messages ───

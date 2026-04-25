@@ -12,7 +12,20 @@ export interface StreamResult {
     toolCallId?: string
   }>
   response: Promise<{ messages: ModelMessage[] }>
-  usage: Promise<{ inputTokens?: number; outputTokens?: number } | undefined>
+  usage: Promise<
+    | {
+        inputTokens?: number
+        outputTokens?: number
+        /** AI SDK v6 normalizes provider cache fields here. cacheReadTokens
+         *  is a subset of inputTokens (don't double-count); cacheWriteTokens
+         *  is what Anthropic charges as cache_creation_input_tokens. */
+        inputTokenDetails?: {
+          cacheReadTokens?: number
+          cacheWriteTokens?: number
+        }
+      }
+    | undefined
+  >
   finishReason: Promise<string>
   toolCalls: Promise<
     Array<{

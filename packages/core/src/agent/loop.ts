@@ -7,6 +7,7 @@ import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
+import { persistUsageSnapshot } from '../knowledge/session-usage.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
@@ -166,9 +167,16 @@ async function collectTurnResponse(
   if (usage) {
     state.tokenUsage.inputTokens += usage.inputTokens ?? 0
     state.tokenUsage.outputTokens += usage.outputTokens ?? 0
+    // AI SDK v6 normalizes provider cache fields into inputTokenDetails:
+    //   cacheReadTokens  ← Anthropic cache_read_input_tokens / OpenAI cached_tokens
+    //   cacheWriteTokens ← Anthropic cache_creation_input_tokens (others: 0)
+    // Both are subsets of inputTokens, so we don't double-count into total.
+    state.tokenUsage.cacheReadTokens += usage.inputTokenDetails?.cacheReadTokens ?? 0
+    state.tokenUsage.cacheCreationTokens += usage.inputTokenDetails?.cacheWriteTokens ?? 0
     state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
     if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
     callbacks.onUsageUpdate(state.tokenUsage)
+    void persistUsageSnapshot(state, modelId)
   }
 
   return result.finishReason

@@ -25,7 +25,7 @@ export interface LoopState {
 export function createLoopState(): LoopState {
   return {
     messages: [],
-    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
     lastInputTokens: 0,
     sessionId: Date.now().toString(36),
     startedAt: new Date().toISOString(),

@@ -158,7 +158,7 @@ xc [options] [prompt]
 | ---------------- | ----------------------------------------- |
 | `/help`          | Show available commands                   |
 | `/model [alias]` | Switch model or list available            |
-| `/usage`         | Show token usage (input / output / total) |
+| `/usage`         | Show current-session token usage incl. cache hits; `/usage history` lists past sessions in this project |
 | `/clear`         | Clear conversation                        |
 | `/compact`       | Manually compress context                 |
 | `/init`          | Initialize project knowledge              |
