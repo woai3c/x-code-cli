@@ -228,3 +228,9 @@ Claude Code 的解法是 vendor 一份自己的 Ink 分支加 grapheme-aware str
 - h1 bold + underline + accent color、h2 bold + accent、h3+ 仅 bold（有视觉层级）
 
 整个 renderer 大约 280 行，没有依赖 Chalk 外的重型东西。
+
+### 12. 优化 token 消耗
+
+### 13. 支持多媒体文件(尤其是 deepseek)
+
+### 14. 终端渲染区的问题和优化
