@@ -64,8 +64,14 @@ const signalExitFixPlugin = {
     build.onLoad({ filter: /.*/, namespace: 'signal-exit-shim' }, (args) => ({
       contents: `
         import * as _m from 'signal-exit';
-        const _raw = _m.default ?? _m;
-        const _fn = typeof _raw === 'function' ? _raw : (_raw.onExit ?? _m.onExit);
+        // Bracket access via a variable key so esbuild can't statically
+        // prove that 'default' is missing from the v4 namespace and emit
+        // an "import-is-undefined" warning. The runtime behavior is the
+        // same as _m.default, but esbuild stops trying to constant-fold it.
+        const _ns = _m;
+        const _defaultKey = 'default';
+        const _raw = _ns[_defaultKey] ?? _ns;
+        const _fn = typeof _raw === 'function' ? _raw : (_raw.onExit ?? _ns.onExit);
         export { _fn as onExit };
         export default _fn;
       `,
