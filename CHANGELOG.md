@@ -1,3 +1,27 @@
+## v0.1.8 (2026-04-25)
+
+### Features
+
+- auto vision sub-agent for text-only providers (1642ba3)
+- attach files and images to user messages (a13aa28)
+
+### Bug Fixes
+
+- silence esbuild signal-exit shim 'import-is-undefined' warning (906ea61)
+- use powershell -EncodedCommand to fix windows quoting (888e5d1)
+
+### Performance
+
+- cut context bloat with truncation, loop guard, and prompt caching (5af7760)
+
+### Documentation
+
+- update docs (0f1ef15)
+
+### Tests
+
+- drop tautology tests, keep behavioral coverage (329deaa)
+
 ## v0.1.7 (2026-04-24)
 
 ### Bug Fixes
