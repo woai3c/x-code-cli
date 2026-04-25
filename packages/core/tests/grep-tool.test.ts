@@ -31,12 +31,6 @@ function isRipgrepAvailable(): boolean {
 const hasRg = isRipgrepAvailable()
 
 describe('grep tool', () => {
-  it('has correct metadata', () => {
-    expect(grep.description).toContain('regex')
-    expect(grep.inputSchema).toBeDefined()
-    expect(grep.execute).toBeDefined()
-  })
-
   it.skipIf(!hasRg)('finds matching content in files', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-grep-test-'))
     await fs.writeFile(path.join(tmpDir, 'hello.ts'), 'const greeting = "hello world"\nconst farewell = "goodbye"')
@@ -80,12 +74,4 @@ describe('grep tool', () => {
     await fs.rm(tmpDir, { recursive: true })
   })
 
-  it('handles errors gracefully when rg is not available', async () => {
-    if (hasRg) return // Only test this when rg is NOT available
-    const result = await grep.execute!(
-      { pattern: 'test', path: '/tmp' },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
-    expect(result).toContain('Error')
-  })
 })

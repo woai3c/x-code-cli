@@ -1,18 +1,8 @@
-// Tests for shell utility functions
+// Tests for shell utility functions.
+// (`getShellProvider` shape check lives in shell-provider.test.ts.)
 import { describe, expect, it } from 'vitest'
 
-import { getShellProvider } from '../src/tools/shell-provider.js'
 import { isDestructive, isReadOnly, splitShellCommands } from '../src/tools/shell-utils.js'
-
-describe('getShellProvider', () => {
-  it('returns a provider with a valid shell type', () => {
-    const provider = getShellProvider()
-    expect(provider).toHaveProperty('type')
-    expect(provider).toHaveProperty('spawn')
-    expect(typeof provider.spawn).toBe('function')
-    expect(['bash', 'zsh', 'powershell']).toContain(provider.type)
-  })
-})
 
 describe('splitShellCommands', () => {
   it('handles a single command', () => {

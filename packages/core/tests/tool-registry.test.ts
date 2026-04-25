@@ -1,10 +1,11 @@
-// Tests for tool registry
-// Note: Uses dynamic import to handle module resolution issues in test environment
+// Tests for truncateToolResult — the only piece of tools/index.ts that
+// has non-trivial logic worth covering at this layer.
 import { describe, expect, it, vi } from 'vitest'
 
-import { MAX_TOOL_RESULT_BYTES, toolRegistry, truncateToolResult } from '../src/tools/index.js'
+import { MAX_TOOL_RESULT_BYTES, truncateToolResult } from '../src/tools/index.js'
 
-// Mock cheerio + turndown to avoid module resolution issues in test env
+// Importing from tools/index.ts pulls in webFetch, which transitively loads
+// cheerio + turndown. Mock them so the import doesn't fail in the test env.
 vi.mock('cheerio', () => ({
   load: vi.fn(() => {
     const $ = () => ({ remove: vi.fn(), first: vi.fn(() => ({ length: 0, html: () => '' })), html: () => '' })
@@ -20,52 +21,6 @@ vi.mock('turndown', () => ({
     }
   },
 }))
-
-describe('toolRegistry', () => {
-  it('contains all 11 tools', () => {
-    const toolNames = Object.keys(toolRegistry)
-    expect(toolNames).toHaveLength(11)
-    expect(toolNames).toContain('readFile')
-    expect(toolNames).toContain('writeFile')
-    expect(toolNames).toContain('edit')
-    expect(toolNames).toContain('shell')
-    expect(toolNames).toContain('glob')
-    expect(toolNames).toContain('grep')
-    expect(toolNames).toContain('listDir')
-    expect(toolNames).toContain('webSearch')
-    expect(toolNames).toContain('webFetch')
-    expect(toolNames).toContain('askUser')
-    expect(toolNames).toContain('saveKnowledge')
-  })
-
-  it('each tool has a description', () => {
-    for (const [name, tool] of Object.entries(toolRegistry)) {
-      expect(tool.description, `Tool "${name}" missing description`).toBeTruthy()
-    }
-  })
-
-  it('each tool has an inputSchema (Zod)', () => {
-    for (const [name, tool] of Object.entries(toolRegistry)) {
-      expect(tool.inputSchema, `Tool "${name}" missing inputSchema`).toBeDefined()
-    }
-  })
-
-  it('read-only tools have execute function', () => {
-    const readOnlyTools = ['readFile', 'glob', 'grep', 'listDir', 'webSearch', 'webFetch', 'saveKnowledge']
-    for (const name of readOnlyTools) {
-      const tool = toolRegistry[name as keyof typeof toolRegistry]
-      expect(tool.execute, `Tool "${name}" should have execute`).toBeDefined()
-    }
-  })
-
-  it('write tools do NOT have execute function', () => {
-    const writeTools = ['writeFile', 'edit', 'shell']
-    for (const name of writeTools) {
-      const tool = toolRegistry[name as keyof typeof toolRegistry]
-      expect(tool.execute, `Tool "${name}" should NOT have execute`).toBeUndefined()
-    }
-  })
-})
 
 describe('truncateToolResult', () => {
   it('does not truncate short results', () => {

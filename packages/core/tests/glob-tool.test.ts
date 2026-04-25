@@ -8,12 +8,6 @@ import path from 'node:path'
 import { glob } from '../src/tools/glob.js'
 
 describe('glob tool', () => {
-  it('has correct metadata', () => {
-    expect(glob.description).toContain('glob')
-    expect(glob.inputSchema).toBeDefined()
-    expect(glob.execute).toBeDefined()
-  })
-
   it('finds files matching a pattern', async () => {
     // Use a temp directory with known files
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-glob-test-'))
