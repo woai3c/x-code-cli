@@ -139,7 +139,10 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 .claude
-packages/cli/.x-code/plans/*
+
+# x-code-cli per-user state — sessions, auto-memory, plans, local prefs.
+# Each contributor's conversations/prefs differ; never share these.
+.x-code/
 
 # Copied into packages at publish time by CI — not source
 packages/cli/README.md
