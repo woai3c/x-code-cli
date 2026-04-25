@@ -1,8 +1,9 @@
 // @x-code-cli/cli — Shared tool display utilities
 //
 // Provides human-readable labels, input previews, and result summaries
-// for tool calls. Used by both MessageList (Static history) and ToolCall
-// (live in-progress indicator).
+// for tool calls. Used by ChatInput's scrollback writer (committed tool
+// rows) and its in-frame live tool indicator (`● Tool / ⎿ ⠋ Running...`)
+// so both render paths produce the same label / preview / summary text.
 //
 // Tool name matching is case-insensitive to handle model/provider
 // variations (e.g. "listDir" vs "ListDir", "readFile" vs "Read").

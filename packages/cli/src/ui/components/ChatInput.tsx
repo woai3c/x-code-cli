@@ -1,4 +1,5 @@
-// @x-code-cli/cli — Bottom dynamic region (spinner + input box).
+// @x-code-cli/cli — Bottom dynamic region (spinner + input box) AND the
+// scrollback commit path for new messages.
 //
 // RENDERING STRATEGY — CELL-LEVEL DIFF, DIRECT STDOUT:
 //   Ink's Yoga layout and log-update both miscount CJK/IME widths. Even
@@ -12,19 +13,17 @@
 //     - Unchanged CJK cells are NEVER re-emitted → no redraw jitter
 //
 //   We return `null` to Ink so Ink's dynamic region is empty; we own
-//   everything below MessageList's scrollback.
+//   everything below the scrollback the user has already seen.
 //
 // THINGS THIS COMPONENT OWNS (instead of Ink):
 //     - The loading spinner row (when `isLoading` is true)
 //     - Top/bottom separator lines
 //     - Input text with cursor
 //     - Slash-command completion menu
-//
-// COORDINATION WITH MessageList's SCROLLBACK WRITES:
-//   Before `onSubmit` fires, we synchronously eraseRegion() so that when
-//   MessageList's useEffect writes the user-echo via Ink's write(), the
-//   terminal cursor is parked at the top-left of a blank region — the
-//   echo lands cleanly instead of overwriting our bottom separator.
+//     - In-frame Permission and SelectOptions dialogs
+//     - Committing newly-arrived `messages` to scrollback above the frame
+//       (via writeMessageToStdout, collected into the same atomic payload
+//       as the frame redraw — see the flush effect)
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 
 import { useStdout } from 'ink'
@@ -641,11 +640,9 @@ export function ChatInput({
     // Let the normal render useEffect handle the transition. The next
     // render sees `messages.length > writtenMessageCountRef` (user-echo
     // just got appended inside onSubmit) and emits a single atomic
-    // BSU/ESU-wrapped payload of: eraseRegion + writeMessageToStdout +
-    // new frame. An extra synchronous eraseRegion here used to exist
-    // "to clear space for MessageList's separate scrollback write", but
-    // MessageList has been retired — this component owns both the
-    // frame and the scrollback commit, so the redundant write was just
+    // BSU/ESU-wrapped payload of: gap-clear + scrollback content + frame
+    // redraw. No synchronous pre-erase here — that used to exist to
+    // make room for a now-retired separate MessageList writer, and was
     // a second non-atomic flash on every submit.
     onSubmit(expanded)
     dispatch({ type: 'RESET' })
@@ -1442,32 +1439,111 @@ export function ChatInput({
         ? Math.max(0, availSpace + preScrollRows - scrollRows - nextH)
         : 0
       pendingFreeBlanks = leftoverBlanks
-      preBuf += '\x1b[?25l'
-      if (preScrollRows > 0) {
-        // Full-screen scroll at termRows to push `preScrollRows` rows into
-        // the terminal's real scrollback (the only mechanism xterm.js
-        // honors — DECSTBM regions splice-discard in its InputHandler).
-        preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
+      // No `\x1b[?25l` here. Earlier revisions hid the cursor across the
+      // scroll-clear-redraw window so its intermediate positions inside
+      // the renderRowToAnsi loop wouldn't blink across rows on terminals
+      // that don't fully atomize DEC 2026 — but at the 10-15Hz commit
+      // cadence of streaming responses this produced exactly the same
+      // hide/show flap that the spinner-tick path already removed for
+      // the same reason (see comment at the top of this file). DEC 2026
+      // sync on every target terminal (xterm.js / VSCode, Windows
+      // Terminal, iTerm2, Ghostty) already buffers the intermediate
+      // positions, and ESU_SHOW at the bottom of this render places the
+      // cursor at the input column. Cursor stays visible throughout.
+      // Two paths from here:
+      //
+      //   FULL-REDRAW PATH — used when (a) the new content forces a
+      //     full-screen scroll (preScrollRows > 0) so the frame slid off
+      //     the bottom and must be repainted at the new bottom, OR
+      //     (b) the frame's height is changing this render (oldFrameH
+      //     !== nextH), e.g. the spinner is appearing/disappearing or
+      //     a permission dialog is opening/closing. Frame-height changes
+      //     can't go through the optimization below because the cell-
+      //     diff loop's `maxH = max(prevH, nextH)` then iterates past
+      //     the new bottom row, triggering a `\x1b[1B\r` from the last
+      //     terminal row and auto-scrolling the bottom separator out of
+      //     view. Symptom this cured: the bottom `─────` row vanishing
+      //     the moment an AI reply finished (frame went 4-row → 3-row
+      //     at end-of-stream).
+      //
+      //   MINIMAL-WRITE PATH — used when the frame is stable in size
+      //     AND no scroll is needed. Streaming responses spend almost
+      //     all their commits here. Don't `[J]`-clear or repaint the
+      //     frame at all; only clear the gap rows between scrollback
+      //     and frame, and let the cell-diff loop below pick up genuine
+      //     frame changes (typically just the 1-cell spinner glyph
+      //     swap). This is what eliminates the visible wipe-and-repaint
+      //     of the spinner / separator / input rows on every commit.
+      const frameSizeChanged = oldFrameH !== nextH
+      if (preScrollRows > 0 || frameSizeChanged) {
+        // FULL-REDRAW PATH.
+        if (preScrollRows > 0) {
+          // Push `preScrollRows` rows into the terminal's real scrollback.
+          // We use SU (`\x1b[NS`, Scroll Up) instead of N separate LFs
+          // emitted at termRows. Both produce the same end state — buffer
+          // shifted up by N, bottom N rows blank — but differ in how the
+          // terminal's renderer processes them:
+          //
+          //   `\n*N` at termRows: each LF triggers a single-row auto-scroll,
+          //     so xterm.js calls its `scroll()` handler N times. The
+          //     renderer's line-cache update path runs once per scroll, and
+          //     a large-table commit (preScrollRows ~9) measurably flickers
+          //     even inside a DEC 2026 sync block because the N
+          //     intermediate buffer states leak into one paint.
+          //
+          //   `\x1b[NS`: a single SU sequence batches the N-row shift in
+          //     one operation. The renderer adjusts its line cache once,
+          //     for the full N-row delta, which is what every modern
+          //     terminal (xterm, xterm.js, Windows Terminal, iTerm2,
+          //     Ghostty, ConHost) optimizes for.
+          //
+          // DECSTBM-restricted scrolling would also work but xterm.js
+          // splice-discards DECSTBM regions in its InputHandler — full-
+          // screen SU is the only mechanism that lands in real scrollback.
+          preBuf += `\x1b[${termRows};1H\x1b[${preScrollRows}S`
+        }
+        // Erase from startRow to the bottom of the screen. startRow is at
+        // or above the (post-scroll) top of the old frame, so this clears
+        // both the shifted old-frame cells and the leftover-blank region.
+        preBuf += `\x1b[${startRow};1H\x1b[J`
+        preBuf += scrollbackContent
+        // scrollbackContent lands the cursor at col 1 of the row
+        // immediately below its last row. That matches the new frame top
+        // only when leftoverBlanks === 0; otherwise we must jump to the
+        // frame top so the renderRowToAnsi loop below draws frame rows
+        // pinned to the bottom with the blank gap sitting above them
+        // (where the next commit will consume it).
+        if (leftoverBlanks > 0) {
+          preBuf += `\x1b[${frameTop};1H`
+        }
+        for (let i = 0; i < nextH; i++) {
+          preBuf += renderRowToAnsi(frame[i]) + '\x1b[K'
+          if (i < nextH - 1) preBuf += '\r\n'
+        }
+        prevFrameRef.current = frame
+      } else {
+        // MINIMAL-WRITE PATH (the dominant case during streaming).
+        // Clear ONLY the rows in [startRow, frameTop), write scrollback
+        // into them, and leave the frame area untouched. The cell-diff
+        // loop below compares the unchanged on-screen frame against the
+        // new frame and emits only the cells that actually differ
+        // (spinner glyph, elapsed-time digits).
+        for (let r = startRow; r < frameTop; r++) {
+          preBuf += `\x1b[${r};1H\x1b[K`
+        }
+        preBuf += `\x1b[${startRow};1H` + scrollbackContent
+        // If scrollbackContent ended above frameTop (leftoverBlanks > 0),
+        // park the cursor at frameTop so the cell-diff loop's
+        // `\x1b[frameTop;1H` at the start of buf is a no-op rather than
+        // an upward jump that would briefly show the cursor mid-screen.
+        if (leftoverBlanks > 0) {
+          preBuf += `\x1b[${frameTop};1H`
+        }
+        // DON'T set prevFrameRef.current = frame here — the on-screen
+        // frame is still the previous render's frame (we didn't repaint
+        // it), and the cell-diff loop below needs to compare against
+        // that to find the cells that genuinely changed.
       }
-      // Erase from startRow to the bottom of the screen. startRow is at
-      // or above the (post-scroll) top of the old frame, so this clears
-      // both the shifted old-frame cells and the leftover-blank region.
-      preBuf += `\x1b[${startRow};1H\x1b[J`
-      preBuf += scrollbackContent
-      // scrollbackContent lands the cursor at col 1 of the row immediately
-      // below its last row. That matches the new frame top only when
-      // leftoverBlanks === 0; otherwise we must jump to the frame top so
-      // the renderRowToAnsi loop below draws frame rows pinned to the
-      // bottom with the blank gap sitting above them (where the next
-      // commit will consume it).
-      if (leftoverBlanks > 0) {
-        preBuf += `\x1b[${termRows - nextH + 1};1H`
-      }
-      for (let i = 0; i < nextH; i++) {
-        preBuf += renderRowToAnsi(frame[i]) + '\x1b[K'
-        if (i < nextH - 1) preBuf += '\r\n'
-      }
-      prevFrameRef.current = frame
       handledCommitWithFrame = true
     } else if (didCommitMessages) {
       // scrollRows == 0 (empty commit) or degenerate dimensions: dump at
