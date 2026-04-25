@@ -55,21 +55,29 @@ export function hashToolCall(toolName: string, input: unknown): string {
   return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 16)
 }
 
+/** Common header carrying the precomputed call hash. Threaded through the
+ *  result so {@link recordToolCall} can reuse it instead of hashing twice. */
+interface LoopCheckBase {
+  hash: string
+}
+
 export type LoopCheck =
   /** No loop detected — dispatch this tool call normally. */
-  | { kind: 'ok' }
+  | (LoopCheckBase & { kind: 'ok' })
   /** Loop detected at soft threshold — inject a synthetic tool-result that
    *  tells the model to stop, and SKIP actually running the tool this round.
    *  `toolCallId` is the id of the current call so the synthetic result
    *  reads as the response to it. */
-  | { kind: 'soft-block'; toolCallId: string; message: string }
+  | (LoopCheckBase & { kind: 'soft-block'; toolCallId: string; message: string })
   /** Loop detected at hard threshold — abort the turn and prompt the user. */
-  | { kind: 'hard-block'; toolName: string; message: string }
+  | (LoopCheckBase & { kind: 'hard-block'; toolName: string; message: string })
 
 /**
  * Check whether the incoming tool call is a duplicate of recent calls in the
  * window, and report what the caller should do. Does NOT mutate state — the
  * caller commits the hash via {@link recordToolCall} once the call proceeds.
+ * The returned `hash` should be passed to `recordToolCall` to avoid a second
+ * SHA256 of the same input.
  *
  * We only count matches that share the same hash AND the same toolName; a
  * fresh command with identical-looking args under a different tool never
@@ -79,18 +87,18 @@ export function checkForLoop(state: LoopState, toolName: string, input: unknown,
   const hash = hashToolCall(toolName, input)
   const window = state.recentToolCalls.slice(-LOOP_WINDOW_SIZE)
 
-  let identical = 0
+  let priorMatches = 0
   for (const entry of window) {
-    if (entry.toolName === toolName && entry.hash === hash) identical++
+    if (entry.toolName === toolName && entry.hash === hash) priorMatches++
   }
 
   // The current incoming call is what pushes us over the threshold, so we
   // compare against N-1 prior matches.
-  const priorMatches = identical
 
   if (priorMatches + 1 >= HARD_LOOP_THRESHOLD) {
     return {
       kind: 'hard-block',
+      hash,
       toolName,
       message: `Tool ${toolName} has been called with identical arguments ${priorMatches + 1} times in a row. The model is looping; aborting this turn.`,
     }
@@ -99,6 +107,7 @@ export function checkForLoop(state: LoopState, toolName: string, input: unknown,
   if (priorMatches + 1 >= SOFT_LOOP_THRESHOLD) {
     return {
       kind: 'soft-block',
+      hash,
       toolCallId,
       message:
         `This exact ${toolName} call (same arguments) has already been attempted ${priorMatches + 1} times this session with the same result. ` +
@@ -106,14 +115,15 @@ export function checkForLoop(state: LoopState, toolName: string, input: unknown,
     }
   }
 
-  return { kind: 'ok' }
+  return { kind: 'ok', hash }
 }
 
 /** Commit a tool call to the rolling window. Bound size so the array doesn't
- *  grow for long sessions. */
-export function recordToolCall(state: LoopState, toolName: string, input: unknown): void {
-  const hash = hashToolCall(toolName, input)
-  state.recentToolCalls.push({ toolName, hash })
+ *  grow for long sessions. Pass the `hash` returned by {@link checkForLoop}
+ *  to skip recomputing it; omit only when called outside the check path. */
+export function recordToolCall(state: LoopState, toolName: string, input: unknown, hash?: string): void {
+  const h = hash ?? hashToolCall(toolName, input)
+  state.recentToolCalls.push({ toolName, hash: h })
   // Keep 2x the window to give checkForLoop some history beyond the active
   // comparison window (lets us tune LOOP_WINDOW_SIZE without changing the
   // persistence footprint).

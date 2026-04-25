@@ -31,6 +31,73 @@ export interface ClassifiedError {
   retryable: boolean
 }
 
+// ── Error-shape predicates ───────────────────────────────────────────────
+// Each predicate matches one provider failure mode. Keeping them as named
+// helpers keeps classifyApiError() readable and gives unit tests a clean
+// hook to assert on individual cases without driving the full classifier.
+
+function isReasoningContentError(msg: string): boolean {
+  // DeepSeek Reasoner requires reasoning_content on assistant messages
+  // during tool-call chains; both phrasings appear in the wild.
+  return msg.includes('Missing `reasoning_content`') || msg.includes('reasoning_content')
+}
+
+function isMissingApiKeyError(msg: string): boolean {
+  return msg.includes('API key is missing') || msg.includes('API_KEY')
+}
+
+function isUnauthorizedError(msg: string, status: number): boolean {
+  return status === 401 || msg.includes('Unauthorized') || msg.includes('Invalid API Key')
+}
+
+function isInsufficientBalanceError(msg: string, status: number): boolean {
+  return (
+    status === 402 ||
+    msg.includes('Insufficient Balance') ||
+    msg.includes('insufficient_balance') ||
+    msg.includes('insufficient_quota') ||
+    msg.includes('exceeded your current quota')
+  )
+}
+
+function isForbiddenError(msg: string, status: number): boolean {
+  return status === 403 || msg.includes('Forbidden')
+}
+
+function isMaxTokensError(msg: string): boolean {
+  if (msg.includes('Invalid max_tokens') || msg.includes('Range of max_tokens') || msg.includes('InvalidParameter')) {
+    return true
+  }
+  // Catch-all: any "max_tokens" reference combined with an invalid/range marker.
+  if (!msg.includes('max_tokens')) return false
+  return /invalid|range/i.test(msg)
+}
+
+function isServiceUnavailableError(msg: string, status: number): boolean {
+  return status === 503 || msg.includes('Service Unavailable') || msg.includes('overloaded')
+}
+
+function isRateLimitedError(msg: string, status: number): boolean {
+  return status === 429 || /rate limit/i.test(msg)
+}
+
+function isNetworkError(msg: string): boolean {
+  return msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')
+}
+
+function isTypeValidationError(err: unknown, msg: string): boolean {
+  return (
+    (err instanceof Error && err.constructor.name === 'AI_TypeValidationError') ||
+    msg.includes('Type validation failed')
+  )
+}
+
+/** Pull a provider name out of "Anthropic API key is missing" → "Anthropic". */
+function extractProviderName(msg: string): string {
+  const m = msg.match(/^(\w+)\s+API key/i)
+  return m ? m[1]! : 'Provider'
+}
+
 /**
  * Extract a meaningful error message from AI SDK errors. TypeValidationError
  * (thrown when a provider returns non-standard JSON — e.g. Alibaba returning
@@ -65,72 +132,60 @@ export function classifyApiError(err: unknown): ClassifiedError {
       retryable: false,
     }
   }
-  if (msg.includes('Missing `reasoning_content`') || msg.includes('reasoning_content')) {
+  if (isReasoningContentError(msg)) {
     return {
       message:
         'DeepSeek Reasoner requires reasoning_content in assistant messages during tool-call chains. This is usually an SDK compatibility issue — please report it.',
       retryable: false,
     }
   }
-  if (msg.includes('API key is missing') || msg.includes('API_KEY')) {
-    const providerMatch = msg.match(/^(\w+)\s+API key/i)
-    const provider = providerMatch ? providerMatch[1] : 'Provider'
+  if (isMissingApiKeyError(msg)) {
+    const provider = extractProviderName(msg)
     return {
       message: `${provider} API key is not set. Please set the corresponding environment variable (e.g. ${provider.toUpperCase()}_API_KEY).`,
       retryable: false,
     }
   }
-  if (status === 401 || msg.includes('Unauthorized') || msg.includes('Invalid API Key')) {
+  if (isUnauthorizedError(msg, status)) {
     return {
       message: 'API authentication failed (401). Please check your API key with /model or reconfigure with `xc init`.',
       retryable: false,
     }
   }
-  if (
-    status === 402 ||
-    msg.includes('Insufficient Balance') ||
-    msg.includes('insufficient_balance') ||
-    msg.includes('insufficient_quota') ||
-    msg.includes('exceeded your current quota')
-  ) {
+  if (isInsufficientBalanceError(msg, status)) {
     return {
       message:
         'API account balance insufficient (402). Top up your provider account, or switch to a different provider with /model.',
       retryable: false,
     }
   }
-  if (status === 403 || msg.includes('Forbidden')) {
+  if (isForbiddenError(msg, status)) {
     return {
       message: 'API access forbidden (403). Your API key may not have permission for this model.',
       retryable: false,
     }
   }
-  if (
-    msg.includes('Invalid max_tokens') ||
-    msg.includes('Range of max_tokens') ||
-    msg.includes('InvalidParameter') ||
-    (msg.includes('max_tokens') && (msg.includes('invalid') || msg.includes('Invalid') || msg.includes('range') || msg.includes('Range')))
-  ) {
+  if (isMaxTokensError(msg)) {
     return {
       message:
         'The configured max_tokens exceeds this model\'s limit. Try switching to a different model with /model, or report this issue so we can add the correct ceiling.',
       retryable: false,
     }
   }
-  if (status === 503 || msg.includes('Service Unavailable') || msg.includes('overloaded')) {
+  if (isServiceUnavailableError(msg, status)) {
     return {
       message: 'Model service unavailable (503). Try switching to a different model with /model.',
       retryable: false,
     }
   }
-  if (status === 429 || msg.includes('rate limit') || msg.includes('Rate limit')) {
+  if (isRateLimitedError(msg, status)) {
     return {
       message:
         'Rate limited (429). Waiting for retry... (AI SDK handles exponential backoff automatically with maxRetries: 3)',
       retryable: true,
     }
   }
-  if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')) {
+  if (isNetworkError(msg)) {
     return {
       message: `Network error: ${msg}. Retrying...`,
       retryable: true,
@@ -139,10 +194,7 @@ export function classifyApiError(err: unknown): ClassifiedError {
   // AI SDK TypeValidationError — provider returned a non-standard response
   // (e.g. an error JSON body instead of a valid SSE stream). Surface the
   // provider's error message rather than the raw Zod validation dump.
-  if (
-    (err instanceof Error && err.constructor.name === 'AI_TypeValidationError') ||
-    msg.includes('Type validation failed')
-  ) {
+  if (isTypeValidationError(err, msg)) {
     return {
       message: `Provider returned an error: ${msg}. Try a different model with /model.`,
       retryable: false,

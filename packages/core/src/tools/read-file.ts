@@ -19,6 +19,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { classifyFile } from '../agent/file-ingest.js'
+import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 
 function mediaTypeFor(filePath: string): string {
@@ -123,8 +124,7 @@ export const readFile = tool({
       // simple for now.)
       return await readTextResult(filePath, offset, limit)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error reading file: ${msg}`
+      return formatToolError('reading file', err)
     }
   },
 })

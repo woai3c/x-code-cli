@@ -57,11 +57,34 @@ export function ensureReasoningContentParts(messages: ModelMessage[], modelId: s
 
 type MaybeOutput = { type?: string; value?: unknown; filename?: string }
 
+// Cap OCR cache so a long session that pages through many distinct images
+// doesn't grow the heap unboundedly. Map preserves insertion order, so we
+// can evict the oldest entry by reading `keys().next()` — that's our LRU.
+// Re-inserting a hit (via delete+set) bumps it to the most-recent slot.
+const OCR_CACHE_LIMIT = 50
 const ocrCache = new Map<string, string>()
+
+function ocrCacheGet(key: string): string | undefined {
+  const hit = ocrCache.get(key)
+  if (hit === undefined) return undefined
+  // Touch: move to most-recent slot.
+  ocrCache.delete(key)
+  ocrCache.set(key, hit)
+  return hit
+}
+
+function ocrCacheSet(key: string, value: string): void {
+  if (ocrCache.has(key)) ocrCache.delete(key)
+  ocrCache.set(key, value)
+  if (ocrCache.size > OCR_CACHE_LIMIT) {
+    const oldest = ocrCache.keys().next().value
+    if (oldest !== undefined) ocrCache.delete(oldest)
+  }
+}
 
 async function ocrBuffer(buffer: Buffer): Promise<string> {
   const key = `${buffer.length}:${buffer.subarray(0, 64).toString('base64')}`
-  const cached = ocrCache.get(key)
+  const cached = ocrCacheGet(key)
   if (cached != null) return cached
 
   // tesseract.js takes a path, URL, or Buffer. Buffers work but some
@@ -70,7 +93,7 @@ async function ocrBuffer(buffer: Buffer): Promise<string> {
   try {
     await fs.writeFile(tmp, buffer)
     const text = await ocrImage(tmp)
-    ocrCache.set(key, text)
+    ocrCacheSet(key, text)
     return text
   } finally {
     await fs.unlink(tmp).catch(() => {})

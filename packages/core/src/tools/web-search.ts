@@ -3,6 +3,7 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 import { getShellProvider } from './shell-provider.js'
 
@@ -112,8 +113,7 @@ export const webSearch = tool({
       const results = hasTavily ? await searchWithTavily(query, n) : await searchWithBrave(query, n)
       return formatResults(results)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error searching (${hasTavily ? 'Tavily' : 'Brave'}): ${msg}`
+      return formatToolError(`searching (${hasTavily ? 'Tavily' : 'Brave'})`, err)
     }
   },
 })

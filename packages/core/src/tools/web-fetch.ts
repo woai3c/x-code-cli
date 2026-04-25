@@ -7,6 +7,7 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 
 const FETCH_TIMEOUT_MS = 15_000
@@ -147,8 +148,7 @@ export const webFetch = tool({
       cacheSet(url, markdown)
       return formatOutput(url, markdown, prompt)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error fetching URL: ${msg}`
+      return formatToolError('fetching URL', err)
     }
   },
 })

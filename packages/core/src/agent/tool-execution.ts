@@ -165,7 +165,7 @@ async function handleToolCall(
   const isAutoExecuted = AUTO_EXECUTED_TOOLS.has(toolName)
   const loopCheck = checkForLoop(state, toolName, input, toolCallId)
   if (loopCheck.kind !== 'ok') {
-    recordToolCall(state, toolName, input)
+    recordToolCall(state, toolName, input, loopCheck.hash)
 
     if (isAutoExecuted) {
       // The tool result already exists in state.messages. Append a follow-up
@@ -206,7 +206,7 @@ async function handleToolCall(
     return
   }
 
-  recordToolCall(state, toolName, input)
+  recordToolCall(state, toolName, input, loopCheck.hash)
 
   // ── Permission check for write tools and shell ──
   if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {

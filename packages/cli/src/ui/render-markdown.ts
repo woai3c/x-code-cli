@@ -123,6 +123,30 @@ function padAligned(
   return content + ' '.repeat(padding)
 }
 
+// Display width in terminal columns: CJK / full-width code points count as 2.
+// Using `string.length` here would undercount headers like `运算` and the
+// table's right border would walk leftward on each subsequent row.
+function isWideChar(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0x9fff) ||
+    (cp >= 0xa000 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe30 && cp <= 0xfe4f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6)
+  )
+}
+
+function displayWidth(text: string): number {
+  let w = 0
+  for (const ch of text) {
+    w += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1
+  }
+  return w
+}
+
 function formatToken(
   token: Token,
   listDepth: number = 0,
@@ -275,35 +299,8 @@ function formatToken(
     case 'table': {
       const tb = token as Tokens.Table
 
-      // Width is measured in display columns (CJK chars take 2), not
-      // code-unit length. Using `.length` made every `运算`-style header
-      // count as 2 — the separator came out too short and the right
-      // border walked leftward on each subsequent row.
-      const displayWidthOf = (tokens?: Token[]): number => {
-        const text = stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join(''))
-        let w = 0
-        for (const ch of text) {
-          const cp = ch.codePointAt(0) ?? 0
-          // Rough CJK / full-width range: CJK Unified, full-width forms,
-          // Hangul, kana, CJK symbols / punctuation. Matches cells-width
-          // used by countContentRows in ChatInput.
-          if (
-            (cp >= 0x1100 && cp <= 0x115f) ||
-            (cp >= 0x2e80 && cp <= 0x9fff) ||
-            (cp >= 0xa000 && cp <= 0xa4cf) ||
-            (cp >= 0xac00 && cp <= 0xd7a3) ||
-            (cp >= 0xf900 && cp <= 0xfaff) ||
-            (cp >= 0xfe30 && cp <= 0xfe4f) ||
-            (cp >= 0xff00 && cp <= 0xff60) ||
-            (cp >= 0xffe0 && cp <= 0xffe6)
-          ) {
-            w += 2
-          } else {
-            w += 1
-          }
-        }
-        return w
-      }
+      const displayWidthOf = (tokens?: Token[]): number =>
+        displayWidth(stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')))
 
       const colWidths = tb.header.map((header, index) => {
         let max = displayWidthOf(header.tokens)

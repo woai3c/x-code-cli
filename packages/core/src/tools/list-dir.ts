@@ -5,6 +5,8 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { formatToolError } from '../utils/tool-errors.js'
+
 import { reportProgress } from './progress.js'
 
 export const listDir = tool({
@@ -22,8 +24,7 @@ export const listDir = tool({
       })
       return lines.join('\n') || '(empty directory)'
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error listing directory: ${msg}`
+      return formatToolError('listing directory', err)
     }
   },
 })

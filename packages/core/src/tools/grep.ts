@@ -6,6 +6,8 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { formatToolError } from '../utils/tool-errors.js'
+
 import { reportProgress } from './progress.js'
 
 const execFileAsync = promisify(execFile)
@@ -56,8 +58,7 @@ export const grep = tool({
       if (err && typeof err === 'object' && 'code' in err && err.code === 1) {
         return 'No matches found.'
       }
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error searching: ${msg}`
+      return formatToolError('searching', err)
     }
   },
 })

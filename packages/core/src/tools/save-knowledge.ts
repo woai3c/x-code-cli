@@ -4,6 +4,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { getAutoMemory } from '../knowledge/auto-memory.js'
+import { formatToolError } from '../utils/tool-errors.js'
 
 export const saveKnowledge = tool({
   description: `Save or delete a persistent memory that should survive across sessions.
@@ -58,8 +59,7 @@ Scope: project = this repo only; global = applies across all repos.`,
         return `Knowledge deleted: [${category}] ${key}`
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error saving knowledge: ${msg}`
+      return formatToolError('saving knowledge', err)
     }
   },
 })

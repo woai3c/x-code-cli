@@ -5,6 +5,8 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { formatToolError } from '../utils/tool-errors.js'
+
 import { reportProgress } from './progress.js'
 
 export const glob = tool({
@@ -24,8 +26,7 @@ export const glob = tool({
       if (files.length === 0) return 'No files found matching the pattern.'
       return files.join('\n')
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `Error searching files: ${msg}`
+      return formatToolError('searching files', err)
     }
   },
 })
