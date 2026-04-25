@@ -76,6 +76,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
 
   const modelRef = useRef<LanguageModel>(initialModel)
   const modelIdRef = useRef<string>(options.modelId)
+  // Mirror the /thinking toggle so the agent loop reads the LATEST value
+  // even when it was changed mid-session — same pattern as modelIdRef.
+  // Initial value comes from CLI options (which read it from
+  // ~/.x-code/config.json on launch).
+  const thinkingRef = useRef<boolean>(options.thinking ?? false)
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const initializedRef = useRef(false)
@@ -244,7 +249,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         loopStateRef.current = await agentLoop(
           content,
           modelRef.current,
-          { ...options, modelId: modelIdRef.current, abortSignal: controller.signal },
+          { ...options, modelId: modelIdRef.current, thinking: thinkingRef.current, abortSignal: controller.signal },
           callbacks,
           loopStateRef.current ?? undefined,
         )
@@ -368,6 +373,18 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     setState((prev) => ({ ...prev, modelId: newModelId }))
   }, [])
 
+  /** Flip extended-thinking on/off at runtime. Picked up by the next
+   *  agent turn via thinkingRef.current. Persistence (saveUserConfig)
+   *  happens in the App.tsx command handler, not here — keeping this
+   *  hook free of disk side-effects matches the existing model-switch
+   *  separation. */
+  const setThinking = useCallback((enabled: boolean) => {
+    thinkingRef.current = enabled
+  }, [])
+
+  /** Read the current /thinking toggle (for status display). */
+  const getThinking = useCallback(() => thinkingRef.current, [])
+
   /** Add a system/info message (for slash command output) */
   const addInfoMessage = useCallback(
     (content: string) => {
@@ -430,6 +447,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     clear,
     compact,
     switchModel,
+    setThinking,
+    getThinking,
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,

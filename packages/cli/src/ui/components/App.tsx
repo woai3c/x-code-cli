@@ -32,6 +32,7 @@ interface AppProps {
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   { name: '/model', description: 'Pick a model (no-arg = interactive) — choice is saved' },
+  { name: '/thinking', description: 'Toggle extended thinking on/off (no-arg = show status) — saved' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
   { name: '/init', description: 'Initialize project knowledge' },
@@ -110,6 +111,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     clear,
     compact,
     switchModel,
+    setThinking,
+    getThinking,
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,
@@ -155,6 +158,10 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
 
         case 'model':
           handleModelSwitch(text, arg)
+          return
+
+        case 'thinking':
+          handleThinkingToggle(text, arg)
           return
 
         case 'clear':
@@ -281,6 +288,123 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       return
     }
     commitModelChange(commandText, picked.id)
+  }
+
+  /** Commit a thinking-mode change: update the live ref so the next
+   *  agent turn uses it, persist to disk, and echo a Claude-style 2-line
+   *  command block. */
+  function commitThinkingChange(commandText: string, next: boolean) {
+    setThinking(next)
+    saveUserConfig({ thinking: next })
+    addCommandMessage(
+      commandText,
+      `Extended thinking → **${next ? 'on' : 'off'}**. Takes effect on the next message.`,
+    )
+  }
+
+  /**
+   * `/thinking` — flip the extended-thinking toggle.
+   *
+   * No arg → interactive picker. Same UX as `/model` no-arg: shows the
+   *   current state (`●` on the active option) and lets the user pick
+   *   the other one with arrow keys + Enter. Cancelling / picking the
+   *   already-active option results in no change.
+   * `on` / `off` (and aliases like `true`/`false`/`enable`/`disable`)
+   *   → direct switch, useful for scripting and muscle memory.
+   * Any other arg → reject with a hint, don't silently swallow.
+   *
+   * The toggle is uniform across providers (see providers/thinking.ts):
+   *   ON  applies the maximum reasoning each provider supports;
+   *   OFF asks for minimum / disabled where exposed (Gemini 2.5 Pro
+   *       can't be fully disabled — it gets clamped to its 128-token
+   *       minimum).
+   *
+   * Persisted to ~/.x-code/config.json so the choice survives restarts.
+   * The agent loop reads it on every turn via thinkingRef in useAgent,
+   * so the next message after toggling already uses the new mode (no
+   * model rebuild required, unlike /model).
+   */
+  async function handleThinkingToggle(commandText: string, arg: string) {
+    const current = getThinking()
+    const trimmed = arg.trim().toLowerCase()
+
+    // Direct-switch shortcut path.
+    if (trimmed) {
+      let next: boolean
+      if (trimmed === 'on' || trimmed === 'true' || trimmed === '1' || trimmed === 'enable' || trimmed === 'enabled') {
+        next = true
+      } else if (
+        trimmed === 'off' ||
+        trimmed === 'false' ||
+        trimmed === '0' ||
+        trimmed === 'disable' ||
+        trimmed === 'disabled'
+      ) {
+        next = false
+      } else {
+        addCommandMessage(commandText, `Unknown value: \`${arg}\`. Use \`/thinking\`, \`/thinking on\`, or \`/thinking off\`.`)
+        return
+      }
+
+      if (next === current) {
+        addCommandMessage(commandText, `Extended thinking is already **${next ? 'on' : 'off'}** — no change.`)
+        return
+      }
+
+      commitThinkingChange(commandText, next)
+      return
+    }
+
+    // No-arg → interactive picker. We always show BOTH options so the
+    // user sees the full state space, with `● ` marking the current
+    // choice (mirroring `/model`'s rendering).
+    const onMarker = current ? '● ' : '  '
+    const offMarker = current ? '  ' : '● '
+    const choices = [
+      {
+        label: `${onMarker}On`,
+        description: 'Opt every supported provider into max reasoning. Slower, costs more, better on hard problems.',
+      },
+      {
+        label: `${offMarker}Off`,
+        description: 'Each provider runs its non-thinking default. Faster, cheaper, sufficient for most chat.',
+      },
+    ]
+    const answer = await askQuestion(
+      `Extended thinking is currently **${current ? 'on' : 'off'}**. Pick a mode (● = current):`,
+      choices,
+    )
+    const wantOn = answer === choices[0].label
+    const wantOff = answer === choices[1].label
+    if (!wantOn && !wantOff) {
+      // User typed something free-form into the picker. Honour the
+      // standard aliases; otherwise no-op (user probably wanted out).
+      const free = (answer ?? '').trim().toLowerCase()
+      if (free === 'on' || free === 'true' || free === '1' || free === 'enable' || free === 'enabled') {
+        if (current) {
+          addCommandMessage(commandText, 'Extended thinking is already **on** — no change.')
+          return
+        }
+        commitThinkingChange(commandText, true)
+        return
+      }
+      if (free === 'off' || free === 'false' || free === '0' || free === 'disable' || free === 'disabled') {
+        if (!current) {
+          addCommandMessage(commandText, 'Extended thinking is already **off** — no change.')
+          return
+        }
+        commitThinkingChange(commandText, false)
+        return
+      }
+      addCommandMessage(commandText, `Cancelled — extended thinking stays **${current ? 'on' : 'off'}**.`)
+      return
+    }
+    const next = wantOn
+    if (next === current) {
+      addCommandMessage(commandText, `Already **${next ? 'on' : 'off'}** — no change.`)
+      return
+    }
+    commitThinkingChange(commandText, next)
   }
 
   async function handleCompact() {

@@ -76,12 +76,21 @@ export function resolveModelId(input?: string): string | null {
 
 // ── User config file (~/.x-code/config.json) ────────────────────────────
 //
-// Only persistent preference right now is `model` — the id the /model
-// picker most recently committed. API keys are deliberately NOT stored
-// here (env-var only, see header comment).
+// Persistent preferences:
+//   model    — id the /model picker most recently committed
+//   thinking — extended-thinking / reasoning toggle written by /thinking.
+//              Applied uniformly across providers that expose a thinking
+//              switch (see providers/thinking.ts). Default is undefined
+//              (treated as off) so naive launches don't silently incur the
+//              2-10× latency on providers whose default is off (Sonnet,
+//              DeepSeek, Qwen) — same as the pre-feature baseline.
+//
+// API keys are deliberately NOT stored here (env-var only, see header
+// comment).
 
 export interface UserConfig {
   model?: string
+  thinking?: boolean
 }
 
 function userConfigPath(): string {

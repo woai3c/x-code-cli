@@ -12,6 +12,7 @@ import {
   createModelRegistry,
   getAvailableProviders,
   getEnvVarName,
+  loadUserConfig,
   resolveModelId,
 } from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
@@ -169,6 +170,12 @@ async function main() {
     trustMode: argv.trust,
     printMode: argv.print,
     maxTurns: argv['max-turns'] ?? 100,
+    // Read the persisted /thinking toggle from disk. Default false so a
+    // launch on a config-less machine matches the pre-feature baseline
+    // (provider-default thinking behavior, no surprise latency / cost
+    // jumps). The /thinking command in App.tsx hot-swaps this flag
+    // without restart via useAgent's setThinking.
+    thinking: loadUserConfig().thinking ?? false,
   }
 
   // Combine prompt with stdin

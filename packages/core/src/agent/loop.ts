@@ -9,6 +9,7 @@ import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
 import { persistUsageSnapshot } from '../knowledge/session-usage.js'
 import { applyCacheControl } from '../providers/cache-control.js'
+import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
@@ -215,6 +216,18 @@ async function runTurn(
     sessionId: state.sessionId,
   })
 
+  // Extended-thinking / reasoning toggle. The user-facing `/thinking on|off`
+  // command (App.tsx) flips `options.thinking`; we translate that flag into
+  // the provider-specific switch (Anthropic `thinking`, Google
+  // `thinkingConfig`, Alibaba `enableThinking`, etc.) and merge it into the
+  // existing per-call providerOptions. Models with no thinking concept
+  // (gpt-4.1, grok-3, glm-4-plus) get an empty entry — the SDK silently
+  // ignores the unrelated keys. Defaults to off when undefined so a stale
+  // config without the new field doesn't surprise users with a quality /
+  // latency change on launch.
+  const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false)
+  const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
+
   let result: StreamResult
   try {
     result = streamText({
@@ -234,7 +247,7 @@ async function runTurn(
       // `Record<string, unknown>` shape because provider-specific field sets
       // drift too fast to keep a strict union in sync. The runtime contract
       // is narrow JSON and we cast here at the single call site.
-      providerOptions: cached.providerOptions as Parameters<typeof streamText>[0]['providerOptions'],
+      providerOptions: mergedProviderOptions as Parameters<typeof streamText>[0]['providerOptions'],
     }) as unknown as StreamResult
   } catch (err) {
     callbacks.onError(new Error(classifyApiError(err).message))

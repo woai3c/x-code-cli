@@ -15,7 +15,8 @@ It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, 
 - **Context compression** — long chats are auto-compressed to stay within token limits
 - **Knowledge system** — 7-layer context loading (project rules, memory, session summary, etc.)
 - **Plan mode** — propose a plan first for complex tasks, review before executing
-- **Slash commands** — quick controls like `/help`, `/model`, `/usage`, `/plan`
+- **Slash commands** — quick controls like `/help`, `/model`, `/thinking`, `/usage`, `/plan`
+- **Unified thinking-mode toggle** — `/thinking on|off` collapses each of the 8 providers' bespoke thinking/reasoning parameters into one boolean
 - **Cross-platform** — works on Windows, macOS, and Linux
 - **Non-interactive mode** — `--print` + pipes for scripts and CI
 
@@ -158,17 +159,30 @@ xc [options] [prompt]
 
 ## Slash Commands
 
-| Command          | Description                               |
-| ---------------- | ----------------------------------------- |
-| `/help`          | Show available commands                   |
-| `/model [alias]` | Switch model or list available            |
-| `/usage`         | Show current-session token usage incl. cache hits; `/usage history` lists past sessions in this project |
-| `/clear`         | Clear conversation                        |
-| `/compact`       | Manually compress context                 |
-| `/init`          | Initialize project knowledge              |
-| `/session save`  | Save session without exiting              |
-| `/plan`          | Enter plan mode                           |
-| `/exit`          | Save session and exit                     |
+| Command               | Description                               |
+| --------------------- | ----------------------------------------- |
+| `/help`               | Show available commands                   |
+| `/model [alias]`      | Switch model or list available            |
+| `/thinking [on\|off]` | Toggle thinking mode (no arg = picker)    |
+| `/usage`              | Show current-session token usage incl. cache hits; `/usage history` lists past sessions in this project |
+| `/clear`              | Clear conversation                        |
+| `/compact`            | Manually compress context                 |
+| `/init`               | Initialize project knowledge              |
+| `/session save`       | Save session without exiting              |
+| `/plan`               | Enter plan mode                           |
+| `/exit`               | Save session and exit                     |
+
+### Thinking-mode notes
+
+The 8 providers we support default extended thinking inconsistently: Gemini 2.5 Pro and Kimi K2.5 are ON by default; Claude Sonnet, DeepSeek V4, and Qwen Max default OFF and need an explicit opt-in to hit their advertised benchmarks; GPT-4.1, Grok 3, and GLM-4-Plus have no thinking concept on those exact model ids.
+
+`/thinking` collapses that into one knob:
+
+- `/thinking` (no arg) — interactive picker showing the current state with arrow-key switching.
+- `/thinking on` — every supported provider enters max-reasoning mode (slower but stronger on hard problems).
+- `/thinking off` — every supported provider runs its non-thinking default (faster, cheaper).
+
+The choice is persisted to `~/.x-code/config.json` so it survives restarts. Toggles take effect on the next message — no model rebuild needed.
 
 ## File Attachments
 

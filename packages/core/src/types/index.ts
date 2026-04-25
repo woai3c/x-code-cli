@@ -89,6 +89,11 @@ export interface AgentOptions {
   trustMode: boolean
   maxTurns: number
   printMode: boolean
+  /** When true, the agent loop opts into the maximum reasoning each
+   *  provider supports (see providers/thinking.ts for the mapping).
+   *  Persisted in `~/.x-code/config.json` as `thinking: boolean`,
+   *  toggled at runtime via `/thinking on|off`. Defaults to false. */
+  thinking?: boolean
   systemPromptExtra?: string
   abortSignal?: AbortSignal
 }
