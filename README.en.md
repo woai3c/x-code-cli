@@ -40,16 +40,16 @@ After installation, launch with the `xc` or `x-code` command.
 
 You need at least one provider API key:
 
-| Variable                       | Provider           |
-| ------------------------------ | ------------------ |
-| `ANTHROPIC_API_KEY`            | Anthropic (Claude) |
-| `OPENAI_API_KEY`               | OpenAI (GPT)       |
-| `DEEPSEEK_API_KEY`             | DeepSeek           |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google (Gemini)    |
-| `ALIBABA_API_KEY`              | Alibaba (Qwen)     |
-| `XAI_API_KEY`                  | xAI (Grok)         |
-| `ZHIPU_API_KEY`                | Zhipu (GLM)        |
-| `MOONSHOT_API_KEY`             | Moonshot (Kimi)    |
+| Variable                       | Provider           | Sign up                                                                     |
+| ------------------------------ | ------------------ | --------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`            | Anthropic (Claude) | [console.anthropic.com](https://console.anthropic.com/)                     |
+| `OPENAI_API_KEY`               | OpenAI (GPT)       | [platform.openai.com/api-keys](https://platform.openai.com/api-keys)        |
+| `DEEPSEEK_API_KEY`             | DeepSeek           | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)    |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google (Gemini)    | [aistudio.google.com/apikey](https://aistudio.google.com/apikey)            |
+| `ALIBABA_API_KEY`              | Alibaba (Qwen)     | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
+| `XAI_API_KEY`                  | xAI (Grok)         | [console.x.ai](https://console.x.ai/)                                       |
+| `ZHIPU_API_KEY`                | Zhipu (GLM)        | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
+| `MOONSHOT_API_KEY`             | Moonshot (Kimi)    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)       |
 
 ### Web Search Keys (optional)
 
@@ -189,13 +189,26 @@ Per-provider support:
 | Text PDF             | Extracted locally (saves tokens)                 | Extracted locally    |
 | Scanned PDF          | Native PDF input                                 | Local raster + OCR   |
 | docx / xlsx / pptx   | Extracted locally                                | Extracted locally    |
-| Images (png/jpg/...) | Native vision                                    | Local OCR fallback   |
+| Images (png/jpg/...) | Native vision                                    | Vision sub-agent / OCR |
 
-**Heads-up on DeepSeek and images**: the DeepSeek API has no multimodal vision input, so the CLI falls back to local OCR via `tesseract.js` to pull text out of images. That means:
+**DeepSeek + images — automatic vision sub-agent**: the DeepSeek API has no multimodal vision input, but the CLI will automatically borrow another configured provider as a "vision sub-agent" to look at the image for it:
 
-- You only get the **text printed in the image**; colors, layout, diagrams, photos, and any non-textual content are invisible to the model.
-- CJK OCR accuracy is mediocre, and stylized or handwritten text often fails.
-- For anything where you need the model to actually *see* the image, **switch to Claude / Kimi / Qwen-VL / GLM-4V** or another multimodal model (`/model` swaps instantly).
+1. Detects whether **any other multimodal provider key** is set in your environment (priority order: Google → Zhipu → Alibaba → OpenAI → Anthropic → Moonshot → xAI).
+2. If found, calls a lightweight vision model on that provider (e.g. `gemini-2.5-flash` / `glm-4v-flash`) to generate a description of the image.
+3. Injects the description as text into the message sent to DeepSeek — DeepSeek "sees" the image transparently, no manual switch needed.
+4. The terminal prints a single line `⎿  Captioned image via google:gemini-2.5-flash` so you know which sub-agent ran.
+5. If no vision provider is configured, it falls back to local `tesseract.js` OCR (text-in-image only).
+
+**Strongly recommended** for DeepSeek users — register a free vision model key for the smoothest experience:
+
+- **Google Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`) — free tier ~10 RPM / 250 RPD on Gemini 2.5 Flash (verify current quota on the [official rate-limits page](https://ai.google.dev/gemini-api/docs/rate-limits) — Google has been tightening the free tier). Best quality, requires VPN in some regions. Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) by signing in with any Google account.
+- **Zhipu GLM-4V-Flash** (`ZHIPU_API_KEY`) — officially marked permanently free by Zhipu, generous enough for personal use, directly accessible from China. Register at [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys) and create a key from the user center.
+
+**Limits of the vision sub-agent** (please be aware):
+
+- The sub-agent returns **a text description**, not true multimodal interaction — DeepSeek cannot ask follow-up questions about the image (e.g. "what color is the button in the top-right?" will fail).
+- For complex UI reproduction or pixel-level layout review, the description loses detail.
+- For those cases, `/model` switch directly to Claude / Gemini / GLM-4V or another multimodal model and continue the conversation there.
 
 ## Project Structure
 

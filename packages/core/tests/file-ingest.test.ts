@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildUserContent,
@@ -10,20 +10,50 @@ import {
   extractFileReferences,
   ingestFile,
 } from '../src/agent/file-ingest.js'
+import { captionImage, pickVisionProvider } from '../src/agent/vision-fallback.js'
+
+// Mock vision-fallback so the image-path test can prove the onNotice plumbing
+// fires with the right provider id WITHOUT making a real Gemini/GLM API call.
+// pickVisionProvider defaults to null (matches the "no key configured"
+// scenario the existing tests rely on); individual tests opt in to a
+// non-null sub-agent via mockReturnValue.
+vi.mock('../src/agent/vision-fallback.js', () => ({
+  pickVisionProvider: vi.fn(() => null),
+  captionImage: vi.fn(),
+}))
+
+// Mock tesseract so the OCR fallback path doesn't spawn a real worker
+// thread on test images. Without this, when the sub-agent test forces
+// captionImage to reject, ingestFile falls through to ocrImage() which
+// crashes the worker on any non-decodable input and leaks an unhandled
+// exception into the test runner. Returning a deterministic stub keeps
+// the assertion focused on the notice + plumbing behavior.
+vi.mock('tesseract.js', () => ({
+  createWorker: vi.fn(async () => ({
+    recognize: vi.fn(async () => ({ data: { text: '' } })),
+    terminate: vi.fn(async () => {}),
+  })),
+}))
 
 let tmpDir: string
 let textFile: string
 let jsonFile: string
 let unknownFile: string
+let imageFile: string
 
 beforeAll(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xcc-ingest-'))
   textFile = path.join(tmpDir, 'hello.md')
   jsonFile = path.join(tmpDir, 'data.json')
   unknownFile = path.join(tmpDir, 'no-extension')
+  imageFile = path.join(tmpDir, 'fake.png')
   await fs.writeFile(textFile, '# Hello\nLine 2')
   await fs.writeFile(jsonFile, '{"ok":true}')
   await fs.writeFile(unknownFile, 'plain body')
+  // Empty file is fine — classifyFile picks .png by extension and the
+  // mocked captionImage never reads the bytes. ingestFile only reads the
+  // buffer for the multimodal-provider path, which we don't exercise here.
+  await fs.writeFile(imageFile, '')
 })
 
 afterAll(async () => {
@@ -132,5 +162,75 @@ describe('buildUserContent', () => {
     if (!Array.isArray(result)) return
     expect(result[0]).toEqual({ type: 'text', text: input })
     expect(result.length).toBeGreaterThan(1)
+  })
+
+})
+
+describe('ingestFile image path with mocked vision sub-agent', () => {
+  const textOnlyCaps = { image: false, pdf: false, filesApi: false }
+
+  beforeEach(() => {
+    vi.mocked(pickVisionProvider).mockReset()
+    vi.mocked(captionImage).mockReset()
+  })
+
+  it('fires onNotice with the chosen sub-agent id and inlines the caption', async () => {
+    // Simulate a user with DeepSeek (text-only) AND a Google key in the env —
+    // the picker returns Gemini, captionImage produces a description, and the
+    // resulting TextPart should both surface a notice to the UI and embed the
+    // caption text + provider attribution into the part the model will see.
+    vi.mocked(pickVisionProvider).mockReturnValue({
+      provider: 'google',
+      modelId: 'google:gemini-2.5-flash',
+      label: 'Gemini 2.5 Flash',
+    })
+    vi.mocked(captionImage).mockResolvedValue('A red Submit button on a white card')
+
+    const notices: string[] = []
+    const parts = await ingestFile(
+      { raw: `@${imageFile}`, absolutePath: imageFile },
+      textOnlyCaps,
+      (msg) => notices.push(msg),
+    )
+
+    expect(notices).toEqual(['Captioned image via google:gemini-2.5-flash'])
+    expect(captionImage).toHaveBeenCalledTimes(1)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]?.type).toBe('text')
+    if (parts[0]?.type === 'text') {
+      expect(parts[0].text).toContain('A red Submit button on a white card')
+      expect(parts[0].text).toContain('via="google:gemini-2.5-flash"')
+      expect(parts[0].text).toContain('kind="image-caption"')
+    }
+  })
+
+  it('falls back when the sub-agent throws and the notice surfaces the failure', async () => {
+    // When captionImage rejects (rate limit / network / bad key),
+    // ingestFile must (a) emit a "failed, falling back to OCR" notice so
+    // the user sees what happened, and (b) NOT silently swallow the
+    // attempt by returning the multimodal-image path. We then short-circuit
+    // before OCR by asserting on the notice, since exercising real OCR on
+    // an empty file destabilises the worker thread.
+    vi.mocked(pickVisionProvider).mockReturnValue({
+      provider: 'zhipu',
+      modelId: 'zhipu:glm-4v-flash',
+      label: 'GLM-4V Flash',
+    })
+    vi.mocked(captionImage).mockRejectedValue(new Error('rate limit exceeded'))
+
+    const notices: string[] = []
+    await ingestFile(
+      { raw: `@${imageFile}`, absolutePath: imageFile },
+      textOnlyCaps,
+      (msg) => notices.push(msg),
+    )
+
+    expect(captionImage).toHaveBeenCalledTimes(1)
+    // Two things must hold: the failure was reported AND it included the
+    // chosen sub-agent's label so the user knows what tried and lost.
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('GLM-4V Flash')
+    expect(notices[0]).toContain('rate limit exceeded')
+    expect(notices[0]).toContain('falling back to OCR')
   })
 })

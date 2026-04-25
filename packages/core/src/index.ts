@@ -32,6 +32,8 @@ export { buildSystemPrompt } from './agent/system-prompt.js'
 export { classifyApiError } from './agent/api-errors.js'
 export { buildUserContent, extractFileReferences, ingestFile, classifyFile } from './agent/file-ingest.js'
 export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'
+export { captionImage, pickVisionProvider } from './agent/vision-fallback.js'
+export type { VisionProvider } from './agent/vision-fallback.js'
 
 // Provider capabilities
 export { capabilitiesOf, providerOf } from './providers/capabilities.js'

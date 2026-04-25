@@ -222,7 +222,24 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         // content parts (images for multimodal providers, extracted text for
         // PDF/Office/non-vision providers). Falls through to the plain-string
         // fast path when nothing attachable is detected.
-        const content = await buildUserContent(text, capabilitiesOf(modelIdRef.current))
+        //
+        // The onNotice callback surfaces ingest-time events (currently:
+        // vision sub-agent caption emitted) as `⎿`-prefixed gray lines so
+        // the user can see when a non-vision model's image was forwarded
+        // to a sub-agent (Gemini, GLM-4V, etc.) instead of being OCR'd.
+        const content = await buildUserContent(
+          text,
+          capabilitiesOf(modelIdRef.current),
+          (notice) => {
+            appendMessage({
+              id: `ingest-notice-${Date.now()}`,
+              role: 'assistant',
+              content: notice,
+              timestamp: Date.now(),
+              kind: 'command-result',
+            })
+          },
+        )
 
         loopStateRef.current = await agentLoop(
           content,

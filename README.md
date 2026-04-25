@@ -40,16 +40,16 @@ yarn global add @x-code-cli/cli
 
 至少配置一个模型厂商的 API Key 即可使用：
 
-| 环境变量                       | 厂商                |
-| ------------------------------ | ------------------- |
-| `ANTHROPIC_API_KEY`            | Anthropic（Claude） |
-| `OPENAI_API_KEY`               | OpenAI（GPT）       |
-| `DEEPSEEK_API_KEY`             | DeepSeek            |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google（Gemini）    |
-| `ALIBABA_API_KEY`              | 阿里通义（Qwen）    |
-| `XAI_API_KEY`                  | xAI（Grok）         |
-| `ZHIPU_API_KEY`                | 智谱（GLM）         |
-| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    |
+| 环境变量                       | 厂商                | 注册地址                                                                  |
+| ------------------------------ | ------------------- | ------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`            | Anthropic（Claude） | [console.anthropic.com](https://console.anthropic.com/)                   |
+| `OPENAI_API_KEY`               | OpenAI（GPT）       | [platform.openai.com/api-keys](https://platform.openai.com/api-keys)      |
+| `DEEPSEEK_API_KEY`             | DeepSeek            | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)  |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google（Gemini）    | [aistudio.google.com/apikey](https://aistudio.google.com/apikey)          |
+| `ALIBABA_API_KEY`              | 阿里通义（Qwen）    | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
+| `XAI_API_KEY`                  | xAI（Grok）         | [console.x.ai](https://console.x.ai/)                                     |
+| `ZHIPU_API_KEY`                | 智谱（GLM）         | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)           |
+| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)     |
 
 ### 网页搜索 Key（可选）
 
@@ -189,13 +189,26 @@ xc [options] [prompt]
 | 文本型 PDF           | 本地抽文本（省 token）                           | 本地抽文本        |
 | 扫描型 PDF           | 作为 PDF 原生识别                                | 本地栅格化 + OCR  |
 | docx / xlsx / pptx   | 本地抽文本                                       | 本地抽文本        |
-| 图片 (png/jpg/...)   | 多模态原生识别                                   | 本地 OCR 兜底     |
+| 图片 (png/jpg/...)   | 多模态原生识别                                   | 视觉辅助模型 / OCR 兜底 |
 
-**DeepSeek 图片识别提醒**：DeepSeek 官方 API 不支持多模态视觉输入，CLI 会用 tesseract.js 本地 OCR 抽取图片里的文字作为降级方案。这意味着：
+**DeepSeek 图片识别 — 自动调用视觉辅助模型**：DeepSeek 官方 API 不支持多模态视觉输入，但 CLI 会按下面的顺序自动找一个"视觉辅助模型"来帮它看图：
 
-- 只能拿到**图片中的文字**；颜色、布局、图表、照片内容都看不见
-- 中文 OCR 准确率一般，复杂排版或手写字容易出错
-- 图片要看结构/设计/视觉内容时，**建议切换到 Claude / Kimi / Qwen-VL / GLM-4V** 等多模态模型（`/model` 一键切换）
+1. 检测你环境变量里**是否还配了其他多模态 provider 的 key**（按优先级：Google → 智谱 → 阿里 → OpenAI → Anthropic → Moonshot → xAI）
+2. 找到的话，自动用这个 provider 调一个轻量视觉模型（如 `gemini-2.5-flash` / `glm-4v-flash`）生成图片描述
+3. 把描述文字注入到发给 DeepSeek 的消息里，DeepSeek 全程无感地"看到"图
+4. 终端会显示一行 `⎿  Captioned image via google:gemini-2.5-flash` 提示用了哪个辅助模型
+5. 没配任何视觉 provider 时，回退到本地 tesseract OCR（只能取图中文字）
+
+**强烈建议** DeepSeek 用户额外注册一个免费视觉模型 key,体验最丝滑：
+
+- **Google Gemini**(`GOOGLE_GENERATIVE_AI_API_KEY`) — 免费档约 10 RPM / 250 RPD(实际配额以 [官方文档](https://ai.google.dev/gemini-api/docs/rate-limits) 为准,Google 偶有收紧),质量最好,需代理。在 [aistudio.google.com/apikey](https://aistudio.google.com/apikey) 登录 Google 账号即可创建 key
+- **智谱 GLM-4V-Flash**(`ZHIPU_API_KEY`) — 智谱官方明确标注永久免费,个人日常使用够用,国内可直连。在 [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys) 注册账号后创建 key
+
+**视觉辅助模型的能力上限**(请知悉):
+
+- 辅助模型给的是**一段文字描述**,不是真正的多模态对话 — DeepSeek 没法对图追问("左上角按钮什么颜色?"会失败)
+- 复杂 UI 还原、像素级布局校验等任务,描述会丢细节
+- 这类场景请直接 `/model` 切到 Claude / Gemini / GLM-4V 等多模态模型,在那里完成对话
 
 ## 项目结构
 
