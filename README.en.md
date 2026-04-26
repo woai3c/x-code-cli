@@ -2,24 +2,24 @@
 
 [简体中文](./README.md) · [English](./README.en.md)
 
-**X-Code CLI** is an AI coding assistant that runs in your terminal. Talk to your codebase in natural language and let it read, modify, debug, and build your project — all without leaving the command line.
+**X-Code CLI** is an AI coding assistant that runs in the terminal. It enables natural-language interaction with the codebase to read, modify, debug, and build projects without leaving the command line.
 
-It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 11 built-in tools (file I/O, shell execution, code search, etc.), and offers advanced capabilities such as a permission model, context compression, file attachments, and a knowledge system.
+X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 11 built-in tools (file I/O, shell execution, code search, etc.), and provides capabilities such as a permission model, context compression, file attachments, and a knowledge system.
 
-## Highlights
+## Features
 
-- **Multi-model support** — 8 built-in providers plus any OpenAI-compatible custom endpoint
-- **11 built-in tools** — covers file, shell, search, web fetch, and other day-to-day dev tasks
-- **3-level permission model** — safe by default; ask before writing, or use `--trust` to skip
-- **Streaming output** — see results as they generate
-- **Context compression** — long chats are auto-compressed to stay within token limits; loop-guard catches doom-loops; prompt caching cuts repeat-input cost
+- **Multi-model support** — 8 built-in providers and any OpenAI-compatible custom endpoint
+- **11 built-in tools** — covers file, shell, search, web fetch, and other common development tasks
+- **3-level permission model** — safe by default, prompts before write operations; `--trust` bypasses prompts
+- **Streaming output** — results render as they are generated
+- **Context compression** — long conversations are auto-compressed; loop-guard detects repeated tool invocations; prompt caching reuses prefixes to reduce input cost
 - **Knowledge system** — layered context loading (global / project AGENTS.md chain / auto-memory / local preferences / session summary)
-- **File attachments** — `@path` or bare absolute paths in your prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
-- **Vision sub-agent** — text-only providers like DeepSeek transparently borrow another configured vision model to caption images
-- **Slash commands** — quick controls like `/help`, `/model`, `/thinking`, `/usage`, `/usage history`
-- **Unified thinking-mode toggle** — `/thinking on|off` collapses each of the 8 providers' bespoke thinking/reasoning parameters into one boolean
-- **Cross-platform** — works on Windows, macOS, and Linux
-- **Non-interactive mode** — `--print` + pipes for scripts and CI
+- **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
+- **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/usage`, `/usage history`
+- **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
+- **Cross-platform** — runs on Windows, macOS, and Linux
+- **Non-interactive mode** — `--print` with pipes for scripts and CI
 
 ## Install
 
@@ -36,11 +36,11 @@ After installation, launch with the `xc` or `x-code` command.
 
 ## Configure API Keys
 
-> **Important**: X-Code CLI does **not** ship with a built-in free model — **it won't run until you configure an API key**. Sign up with any provider below to get one.
+> **Note**: X-Code CLI does not bundle a free model. **At least one provider API key must be configured before use.** Sign up with any provider listed below to obtain a key.
 >
-> **Recommended: [DeepSeek](https://platform.deepseek.com/)** — cheap, reliable, strong coding ability, and free credits on signup. The best starting point for first-time users.
+> **Recommended: [DeepSeek](https://platform.deepseek.com/)** — affordable, reliable, sufficient coding capability for everyday development, and free credits on signup. A suitable starting point for first-time users.
 
-You need at least one provider API key:
+At least one provider key is required:
 
 | Variable                       | Provider           | Sign up                                                                     |
 | ------------------------------ | ------------------ | --------------------------------------------------------------------------- |
@@ -55,20 +55,20 @@ You need at least one provider API key:
 
 ### Web Search Keys (optional)
 
-To enable web search (the `web_search` tool), set **either one** of the following. **Both providers have a free tier — no payment required for everyday use**:
+To enable web search (the `web_search` tool), configure **either** of the following. Both providers offer a free tier sufficient for everyday use:
 
-| Variable         | Provider                                      | Free quota                                                       | Signup friction                  |
-| ---------------- | --------------------------------------------- | ---------------------------------------------------------------- | -------------------------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | **1,000 credits / month** (basic search = 1 credit, so 1000 searches/mo) | Email signup, **no credit card** |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | **$5 free credit / month** (Search at $5 per 1k requests = ~1000 searches/mo) | Credit card required to activate |
+| Variable         | Provider                                      | Free quota                                                          | Signup requirements              |
+| ---------------- | --------------------------------------------- | ------------------------------------------------------------------- | -------------------------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | **1,000 credits / month** (1 credit per basic search, ~1,000/month) | Email signup, **no credit card** |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | **$5 free credit / month** ($5 per 1,000 requests, ~1,000/month)    | Credit card required to activate |
 
-> **For first-time setup we recommend Tavily** — lighter signup, and the response format is purpose-built for LLMs (clean summaries instead of raw SERP snippets). If you set both, Tavily wins; Brave is the automatic fallback.
+> **Tavily is recommended for first-time setup**: simpler signup, with response formats optimized for LLM use (cleaned summaries rather than raw SERP). When both are configured, Tavily is preferred and Brave serves as the automatic fallback.
 >
-> Quota figures come from the official docs ([Tavily](https://docs.tavily.com/documentation/api-credits), [Brave](https://brave.com/search/api/)) and may change — check the linked pages for current numbers.
+> Quota figures are sourced from official documentation ([Tavily](https://docs.tavily.com/documentation/api-credits), [Brave](https://brave.com/search/api/)); refer to the linked pages for current limits.
 
-**How to configure your API key**
+**Configuration**
 
-Set the key as an environment variable so `xc` can use it from any directory. The example uses `ANTHROPIC_API_KEY` — swap in whichever provider variable you need:
+Once the API key is exported as an environment variable, `xc` can be invoked from any directory. The example below uses `ANTHROPIC_API_KEY`; substitute the variable name for the provider in use:
 
 <details>
 <summary>bash (Linux / Git Bash / WSL)</summary>
@@ -119,30 +119,30 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 </details>
 
-> Session-only alternatives like `export X=...` (current bash) or `$env:X = '...'` (current PowerShell) are handy for quick testing but evaporate when you close the terminal.
+> For temporary use within a single session, run `export X=...` (bash) or `$env:X = '...'` (PowerShell); these settings are discarded when the terminal closes.
 >
-> Per-project overrides: drop a `.env` file in your project root — `xc` loads it by walking up from the current directory.
+> Per-project configuration: place a `.env` file in the project root. `xc` loads it by walking up from the current directory.
 
 ## Quick Start
 
 ```bash
-# Enter your project
+# Enter the project directory
 cd your-project
 
-# Launch interactive session
+# Launch an interactive session
 xc
 
-# Run with a prompt directly
+# Run with a prompt
 xc "Explain the overall architecture of this project"
 
 # Specify a model
-xc -m sonnet "Refactor formatDate in src/utils.ts"
+xc -m sonnet "Refactor the formatDate function in src/utils.ts"
 
-# Trust mode (skip write confirmations — use when you trust the workflow)
+# Trust mode: skip write-operation confirmations
 xc -t
 
-# Non-interactive mode (print result and exit, great for scripts)
-xc -p "Generate a CHANGELOG for this repo"
+# Non-interactive mode: print the result and exit, suitable for scripting
+xc -p "Generate a CHANGELOG for this repository"
 ```
 
 ## CLI Options
@@ -151,98 +151,102 @@ xc -p "Generate a CHANGELOG for this repo"
 xc [options] [prompt]
 
 --model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-4.1)
---trust, -t           Trust mode: skip write confirmations
---print, -p           Non-interactive: print and exit
---max-turns <n>       Max agent loop turns (default: 100)
+--trust, -t           Trust mode: skip write-operation confirmations
+--print, -p           Non-interactive mode: print result and exit
+--max-turns <n>       Maximum agent loop turns (default: 100)
 --version, -v         Show version
 --help, -h            Show help
 ```
 
 ## Slash Commands
 
-| Command               | Description                               |
-| --------------------- | ----------------------------------------- |
-| `/help`               | Show available commands                   |
-| `/model [alias]`      | Switch model or list available            |
-| `/thinking [on\|off]` | Toggle thinking mode (no arg = picker)    |
-| `/usage`              | Show current-session token usage incl. cache hits; `/usage history` lists past sessions in this project |
-| `/clear`              | Clear conversation                        |
-| `/compact`            | Manually compress context                 |
-| `/init`               | Initialize project knowledge              |
-| `/session save`       | Save session without exiting              |
-| `/exit`               | Save session and exit                     |
+| Command               | Description                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/help`               | Show available commands                                                                                  |
+| `/model [alias]`      | Switch model or list available models                                                                    |
+| `/thinking [on\|off]` | Enable / disable thinking mode (no argument opens the picker)                                            |
+| `/usage`              | Show current-session token usage (including cache hit rate); `/usage history` lists past project sessions |
+| `/clear`              | Clear the current conversation                                                                           |
+| `/compact`            | Manually compress context                                                                                |
+| `/init`               | Initialize the project knowledge base                                                                    |
+| `/session save`       | Save the current session without exiting                                                                 |
+| `/exit`               | Save the session and exit                                                                                |
 
 ### Thinking-mode notes
 
-The 8 providers we support default extended thinking inconsistently: Gemini 2.5 Pro and Kimi K2.5 are ON by default; Claude Sonnet, DeepSeek V4, and Qwen Max default OFF and need an explicit opt-in to hit their advertised benchmarks; GPT-4.1, Grok 3, and GLM-4-Plus have no thinking concept on those exact model ids.
+The 8 supported providers exhibit different default behaviors for thinking / reasoning mode:
 
-`/thinking` collapses that into one knob:
+- **Enabled by default**: Gemini 2.5 Pro, Kimi K2.5
+- **Disabled by default**: Claude Sonnet, DeepSeek V4, Qwen Max — must be explicitly enabled to reach published benchmark scores
+- **Not supported**: GPT-4.1, Grok 3, GLM-4-Plus do not expose a thinking option on the listed model IDs
 
-- `/thinking` (no arg) — interactive picker showing the current state with arrow-key switching.
-- `/thinking on` — every supported provider enters max-reasoning mode (slower but stronger on hard problems).
-- `/thinking off` — every supported provider runs its non-thinking default (faster, cheaper).
+`/thinking` consolidates these differences into a single switch:
 
-The choice is persisted to `~/.x-code/config.json` so it survives restarts. Toggles take effect on the next message — no model rebuild needed.
+- `/thinking` (no argument): opens an interactive picker showing the current state with arrow-key switching
+- `/thinking on`: enables thinking mode for every provider that supports it (slower responses, stronger on hard problems)
+- `/thinking off`: disables thinking mode (faster responses, lower cost)
+
+The setting is persisted to `~/.x-code/config.json` and survives restarts. Toggles take effect immediately on the next message; no model rebuild is required.
 
 ## File Attachments
 
-Mention a file path in your prompt and the CLI attaches its contents automatically:
+Reference a file path in the prompt and the CLI attaches its contents to the request automatically:
 
 ```bash
-# Explicit @-mention
-> what does @D:\code\app\src\main.ts do in its main function?
+# @ syntax (explicit reference)
+> Explain the main function in @D:\code\app\src\main.ts
 
-# Bare absolute paths (must include an extension) work too
-> summarize the key points in /home/me/report.pdf
+# Bare absolute paths (extension required)
+> Summarize the key points of /home/me/report.pdf
 
-# Images, PDFs, docx, xlsx, pptx are all supported
-> what's wrong in this screenshot? @D:\screenshots\bug.png
+# Images, PDFs, docx, xlsx, and pptx are all supported
+> Identify the issue in this screenshot: @D:\screenshots\bug.png
 ```
 
 Per-provider support:
 
-| Kind                 | Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM | DeepSeek             |
-| -------------------- | ------------------------------------------------ | -------------------- |
-| Source / text files  | Inlined                                          | Inlined              |
-| Text PDF             | Extracted locally (saves tokens)                 | Extracted locally    |
-| Scanned PDF          | Native PDF input                                 | Local raster + OCR   |
-| docx / xlsx / pptx   | Extracted locally                                | Extracted locally    |
-| Images (png/jpg/...) | Native vision                                    | Vision sub-agent / OCR |
+| Type                 | Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM | DeepSeek                |
+| -------------------- | ------------------------------------------------ | ----------------------- |
+| Source / text files  | Inlined                                          | Inlined                 |
+| Text PDF             | Extracted locally (saves tokens)                 | Extracted locally       |
+| Scanned PDF          | Native PDF input                                 | Local raster + OCR      |
+| docx / xlsx / pptx   | Extracted locally                                | Extracted locally       |
+| Images (png/jpg/...) | Native vision                                    | Vision sub-agent / OCR  |
 
-**DeepSeek + images — automatic vision sub-agent**: the DeepSeek API has no multimodal vision input, but the CLI will automatically borrow another configured provider as a "vision sub-agent" to look at the image for it:
+**DeepSeek image handling — vision sub-agent**: The DeepSeek API does not support multimodal vision input. When the user attaches an image, the CLI automatically delegates image understanding to another configured provider:
 
-1. Detects whether **any other multimodal provider key** is set in your environment (priority order: Google → Zhipu → Alibaba → OpenAI → Anthropic → Moonshot → xAI).
-2. If found, calls a lightweight vision model on that provider (e.g. `gemini-2.5-flash` / `glm-4v-flash`) to generate a description of the image.
-3. Injects the description as text into the message sent to DeepSeek — DeepSeek "sees" the image transparently, no manual switch needed.
-4. The terminal prints a single line `⎿  Captioned image via google:gemini-2.5-flash` so you know which sub-agent ran.
-5. If no vision provider is configured, it falls back to local `tesseract.js` OCR (text-in-image only).
+1. Checks whether any other multimodal provider key is configured in the environment (priority: Google → Zhipu → Alibaba → OpenAI → Anthropic → Moonshot → xAI)
+2. If found, invokes a lightweight vision model from that provider (e.g. `gemini-2.5-flash` or `glm-4v-flash`) to generate an image description
+3. Injects the description text into the message sent to DeepSeek so the image content remains accessible
+4. The terminal prints `⎿  Captioned image via google:gemini-2.5-flash` to indicate which sub-agent was used
+5. If no vision provider is configured, the CLI falls back to local `tesseract.js` OCR (text-in-image only)
 
-**Strongly recommended** for DeepSeek users — register a free vision model key for the smoothest experience:
+**Recommendation** for DeepSeek users: register a free vision model key for richer image understanding:
 
-- **Google Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`) — free tier ~10 RPM / 250 RPD on Gemini 2.5 Flash (verify current quota on the [official rate-limits page](https://ai.google.dev/gemini-api/docs/rate-limits) — Google has been tightening the free tier). Best quality, requires VPN in some regions. Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) by signing in with any Google account.
-- **Zhipu GLM-4V-Flash** (`ZHIPU_API_KEY`) — officially marked permanently free by Zhipu, generous enough for personal use, directly accessible from China. Register at [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys) and create a key from the user center.
+- **Google Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`): free tier of approximately 10 RPM / 250 RPD on Gemini 2.5 Flash (refer to the [official rate-limits page](https://ai.google.dev/gemini-api/docs/rate-limits) for current quotas). Provides the highest description quality; access from some regions requires a VPN. Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) by signing in with a Google account.
+- **Zhipu GLM-4V-Flash** (`ZHIPU_API_KEY`): officially marked permanently free, sufficient for personal use, directly accessible from China. Register at [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys) and create a key from the user center.
 
-**Limits of the vision sub-agent** (please be aware):
+**Limitations of the vision sub-agent**:
 
-- The sub-agent returns **a text description**, not true multimodal interaction — DeepSeek cannot ask follow-up questions about the image (e.g. "what color is the button in the top-right?" will fail).
-- For complex UI reproduction or pixel-level layout review, the description loses detail.
-- For those cases, `/model` switch directly to Claude / Gemini / GLM-4V or another multimodal model and continue the conversation there.
+- The sub-agent returns a text description rather than supporting true multimodal interaction; DeepSeek cannot ask follow-up questions about the image (e.g. "what color is the button in the top-right corner" cannot be answered)
+- For complex UI reproduction or pixel-level layout review, the text description may omit fine details
+- For such scenarios, switch to a multimodal model (Claude, Gemini, GLM-4V, etc.) via `/model` and continue the conversation directly
 
 ## Troubleshooting
 
-To capture a debug log when reporting a bug, launch with `DEBUG_STDOUT=1`:
+To capture a debug log, launch with the `DEBUG_STDOUT=1` environment variable:
 
 ```bash
 DEBUG_STDOUT=1 xc
 ```
 
-The log lives under your home directory:
+The log is written under the user directory:
 
 - **Path**: `~/.x-code/logs/debug.log` (with rotated `debug.log.1`)
-- **Size cap**: 10 MB per file, ~20 MB total with rotation — oldest data is overwritten automatically
-- **Capacity guide**: ~5 MB of debug log per ~50-turn agent run, so a typical multi-turn need fits entirely in the active file; rotation only triggers past ~100 turns
-- **Line guarantee**: each entry is capped at 1 KB (truncated with a marker if longer), so each rotation cycle holds **≥ 20,000 lines**
-- **View**: `tail -f ~/.x-code/logs/debug.log`, or attach the file to your issue
+- **Size limit**: 10 MB per file, ~20 MB total including the rotated backup; the oldest data is overwritten automatically
+- **Capacity reference**: a typical 50-turn agent session produces ~5 MB of log, which fits entirely within the active file; rotation only occurs after ~100 turns
+- **Per-entry limit**: each entry is capped at 1 KB (truncated with a marker if longer), guaranteeing at least 20,000 entries per rotation cycle
+- **Inspection**: use `tail -f ~/.x-code/logs/debug.log`, or attach the file to a GitHub Issue
 
 The log file is written only when `DEBUG_STDOUT=1` is set; default runs incur zero overhead.
 
@@ -255,7 +259,7 @@ x-code-cli/
 │   │   └── src/
 │   │       ├── agent/        Agent loop, system prompt, file ingest, vision fallback, loop guard
 │   │       ├── config/       Model config, API key management
-│   │       ├── knowledge/    Knowledge loader, auto-memory, session summary + usage
+│   │       ├── knowledge/    Knowledge loader, auto-memory, session summary and usage
 │   │       ├── permissions/  3-level permission system
 │   │       ├── providers/    AI SDK provider registry, thinking switch, cache control
 │   │       ├── tools/        11 tool implementations
@@ -267,16 +271,16 @@ x-code-cli/
 │           ├── app.tsx         Ink app root
 │           └── ui/             React components, hooks, theme
 │
-└── .x-code/         Project knowledge directory (created by /init)
+└── .x-code/         Project knowledge directory (created on first /init)
     ├── memory/      AI-written auto memory (auto.md)
-    ├── sessions/    Session summaries + token usage
+    ├── sessions/    Session summaries and token usage
     └── local/       Personal preferences (gitignored)
 ```
 
 ## Build From Source
 
 ```bash
-# Clone the repo
+# Clone the repository
 git clone https://github.com/woai3c/x-code-cli.git
 cd x-code-cli
 
@@ -286,16 +290,18 @@ pnpm install
 # Build
 pnpm build
 
-# Run directly
+# Run the build output
 node packages/cli/dist/cli.js
 
-# Or development mode
+# Or run from source (builds core once, then runs the CLI through tsx; does not watch for changes)
 pnpm dev
 ```
 
+> Source changes require rerunning `pnpm build` or `pnpm dev` to take effect. To watch for changes, run `pnpm dev` inside `packages/core` in a separate terminal (which executes `tsc -b --watch`).
+
 ## Feedback & Contributing
 
-Issues and PRs are welcome: <https://github.com/woai3c/x-code-cli>
+Issues and pull requests are welcome: <https://github.com/woai3c/x-code-cli>
 
 ## License
 
