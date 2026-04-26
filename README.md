@@ -234,11 +234,33 @@ X-Code CLI 支持的 8 家厂商对思考 / 推理模式的默认行为存在差
 
 ## 故障排查
 
-如需调试或抓取运行日志，可通过设置 `DEBUG_STDOUT=1` 环境变量启动：
+如需调试或抓取运行日志，可在当前会话临时设置 `DEBUG_STDOUT=1` 环境变量启动。不同 shell 的语法不同，请按所用 shell 选择对应命令：
+
+**bash / zsh / Git Bash**
 
 ```bash
 DEBUG_STDOUT=1 xc
 ```
+
+**fish**
+
+```fish
+env DEBUG_STDOUT=1 xc
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:DEBUG_STDOUT=1; xc
+```
+
+**Windows CMD**
+
+```cmd
+set DEBUG_STDOUT=1 && xc
+```
+
+> 上述写法均为临时设置——仅当前命令生效，关闭终端后变量自动释放。如需在多次启动间保留，请参照前文「配置方式」章节做持久化配置。
 
 日志保存在用户目录下：
 

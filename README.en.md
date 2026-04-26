@@ -234,11 +234,33 @@ Per-provider support:
 
 ## Troubleshooting
 
-To capture a debug log, launch with the `DEBUG_STDOUT=1` environment variable:
+To capture a debug log, set `DEBUG_STDOUT=1` in the current session and launch. Shell syntax varies — pick the one that matches your shell:
+
+**bash / zsh / Git Bash**
 
 ```bash
 DEBUG_STDOUT=1 xc
 ```
+
+**fish**
+
+```fish
+env DEBUG_STDOUT=1 xc
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:DEBUG_STDOUT=1; xc
+```
+
+**Windows CMD**
+
+```cmd
+set DEBUG_STDOUT=1 && xc
+```
+
+> All forms above are session-scoped — the variable is set only for the current invocation and discarded when the terminal closes. To persist across launches, follow the persistent setup in the "Configuration" section above.
 
 The log is written under the user directory:
 
