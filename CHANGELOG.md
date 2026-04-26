@@ -1,3 +1,21 @@
+## v0.1.10 (2026-04-26)
+
+### Features
+
+- add `/thinking` to uniformly toggle extended reasoning (102d86f)
+
+### Performance
+
+- cut streaming flicker and improve per-line streaming (cd3a806)
+
+### Refactors
+
+- dedupe tool errors, slim api-errors, cap ocr cache (94af860)
+
+### Chores
+
+- add S_GRAY_90 (1bb9d77)
+
 ## v0.1.9 (2026-04-25)
 
 ### Features
