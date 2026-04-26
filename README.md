@@ -4,7 +4,7 @@
 
 **X-Code CLI** 是一款运行在终端中的 AI 编码助手。你可以用自然语言与代码库对话，让它帮你阅读、修改、调试和构建项目，而无需离开命令行。
 
-它支持多种主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 11 个常用工具（文件读写、Shell 执行、代码搜索等），并提供权限控制、计划模式、上下文压缩、知识库等高级能力。
+它支持多种主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 11 个常用工具（文件读写、Shell 执行、代码搜索等），并提供权限控制、上下文压缩、文件附件、知识库等高级能力。
 
 ## 功能亮点
 
@@ -12,10 +12,11 @@
 - **11 个内置工具**：覆盖文件、Shell、搜索、网页抓取等日常开发场景
 - **三级权限模型**：默认安全，写操作前会请求确认；`--trust` 一键放行
 - **流式输出**：边生成边显示，无需等待完整响应
-- **上下文压缩**：长对话自动压缩历史，避免超出 Token 限制
-- **知识库系统**：7 层知识加载（项目规则、记忆、会话总结等）
-- **计划模式**：复杂任务先出方案再执行，可随时审阅
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/usage`、`/plan` 等快捷指令
+- **上下文压缩**：长对话自动压缩历史；loop-guard 检测 doom-loop；prompt cache 复用前缀降低重复输入成本
+- **知识库系统**：分层加载（全局 / 项目 AGENTS.md chain / 自动记忆 / 本地偏好 / 会话总结）
+- **文件附件**：在提示词里写 `@path` 或裸绝对路径，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
+- **视觉子 agent**：DeepSeek 等纯文本模型自动借用其他多模态 provider 给图片打 caption，无感看图
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/usage`、`/usage history` 等快捷指令
 - **统一的思考模式开关**：`/thinking on|off` 一键切换，把 8 家厂商五花八门的 thinking/reasoning 参数收口成一个布尔值
 - **跨平台**：支持 Windows、macOS、Linux
 - **非交互模式**：`--print` 配合管道，可嵌入脚本和 CI
@@ -169,7 +170,6 @@ xc [options] [prompt]
 | `/compact`          | 手动压缩上下文                    |
 | `/init`             | 初始化项目知识库                  |
 | `/session save`     | 保存当前会话（不退出）            |
-| `/plan`             | 进入计划模式                      |
 | `/exit`             | 保存会话并退出                    |
 
 ### 思考模式说明
@@ -253,11 +253,11 @@ x-code-cli/
 ├── packages/
 │   ├── core/        @x-code-cli/core    AI 引擎（无 UI 依赖）
 │   │   └── src/
-│   │       ├── agent/        Agent 循环、系统提示词、计划模式
+│   │       ├── agent/        Agent 循环、系统提示词、文件附件、视觉子 agent、loop guard
 │   │       ├── config/       模型配置、API Key 管理
-│   │       ├── knowledge/    知识加载器、自动记忆、会话、项目扫描
+│   │       ├── knowledge/    知识加载器、自动记忆、会话摘要 + token 用量
 │   │       ├── permissions/  三级权限系统
-│   │       ├── providers/    AI SDK 厂商注册（8+ 个）
+│   │       ├── providers/    AI SDK 厂商注册、thinking 开关、cache control
 │   │       ├── tools/        11 个工具实现
 │   │       └── types/        公开 TypeScript 接口
 │   │
@@ -267,12 +267,10 @@ x-code-cli/
 │           ├── app.tsx         Ink 应用根
 │           └── ui/             React 组件、Hook、主题
 │
-└── .x-code/         项目知识库目录
-    ├── memory/      自动生成的记忆
-    ├── plans/       实现方案
-    ├── rules/       自定义 Agent 规则
-    ├── sessions/    会话总结
-    └── local/       个人偏好（不入版本库）
+└── .x-code/         项目知识库目录（首次 /init 时创建）
+    ├── memory/      AI 自动写入的记忆（auto.md）
+    ├── sessions/    会话摘要 + token 用量
+    └── local/       个人偏好（gitignored）
 ```
 
 ## 从源码运行

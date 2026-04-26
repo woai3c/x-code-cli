@@ -4,7 +4,7 @@
 
 **X-Code CLI** is an AI coding assistant that runs in your terminal. Talk to your codebase in natural language and let it read, modify, debug, and build your project — all without leaving the command line.
 
-It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 11 built-in tools (file I/O, shell execution, code search, etc.), and offers advanced capabilities such as a permission model, plan mode, context compression, and a knowledge system.
+It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 11 built-in tools (file I/O, shell execution, code search, etc.), and offers advanced capabilities such as a permission model, context compression, file attachments, and a knowledge system.
 
 ## Highlights
 
@@ -12,10 +12,11 @@ It supports all major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, 
 - **11 built-in tools** — covers file, shell, search, web fetch, and other day-to-day dev tasks
 - **3-level permission model** — safe by default; ask before writing, or use `--trust` to skip
 - **Streaming output** — see results as they generate
-- **Context compression** — long chats are auto-compressed to stay within token limits
-- **Knowledge system** — 7-layer context loading (project rules, memory, session summary, etc.)
-- **Plan mode** — propose a plan first for complex tasks, review before executing
-- **Slash commands** — quick controls like `/help`, `/model`, `/thinking`, `/usage`, `/plan`
+- **Context compression** — long chats are auto-compressed to stay within token limits; loop-guard catches doom-loops; prompt caching cuts repeat-input cost
+- **Knowledge system** — layered context loading (global / project AGENTS.md chain / auto-memory / local preferences / session summary)
+- **File attachments** — `@path` or bare absolute paths in your prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
+- **Vision sub-agent** — text-only providers like DeepSeek transparently borrow another configured vision model to caption images
+- **Slash commands** — quick controls like `/help`, `/model`, `/thinking`, `/usage`, `/usage history`
 - **Unified thinking-mode toggle** — `/thinking on|off` collapses each of the 8 providers' bespoke thinking/reasoning parameters into one boolean
 - **Cross-platform** — works on Windows, macOS, and Linux
 - **Non-interactive mode** — `--print` + pipes for scripts and CI
@@ -169,7 +170,6 @@ xc [options] [prompt]
 | `/compact`            | Manually compress context                 |
 | `/init`               | Initialize project knowledge              |
 | `/session save`       | Save session without exiting              |
-| `/plan`               | Enter plan mode                           |
 | `/exit`               | Save session and exit                     |
 
 ### Thinking-mode notes
@@ -253,11 +253,11 @@ x-code-cli/
 ├── packages/
 │   ├── core/        @x-code-cli/core    AI engine (no UI deps)
 │   │   └── src/
-│   │       ├── agent/        Agent loop, system prompt, plan mode
+│   │       ├── agent/        Agent loop, system prompt, file ingest, vision fallback, loop guard
 │   │       ├── config/       Model config, API key management
-│   │       ├── knowledge/    Knowledge loader, auto-memory, session, project scan
+│   │       ├── knowledge/    Knowledge loader, auto-memory, session summary + usage
 │   │       ├── permissions/  3-level permission system
-│   │       ├── providers/    AI SDK provider registry (8+)
+│   │       ├── providers/    AI SDK provider registry, thinking switch, cache control
 │   │       ├── tools/        11 tool implementations
 │   │       └── types/        Public TypeScript interfaces
 │   │
@@ -267,11 +267,9 @@ x-code-cli/
 │           ├── app.tsx         Ink app root
 │           └── ui/             React components, hooks, theme
 │
-└── .x-code/         Project knowledge directory
-    ├── memory/      Auto-generated memory
-    ├── plans/       Implementation plans
-    ├── rules/       Custom agent rules
-    ├── sessions/    Session summaries
+└── .x-code/         Project knowledge directory (created by /init)
+    ├── memory/      AI-written auto memory (auto.md)
+    ├── sessions/    Session summaries + token usage
     └── local/       Personal preferences (gitignored)
 ```
 
