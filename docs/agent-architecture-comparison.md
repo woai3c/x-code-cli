@@ -134,7 +134,7 @@ result = streamText({
   model, // 用哪个模型
   system: systemPrompt, // 系统提示词
   messages: state.messages, // 对话历史
-  tools: toolRegistry, // 工具定义（13 个工具的 name + description + inputSchema）
+  tools: toolRegistry, // 工具定义（11 个工具的 name + description + inputSchema）
 })
 ```
 
@@ -159,7 +159,7 @@ POST /v1/messages (以 Anthropic 为例)
     },
     { "name": "readFile", "description": "Read the contents of a file...", ... },
     { "name": "grep", "description": "Search file contents using regex...", ... }
-    // ... 共 13 个工具定义
+    // ... 共 11 个工具定义
   ]
 }
 ```
@@ -411,12 +411,12 @@ Gemini CLI:     四层嵌套（sendMessageStream → processTurn → run → mak
 
 ### 5.4 Prompt Caching
 
-| 项目            | 支持                                                         |
-| --------------- | ------------------------------------------------------------ |
-| **x-code-cli**  | 无                                                           |
-| **Claude Code** | 多层缓存：全局缓存域 + 缓存断点 + 缓存编辑，1 小时 TTL       |
-| **Codex**       | Sticky routing（`x-codex-turn-state` header 保持服务端状态） |
-| **Gemini CLI**  | 依赖 Gemini API 内置缓存                                     |
+| 项目            | 支持                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **x-code-cli**  | `providers/cache-control.ts` 给 Anthropic / 兼容 prefix-caching 的 OpenAI 端点（DeepSeek/Moonshot/Alibaba）打 cache header |
+| **Claude Code** | 多层缓存：全局缓存域 + 缓存断点 + 缓存编辑，1 小时 TTL                                                                    |
+| **Codex**       | Sticky routing（`x-codex-turn-state` header 保持服务端状态）                                                              |
+| **Gemini CLI**  | 依赖 Gemini API 内置缓存                                                                                                  |
 
 ### 5.5 流式工具执行
 
@@ -429,12 +429,12 @@ Gemini CLI:     四层嵌套（sendMessageStream → processTurn → run → mak
 
 ### 5.6 循环检测
 
-| 项目            | 支持                                                                        |
-| --------------- | --------------------------------------------------------------------------- |
-| **x-code-cli**  | 仅 maxTurns 限制                                                            |
-| **Claude Code** | maxTurns 限制                                                               |
-| **Codex**       | maxTurns + 重试上限                                                         |
-| **Gemini CLI**  | **三重检测**：工具重复调用（5次阈值）+ 内容重复（10次）+ LLM 判断（30轮后） |
+| 项目            | 支持                                                                                                                                         |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **x-code-cli**  | maxTurns + `agent/loop-guard.ts` 双阈值（SHA-256 hash of tool name + input；3 次软阻断注入"换思路" hint，5 次硬退出）                         |
+| **Claude Code** | maxTurns 限制                                                                                                                                |
+| **Codex**       | maxTurns + 重试上限                                                                                                                          |
+| **Gemini CLI**  | **三重检测**：工具重复调用（5次阈值）+ 内容重复（10次）+ LLM 判断（30轮后）                                                                  |
 
 ### 5.7 错误恢复与重试
 
@@ -493,27 +493,28 @@ for await (const chunk of result.fullStream) {
 const results = await Promise.all(pendingTools.values())
 ```
 
-### P2：渐进式上下文压缩
+### P2：渐进式上下文压缩 ✅ 已部分完成
 
-当前只有"满了就全压"。可以改进：
+当前实际有**两层**压缩了（`agent/loop.ts` + `agent/light-compact.ts`）：
 
-1. **裁剪老工具结果** — 早期的 glob/grep 结果用一句摘要替代
-2. **保留最近对话完整** — 只压缩前面的轮次
-3. **多阈值触发** — 70% 时轻压，90% 时重压
+1. **Light compaction**（O(n) 扫描）：proactive 触发时先扫一遍消息删掉重复的 tool-call/result 对，不调 LLM。能就地解决就不进 summary。
+2. **Full summary**（LLM 调用）：light compaction 仍超阈值时才走 `compressMessages` 让模型生成摘要，保留最后 6 条消息。
+3. **Reactive 兜底**：stream 抛 "context too long" 错误时立即压缩 + 重试当前 turn。
 
-### P3：循环检测
+后续仍可改的：早期工具结果按工具类型摘要、"70% 轻压 90% 重压" 多阈值。
 
-参考 Gemini CLI，加工具调用重复检测：
+### P3：循环检测 ✅ 已完成
 
-```typescript
-const recentToolCalls: string[] = []
-// 每次工具调用记录 toolName + 关键参数的 hash
-// 连续 5 次相同 → 注入 "你似乎在重复操作，请换个思路"
-```
+实现：`agent/loop-guard.ts`（~140 行）。SHA-256 hash 工具名 + stable-stringify input，滚动 8 条窗口检测重复：
 
-### P4：Prompt Caching
+- **软阈值 3**：注入合成 tool-result "this call failed 3 times, change approach"
+- **硬阈值 5**：直接退出本 turn 并通知用户
 
-如果用 Anthropic 模型，Vercel AI SDK 的 `@ai-sdk/anthropic` 支持 `cacheControl`。系统提示词和工具定义加上缓存标记，多轮对话能省大量 token。
+实际效果：DeepSeek-v4 早期常见的 shell quoting 错误后反复重试 8-10 次的 doom-loop 不再发生。
+
+### P4：Prompt Caching ✅ 已完成
+
+实现：`providers/cache-control.ts`。Anthropic 走原生 `cacheControl`，OpenAI 兼容的 DeepSeek / Moonshot / Alibaba 走它们自己的 prefix caching 协议。系统提示词 + 知识库这部分不变内容下一轮命中缓存，input token 实际计费按 ~10% 收。`/usage` 命令的 cache hit ratio 字段可观察命中率。
 
 ### P5：重试与降级
 

@@ -30,7 +30,7 @@
 | 维度               | Claude Code               | Gemini CLI                          | Codex CLI                   | x-code-cli        |
 | ------------------ | ------------------------- | ----------------------------------- | --------------------------- | ----------------- |
 | **语言**           | TypeScript (Bun)          | TypeScript (Node)                   | **Rust** + TS 薄壳          | TypeScript (Node) |
-| **工具数量**       | ~40                       | ~25                                 | ~20                         | 13                |
+| **工具数量**       | ~40                       | ~25                                 | ~20                         | 11                |
 | **代码量 (tools)** | ~30,000 行                | ~15,000 行                          | ~8,000 行 (Rust)            | ~1,500 行         |
 | **Schema 格式**    | Zod v4                    | JSON Schema (`@google/genai`)       | 自定义 Rust JsonSchema      | Zod               |
 | **AI SDK**         | 自研框架 (Anthropic API)  | `@google/genai`                     | OpenAI Responses API        | Vercel AI SDK     |
@@ -293,7 +293,7 @@ const edit = tool({
 
 | 模式           | Claude Code | Gemini CLI | Codex CLI     | x-code-cli  |
 | -------------- | ----------- | ---------- | ------------- | ----------- |
-| 只读模式       | Plan mode   | PLAN mode  | -             | Plan mode   |
+| 只读模式       | Plan mode   | PLAN mode  | -             | -           |
 | 默认（需确认） | default     | DEFAULT    | UnlessTrusted | trust=false |
 | 自动编辑       | -           | AUTO_EDIT  | OnRequest     | -           |
 | 全自动（危险） | -           | YOLO       | Never         | trust=true  |
@@ -413,10 +413,14 @@ NO_SPACE_LEFT // 磁盘满 (Fatal)
 
 ### 只有 x-code-cli 有的
 
-- **最简代码量** — 13 工具 ~1500 行，最易理解和维护
+- **最简代码量** — 11 工具 ~1500 行，最易理解和维护
 - **AI SDK 原生** — 零框架成本，Vercel AI SDK 标准模式
-- **多 Provider** — 天然支持 Anthropic/OpenAI/Google/DeepSeek 等
-- **saveKnowledge** — 内置知识持久化工具
+- **多 Provider** — 天然支持 Anthropic/OpenAI/Google/DeepSeek 等 8 家 + 任意 OpenAI 兼容端点
+- **saveKnowledge** — 内置知识持久化工具（带 4 类 category + 90 天 TTL）
+- **Vision fallback 子 agent** — DeepSeek 等纯文本 provider 自动借用其他 provider 的视觉模型给图片打 caption（`agent/vision-fallback.ts`），Claude Code / Gemini / Codex 都没做
+- **统一 thinking 开关** — `/thinking on|off` 把 8 家 provider 五花八门的 reasoning 参数收口成一个布尔值（`providers/thinking.ts`），用户不用关心每家的配置差异
+- **Loop guard 圆形检测** — 滚动窗口 SHA-256 检测重复 tool call，3 次软阻断 / 5 次硬退出（`agent/loop-guard.ts`），doom-loop 不再爆 token
+- **Light compaction** — proactive 压缩前 O(n) 扫一遍删掉重复的 tool-call/result 对（`agent/light-compact.ts`），能不调 LLM 就不调
 
 ---
 
@@ -700,9 +704,11 @@ interface ToolDef<TInput, TOutput> {
 
 `shell` (array), `shell_command` (string), `exec_command`, `write_stdin`, `apply_patch`, `request_permissions`, `spawn_agent` (v1/v2), `wait_agent`, `close_agent`, `send_message`, `send_input`, `agent_jobs`, `tool_search`, `tool_suggest`, `list_dir`, `view_image`, `js_repl`, `js_repl_reset`, `code_mode_execute/wait`, MCP tools, Dynamic tools
 
-### x-code-cli (13 tools)
+### x-code-cli (11 tools)
 
-`readFile`, `writeFile`, `edit`, `shell`, `glob`, `grep`, `listDir`, `webSearch`, `webFetch`, `askUser`, `saveKnowledge`, `enterPlanMode`, `exitPlanMode`
+`readFile`, `writeFile`, `edit`, `shell`, `glob`, `grep`, `listDir`, `webSearch`, `webFetch`, `askUser`, `saveKnowledge`
+
+> Plan-mode（`enterPlanMode` / `exitPlanMode`）已在 v0.1.4 移除（commit `1ed61ae`）。原因：实际使用中模型对"该不该 plan"的判断不稳定，强制 plan 反而拖慢简单任务，移除后由用户自主决定（"先帮我看看代码再说"vs"直接动手"）效果更好。
 
 ---
 

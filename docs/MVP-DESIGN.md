@@ -83,43 +83,53 @@ x-code-cli/
 │       ├── src/
 │       │   ├── index.ts            # 公共 API 导出（barrel exports）
 │       │   ├── agent/
-│       │   │   ├── loop.ts             # Agent Loop 主编排（streaming / tool / compaction 协调）
-│       │   │   ├── loop-state.ts       # LoopState 类型 + createLoopState()
-│       │   │   ├── tool-execution.ts   # processToolCalls：权限检查 + 写/shell 工具分发
-│       │   │   ├── context-window.ts   # 模型上下文窗口表 + 压缩阈值 + token 估算
-│       │   │   ├── api-errors.ts       # classifyApiError + isContextTooLongError
-│       │   │   ├── stream-utils.ts     # StreamResult 类型 + drainStreamResult
-│       │   │   ├── provider-compat.ts  # DeepSeek reasoning_content shim
-│       │   │   ├── system-prompt.ts    # System Prompt 管理
-│       │   │   ├── plan-mode.ts        # Plan Mode 逻辑（提示注入/移除 + 计划文件管理）
-│       │   │   └── messages.ts         # 消息类型定义与管理
+│       │   │   ├── loop.ts                # Agent Loop 主编排（streaming / tool / compaction 协调）
+│       │   │   ├── loop-state.ts          # LoopState 类型 + createLoopState()
+│       │   │   ├── loop-guard.ts          # 滚动窗口 SHA-256 检测重复 tool call（3 软 / 5 硬）
+│       │   │   ├── tool-execution.ts      # processToolCalls：权限检查 + 写/shell 工具分发
+│       │   │   ├── tool-result-sanitize.ts # 去重工具错误 + 格式归一
+│       │   │   ├── context-window.ts      # 模型上下文窗口表 + 压缩阈值 + token 估算
+│       │   │   ├── light-compact.ts       # O(n) 删除重复 tool-call/result 对（proactive 压缩前置）
+│       │   │   ├── api-errors.ts          # classifyApiError + isContextTooLongError
+│       │   │   ├── stream-utils.ts        # StreamResult 类型 + drainStreamResult
+│       │   │   ├── provider-compat.ts     # DeepSeek reasoning_content shim、ImagePart 剥离 → vision-fallback
+│       │   │   ├── system-prompt.ts       # System Prompt 管理
+│       │   │   ├── file-ingest.ts         # @file / 裸绝对路径 解析；text/image/pdf/office 分类与抽取
+│       │   │   ├── vision-fallback.ts     # DeepSeek 等纯文本 provider 的视觉子 agent（caption + 缓存）
+│       │   │   └── messages.ts            # 消息类型定义与管理（含附件 buildUserMessage）
 │       │   ├── tools/
-│       │   │   ├── index.ts        # 工具注册表（统一导出）
+│       │   │   ├── index.ts        # 工具注册表（统一导出，11 个工具）
 │       │   │   ├── read-file.ts    # 读文件
 │       │   │   ├── write-file.ts   # 写文件
 │       │   │   ├── edit.ts         # 精确字符串替换
 │       │   │   ├── shell.ts        # 跨平台命令执行
-│       │   │   ├── shell-utils.ts  # Shell 检测与抽象层
+│       │   │   ├── shell-provider.ts # Shell 配置 provider（执行环境抽象）
+│       │   │   ├── shell-utils.ts  # 命令分级（destructive / readonly）+ 链式拆分
 │       │   │   ├── glob.ts         # 文件搜索
 │       │   │   ├── grep.ts         # 内容搜索
 │       │   │   ├── list-dir.ts     # 目录列表
-│       │   │   ├── web-search.ts   # 网页搜索
-│       │   │   ├── web-fetch.ts    # 网页抓取
+│       │   │   ├── web-search.ts   # 网页搜索（Tavily 优先，Brave 兜底）
+│       │   │   ├── web-fetch.ts    # 网页抓取（cheerio + turndown + LRU + CF 降级）
 │       │   │   ├── ask-user.ts     # 交互式询问
 │       │   │   ├── save-knowledge.ts # 知识持久化（CRUD）
-│       │   │   ├── enter-plan-mode.ts # 进入计划模式
-│       │   │   └── exit-plan-mode.ts  # 退出计划模式
+│       │   │   ├── progress.ts     # 长时工具的进度上报
+│       │   │   └── truncate.ts     # 工具结果首尾截断 + 聚合上限
 │       │   ├── permissions/
 │       │   │   └── index.ts        # 权限检查逻辑
 │       │   ├── providers/
-│       │   │   └── registry.ts     # AI SDK Provider Registry（多模型）
+│       │   │   ├── registry.ts     # AI SDK Provider Registry（多模型）
+│       │   │   ├── thinking.ts     # /thinking 开关 → 各 provider 自家参数映射
+│       │   │   ├── capabilities.ts # 多模态/视觉能力表（决定是否走 vision-fallback）
+│       │   │   └── cache-control.ts # Anthropic + OpenAI 兼容端点的 prefix caching
 │       │   ├── config/
-│       │   │   └── index.ts        # 模型解析 + 环境变量读取（无配置文件）
+│       │   │   └── index.ts        # 模型解析 + 环境变量读取 + ~/.x-code/config.json（model + thinking）
 │       │   ├── utils.ts            # 路径常量（XCODE_DIR / GLOBAL_XCODE_DIR）
+│       │   ├── utils/              # 工具函数集（path 等）
 │       │   ├── knowledge/
 │       │   │   ├── loader.ts       # 知识加载器（AGENTS.md 向上遍历 + 分层拼接）
-│       │   │   ├── auto-memory.ts  # AutoMemory 类（CRUD + 冲突检测 + 90 天 TTL）
-│       │   │   ├── session.ts      # 会话记忆（自动摘要 + 跨会话延续）
+│       │   │   ├── auto-memory.ts  # AutoMemory 类（4 类 category + 90 天 TTL）
+│       │   │   ├── session.ts      # SessionSummary（LLM 生成 title/keyResults/pendingWork/decisions）
+│       │   │   ├── session-usage.ts # 会话 token 用量与 cache hit ratio 持久化
 │       │   │   └── init.ts         # /init 命令：在项目根生成 AGENTS.md 模板
 │       │   └── types/
 │       │       └── index.ts        # 公共类型定义
@@ -487,8 +497,6 @@ export const toolRegistry = {
   webFetch,
   askUser,
   saveKnowledge,
-  enterPlanMode,
-  exitPlanMode,
 }
 ```
 
@@ -515,7 +523,6 @@ function truncateToolResult(result: string): string {
 - **写操作和命令执行**（writeFile, edit, shell）**不提供** `execute`，在 Agent Loop 中手动处理，以便插入权限检查
 - **交互工具**（askUser）**不提供** `execute`，通过回调触发 UI 渲染并等待用户响应
 - **知识工具**（saveKnowledge）直接提供 `execute`，自动执行（内部处理知识 CRUD + 冲突检测）
-- **计划工具**（enterPlanMode, exitPlanMode）**不提供** `execute`，在 Agent Loop 中手动处理（注入/移除 plan mode 提示 + 用户审核流程）
 
 #### `askUser` 工具的交互流程
 
@@ -823,82 +830,104 @@ const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMess
 - UX：用户看到"完整行一行行出现"，接近 Claude Code 的块粒度体验
 - Markdown 格式：cell buffer 里的 streaming 预览已经经过 `renderMarkdown`，跟提交到 scrollback 那一瞬间视觉完全一致，消除"plain text → markdown"的转换闪烁
 
-### 4.7 Plan Mode（计划模式）
+### 4.7 文件附件与视觉子 agent
 
-**文件**: `packages/core/src/agent/plan-mode.ts`
+**文件**：`packages/core/src/agent/file-ingest.ts`、`vision-fallback.ts`、`provider-compat.ts`
 
-复杂任务直接执行容易跑偏——先探索代码库、写计划、用户审核通过后再执行，效率更高。所有主流竞品（Claude Code、Cursor、Codex CLI、Gemini CLI）都有 Plan Mode。
+用户可以在消息里附文件——`@D:\path\to\file.png` 或裸绝对路径 `/home/me/report.pdf`（必须带扩展名），CLI 在 `extractAttachments` 阶段把它们替换成占位 token，附在 `messages.ts::buildUserMessage` 里发给模型。
 
-#### 工作流程
+#### 分类与处理
 
-```
-用户输入复杂需求（或输入 /plan）
-  │
-  ▼
-模型判断复杂度 ──── 简单任务 → 直接执行
-  │
-  复杂任务
-  │
-  ▼
-模型调用 enterPlanMode 工具 → 用户同意 → 进入 Plan Mode
-  │
-  │  系统注入 Plan Mode 提示：
-  │  "Plan mode is active. 只能使用只读工具，不能执行任何写操作。"
-  │
-  │  模型使用 readFile/glob/grep 探索代码库
-  │  模型写计划到 .x-code/plans/{id}.md
-  │
-  ▼
-模型调用 exitPlanMode 工具 → 系统读取计划文件展示给用户
-  │
-  ▼
-用户审核计划 → 同意 → 移除 Plan Mode 提示 → 模型按计划执行
-             → 拒绝 → 模型修改计划 / 用户手动调整
-```
+| 类型               | 多模态 provider (Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM) | DeepSeek / 自定义 OpenAI 兼容        |
+| ------------------ | ------------------------------------------------------------------ | ------------------------------------ |
+| 文本 / 代码        | TextPart 内联，带行号                                              | 同左                                 |
+| 文本型 PDF         | 本地 `pdf-parse` 抽文本                                            | 同左                                 |
+| 扫描型 PDF         | 作为 `FilePart` 原生发                                             | 本地栅格化每页 → tesseract OCR       |
+| docx / xlsx / pptx | 本地 `mammoth` / `xlsx` / `officeparser`                           | 同左                                 |
+| 图片 png/jpg/...   | `ImagePart` 多模态原生                                             | **vision-fallback 子 agent**（见下） |
 
-#### 实现方式
+#### Vision fallback（DeepSeek 等纯文本 provider 自动看图）
 
-**核心：两个工具 + 一段 System Prompt overlay**
+DeepSeek 官方 API 不支持视觉输入。`provider-compat.ts` 在打包 messages 之前把 ImagePart 抽出来，对每张图：
 
-```typescript
-// packages/core/src/tools/plan-mode.ts
-export const enterPlanMode = tool({
-  description: `Enter plan mode for exploring the codebase and designing an implementation plan.
-Use proactively for non-trivial tasks: new features, multi-file changes, architectural decisions, unclear requirements.
-Skip for: single-line fixes, obvious bugs, specific user instructions.`,
-  inputSchema: z.object({
-    topic: z
-      .string()
-      .describe(
-        'Short 3-6 word description of what this plan addresses, used to name the plan file (e.g. "refactor auth middleware").',
-      ),
-  }),
-  // 不提供 execute — 在 Agent Loop 中处理（注入 plan mode 提示 + 等待用户同意）
-})
+1. 按优先级（google → zhipu → alibaba → openai → anthropic → moonshotai → xai）找用户配过 key 的多模态 provider
+2. 用一个轻量视觉模型（`gemini-2.5-flash` / `glm-4v-flash` 等）发起一次额外请求，prompt 让它输出"文字转录 + UI 布局 + 视觉细节 + 推断目的"
+3. 把生成的描述拼回 user message，DeepSeek 全程无感地"看到"图——终端打 `⎿  Captioned image via google:gemini-2.5-flash`
+4. 描述按 `${modelId}:${fileSize}:${first-64-bytes-base64}` 在 session 内缓存
+5. 没配任何视觉 provider → 回退本地 `tesseract.js` OCR（仅取图中文字，weights 缓存到 `~/.x-code/tessdata/` 一次 7.6 MB 全局共享）
 
-export const exitPlanMode = tool({
-  description:
-    'Signal that the plan is complete and ready for user review. The system will read the plan file and present it to the user.',
-  inputSchema: z.object({}),
-  // 不提供 execute — 在 Agent Loop 中处理（读取计划文件 + 展示给用户）
-})
-```
+#### 关键设计决策
 
-**Plan Mode 提示注入**（plan mode 激活期间，追加到每条消息）：
+- **用户接口零配置**：`@file` 语法和裸绝对路径都自动识别，不需要专门的 attachment 命令
+- **分流到合适处理路径**：能本地抽文本的（PDF/docx）就抽，省 token；多模态原生支持的（图片+主流模型）直接发；只有不能原生看的才走子 agent
+- **vision-fallback 是子 agent，不是工具**：用户和模型都看不到这是两次 API 调用，DeepSeek 响应里只看到一段图片描述
+- **session 缓存**：复用同一张图的 description，避免重复花视觉模型的 token
+
+---
+
+### 4.8 Loop guard（doom-loop 检测）
+
+**文件**：`packages/core/src/agent/loop-guard.ts`
+
+模型偶尔会陷入"同一个 shell 命令重试 8 次、每次都是同样的引号错误"的循环。这种 doom-loop 的代价是：每次重试都把上一次的失败 stderr 喂回给模型，几轮下来上下文 + token 都炸。
+
+#### 检测与阻断
 
 ```
-Plan mode is active. You MUST NOT make any edits to project code, execute write commands, or make any changes to user files.
-Only use read-only tools: readFile, glob, grep, listDir, webSearch, webFetch.
-The ONLY exception: use writeFile to save your plan to .x-code/plans/{plan-id}.md.
-When the plan is ready, call exitPlanMode.
+每次 tool call 进入 processToolCalls 时：
+  hash = SHA-256(toolName + stable-stringify(input))
+  state.recentToolCalls 推入 hash（cap = 8，FIFO）
+
+  count = 同 hash 在窗口内出现次数
+
+  if count >= SOFT_LIMIT (3):
+    → 不实际执行该 tool
+    → 注入合成 tool-result：
+      "This call has failed 3 times with the same arguments.
+       Try a different approach instead of repeating it."
+    → AI 下一轮通常会换思路
+
+  if count >= HARD_LIMIT (5):
+    → 整个 turn 终止
+    → agentLoop 上报 "Possible doom-loop detected"
+    → 用户接手
 ```
 
-**关键设计决策**：
+#### 关键设计决策
 
-- **工具不实际移除**：只通过 prompt 约束行为，实现简单，与 Claude Code 做法一致
-- **计划存文件**：写到 `.x-code/plans/` 目录，方便用户查看/编辑/复用
-- **模型可主动触发**：System Prompt 指导模型对复杂任务主动调用 `enterPlanMode`，但需用户同意
-- **用户也可手动触发**：`/plan` 命令或 `Shift+Tab` 快捷键
+- **Hash 基于 stable-stringify**：JSON.stringify 对 key 顺序不稳定，必须 sort key 后再 hash，否则 `{a:1,b:2}` 和 `{b:2,a:1}` 算成不同的 call
+- **滚动窗口而非全 session**：8 条窗口够检测连续重试，超出窗口的"很久之前的同样 call"不算 loop
+- **软阻断优先**：3 次先 nudge 模型换思路，给模型一个机会自己跳出；5 次再硬退出
+- **兜底而非主守门**：正常流程零开销，只有重复才会触发——没有性能损耗
+
+---
+
+### 4.9 Thinking 模式统一开关
+
+**文件**：`packages/core/src/providers/thinking.ts`
+
+8 家 provider 对"thinking / reasoning"开关的参数完全不一致。`/thinking on|off` 把这些差异收口成一个布尔值。
+
+| Provider     | 开                                              | 关                                            |
+| ------------ | ----------------------------------------------- | --------------------------------------------- |
+| anthropic    | `thinking: { type: 'enabled', budgetTokens }`   | `thinking: { type: 'disabled' }`              |
+| google       | `thinkingConfig: { thinkingBudget: -1 }` (动态) | `thinkingConfig: { thinkingBudget: 0 }`       |
+| openai       | `reasoningEffort: 'high'` (仅 o-series)         | `reasoningEffort: 'minimal'`                  |
+| xai          | `reasoningEffort: 'high'` (仅 mini 系列)        | `reasoningEffort: 'low'`                      |
+| deepseek     | `thinking: { type: 'enabled' }` (仅 v4)         | `thinking: { type: 'disabled' }`              |
+| moonshotai   | `thinking: { type: 'enabled' }`                 | `thinking: { type: 'disabled' }`              |
+| alibaba      | `enableThinking: true`                          | `enableThinking: false`                       |
+| zhipu/custom | (无对应参数)                                    | (无对应参数)                                  |
+
+**用户接口**：
+
+- `/thinking`（无参）→ SelectOptions 选择器
+- `/thinking on|true|enable` → 全打开
+- `/thinking off|false|disable` → 全关闭
+
+**持久化**：`~/.x-code/config.json` 的 `thinking: boolean`，重启保持。
+
+**实时生效**：`use-agent.ts` 用 `thinkingRef` 持有这个 flag，下一条用户消息发出去时 `runTurn` 现读现用，不需要重建 model。
 
 ---
 
@@ -924,11 +953,6 @@ You have access to these tools:
 - webFetch: Fetch and extract content from URLs
 - askUser: Ask the user clarifying questions with choices
 - saveKnowledge: Save project/user knowledge facts to persistent memory
-- enterPlanMode: Enter plan mode to explore codebase and design implementation plan before coding
-- exitPlanMode: Signal that plan is complete and ready for user review
-
-## Planning
-For non-trivial tasks (new features, multi-file changes, architectural decisions, unclear requirements), call enterPlanMode BEFORE writing any code. This lets the user review your approach first. Skip planning for simple fixes, single-line changes, or when the user gives very specific instructions.
 
 ## Rules
 
@@ -1165,17 +1189,18 @@ export function createModelRegistry() {
 
 对话中可使用以下内置命令：
 
-| 命令            | 功能                    | 说明                                                      |
-| --------------- | ----------------------- | --------------------------------------------------------- |
-| `/help`         | 显示所有可用命令        |                                                           |
-| `/model [name]` | 切换模型 / 查看可用模型 | `/model opus`、`/model deepseek`                          |
-| `/plan`         | 进入 Plan Mode          | 只读探索 + 生成实施计划，需用户审核通过后执行（详见 4.7） |
-| `/compact`      | 手动触发上下文压缩      | 不等自动阈值，立即压缩旧消息                              |
-| `/usage`        | 查看 token 用量         | 本次会话的累计 token 统计（不含自动计费）                 |
-| `/clear`        | 清空对话历史            | 不退出程序，重新开始新对话（保留知识上下文）              |
-| `/init`         | 初始化项目              | 在项目根生成 `AGENTS.md` 模板 + 建 `.x-code/` 目录结构    |
-| `/session save` | 手动保存会话摘要        | 不退出程序，保存当前进度                                  |
-| `/exit`         | 退出（等同 Ctrl+C）     | 自动保存会话摘要后退出                                    |
+| 命令               | 功能                          | 说明                                                                        |
+| ------------------ | ----------------------------- | --------------------------------------------------------------------------- |
+| `/help`            | 显示所有可用命令              |                                                                             |
+| `/model [name]`    | 切换模型 / 查看可用模型       | `/model opus`、`/model deepseek`；无参数 = 交互式选择器；选择持久化         |
+| `/thinking [on/off]` | 切换 thinking 模式            | 把 8 家 provider 的 reasoning 参数统一成一个开关；持久化（详见 4.9）        |
+| `/compact`         | 手动触发上下文压缩            | 不等自动阈值，立即压缩旧消息                                                |
+| `/usage`           | 查看本次会话 token 用量       | 含输入/输出/cache hit ratio                                                 |
+| `/usage history`   | 列出本项目历史会话            | 读 `.x-code/sessions/*.usage.json`，显示 sessionId / 模型 / 总 tokens / cache 命中率 |
+| `/clear`           | 清空对话历史                  | 不退出程序，重新开始新对话（保留知识上下文）                                |
+| `/init`            | 初始化项目                    | 在项目根生成 `AGENTS.md` 模板 + 建 `.x-code/` 目录结构                      |
+| `/session save`    | 手动保存会话摘要              | 不退出程序，生成 SessionSummary 持久化到 `.x-code/sessions/`                |
+| `/exit`            | 退出（等同 Ctrl+C）           | 自动保存会话摘要后退出                                                      |
 
 ### 6.8 CLI 参数
 
@@ -1428,7 +1453,7 @@ export default defineConfig({
 
 - [x] 基本对话能力（用户输入 → LLM 回复）
 - [x] 流式文本输出
-- [x] 13 个内置工具（readFile / writeFile / edit / shell / glob / grep / listDir / webSearch / webFetch / askUser / saveKnowledge / enterPlanMode / exitPlanMode）
+- [x] 11 个内置工具（readFile / writeFile / edit / shell / glob / grep / listDir / webSearch / webFetch / askUser / saveKnowledge）
 - [x] 权限确认（写操作、命令执行前询问）+ `--trust` / `-t` 信任模式
 - [x] Agent Loop（工具调用 → 结果反馈 → 继续推理）
 - [x] 多模型支持（Anthropic / OpenAI / Google / xAI / DeepSeek / 通义千问 / 智谱 / Moonshot + 自定义 OpenAI 兼容，通过 AI SDK Provider Registry）
@@ -1444,8 +1469,14 @@ export default defineConfig({
 - [x] 权限 diff 预览（edit/writeFile 确认时显示变更内容）
 - [x] 错误恢复（API 限流重试、网络超时恢复、工具错误自修正）
 - [x] Ctrl+C 优雅退出（保存会话摘要后退出）
-- [x] Plan Mode（复杂任务先计划再执行，模型可主动触发，用户审核后执行）
-- [x] 内置斜杠命令（/help、/model、/plan、/compact、/usage、/clear、/init、/exit）
+- [x] 文件附件（`@file` 语法 / 裸绝对路径，自动分类 text/image/pdf/office）
+- [x] Vision fallback 子 agent（DeepSeek 等纯文本 provider 自动借用其他 provider 的视觉模型给图片打 caption）
+- [x] Loop guard（SHA-256 滚动窗口检测重复 tool call，3 软阻断 / 5 硬退出）
+- [x] Light compaction（O(n) 删除重复 tool-call/result 对，proactive 压缩前置）
+- [x] Prompt cache（Anthropic + 兼容 prefix-caching 的 OpenAI 端点）
+- [x] /thinking 统一开关（把 8 家 provider 的 reasoning 参数收口成一个布尔值）
+- [x] /usage history（按项目列出历史会话的 token + cache hit）
+- [x] 内置斜杠命令（/help、/model、/thinking、/compact、/usage、/usage history、/clear、/init、/session save、/exit）
 - [x] 非交互模式（`--print` / 管道输入，适合脚本和 CI/CD）
 - [x] 工具结果截断（防止大文件/大搜索结果撑爆上下文）
 - [x] 最大轮次限制（`--max-turns`，防止 Agent 死循环）
@@ -1587,21 +1618,25 @@ description: Create a well-formatted git commit following project conventions.
 
 ```
 项目根/
-├── AGENTS.md                     ← 项目说明(人写,git 追踪)
-└── .x-code/                      ← CLI 内部状态
-    ├── memory/auto.md            ← AI 自动写入的记忆
-    ├── sessions/*.json           ← 会话摘要
-    ├── plans/*.md                ← Plan Mode 产出
+├── AGENTS.md                       ← 项目说明(人写,git 追踪)
+└── .x-code/                        ← CLI 内部状态
+    ├── memory/auto.md              ← AI 自动写入的记忆
+    ├── sessions/{id}.json          ← 会话摘要(SessionSummary, 压缩 / 退出 / `/session save`)
+    ├── sessions/{id}.usage.json    ← 会话 token 用量与 cache hit ratio(每轮持久化)
+    ├── sessions/latest.{json,usage.json}  ← 最近一次会话快照
     └── local/
-        ├── .gitignore            ← 内容是 `*`
-        └── preferences.md        ← 个人项目偏好(人写)
+        ├── .gitignore              ← 内容是 `*`
+        └── preferences.md          ← 个人项目偏好(人写)
 
 ~/.x-code/
-├── AGENTS.md                     ← 全局用户偏好(人写)
-└── memory/auto.md                ← 全局自动记忆
+├── AGENTS.md                       ← 全局用户偏好(人写)
+├── config.json                     ← `/model` 选定的模型 + `/thinking` 开关持久化
+├── memory/auto.md                  ← 全局自动记忆
+├── tessdata/                       ← tesseract OCR 权重(首次 DeepSeek 看图时下载,~7.6 MB)
+└── logs/debug.log                  ← `DEBUG_STDOUT=1` 启用,10 MB 滚动
 ```
 
-> 没有配置文件。API Key 和默认模型都走环境变量(`ANTHROPIC_API_KEY` / `X_CODE_MODEL` 等),`config/index.ts` 注释里也有明确声明:"There is no config file"。
+> API Key 走环境变量(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / ...);`~/.x-code/config.json` 只存 UX 偏好(`/model` 选过的模型 alias、`/thinking` 开关),不放 secret。
 
 ### 10.2 AGENTS.md 加载规则
 
@@ -1802,6 +1837,12 @@ interface SessionSummary {
 | `turndown`                  | ^7.2.0   | webFetch HTML→Markdown 转换（latest 7.2.2）                        |
 | `diff`                      | ^8.0.0   | Permission 组件 diff 预览（edit/writeFile 变更对比，latest 8.0.3） |
 | `chalk`                     | ^5.4.0   | 颜色输出（latest 5.6.2）                                           |
+| `file-type`                 | ^22.0.1  | file-ingest 类型探测（按 magic bytes 而非扩展名）                  |
+| `pdf-parse`                 | ^2.4.5   | file-ingest PDF 文本抽取（省 token，不发原 PDF）                    |
+| `mammoth`                   | ^1.12.0  | file-ingest docx → 纯文本                                          |
+| `officeparser`              | ^6.1.0   | file-ingest pptx / odt / odp / ods 文本抽取                        |
+| `xlsx`                      | ^0.18.5  | file-ingest xlsx → 纯文本                                          |
+| `tesseract.js`              | ^7.0.0   | DeepSeek 没配视觉 provider 时的本地 OCR 兜底（weights 缓存全局共享）|
 
 ### `@x-code-cli/cli` dependencies
 
@@ -1925,16 +1966,17 @@ interface SessionSummary {
 - ✅ `maxOutputTokens: 32000` 显式设置（覆盖 Anthropic 4096 默认）+ `finishReason === 'length'` 自动续写（push "continue" 提示,最多 3 次,成功 tool 轮次 reset 计数）
 - ✅ `finishReason === 'content-filter'` 明确报错(不再静默)
 
-### 13.5 工具（13 个）
+### 13.5 工具（11 个）
 
 - ✅ `readFile` / `writeFile` / `edit` / `listDir` / `glob` / `grep`（跨平台，ripgrep 基础）
 - ✅ `shell`：execa + 跨平台（Windows PowerShell / Unix bash/zsh）+ 流式输出 + 智能权限分级
 - ✅ `webSearch`：Tavily 优先 + Brave 兜底（`@tavily/core` SDK + Brave 直连 fetch），工具描述注入当前年份；都缺失时返回平台化配置引导
 - ✅ `webFetch`：HTTP + cheerio + turndown，100 KB 上限，50 条 / 15 min LRU 缓存，Cloudflare bot-challenge 降级重试
 - ✅ `askUser`：配合 `<SelectOptions>` UI
-- ✅ `saveKnowledge`：模型驱动知识提炼
-- ✅ `enterPlanMode` / `exitPlanMode`
-- ✅ 全局 `truncateToolResult()`（30 KB 上限，头尾各半保留）
+- ✅ `saveKnowledge`：模型驱动知识提炼（4 类 category + 90 天 TTL）
+- ✅ 全局 `truncateToolResult()`（首尾各半保留 + 聚合上限 `MAX_AGGREGATE_TOOL_RESULT_BYTES`）
+
+> Plan-mode（`enterPlanMode` / `exitPlanMode`）已在 v0.1.4 移除（commit `1ed61ae`），见 §13.10。
 
 ### 13.6 权限系统
 
@@ -1968,14 +2010,25 @@ interface SessionSummary {
 
 ### 13.9 斜杠命令
 
-- ✅ `/help` / `/model` / `/usage` / `/clear` / `/compact` / `/init` / `/session save` / `/plan` / `/exit`
+- ✅ `/help` / `/model` / `/thinking` / `/usage` / `/usage history` / `/clear` / `/compact` / `/init` / `/session save` / `/exit`
 - ✅ Tab 补全（模糊匹配）
+- ✅ `/model` / `/thinking` 无参时弹 SelectOptions 交互选择器；选择持久化到 `~/.x-code/config.json`
 
-### 13.10 Plan Mode
+### 13.10 Plan Mode（已移除）
 
-- ✅ `enterPlanMode` / `exitPlanMode` 工具
-- ✅ System prompt overlay（Plan 模式下禁用所有写入工具）
-- ✅ 计划文件管理（`.x-code/plans/` 目录 + 自动生成的 plan ID）
+- ❌ Plan-mode 在 v0.1.4 移除（commit `1ed61ae`）。原因：实际使用中模型对"该不该 plan"的判断不稳定，强制 plan 反而拖慢简单任务。当前由用户自主决定（"先帮我看看代码再说" vs "直接动手"）。
+- 旧实现保留在 git history，如需查阅请 `git show 1ed61ae^:packages/core/src/agent/plan-mode.ts`。
+
+### 13.x 其他增强（v0.1.7 以后）
+
+- ✅ **文件附件**（`agent/file-ingest.ts`）：`@path` / 裸绝对路径自动识别；text/code/pdf/docx/xlsx/pptx/image 分类与抽取
+- ✅ **Vision fallback 子 agent**（`agent/vision-fallback.ts`）：DeepSeek 等纯文本 provider 自动借用其他 provider 的视觉模型；session 内 caption 缓存
+- ✅ **Loop guard**（`agent/loop-guard.ts`）：SHA-256 滚动窗口检测重复 tool call，3 软阻断 + 5 硬退出
+- ✅ **Light compaction**（`agent/light-compact.ts`）：O(n) 删除重复 tool-call/result 对，proactive 压缩前置 free 节省
+- ✅ **Prompt caching**（`providers/cache-control.ts`）：Anthropic 原生 `cacheControl` + DeepSeek/Moonshot/Alibaba 的 prefix-caching；`/usage` 显示 cache hit ratio
+- ✅ **Thinking 统一开关**（`providers/thinking.ts`）：8 家 provider 的 reasoning 参数收口成一个 boolean，`/thinking on|off` 切换并持久化
+- ✅ **Session usage 历史**（`knowledge/session-usage.ts`）：每轮持久化 token 用量到 `.x-code/sessions/{sessionId}.usage.json`，`/usage history` 列表查看
+- ✅ **OCR 缓存**（`~/.x-code/tessdata/`）：tesseract 权重 7.6 MB 跨项目共享，首次下载后多项目复用
 
 ### 13.11 非交互模式 & CI 集成
 

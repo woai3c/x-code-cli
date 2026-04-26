@@ -23,20 +23,25 @@ X-Code 的知识加载体系:**人写的和 AI 写的严格分开,各自有独�
     ├── memory/
     │   └── auto.md               ← AI 自动写入的记忆
     ├── sessions/
-    │   └── *.json                ← 会话摘要(压缩时 / 退出时保存)
-    ├── plans/
-    │   └── *.md                  ← Plan Mode 产出
+    │   ├── {sessionId}.json       ← 会话摘要(压缩时 / 退出时 / `/session save`)
+    │   ├── {sessionId}.usage.json ← 会话 token 用量与 cache hit ratio(每轮持久化)
+    │   ├── latest.json            ← 最近一次 session 摘要快照
+    │   └── latest.usage.json      ← 最近一次 session 用量快照
     └── local/
         ├── .gitignore            ← 内容是 `*`,整个 local/ 不提交
         └── preferences.md        ← 个人项目偏好(人写)
 
 ~/.x-code/
 ├── AGENTS.md                     ← 全局用户偏好(人写)
-└── memory/
-    └── auto.md                   ← 全局自动记忆
+├── config.json                   ← `/model` 选定的模型 + `/thinking` 开关持久化
+├── memory/
+│   └── auto.md                   ← 全局自动记忆
+├── tessdata/                     ← tesseract OCR 权重(首次 DeepSeek 看图时下载,~7.6 MB,跨项目共享)
+└── logs/
+    └── debug.log                 ← `DEBUG_STDOUT=1` 时启用,10 MB 滚动
 ```
 
-> 没有配置文件。API Key 和默认模型都走环境变量(`ANTHROPIC_API_KEY` / `X_CODE_MODEL` 等),一份数据源不必同步。
+> API Key 走环境变量(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / ...);`~/.x-code/config.json` 只存 UX 偏好(`/model` 选过的模型 alias、`/thinking` 开关),不放 secret。
 
 ---
 

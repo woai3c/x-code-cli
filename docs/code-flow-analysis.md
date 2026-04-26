@@ -86,7 +86,7 @@ Ink 上游标准版在 CJK / IME / 长流式文本组合下有根深蒂固的抖
 +----------------------------------------------------------+
 |                      Core 层 (core/)                       |
 |  agentLoop() → runTurn() → streamText() → processToolCalls() |
-|  Knowledge / Session / Permission / Plan Mode              |
+|  Knowledge / Session / Permission / LoopGuard / FileIngest |
 +----------------------------------------------------------+
 |                   AI SDK + Provider 层                     |
 |  Anthropic / OpenAI / Google / DeepSeek / ...              |
@@ -462,8 +462,9 @@ ChatInput 把 `text` split 成多行，在有上下边框的 Box 里逐行渲染
 ```
 > /█                          ← 用户正在输入
   /help            Show this help message
-  /model           Switch model or list available models
-  /usage           Show token usage
+  /model           Pick a model (no-arg = interactive) — choice is saved
+  /thinking        Toggle extended thinking on/off — saved
+  /usage           Show current-session token usage (input/output/cache)
   /clear           Clear conversation history
   ...
 ```
@@ -475,15 +476,16 @@ ChatInput 把 `text` split 成多行，在有上下边框的 Box 里逐行渲染
 ```
 handleSubmit(text)
   ├─ 以 / 开头 → 斜杠命令处理
-  │    ├─ /help    → addInfoMessage(HELP_TEXT)
-  │    ├─ /model   → handleModelSwitch()
-  │    ├─ /usage   → handleUsage()
-  │    ├─ /clear   → clear()
-  │    ├─ /compact → compact() → compressMessages()
-  │    ├─ /init    → initProject()
-  │    ├─ /session save → saveCurrentSession()
-  │    ├─ /plan    → submit('Please enter plan mode...')
-  │    └─ /exit    → cleanup() → exit()
+  │    ├─ /help          → addInfoMessage(HELP_TEXT)
+  │    ├─ /model         → handleModelSwitch() (interactive picker | explicit alias)
+  │    ├─ /thinking      → handleThinkingToggle() (interactive picker | on/off)
+  │    ├─ /usage         → handleUsage() (current-session token + cache hit)
+  │    ├─ /usage history → listSessionUsageHistory() (.x-code/sessions/*.usage.json)
+  │    ├─ /clear         → clear()
+  │    ├─ /compact       → compact() → compressMessages()
+  │    ├─ /init          → initProject() (生成项目 AGENTS.md)
+  │    ├─ /session save  → saveCurrentSession() (生成 SessionSummary)
+  │    └─ /exit          → cleanup() → saveSession + exit
   │
   └─ 普通文本 → submit(text)   // 进入 Agent 流程
 ```
@@ -549,7 +551,7 @@ submit(text)
   │
   ├─ 5. 调用 agentLoop(text, model, options, callbacks, loopStateRef.current ?? undefined)
   │    └─ 第五个参数 existingState 复用上一次 submit 的 LoopState，使同一次 CLI 会话内
-  │       多轮提问共享同一个 state.messages / tokenUsage / planMode / sessionId。
+  │       多轮提问共享同一个 state.messages / tokenUsage / sessionId / recentToolCalls。
   │       (不是启动时自动恢复历史会话 —— 启动时 loopStateRef 为 null。)
   │
   └─ 6. 收尾：
@@ -570,8 +572,7 @@ agentLoop(userMessage, model, options, callbacks, existingState)
   │      messages: [],            // AI SDK ModelMessage 数组
   │      tokenUsage: {...},       // 累计 token 用量（API 返回的真实值）
   │      lastInputTokens: 0,      // 上一轮 API 返回的 inputTokens，用于触发压缩
-  │      planMode: false,         // 计划模式标志
-  │      planId: null,            // 当前计划 ID（计划模式下生成）
+  │      recentToolCalls: [],     // loop-guard 滚动窗口（SHA-256 of tool+input）
   │      sessionId: '...',        // 会话 ID
   │      startedAt: '...',        // 会话起始时间 (ISO)
   │      filesModified: Set<>,    // 已修改文件集合
@@ -615,8 +616,7 @@ agentLoop(userMessage, model, options, callbacks, existingState)
        ├─ 构建 System Prompt
        │    buildSystemPrompt({
        │      knowledgeContext,    // 知识上下文
-       │      planMode,           // 是否计划模式
-       │      modelId,            // 模型标识
+       │      modelId,             // 模型标识
        │    })
        │
        ├─ 调用 AI (streamText)
@@ -624,8 +624,10 @@ agentLoop(userMessage, model, options, callbacks, existingState)
        │      model,              // AI SDK LanguageModel
        │      system: systemPrompt,
        │      messages: state.messages,
-       │      tools: toolRegistry, // 13 个工具定义
+       │      tools: toolRegistry, // 11 个工具定义
        │      maxRetries: 3,
+       │      providerOptions,    // /thinking 开关 → 各 provider 自家参数
+       │      experimental_telemetry, // 给 cache-control header 用
        │      abortSignal,
        │    })
        │
@@ -670,8 +672,7 @@ buildSystemPrompt()
 
   2. 工具列表与使用说明
      readFile, writeFile, edit, shell, glob, grep, listDir,
-     webSearch, webFetch, askUser, saveKnowledge,
-     enterPlanMode, exitPlanMode
+     webSearch, webFetch, askUser, saveKnowledge
 
   3. 行为规则
      - 文件操作规则 (先读后改, 优先 edit)
@@ -689,22 +690,20 @@ buildSystemPrompt()
      Working Directory: /path/to/project
      Is Git Repo: yes | no
 
-  6. [可选] Plan Mode 提示
-     "Plan mode is active. You MUST NOT make any edits..."
-
-  7. [可选] 知识上下文 (buildKnowledgeContext 的输出)
+  6. [可选] 知识上下文 (buildKnowledgeContext 的输出)
      ### Global Preferences (~/.x-code/AGENTS.md)
      ### Global Auto Memory
      ### Project AGENTS.md (.)           (repo 根)
      ### Project AGENTS.md (packages/x)  (monorepo 子包, 如有, 覆盖上层)
      ### Project Auto Memory
      ### Local Preferences
+     ### Session Context                 (上一次 session 的 SessionSummary, 如有)
 ```
 
 ### 工具注册表
 
 ```
-toolRegistry (core/src/tools/index.ts)
+toolRegistry (core/src/tools/index.ts) — 11 工具
   ├─ readFile       读取文件内容 (带行号)          — 自动允许
   ├─ writeFile      创建/覆盖文件                  — 需要确认
   ├─ edit           字符串替换编辑文件              — 需要确认
@@ -712,12 +711,10 @@ toolRegistry (core/src/tools/index.ts)
   ├─ glob           按模式查找文件                  — 自动允许
   ├─ grep           按正则搜索文件内容              — 自动允许
   ├─ listDir        列出目录内容                    — 自动允许
-  ├─ webSearch      网络搜索 (Tavily)              — 自动允许
+  ├─ webSearch      网络搜索 (Tavily / Brave)       — 自动允许
   ├─ webFetch       获取网页内容                    — 自动允许
   ├─ askUser        向用户提问                      — 自动允许
-  ├─ saveKnowledge  保存知识到持久化记忆             — 自动允许
-  ├─ enterPlanMode  进入计划模式                    — 自动允许
-  └─ exitPlanMode   退出计划模式                    — 自动允许
+  └─ saveKnowledge  保存知识到持久化记忆             — 自动允许
 ```
 
 ### 工具调用处理流程
@@ -727,13 +724,11 @@ processToolCalls(toolCalls, state, options, callbacks)  // tool-execution.ts
   │
   for each toolCall:
   │
-  ├─ enterPlanMode
-  │    → state.planMode = true, generatePlanId(input.topic)
-  │       // topic 是 AI 在 tool-call 里顺手生成的短主题
-  │       // 最终 planId 形如 refactor-auth-middleware-20260419-0812
-  │
-  ├─ exitPlanMode
-  │    → state.planMode = false, 读取计划文件内容
+  ├─ loop-guard 检测 (loop-guard.ts)
+  │    → SHA-256(toolName + stable-stringify(input)) 推入 state.recentToolCalls (cap 8)
+  │    → 同 hash 在窗口内出现 ≥3 次 → 注入合成 tool-result "this call failed N times,
+  │       try a different approach"，不实际执行该工具
+  │    → 出现 ≥5 次 → 整个 turn 终止，agentLoop 上报 "Possible doom-loop detected"
   │
   ├─ askUser
   │    → callbacks.onAskUser(question, options)
@@ -1186,7 +1181,7 @@ process.on('SIGINT') (cli/src/index.ts)  — 安全网
    │ DeepSeek 等多个 AI 服务商...
    │
    │ 2. 智能工具调用
-   │ 13 个内置工具: 文件读写, Shell 执行,
+   │ 11 个内置工具: 文件读写, Shell 执行,
    │ 代码搜索, 网络搜索...
    │
    │ 3. 知识管理系统
@@ -1325,10 +1320,14 @@ Turn 4: AI 生成最终分析报告 (纯文本回复, 无工具调用)
 | 上下文窗口    | `core/src/agent/context-window.ts`        | `getCompressionThreshold()`, `estimateTokenCount()` + 模型/provider 表                                                                             |
 | API 错误      | `core/src/agent/api-errors.ts`            | `classifyApiError()`, `isContextTooLongError()`, `extractHttpStatus()`                                                                             |
 | Stream 工具   | `core/src/agent/stream-utils.ts`          | `StreamResult` 类型, `drainStreamResult()`                                                                                                         |
-| System Prompt | `core/src/agent/system-prompt.ts`         | `buildSystemPrompt()`, `PLAN_MODE_PROMPT`                                                                                                          |
-| 消息处理      | `core/src/agent/messages.ts`              | `userMessage()`, `toolResultMessage()`                                                                                                             |
-| 计划模式      | `core/src/agent/plan-mode.ts`             | `ensurePlansDir()`, `generatePlanId(topic?)`, `getPlanPath()`                                                                                      |
-| 工具注册      | `core/src/tools/index.ts`                 | `toolRegistry`, `truncateToolResult()`                                                                                                             |
+| System Prompt | `core/src/agent/system-prompt.ts`         | `buildSystemPrompt()`                                                                                                                              |
+| 消息处理      | `core/src/agent/messages.ts`              | `userMessage()`, `toolResultMessage()`, `buildUserMessage()` (含附件)                                                                              |
+| 文件附件      | `core/src/agent/file-ingest.ts`           | `extractAttachments()` — `@path` / 裸绝对路径解析；分类 text/image/pdf/office；多模态 vs OCR/caption                                              |
+| 视觉子 agent  | `core/src/agent/vision-fallback.ts`       | `captionImageWithFallbackProvider()` — DeepSeek 等纯文本 provider 自动借用其他 provider 的视觉模型给图片打 caption（结果 session 内缓存）         |
+| Loop guard    | `core/src/agent/loop-guard.ts`            | `recordToolCall()`, `shouldSoftBlock()`, `shouldHardStop()` — 滚动窗口 SHA-256 检测重复 tool call                                                  |
+| Light compact | `core/src/agent/light-compact.ts`         | `lightCompact()` — O(n) 删除重复 tool-call/result 对，proactive 压缩前先走一遍                                                                     |
+| Provider 兼容 | `core/src/agent/provider-compat.ts`       | DeepSeek-v4 reasoning_content 多轮 shim、ImagePart 剥离 → vision-fallback、PDF FilePart 适配                                                       |
+| 工具注册      | `core/src/tools/index.ts`                 | `toolRegistry` (11 工具), `truncateToolResult()`                                                                                                   |
 | 权限系统      | `core/src/permissions/index.ts`           | `checkPermission()`, `getPermissionLevel()`                                                                                                        |
 | 知识加载      | `core/src/knowledge/loader.ts`            | `buildKnowledgeContext()`, AGENTS.md 向上遍历                                                                                                      |
 | 会话持久化    | `core/src/knowledge/session.ts`           | `saveSession()`, `generateSessionSummary()`, `loadLatestSession()` (预留 history)                                                                  |
