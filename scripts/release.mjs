@@ -54,40 +54,24 @@ function generateChangelog(version) {
 
   if (!log) return ''
 
-  const groups = {
-    feat: [],
-    fix: [],
-    perf: [],
-    refactor: [],
-    docs: [],
-    chore: [],
-    ci: [],
-    style: [],
-    test: [],
-    other: [],
-  }
+  // Only user-facing changes appear in the changelog.
+  // refactor / docs / chore / ci / style / test / release commits are filtered out.
+  const groups = { feat: [], fix: [], perf: [] }
   const labels = {
     feat: 'Features',
     fix: 'Bug Fixes',
     perf: 'Performance',
-    refactor: 'Refactors',
-    docs: 'Documentation',
-    chore: 'Chores',
-    ci: 'CI',
-    style: 'Styles',
-    test: 'Tests',
-    other: 'Other Changes',
   }
 
   for (const line of log.split('\n')) {
     const match = line.match(/^(\w+)(?:\(.+?\))?!?:\s*(.+)$/)
-    if (match) {
-      const type = match[1]
-      groups[type in groups ? type : 'other'].push(match[2])
-    } else {
-      groups.other.push(line)
+    if (match && match[1] in groups) {
+      groups[match[1]].push(match[2])
     }
   }
+
+  const hasContent = Object.values(groups).some((items) => items.length > 0)
+  if (!hasContent) return ''
 
   let md = `## v${version} (${new Date().toISOString().slice(0, 10)})\n\n`
   for (const [type, items] of Object.entries(groups)) {
