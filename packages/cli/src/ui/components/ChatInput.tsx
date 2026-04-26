@@ -306,6 +306,15 @@ const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'
 // SGR first then applying dim pins the color to the terminal default,
 // so meta looks consistent regardless of prior SGR state.
 const S_DIM = '\x1b[0m\x1b[2m'
+// ANSI 90 (bright black). Equivalent to chalk's `c.gray()` output —
+// `c.gray('⎿')` emits `\x1b[90m...\x1b[39m`. Use this for cells that
+// MUST visually match a `c.gray()`-styled glyph in committed scrollback
+// (currently: the `⎿` connector and the `(duration)` suffix in tool
+// rows). S_DIM (`\x1b[2m` = dim attribute on default fg) renders as a
+// noticeably different shade than `\x1b[90m` (explicit palette entry)
+// on most terminals — the user perceives a color flash on the moment
+// a tool finishes and its row switches from live frame to scrollback.
+const S_GRAY_90 = '\x1b[0m\x1b[90m'
 // S_NONE means "default styling — no fg color, no attribute" and MUST
 // be a non-empty escape, otherwise the cell-diff loop's
 // `if (cell.style !== lastStyle) buf += cell.style` branch emits an
@@ -1112,16 +1121,23 @@ export function ChatInput({
           // "is running" signal — when the tool finishes, row2 goes away
           // and the committed scrollback entry keeps row1 plus a result
           // summary in its place.
+          // ⎿ and the trailing meta suffix use S_GRAY_90 (matches the
+          // committed scrollback's `c.gray('⎿')` and `c.gray(' (Xs)')`)
+          // so they don't change color the instant the tool transitions
+          // from live frame to scrollback. Only the in-progress text
+          // ("Running..."/progress) stays in S_DIM — that's running-
+          // specific content that gets replaced wholesale on completion,
+          // so its color doesn't need to match anything in scrollback.
           const row2: Cell[] = []
           row2.push(...textToCells('   ', S_NONE))
-          row2.push(...textToCells('⎿', S_DIM))
+          row2.push(...textToCells('⎿', S_GRAY_90))
           row2.push({ char: ' ', style: S_NONE, width: 1 })
           row2.push({ char: ' ', style: S_NONE, width: 1 })
           row2.push(...textToCells(glyph, S_SPINNER))
           row2.push({ char: ' ', style: S_NONE, width: 1 })
           row2.push(...textToCells(tc.progress ?? 'Running...', S_DIM))
           if (idx === tools.length - 1 && meta) {
-            row2.push(...textToCells(meta, S_DIM))
+            row2.push(...textToCells(meta, S_GRAY_90))
           }
           frame.push(row2)
         })
