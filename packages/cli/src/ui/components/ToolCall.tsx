@@ -10,7 +10,11 @@ import { Box, Text } from 'ink'
 import { ACCENT, BLUE_PURPLE, DIM, WARNING } from '../theme.js'
 import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+// Same asterisk-pulse breathe cycle as ChatInput's SPINNER_FRAMES — see
+// the comment there for why this glyph set replaced the rotating braille
+// dots (visual position stability vs. flicker on weak terminals).
+const SPINNER_BASE_FRAMES = ['·', '✢', '*', '✶', '✻', '✽']
+const SPINNER_FRAMES = [...SPINNER_BASE_FRAMES, ...[...SPINNER_BASE_FRAMES].reverse()]
 
 interface ToolCallProps {
   toolName: string
@@ -28,7 +32,7 @@ export function ToolCall({ toolName, input }: ToolCallProps) {
     const timer = setInterval(() => {
       setFrame((prev) => (prev + 1) % SPINNER_FRAMES.length)
       setElapsed(Date.now() - startRef.current)
-    }, 80)
+    }, 200)
     return () => clearInterval(timer)
   }, [toolName]) // Reset timer when tool changes
 

@@ -40,7 +40,18 @@ import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
 const MAX_VISIBLE_LINES = 10
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+// Asterisk-pulse glyphs that breathe at the same screen position rather
+// than rotating dot patterns (which the eye reads as area shake/flicker).
+// Forward + reversed produces a 12-frame `·, ✢, *, ✶, ✻, ✽, ✽, ✻, ✶, *, ✢, ·`
+// breathe cycle. Mirrors Claude Code's spinner glyph set
+// (D:\res\claude-code\src\components\Spinner\utils.ts:4-11 +
+// SpinnerGlyph.tsx:7), which is visually stable on terminals where high-
+// contrast braille rotation registers as flicker (VSCode xterm.js, ConHost).
+// Using the non-Mac glyphs (`*` instead of `✽` for the brightest frame) on
+// every platform — `*` is monospace-safe everywhere and the visual diff
+// against `✻` is small enough that the breathe still reads cleanly.
+const SPINNER_BASE_FRAMES = ['·', '✢', '*', '✶', '✻', '✽']
+const SPINNER_FRAMES = [...SPINNER_BASE_FRAMES, ...[...SPINNER_BASE_FRAMES].reverse()]
 
 // ── CJK width helpers ───────────────────────────────────────────────────
 
@@ -334,6 +345,15 @@ const S_GRAY_90 = '\x1b[0m\x1b[90m'
 // here is safe.
 const S_RESET = '\x1b[0m'
 const S_NONE = '\x1b[0m'
+// Inverse-video block used to PAINT the input cursor's position as a
+// regular cell. The real terminal cursor is hidden app-wide (see the
+// useEffect at component mount), so this is the only thing the user
+// sees as "the cursor". Updates atomically with the rest of the cell-
+// diff frame, so it never flickers on its own. Mirrors Gemini CLI's
+// `<Text terminalCursorFocus>` approach (renders an inverse-video
+// block at the caret position) and Claude Code's same hidden-cursor
+// strategy.
+const S_CURSOR = '\x1b[7m'
 
 // NOTE: `\x1b7` / `\x1b8` (DECSC / DECRC) are DELIBERATELY NOT used
 // anywhere in this file. The terminal provides a single save register,
@@ -366,6 +386,50 @@ const S_NONE = '\x1b[0m'
 const BSU = '\x1b[?2026h'
 const ESU_SHOW = '\x1b[?2026l\x1b[?25h'
 const ESU_HIDE = '\x1b[?2026l\x1b[?25l'
+
+/** Heuristic: does this terminal honor DEC 2026 Synchronized Output Mode
+ *  strictly enough that cursor-position changes inside a BSU/ESU block
+ *  are atomized into one paint? On terminals that pass this check, the
+ *  cell-diff loop's intra-frame cursor walks are invisible — cursor
+ *  ends at the input anchor as a single observable jump. On terminals
+ *  that don't, every intermediate cursor position is drawn at 5–10 Hz
+ *  during streaming, which users perceive as cursor jitter / flicker.
+ *
+ *  We only read environment variables — no async stdin probe — to keep
+ *  startup synchronous and avoid races with the first key the user
+ *  presses. Mirrors the env-var checks in Claude Code's
+ *  `isSynchronizedOutputSupported()` (terminal.ts):
+ *    - WT_SESSION                → Windows Terminal (modern)
+ *    - TERM_PROGRAM=iTerm.app    → iTerm2
+ *    - TERM_PROGRAM=vscode       → VSCode integrated terminal (xterm.js)
+ *    - TERM_PROGRAM=ghostty      → Ghostty
+ *    - TERM_PROGRAM=WezTerm      → WezTerm
+ *    - KITTY_WINDOW_ID           → kitty
+ *    - ALACRITTY_*               → Alacritty (sync supported since 0.13)
+ *    - TERM=xterm-kitty          → kitty fallback
+ *  TMUX presence forces the weak path even if the outer terminal is
+ *  capable — tmux multiplexes and breaks intra-frame atomicity.
+ *
+ *  Default for unknown terminals: WEAK. Conservative — better to drop
+ *  the on-screen cursor visibly during streaming on a capable terminal
+ *  than to flicker on a weak one. PowerShell launched from the Win10
+ *  Start menu typically lands in conhost without WT_SESSION set, which
+ *  is the exact case where users see flicker. */
+function isCapableTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.TMUX) return false
+  if (env.WT_SESSION) return true
+  const tp = env.TERM_PROGRAM
+  // VSCode IS in this list — Claude Code's `isSynchronizedOutputSupported()`
+  // treats vscode as capable (terminal.ts:86). VSCode's xterm.js
+  // honors DEC 2026 strictly enough that with the cursor hidden
+  // app-wide (see useEffect at component mount) cell-diff renders
+  // are atomic and the user sees zero flicker.
+  if (tp === 'vscode' || tp === 'iTerm.app' || tp === 'ghostty' || tp === 'WezTerm') return true
+  if (env.KITTY_WINDOW_ID || env.TERM === 'xterm-kitty') return true
+  if (env.ALACRITTY_WINDOW_ID || env.ALACRITTY_LOG || env.ALACRITTY_SOCKET) return true
+  return false
+}
+const TERMINAL_IS_CAPABLE = isCapableTerminal()
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
@@ -568,7 +632,13 @@ export function ChatInput({
     if (loadingStartRef.current === 0) loadingStartRef.current = Date.now()
     const timer = setInterval(() => {
       setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length)
-    }, 80)
+    }, 200) // 200ms per frame (5 Hz). Below 8 Hz the asterisk-pulse
+    // breathe still reads as a smooth animation, but each cell write is
+    // 38% less frequent than at 120ms — measurably less visible
+    // residual flicker on weak terminals (VSCode xterm.js, ConHost)
+    // where every spinner-cell update kicks the renderer's state
+    // machine. A full breathe cycle is now 12 frames × 200ms = 2.4s,
+    // which still feels alive without feeling jittery.
     return () => clearInterval(timer)
   }, [spinner])
 
@@ -590,6 +660,25 @@ export function ChatInput({
     stdout.on('resize', onResize)
     return () => { stdout.off('resize', onResize) }
   }, [stdout])
+
+  // ── Cursor visibility lifecycle (Claude-Code pattern). ──
+  // The terminal cursor is hidden for the entire lifetime of the TUI
+  // and shown again on unmount. We never toggle `?25h` / `?25l` per
+  // render, which on Windows Terminal / VSCode-xterm.js / ConHost
+  // resets the cursor blink phase each time it's processed and the
+  // user perceives that as flicker at the cursor's last position.
+  // The "input cursor" is rendered as an inverse-video cell on the
+  // input row by the cell-diff loop below — visually it's just a
+  // styled char that updates atomically with the rest of the frame.
+  // Reference: D:\res\claude-code\src\ink\components\App.tsx:184
+  // (HIDE_CURSOR write at componentDidMount) and :189 (SHOW_CURSOR
+  // at componentWillUnmount).
+  useEffect(() => {
+    try { process.stdout.write('\x1b[?25l') } catch { /* tty closed */ }
+    return () => {
+      try { process.stdout.write('\x1b[?25h') } catch { /* tty closed */ }
+    }
+  }, [])
 
   // ── Fuzzy matching ──
   const matches = useMemo(() => {
@@ -1268,7 +1357,7 @@ export function ChatInput({
           // +1 to convert to 1-based. Captured BEFORE pushing cursor cell
           // so it reflects the cursor cell's starting column.
           cursorAnchor = { row: frame.length, col: 2 + visualWidth(before) + 1 }
-          cells.push({ char: cursorChar, style: S_RESET, width: charWidth(cursorChar) })
+          cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
           cells.push(...textToCells(after, S_RESET))
         } else {
           const beforeWidth = visualWidth(before)
@@ -1283,7 +1372,7 @@ export function ChatInput({
           const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
           cells.push(...textToCells(vb, S_RESET))
           cursorAnchor = { row: frame.length, col: 2 + visualWidth(vb) + 1 }
-          cells.push({ char: cursorChar, style: S_RESET, width: charWidth(cursorChar) })
+          cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
           cells.push(...textToCells(va, S_RESET))
         }
       }
@@ -1311,6 +1400,47 @@ export function ChatInput({
         }
         frame.push(cells)
       }
+    }
+
+    // ── Plan b: weak-terminal streaming bail-out. ────────────────────────
+    //
+    // On terminals that don't atomize the BSU/ESU window (see
+    // TERMINAL_IS_CAPABLE), every text commit during streaming visibly
+    // mispaints the bottom frame: pre-scroll with `\n.repeat(N)` shifts
+    // the frame up into scrollback, then we redraw it at the new bottom
+    // — but the redraw isn't atomic with the scroll, so the user sees
+    // the frame at the scrolled position for a beat (the "input box
+    // jitter" symptom). Hiding the cursor (Plan a) only suppresses
+    // cursor-position jitter; the frame mispaint is independent.
+    //
+    // The fix: during streaming on weak terminals, render NO frame at
+    // all (nextH = 0). The commit logic then falls into the simple
+    // `else if (didCommitMessages)` branch that just writes scrollback
+    // content at the natural cursor position, with no pre-scroll, no
+    // erase, no frame redraw — and crucially no frame to mispaint.
+    // The screen behaves exactly like a plain `console.log` stream
+    // during the AI's reply (which is what scrollback writes already
+    // are), and the input frame reappears in one atomic redraw at the
+    // bottom when streaming ends (spinner becomes null), via the
+    // existing frame-grow path.
+    //
+    // Consequences during streaming on weak terminals:
+    //   - No spinner row, no separators, no input box pinned to bottom
+    //   - User can still type: keystrokes go into local state and are
+    //     submitted as usual, but they aren't echoed on screen until
+    //     the input frame is redrawn at end-of-stream
+    //   - Mid-stream tool dialogs (permission/select) are SKIPPED here
+    //     — but in App.tsx the spinner prop is gated on
+    //     `!selectActive && !permissionRequest`, so when a dialog
+    //     opens, spinner becomes null and the frame reappears
+    //     immediately, restoring the dialog UX
+    //
+    // Capable terminals (Windows Terminal, iTerm2, Ghostty, kitty,
+    // Alacritty, WezTerm) skip this branch entirely and get the full
+    // frame as before.
+    if (spinner && !TERMINAL_IS_CAPABLE) {
+      frame.length = 0
+      cursorAnchor = null
     }
 
     // ── Diff against previous frame and emit one buffered write ──────────
@@ -1494,29 +1624,19 @@ export function ChatInput({
       if (preScrollRows > 0 || frameSizeChanged) {
         // FULL-REDRAW PATH.
         if (preScrollRows > 0) {
-          // Push `preScrollRows` rows into the terminal's real scrollback.
-          // We use SU (`\x1b[NS`, Scroll Up) instead of N separate LFs
-          // emitted at termRows. Both produce the same end state — buffer
-          // shifted up by N, bottom N rows blank — but differ in how the
-          // terminal's renderer processes them:
-          //
-          //   `\n*N` at termRows: each LF triggers a single-row auto-scroll,
-          //     so xterm.js calls its `scroll()` handler N times. The
-          //     renderer's line-cache update path runs once per scroll, and
-          //     a large-table commit (preScrollRows ~9) measurably flickers
-          //     even inside a DEC 2026 sync block because the N
-          //     intermediate buffer states leak into one paint.
-          //
-          //   `\x1b[NS`: a single SU sequence batches the N-row shift in
-          //     one operation. The renderer adjusts its line cache once,
-          //     for the full N-row delta, which is what every modern
-          //     terminal (xterm, xterm.js, Windows Terminal, iTerm2,
-          //     Ghostty, ConHost) optimizes for.
-          //
-          // DECSTBM-restricted scrolling would also work but xterm.js
-          // splice-discards DECSTBM regions in its InputHandler — full-
-          // screen SU is the only mechanism that lands in real scrollback.
-          preBuf += `\x1b[${termRows};1H\x1b[${preScrollRows}S`
+          // Push `preScrollRows` rows into the terminal's real scrollback
+          // by emitting N LFs at the bottom row. This is the ONLY portable
+          // mechanism that preserves displaced rows in scrollback history:
+          // SU (`\x1b[NS`) and DECSTBM-restricted scrolls both shift cells
+          // in the viewport but discard the rows that fall off the top
+          // on Windows Terminal, ConHost, iTerm2, native macOS Terminal,
+          // Ghostty, and Alacritty. (xterm.js was the one outlier where
+          // SU sometimes lands in scrollback — an earlier revision of
+          // this file used SU on that basis and silently swallowed the
+          // overflow on every other target terminal: any AI reply taller
+          // than the available rows above the frame lost its top lines.)
+          // Auto-scroll triggered by LF at termRows is universally honored.
+          preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
         }
         // Erase from startRow to the bottom of the screen. startRow is at
         // or above the (post-scroll) top of the old frame, so this clears
@@ -1562,8 +1682,33 @@ export function ChatInput({
       }
       handledCommitWithFrame = true
     } else if (didCommitMessages) {
-      // scrollRows == 0 (empty commit) or degenerate dimensions: dump at
-      // current cursor, let frame redraw below clean up.
+      // Plan b weak-terminal path: nextH=0 (frame was cleared by the
+      // streaming bail-out above) but oldFrameH may still be > 0 — the
+      // OLD frame is still painted on screen. If we let scrollbackContent
+      // write first, its trailing `\r\n\r\n` triggers auto-scrolls at
+      // termRows that push the OLD top-separator and OLD input row into
+      // the terminal's scrollback history (visible as "horizontal line +
+      // `> 查询…`" appearing above the AI response). The erase done by
+      // the shrink path BELOW fires too late — it lands on the just-
+      // shifted rows and erases the new echo instead.
+      //
+      // Fix: erase the OLD frame rows FIRST, here, before scrollbackContent
+      // writes. With the frame area cleared, the echo's auto-scrolls push
+      // BLANK rows into scrollback rather than old frame remnants, and
+      // the echo lands cleanly. Mark handledCommitWithFrame so the shrink
+      // path below doesn't double-erase.
+      if (oldFrameH > 0 && nextH < oldFrameH && !permission) {
+        for (let i = 0; i < oldFrameH; i++) {
+          const row = termRows - oldFrameH + 1 + i
+          preBuf += `\x1b[${row};1H\x1b[K`
+        }
+        // Cursor sits at top of where the old frame was, so the echo
+        // writes there instead of one row below the old input.
+        preBuf += `\x1b[${termRows - oldFrameH + 1};1H`
+        pendingFreeBlanks = freeBlanksAboveFrameRef.current + oldFrameH
+        prevFrameRef.current = []
+        handledCommitWithFrame = true
+      }
       preBuf += scrollbackContent
     }
 
@@ -1649,13 +1794,29 @@ export function ChatInput({
     const prevH = prevFrame.length
     const maxH = Math.max(prevH, nextH)
 
-    // Jump absolutely to the frame's top-left. Works regardless of where
-    // the DECSTBM path or the height-change path left the cursor.
-    buf += `\x1b[${frameTop};1H`
-
+    // PER-ROW ABSOLUTE POSITIONING (Claude-Code style).
+    //
+    // Earlier code did `jump-to-frame-top, then walk-down each row with
+    // \x1b[1B\r`. On a steady spinner tick only ONE cell in ONE row
+    // actually differs, but the relative-walk approach emitted
+    // `\x1b[1B\r` after every row regardless — moving the cursor through
+    // every unchanged row of the frame on the way down, plus an initial
+    // jump to frame-top, plus a final park to the cursor anchor. That's
+    // 5+ cursor positions per tick and on terminals whose DEC 2026 sync
+    // doesn't fully atomize cursor positions (Windows Terminal, VSCode
+    // xterm.js, ConHost) every intermediate stop is processed by the
+    // terminal's renderer — visible as a flicker even with the cursor
+    // hidden, because each cursor-position command kicks the cell-render
+    // pipeline.
+    //
+    // Per-row absolute (`\x1b[absRow;colH` only on rows we actually
+    // write) means a stable spinner tick visits 2 cursor positions:
+    // the spinner cell, and the final cursor-anchor park. Unchanged
+    // rows are SKIPPED — no jump to them, no `\x1b[K`, no advance.
     for (let row = 0; row < maxH; row++) {
       const prevRow = row < prevH ? prevFrame[row] : []
       const nextRow = row < nextH ? frame[row] : []
+      const absRow = frameTop + row
 
       if (row < nextH) {
         // First cell that differs from prevRow
@@ -1682,10 +1843,10 @@ export function ChatInput({
         }
 
         if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
-          // Position cursor at diffIdx's visual column
+          // Absolute-position to (absRow, diffIdx's visual column).
           let col = 0
           for (let c = 0; c < diffIdx; c++) col += nextRow[c].width
-          buf += `\x1b[${col + 1}G`
+          buf += `\x1b[${absRow};${col + 1}H`
 
           // Emit changed cells. Initialize lastStyle to S_NONE (= explicit
           // reset code) so the first cell's char doesn't inherit any SGR
@@ -1726,32 +1887,24 @@ export function ChatInput({
             }
           }
         }
-        // else: row identical — skip
+        // else: row identical — skip without moving the cursor.
       } else {
-        // Extra old row — blank it out
-        buf += '\r\x1b[K'
-      }
-
-      // Advance to the next row. Always use CUD+\r (down + col 1) —
-      // never \n, which at row=termRows would cause the terminal to
-      // scroll our frame off the viewport by one row. Rows always exist
-      // because the frame is pinned to [frameTop..termRows] and those
-      // rows have already been allocated (either by the frame-height
-      // growth scroll above, or by being the same rows the previous
-      // frame occupied).
-      if (row < maxH - 1) {
-        buf += '\x1b[1B\r'
+        // Extra old row — absolute-position and blank it out.
+        buf += `\x1b[${absRow};1H\x1b[K`
       }
     }
 
-    // Park the real cursor at the input cursor's column. ESU_SHOW below
-    // then makes it visible there; the user's terminal draws it in
-    // whatever shape they configured (block / bar / underline) — that
-    // is the only cursor on screen.
-    if (cursorAnchor) {
-      const anchorRow = frameTop + cursorAnchor.row
-      buf += `\x1b[${anchorRow};${cursorAnchor.col}H`
-    }
+    // No cursor parking. The terminal cursor is hidden for the whole
+    // life of the TUI (see the mount useEffect that emits `\x1b[?25l`),
+    // so its position is invisible and doesn't matter for display. The
+    // visual "input cursor" the user sees is the inverse-video cell on
+    // the input row (S_CURSOR), drawn atomically by the cell-diff loop
+    // above. Skipping the park removes one cursor-position command per
+    // flush — on weak terminals each such command kicks the renderer's
+    // state machine even when the cursor itself is hidden, so dropping
+    // it visibly reduces residual flicker. cursorAnchor is still
+    // computed because lower paths (and future revival of the visible
+    // cursor) read it; it's just no longer emitted as a CSI H here.
 
     // Flush everything as a single write: preBuf (BSU + DECSTBM scrollback
     // insertion + any frame-height-change scrolling) + frame diff + ESU.
@@ -1761,7 +1914,32 @@ export function ChatInput({
     // Ink's log-update internals, so our save was being clobbered on every
     // Ink tree reconcile. Instead we jump absolutely to (frameTop, 1) at
     // the start of every render — no cross-render cursor-state dependency.
-    const esu = cursorAnchor ? ESU_SHOW : ESU_HIDE
+    // ESU never carries a visibility command. The cursor is hidden for
+    // the entire lifetime of this component (see the mount useEffect
+    // above) and the input "cursor" is just an inverse-video cell on
+    // the input row, drawn atomically with the rest of the frame. Per-
+    // flush `?25h` / `?25l` toggling resets the cursor blink phase on
+    // Windows Terminal and VSCode's xterm.js — that is the flicker
+    // users were reporting at the rightmost typed column.
+    const esu = '\x1b[?2026l'
+
+    // Early-return for no-op flushes. When the spinner ticks but no
+    // cell content has changed (preBuf empty after BSU, buf empty),
+    // the wrapper alone (`?2026h` + `?2026l`, 16 bytes) is enough to
+    // make the terminal re-process the sync window — and on weak
+    // terminals this still resets the cursor blink phase, producing
+    // the cursor flicker the user was seeing at 12 Hz. Skipping the
+    // write entirely is the same trick Claude Code uses
+    // (D:\res\claude-code\src\ink\ink.tsx:623, 668-671 — the
+    // `hasDiff || targetMoved` early-return).
+    if (preBuf === BSU && buf === '') {
+      lastFlushTimeRef.current = Date.now()
+      // Still need to apply the pending blank-rows update; the
+      // shrink path may have computed a new value.
+      freeBlanksAboveFrameRef.current = pendingFreeBlanks
+      return
+    }
+
     const payload = preBuf + buf + esu
     debugLog(
       'chatinput.flush',

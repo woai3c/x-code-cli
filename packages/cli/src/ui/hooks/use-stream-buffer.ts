@@ -171,12 +171,14 @@ function makeStreamChunkMessage(content: string): DisplayMessage {
 
 /** Always-defer window for coalescing commits. The first commit in a
  *  quiet period arms a timer; any further commits arriving before it
- *  fires join the same emit. 48ms ≈ 3 frames at 60Hz — short enough to
- *  feel "live" (well under the ~100ms human reaction threshold and
- *  shorter than typical 80-200ms inter-delta gaps from the provider),
- *  long enough to coalesce the paragraph + separator + heading bursts
- *  models commonly emit 30-70ms apart around section boundaries. */
-const COMMIT_BATCH_MS = 48
+ *  fires join the same emit. 150ms is below the ~200ms human-perception
+ *  threshold for "stuttering" but long enough to absorb most paragraph +
+ *  separator + heading bursts (which usually arrive 30-150ms apart
+ *  around section boundaries). Cuts the rate of large terminal-frame
+ *  redraws roughly in half versus the prior 48ms window — the live
+ *  scrollback area "shakes" half as often during streaming, at the cost
+ *  of paragraphs appearing in slightly chunkier batches. */
+const COMMIT_BATCH_MS = 150
 
 export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): StreamBufferApi {
   /** Accumulating buffer — holds everything since the last safe-boundary
