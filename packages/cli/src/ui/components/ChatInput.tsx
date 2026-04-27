@@ -557,13 +557,33 @@ export function ChatInput({
    *  was positioned so it can be erased before painting at the new spot. */
   const lastTermRowsRef = useRef(0)
   const lastTermWidthRef = useRef(0)
-  /** Rows of freshly-erased blank space immediately above the frame —
-   *  typically from a shrink that closed a dialog (the erase step wipes
-   *  the old picker rows, leaving them blank). The next commit can write
-   *  new scrollback content INTO these blanks without needing to
-   *  pre-scroll the top of the viewport into real scrollback, which is
-   *  what preserves the startup banner across multiple /model cycles. */
+  /** Rows of blank space between the last on-screen content row and the
+   *  TERMINAL BOTTOM. Conceptually the same value as the original "blanks
+   *  above frame" — what changed is where we choose to draw the frame
+   *  inside that empty zone:
+   *
+   *    - When this is 0 the frame sits at the bottom of the terminal
+   *      (the original always-anchored-at-bottom behavior).
+   *    - When this is > 0 the frame floats UP so it sits immediately
+   *      below the last content row, and the freeBlanks become the
+   *      empty rows BELOW the input box. Mirrors Claude Code's flex-
+   *      layout behavior (Box flexGrow=1 spacer doesn't push to bottom
+   *      until messages fill the screen) and avoids the "tool block
+   *      anchored at bottom of empty terminal" gap users see when
+   *      starting a fresh conversation.
+   *
+   *  Across the rest of the render code this still tracks "free row
+   *  budget that the next commit can write into without scrolling real
+   *  history" — that arithmetic is identical regardless of where the
+   *  frame is parked inside the empty zone. */
   const freeBlanksAboveFrameRef = useRef(0)
+  /** Last actual frameTop row written to the terminal. Stored separately
+   *  because frameTop is no longer derivable from (termRows, frameH)
+   *  alone — it now also depends on freeBlanksAboveFrameRef. Read by
+   *  unmount cleanup (buildEraseRegion) and the resize handler so they
+   *  can erase the OLD on-screen frame at its actual position rather
+   *  than guessing it from termRows. */
+  const lastFrameTopRef = useRef(0)
   /** Reserves vertical space inside the tool-running frame when a permission
    *  dialog just closed but its approved tool hasn't committed a result yet.
    *  Without the reservation the frame snaps 7→5 rows (permission was 4 rows,
@@ -710,11 +730,16 @@ export function ChatInput({
    *  needed when the TUI itself is tearing down. */
   const buildEraseRegion = (): string => {
     const prevH = lastFrameHRef.current
+    const prevTop = lastFrameTopRef.current
     prevFrameRef.current = []
     lastFrameHRef.current = 0
+    lastFrameTopRef.current = 0
     if (prevH <= 0) return ''
     const termRows = stdout?.rows ?? 25
-    const frameTop = Math.max(1, termRows - prevH + 1)
+    // Use the actual last-rendered top, falling back to the bottom-anchor
+    // formula on the legacy path where lastFrameTopRef wasn't yet
+    // populated (would only matter for very early teardowns).
+    const frameTop = prevTop > 0 ? prevTop : Math.max(1, termRows - prevH + 1)
     // Jump to frame top, erase to end of display. One atomic wipe.
     return `\x1b[${frameTop};1H\x1b[J`
   }
@@ -969,6 +994,7 @@ export function ChatInput({
       wasHiddenRef.current = false
       prevFrameRef.current = []
       lastFrameHRef.current = 0
+      lastFrameTopRef.current = 0
       freeBlanksAboveFrameRef.current = 0
       activeRef.current = false
     }
@@ -1455,7 +1481,16 @@ export function ChatInput({
     // previous frame".
     const nextH = frame.length
     const oldFrameH = lastFrameHRef.current
-    const frameTop = Math.max(1, termRows - nextH + 1)
+    // Floating-frame model: when there are blank rows below the frame
+    // (freeBlanks > 0), the frame floats up so it sits right after the
+    // last content row. When freeBlanks reaches 0 the frame is at the
+    // bottom (the original behavior). frameTop is recomputed every time
+    // pendingFreeBlanks changes (after a commit absorbs blanks, after
+    // a frame-size change, etc.) so the cell-diff loop further down
+    // always writes at the position the frame will end up at.
+    const computeFrameTop = (blanks: number) =>
+      Math.max(1, termRows - nextH + 1 - blanks)
+    let frameTop = computeFrameTop(freeBlanksAboveFrameRef.current)
 
     // First render: seed the "blanks above frame" tracker. The banner
     // (initialContentRows) occupies the top of the viewport; everything
@@ -1464,6 +1499,11 @@ export function ChatInput({
     // in view during normal operation.
     if (isFirstPaint && initialContentRows > 0) {
       freeBlanksAboveFrameRef.current = Math.max(0, termRows - initialContentRows - nextH)
+      // Re-seed frameTop now that freeBlanks is set so the very first
+      // paint floats the frame up to sit immediately below the banner
+      // instead of stranding it at the bottom of an otherwise-empty
+      // terminal.
+      frameTop = computeFrameTop(freeBlanksAboveFrameRef.current)
     }
 
     // ── Terminal resize: erase old frame at its previous position ────────
@@ -1503,12 +1543,19 @@ export function ChatInput({
         const eraseFrom = Math.max(1, frameTop - extraRows)
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
       } else {
-        // Height-only change: old frame position is predictable.
-        const oldFrameTop = Math.max(1, oldTermRows - oldFrameH + 1)
+        // Height-only change: use the actual last-rendered top (the
+        // frame may have been floating before the resize, so the
+        // bottom-anchor formula is no longer reliable).
+        const oldFrameTop = lastFrameTopRef.current > 0
+          ? lastFrameTopRef.current
+          : Math.max(1, oldTermRows - oldFrameH + 1)
         const eraseFrom = Math.min(oldFrameTop, frameTop)
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
       }
+      // Resize invalidates the floating-frame state; the next render
+      // re-seeds freeBlanks via the first-paint path or commit branch.
       freeBlanksAboveFrameRef.current = 0
+      frameTop = computeFrameTop(0)
     }
     lastTermRowsRef.current = termRows
     lastTermWidthRef.current = termWidth
@@ -1562,29 +1609,32 @@ export function ChatInput({
       // by a recent shrink (dialog close). If the new content+frame fits
       // within that space, no full-screen scroll is needed. If it doesn't,
       // pre-scroll the shortfall into real terminal scrollback history.
-      const freeBlanks = oldFrameH > 0 ? freeBlanksAboveFrameRef.current : 0
+      // Floating-frame model: freeBlanks always represents the budget of
+      // re-usable rows below the frame (or above when frame is at the
+      // bottom — same value, just placed differently). On first-paint
+      // (oldFrameH = 0) it was just seeded from termRows-banner-nextH so
+      // the very first commit can write content right after the banner
+      // and leave the residual blanks below the frame.
+      const freeBlanks = freeBlanksAboveFrameRef.current
       const availSpace = oldFrameH + freeBlanks
-      const preScrollRows = oldFrameH > 0 ? Math.max(0, scrollRows + nextH - availSpace) : 0
+      const preScrollRows = Math.max(0, scrollRows + nextH - availSpace)
       // Write scrollbackContent DIRECTLY after the last row of real
       // scrollback — this consumes the free-blank region row-by-row
       // instead of leaving it stranded as a visible gap between the
-      // earlier history and the newly committed content. The previous
-      // formula placed content immediately above the new frame, which
-      // left any excess free-blanks above it; on the next grow those
-      // blank rows would be pre-scrolled into real terminal history
-      // permanently, producing the "tool result, then 5-8 blank lines,
-      // then next tool result" pattern in scrollback.
-      const startRow = oldFrameH > 0
-        ? Math.max(1, termRows - availSpace - preScrollRows + 1)
-        : Math.max(1, termRows - scrollRows - nextH + 1)
-      // Any rows between the end of scrollbackContent and the new frame
-      // top remain blank and become the new "free blanks above frame" —
-      // a subsequent commit will consume them the same way this one
-      // consumed the previous batch.
-      const leftoverBlanks = oldFrameH > 0
-        ? Math.max(0, availSpace + preScrollRows - scrollRows - nextH)
-        : 0
+      // earlier history and the newly committed content.
+      const startRow = Math.max(1, termRows - availSpace - preScrollRows + 1)
+      // Rows still blank after this commit. These become the next
+      // render's freeBlanks — either kept BELOW the frame (frame keeps
+      // floating up) or implicitly consumed when the frame reaches the
+      // bottom (freeBlanks = 0).
+      const leftoverBlanks = Math.max(0, availSpace + preScrollRows - scrollRows - nextH)
       pendingFreeBlanks = leftoverBlanks
+      // Recompute frameTop now that pendingFreeBlanks reflects the
+      // post-commit free-row budget. In the floating-frame model the
+      // frame's top moves DOWN by scrollRows on every commit (until it
+      // reaches the bottom and stays there) — the cell-diff loop and
+      // the FULL-REDRAW path below both anchor at this updated value.
+      frameTop = computeFrameTop(pendingFreeBlanks)
       // No `\x1b[?25l` here. Earlier revisions hid the cursor across the
       // scroll-clear-redraw window so its intermediate positions inside
       // the renderRowToAnsi loop wouldn't blink across rows on terminals
@@ -1621,7 +1671,17 @@ export function ChatInput({
       //     swap). This is what eliminates the visible wipe-and-repaint
       //     of the spinner / separator / input rows on every commit.
       const frameSizeChanged = oldFrameH !== nextH
-      if (preScrollRows > 0 || frameSizeChanged) {
+      // Floating-frame model: any commit that moves the frame's top row
+      // (i.e. freeBlanks was non-zero before this commit) MUST go
+      // through FULL-REDRAW. The cell-diff loop further down assumes
+      // the on-screen frame still matches prevFrameRef.current — true
+      // when frame stayed put, false when it just moved. Without this
+      // guard, after a commit the cell-diff would write the new frame
+      // at the new (lower) frameTop while the old frame's cells are
+      // still painted at the old (higher) position — leaving stale
+      // rows above the new frame.
+      const frameMoved = freeBlanksAboveFrameRef.current > 0
+      if (preScrollRows > 0 || frameSizeChanged || frameMoved) {
         // FULL-REDRAW PATH.
         if (preScrollRows > 0) {
           // Push `preScrollRows` rows into the terminal's real scrollback
@@ -1698,14 +1758,19 @@ export function ChatInput({
       // the echo lands cleanly. Mark handledCommitWithFrame so the shrink
       // path below doesn't double-erase.
       if (oldFrameH > 0 && nextH < oldFrameH && !permission) {
+        // Use the actual previous frame top (floating-frame model means
+        // the OLD frame may have sat above the bottom-anchor position).
+        const oldTop = lastFrameTopRef.current > 0
+          ? lastFrameTopRef.current
+          : Math.max(1, termRows - oldFrameH + 1)
         for (let i = 0; i < oldFrameH; i++) {
-          const row = termRows - oldFrameH + 1 + i
-          preBuf += `\x1b[${row};1H\x1b[K`
+          preBuf += `\x1b[${oldTop + i};1H\x1b[K`
         }
         // Cursor sits at top of where the old frame was, so the echo
         // writes there instead of one row below the old input.
-        preBuf += `\x1b[${termRows - oldFrameH + 1};1H`
+        preBuf += `\x1b[${oldTop};1H`
         pendingFreeBlanks = freeBlanksAboveFrameRef.current + oldFrameH
+        frameTop = computeFrameTop(pendingFreeBlanks)
         prevFrameRef.current = []
         handledCommitWithFrame = true
       }
@@ -1738,52 +1803,51 @@ export function ChatInput({
     if (!handledCommitWithFrame && activeRef.current && oldFrameH > 0 && oldFrameH !== nextH) {
       if (nextH > oldFrameH) {
         const deltaH = nextH - oldFrameH
-        // Consume as much freshly-blank space above the frame as we can —
+        // Consume as much freshly-blank space below the frame as we can —
         // those rows can be overwritten without losing anything. Any excess
-        // expansion IS over real content, so pre-scroll that much into
-        // real scrollback to preserve it (banner, earlier messages).
-        // Without this, typing `/` to open the completion menu would wipe
-        // whatever scrollback sat right above the input (see the /usage
-        // result disappearing when /mo was typed).
+        // expansion exceeds the bottom blanks, so pre-scroll that much into
+        // real scrollback to preserve content above (banner, earlier
+        // messages). Without this, typing `/` to open the completion menu
+        // would wipe whatever scrollback sat right above the input.
         const absorbed = Math.min(deltaH, freeBlanksAboveFrameRef.current)
         const needsScroll = deltaH - absorbed
         if (needsScroll > 0) {
           preBuf += `\x1b[${termRows};1H` + '\n'.repeat(needsScroll)
         }
-        // Pre-erase the newly-occupied rows so any stale cells (from prior
-        // renders or auto-scroll residue) don't bleed through before the
-        // diff below repaints them.
-        for (let i = 0; i < deltaH; i++) {
-          const row = termRows - nextH + 1 + i
-          preBuf += `\x1b[${row};1H\x1b[K`
-        }
         pendingFreeBlanks = Math.max(0, freeBlanksAboveFrameRef.current - deltaH)
+        // Recompute frameTop for the new (smaller) freeBlanks. With pure
+        // absorb (no scroll), frameTop stays at the old top and the frame
+        // grows downward. With scroll, frameTop drops to the bottom-anchor
+        // position (newFreeBlanks=0).
+        frameTop = computeFrameTop(pendingFreeBlanks)
+        // Pre-erase the newly-occupied bottom-of-frame rows so any stale
+        // cells (from prior renders or auto-scroll residue) don't bleed
+        // through before the diff below repaints them.
+        for (let i = 0; i < deltaH; i++) {
+          preBuf += `\x1b[${frameTop + oldFrameH + i};1H\x1b[K`
+        }
       } else {
         const deltaH = oldFrameH - nextH
-        // When shrinking INTO a permission dialog, skip erasing the top
-        // deltaH rows of the old frame. Those rows held tool-progress
-        // content (`● ToolName / ⎿ Running...`) — the permission is
-        // about one of those tools. Leaving them visible keeps useful
-        // context above the dialog instead of flashing 2+ blank rows
-        // during the approval window. The subsequent commit (when the
-        // approved tool finishes) writes to scrollback via
-        // `\x1b[startRow;1H\x1b[J` which clears whatever's there before
-        // drawing, so there's no double-paint once the tool result
-        // lands. Other shrinks (permission close, menu close) still
-        // erase — there we WANT the old dialog/menu gone.
+        // Shrink: top stays, bottom moves up. The rows that were the
+        // bottom of the old frame no longer hold frame content and must
+        // be erased so old cells don't linger.
+        //
+        // When shrinking INTO a permission dialog, skip erasing —
+        // leaves the prior tool-progress lines visible above the dialog
+        // instead of flashing blanks during the approval window.
+        pendingFreeBlanks = freeBlanksAboveFrameRef.current + deltaH
+        const oldTop = lastFrameTopRef.current > 0
+          ? lastFrameTopRef.current
+          : Math.max(1, termRows - oldFrameH + 1)
+        frameTop = computeFrameTop(pendingFreeBlanks)
         if (!permission) {
           for (let i = 0; i < deltaH; i++) {
-            const row = termRows - oldFrameH + 1 + i
-            preBuf += `\x1b[${row};1H\x1b[K`
+            preBuf += `\x1b[${oldTop + nextH + i};1H\x1b[K`
           }
         }
-        // Remember those rows so the next commit can write into them
-        // instead of pre-scrolling the viewport (which would push the
-        // banner / earlier content off the top). This still applies in
-        // the skip-erase branch above — the rows hold stale content but
-        // the next commit's `\x1b[J` erases before writing, making them
-        // effectively "free" for commit placement.
-        pendingFreeBlanks = freeBlanksAboveFrameRef.current + deltaH
+        // pendingFreeBlanks (already set above) remembers the now-blank
+        // rows so the next commit can write INTO them instead of
+        // pre-scrolling the viewport.
       }
       // Frame moved — prev cell matrix is at the wrong rows now; force
       // full redraw at the new position.
@@ -1973,6 +2037,7 @@ export function ChatInput({
       lastFlushTimeRef.current = Date.now()
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
+      lastFrameTopRef.current = frameTop
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
     }
 
