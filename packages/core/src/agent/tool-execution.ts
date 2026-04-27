@@ -6,7 +6,7 @@ import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
-import type { AgentCallbacks, AgentOptions } from '../types/index.js'
+import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
@@ -177,6 +177,50 @@ async function handleToolCall(
     return
   }
 
+  // ── todoWrite tool ──
+  // Full-replacement semantics: every call rewrites state.todos with
+  // the model's payload. Auto-clears (drops to []) when every item is
+  // completed, mirroring Claude Code's TodoWriteTool behavior — the
+  // user's live UI panel goes back to "no checklist" once the work is
+  // done, instead of showing a stale all-✓ list forever.
+  if (toolName === 'todoWrite') {
+    // Schema is intentionally lenient (see todo-write.ts) — every
+    // field is optional at the wire level so weaker models that drop
+    // a field per item don't poison the conversation. We patch
+    // missing pieces here and silently drop items that have nothing
+    // useful to render.
+    type RawTodo = { content?: string; activeForm?: string; status?: TodoItem['status'] }
+    const raw = (input.todos as RawTodo[] | undefined) ?? []
+    const normalized: TodoItem[] = []
+    for (const t of raw) {
+      const content = (t.content ?? '').trim()
+      const activeForm = (t.activeForm ?? '').trim()
+      // Need at least one identity field — otherwise this is just an
+      // empty entry and there's nothing useful to show or track.
+      if (!content && !activeForm) continue
+      normalized.push({
+        content: content || activeForm,
+        activeForm: activeForm || content,
+        status: t.status ?? 'pending',
+      })
+    }
+    const allDone = normalized.length > 0 && normalized.every((t) => t.status === 'completed')
+    state.todos = allDone ? [] : normalized
+    callbacks.onTodosUpdate(state.todos)
+    const dropped = raw.length - normalized.length
+    const droppedNote = dropped > 0 ? ` ${dropped} entr${dropped === 1 ? 'y was' : 'ies were'} dropped because they had neither content nor activeForm — please include both fields next time so the user sees clean labels.` : ''
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      allDone
+        ? `All todos completed. Checklist cleared. Continue with the task or close it out as appropriate.${droppedNote}`
+        : `Todo list updated. Keep the checklist current — mark items completed immediately when finished, and ensure exactly one item is in_progress.${droppedNote}`,
+    )
+    return
+  }
+
   // ── enterPlanMode tool ──
   // Flip state.permissionMode → 'plan', invalidate the system-prompt
   // cache so the next turn rebuilds it with the overlay, and reserve a
@@ -333,6 +377,10 @@ async function handleToolCall(
           'Plan approved by user. Plan mode has been exited.',
           persisted ? `The approved plan is saved at: ${persisted}` : '',
           'You can now edit files and run shell commands. Start implementing the plan.',
+          '',
+          'For multi-step plans, call **todoWrite** first to break the plan into a',
+          'tracked checklist — the user sees a live panel of your progress and you',
+          'avoid losing track of remaining steps mid-implementation.',
         ]
           .filter(Boolean)
           .join('\n'),

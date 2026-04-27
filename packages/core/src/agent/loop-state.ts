@@ -1,7 +1,7 @@
 // @x-code-cli/core — Shared agent loop state
 import type { ModelMessage } from 'ai'
 
-import type { PermissionMode, TokenUsage } from '../types/index.js'
+import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
 
 export interface LoopState {
   messages: ModelMessage[]
@@ -40,6 +40,13 @@ export interface LoopState {
    *  changed; renaming mid-session would orphan the previous turn's
    *  on-disk usage file. */
   taskSlug: string
+  /** Current checklist maintained by the model via the `todoWrite`
+   *  tool. Full-replacement semantics — every todoWrite call rewrites
+   *  this array. In-memory only, never persisted. Auto-cleared back
+   *  to [] when the model submits a list with all items completed.
+   *  Survives `/clear` (matches Claude Code) so a multi-feature
+   *  checklist isn't wiped by an unrelated context reset. */
+  todos: TodoItem[]
 }
 
 /** Generate a human-skimmable session id: `YYYYMMDD-HHMMSS-mmm` (local
@@ -75,5 +82,6 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     // session-construction time.
     currentPlanPath: null,
     taskSlug: '',
+    todos: [],
   }
 }

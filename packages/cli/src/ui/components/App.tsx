@@ -600,6 +600,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
           : null
       }
       activeToolCalls={state.activeToolCalls}
+      todos={state.todos}
       errorMessage={state.error}
       permission={
         permissionRequest

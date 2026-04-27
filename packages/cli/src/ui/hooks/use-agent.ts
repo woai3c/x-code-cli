@@ -18,6 +18,7 @@ import type {
   LanguageModel,
   LoopState,
   PermissionMode,
+  TodoItem,
   TokenUsage,
 } from '@x-code-cli/core'
 
@@ -63,6 +64,11 @@ export interface AgentState {
    *  so the bottom UI indicator can re-render whenever the model or the
    *  user (Shift+Tab) flips it. */
   permissionMode: PermissionMode
+  /** Live checklist maintained by the model via `todoWrite`. Empty
+   *  when the model hasn't started a multi-step task or when all items
+   *  have been auto-cleared after completion. Drives the in-frame
+   *  todo panel rendered above the spinner in ChatInput. */
+  todos: TodoItem[]
 }
 
 const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
@@ -74,6 +80,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   pendingQuestion: null,
   usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
   error: null,
+  todos: [],
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
@@ -292,6 +299,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           // Mode is session-scoped (matches Claude Code) — not
           // persisted to user config. Each new session starts in
           // 'default' unless `--plan` was passed.
+        },
+        onTodosUpdate: (todos) => {
+          // Direct mirror — the core agent has already validated the
+          // shape and applied auto-clear semantics; we just store what
+          // it gives us so ChatInput can re-render the todo panel.
+          setState((prev) => ({ ...prev, todos }))
         },
         onShellOutput: (chunk) => {
           setState((prev) => ({ ...prev, shellOutput: prev.shellOutput + chunk }))

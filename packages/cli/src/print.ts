@@ -53,6 +53,10 @@ export async function runPrintMode(
       // effect on LoopState, which is the only place it actually
       // matters for this short-lived run.
     },
+    onTodosUpdate: () => {
+      // No live panel in print mode — todos exist on LoopState but
+      // there's no terminal UI to render them. Silent no-op.
+    },
     onShellOutput: () => {},
     onUsageUpdate: () => {},
     onContextCompressed: () => {},

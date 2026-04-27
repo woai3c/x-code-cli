@@ -9,6 +9,7 @@ import { listDir } from './list-dir.js'
 import { readFile } from './read-file.js'
 import { saveKnowledge } from './save-knowledge.js'
 import { shell } from './shell.js'
+import { todoWrite } from './todo-write.js'
 import { webFetch } from './web-fetch.js'
 import { webSearch } from './web-search.js'
 import { writeFile } from './write-file.js'
@@ -27,6 +28,7 @@ export const toolRegistry = {
   saveKnowledge,
   enterPlanMode,
   exitPlanMode,
+  todoWrite,
 }
 
 export {
@@ -43,6 +45,7 @@ export {
   saveKnowledge,
   enterPlanMode,
   exitPlanMode,
+  todoWrite,
 }
 
 export {

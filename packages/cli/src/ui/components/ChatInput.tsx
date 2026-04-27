@@ -29,7 +29,7 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } fro
 import { useStdout } from 'ink'
 
 import { debugLog, getPermissionLevel } from '@x-code-cli/core'
-import type { DisplayMessage } from '@x-code-cli/core'
+import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
 
 import type { ActiveToolCall } from '../hooks/use-agent.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
@@ -192,6 +192,11 @@ interface ChatInputProps {
    *  `onToolProgress`. Commits to scrollback via the regular tool-result
    *  DisplayMessage path once the tool finishes. */
   activeToolCalls?: readonly ActiveToolCall[]
+  /** Live checklist from the model's `todoWrite` tool. Rendered as a
+   *  compact panel above the spinner (☐ pending, ◼ in_progress, ✔
+   *  completed). Empty array hides the panel — zero visual cost when
+   *  the model isn't using TodoWrite. */
+  todos?: readonly TodoItem[]
   /** Optional error string shown as a dedicated row above the spinner. */
   errorMessage?: string | null
   /** If non-null, render a Permission dialog inside our cell buffer AND
@@ -558,6 +563,7 @@ export function ChatInput({
   hidden,
   spinner,
   activeToolCalls,
+  todos,
   errorMessage,
   permission,
   selectRequest,
@@ -1224,6 +1230,113 @@ export function ChatInput({
     // — see writeMessageToStdout. That keeps our frame's row count
     // stable as output grows: spinner / separators / input never shift
     // position, so there's no row-shift jitter.)
+
+    // Todo panel. Driven by the model's `todoWrite` tool; gives the
+    // user a live view of multi-step task progress. Layout faithfully
+    // mirrors Claude Code's TaskListV2 (`src/components/TaskListV2.tsx`):
+    //
+    //   blank
+    //     N tasks (X done, Y in progress, Z open)        ← header, numbers bold
+    //     ✔ Task name                                     ← completed: green + strikethrough + dim
+    //     ◼ Task name                                     ← in_progress: blue + bold content
+    //       activeForm…                                   ← activity line: dim, only if differs from content
+    //     ◻ Task name                                     ← pending: default color, NOT dim
+    //   blank
+    //
+    // Key alignment with CC:
+    //   - 2-space left indent on EVERY row (header + items + activity).
+    //     Earlier mismatched indent (header 1 / items 3) read as "messy".
+    //   - Pending items stay default-color, NOT dim — CC reserves dim for
+    //     blocked / completed items so pending feels "actively waiting"
+    //     rather than "tired / forgotten".
+    //   - Bold numbers in the header so progress (3 done / 5) jumps out.
+    //   - In-progress shows `content` (the imperative task name) bold on
+    //     the marker row — task identity stays consistent across status
+    //     transitions. The activity line below uses `activeForm` and
+    //     only renders when it carries information beyond `content`.
+    if (todos && todos.length > 0) {
+      const completed = todos.filter((t) => t.status === 'completed').length
+      const inProgress = todos.filter((t) => t.status === 'in_progress').length
+      const pending = todos.length - completed - inProgress
+
+      // Top blank row to breathe — only when something else is already
+      // in the frame above (avoids leading blank row at frame top).
+      if (frame.length > 0) frame.push([])
+
+      // Header row: `  N tasks (X done, Y in progress, Z open)`
+      // Numbers bold, rest dim. The mixed weight is what makes CC's
+      // header scannable at a glance — bare-eyes track the bold count
+      // changing turn over turn.
+      const headerCells: Cell[] = []
+      headerCells.push({ char: ' ', style: S_NONE, width: 1 })
+      headerCells.push({ char: ' ', style: S_NONE, width: 1 })
+      headerCells.push(...textToCells(String(todos.length), S_BOLD))
+      headerCells.push(...textToCells(' tasks (', S_DIM))
+      headerCells.push(...textToCells(String(completed), S_BOLD))
+      headerCells.push(...textToCells(' done', S_DIM))
+      if (inProgress > 0) {
+        headerCells.push(...textToCells(', ', S_DIM))
+        headerCells.push(...textToCells(String(inProgress), S_BOLD))
+        headerCells.push(...textToCells(' in progress', S_DIM))
+      }
+      if (pending > 0) {
+        headerCells.push(...textToCells(', ', S_DIM))
+        headerCells.push(...textToCells(String(pending), S_BOLD))
+        headerCells.push(...textToCells(' open', S_DIM))
+      }
+      headerCells.push(...textToCells(')', S_DIM))
+      frame.push(headerCells)
+
+      for (const t of todos) {
+        const cells: Cell[] = []
+        // 2-space left indent — matches CC's marginLeft=2 on the panel.
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        if (t.status === 'completed') {
+          // ✔ in success green + strikethrough dim text → unmistakably "done".
+          cells.push(...textToCells('\u2714', S_SUCCESS))
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          cells.push(...textToCells(t.content, '\x1b[0m\x1b[2;9m'))
+        } else if (t.status === 'in_progress') {
+          // ◼ in spinner blue + bold content → "doing this now".
+          cells.push(...textToCells('\u25fc', S_SPINNER))
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          cells.push(...textToCells(t.content, S_BOLD))
+        } else {
+          // ◻ in default color + default text → "waiting, not stale".
+          // S_RESET (no color, no attrs) keeps these visually present
+          // rather than fading them out like dim would.
+          cells.push(...textToCells('\u25fb', S_RESET))
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          cells.push(...textToCells(t.content, S_RESET))
+        }
+        frame.push(cells)
+
+        // Activity line: dimmed `activeForm…` indented 4 spaces (2 for
+        // panel margin + 2 deeper to sit under the marker glyph).
+        // Only rendered for in-progress items where activeForm carries
+        // information beyond content — when the model emits identical
+        // values for both fields, the activity line would just be
+        // grammatical noise.
+        if (
+          t.status === 'in_progress' &&
+          t.activeForm.trim().length > 0 &&
+          t.activeForm.trim() !== t.content.trim()
+        ) {
+          const activityCells: Cell[] = []
+          activityCells.push({ char: ' ', style: S_NONE, width: 1 })
+          activityCells.push({ char: ' ', style: S_NONE, width: 1 })
+          activityCells.push({ char: ' ', style: S_NONE, width: 1 })
+          activityCells.push({ char: ' ', style: S_NONE, width: 1 })
+          activityCells.push(...textToCells(`${t.activeForm}\u2026`, S_DIM))
+          frame.push(activityCells)
+        }
+      }
+
+      // Trailing blank row so the panel breathes apart from the
+      // spinner / tool-status block that follows.
+      frame.push([])
+    }
 
     // Spinner / tool-status line. Pinned just above the input box
     // (below any permission dialog) so it always sits at the very bottom

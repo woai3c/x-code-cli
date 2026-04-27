@@ -28,6 +28,27 @@ export type PermissionLevel = 'always-allow' | 'ask' | 'deny'
  *  Cycling order on Shift+Tab: default → acceptEdits → plan → default. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
 
+// ─── Todo list (TodoWrite tool) ───
+
+/** A single entry on the model's working checklist.
+ *
+ *    content    — imperative phrasing of the task ("Update auth handler")
+ *    activeForm — present-continuous phrasing for the live indicator
+ *                 ("Updating auth handler"); shown in UI while status is
+ *                 'in_progress' so the user sees what the agent is doing
+ *                 right now.
+ *    status     — 'pending' | 'in_progress' | 'completed'.
+ *
+ *  Mirrors Claude Code's TodoWrite payload shape verbatim. Persisted
+ *  in-memory only (LoopState.todos), per-session, no disk. */
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface TodoItem {
+  content: string
+  activeForm: string
+  status: TodoStatus
+}
+
 // ─── Token usage ───
 
 export interface TokenUsage {
@@ -106,6 +127,10 @@ export interface AgentCallbacks {
   /** Fired whenever permissionMode flips so the UI can resync the bottom
    *  indicator and (when persisting) write the new value to user config. */
   onPlanModeChange: (mode: PermissionMode) => void
+  /** Fired after the model calls `todoWrite` so the UI can show the
+   *  current checklist. The full list is passed every call (todoWrite
+   *  is a full-replacement tool, not a delta) — UI just stores it. */
+  onTodosUpdate: (todos: TodoItem[]) => void
   onShellOutput: (chunk: string) => void
   onUsageUpdate: (usage: TokenUsage) => void
   onContextCompressed: (summary: string) => void
