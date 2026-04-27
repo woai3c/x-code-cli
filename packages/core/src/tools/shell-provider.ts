@@ -13,6 +13,10 @@ export interface ShellSpawnOptions {
   timeout: number
   env?: NodeJS.ProcessEnv
   cwd?: string
+  /** When this signal aborts, execa kills the child process tree. Used to
+   *  honor user Esc / Ctrl+C cancellation mid-command without waiting for
+   *  the timeout. */
+  signal?: AbortSignal
 }
 
 export interface ShellProvider {
@@ -28,6 +32,7 @@ function createPosixProvider(executable: string, type: 'bash' | 'zsh'): ShellPro
         timeout: opts.timeout,
         cwd: opts.cwd,
         reject: false,
+        cancelSignal: opts.signal,
         env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
       })
     },
@@ -72,6 +77,7 @@ function createPowerShellProvider(executable: string): ShellProvider {
           timeout: opts.timeout,
           cwd: opts.cwd,
           reject: false,
+          cancelSignal: opts.signal,
           env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
         },
       )

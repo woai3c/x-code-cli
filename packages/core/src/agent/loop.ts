@@ -190,6 +190,22 @@ type TurnOutcome =
   | { kind: 'error' }
   /** Context overflowed and was compressed; caller should retry this turn. */
   | { kind: 'retry' }
+  /** User aborted the request (Esc / Ctrl+C). NOT reported to onError —
+   *  the UI shows a `[Request interrupted by user]` notice instead. */
+  | { kind: 'aborted' }
+
+/** AbortError from streamText / fetch is the SDK's signal that we cancelled
+ *  the request. We also accept any error that lands while abortSignal is
+ *  already aborted — some providers wrap the underlying AbortError into their
+ *  own error class but still flip the signal first. */
+function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) return true
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return true
+    if (/aborted|AbortError/i.test(err.message)) return true
+  }
+  return false
+}
 
 /** Run one agent turn: stream to UI, collect response. Resilient to errors. */
 async function runTurn(
@@ -250,6 +266,7 @@ async function runTurn(
       providerOptions: mergedProviderOptions as Parameters<typeof streamText>[0]['providerOptions'],
     }) as unknown as StreamResult
   } catch (err) {
+    if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
     callbacks.onError(new Error(classifyApiError(err).message))
     return { kind: 'error' }
   }
@@ -270,6 +287,7 @@ async function runTurn(
     // warnings (NoOutputGeneratedError) don't leak to stderr.
     drainStreamResult(result)
 
+    if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
     if (isContextTooLongError(err)) {
       const compressed = await handleContextTooLong(state, model, callbacks)
       if (compressed) return { kind: 'retry' }
@@ -287,6 +305,7 @@ async function runTurn(
     return { kind: 'done', finishReason, result }
   } catch (err) {
     drainStreamResult(result)
+    if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
     callbacks.onError(new Error(classifyApiError(err).message))
     return { kind: 'error' }
   }
@@ -348,6 +367,7 @@ export async function agentLoop(
     const outcome = await runTurn(state, model, options, systemPrompt, callbacks)
 
     if (outcome.kind === 'error') break
+    if (outcome.kind === 'aborted') break
     if (outcome.kind === 'retry') {
       // Don't count a failed attempt that got recovered via reactive compaction.
       state.turnCount--
@@ -362,10 +382,14 @@ export async function agentLoop(
       try {
         toolCalls = await outcome.result.toolCalls
       } catch (err) {
+        if (isAbortError(err, options.abortSignal)) break
         callbacks.onError(new Error(classifyApiError(err).message))
         break
       }
       await processToolCalls(toolCalls, state, options, callbacks)
+      // processToolCalls short-circuits on abort with synthetic results;
+      // skip the next streamText call which would just throw AbortError.
+      if (options.abortSignal?.aborted) break
       continue
     }
 

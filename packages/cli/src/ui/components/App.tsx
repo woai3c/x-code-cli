@@ -1,5 +1,5 @@
 // @x-code-cli/cli — Root App component
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useApp } from 'ink'
 
@@ -98,7 +98,7 @@ const HELP_TEXT =
   `X-Code CLI v${VERSION}\n\n` +
   SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
   `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
-  `\nKeyboard: ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} to abort current operation`
+  `\nKeyboard: Esc to interrupt the current turn · ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} (twice) to exit`
 
 export function App({ model, options, initialPrompt, onCleanupReady }: AppProps) {
   const { exit } = useApp()
@@ -107,6 +107,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     submit,
     resolvePermission,
     resolveQuestion,
+    abort,
     cleanup,
     clear,
     compact,
@@ -119,6 +120,55 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     addCommandMessage,
     askQuestion,
   } = useAgent(model, options)
+
+  // Transient one-line hint shown above the spinner. Today only used for the
+  // "Press Ctrl+C again to exit" double-press prompt — kept narrow on purpose
+  // so future use-cases have a single rendering slot to share.
+  const [notice, setNotice] = useState<string | null>(null)
+  // Timestamp of the most recent Ctrl+C. While inside the arm window the
+  // next Ctrl+C exits; outside it, Ctrl+C just re-arms (and cancels the
+  // running turn if any). Mirrors Claude Code's `useExitOnCtrlCD` 2s window.
+  const ctrlCArmedAtRef = useRef(0)
+  const ctrlCArmWindowMs = 2000
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Auto-clear the notice after the arm window expires.
+  useEffect(() => {
+    if (!notice) return
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+    noticeTimerRef.current = setTimeout(() => setNotice(null), ctrlCArmWindowMs)
+    return () => {
+      if (noticeTimerRef.current) {
+        clearTimeout(noticeTimerRef.current)
+        noticeTimerRef.current = null
+      }
+    }
+  }, [notice])
+
+  /** Ctrl+C handler — double-press to exit, single-press cancels in-flight
+   *  turn (if any) and arms the exit hint. Mirrors Claude Code's behavior:
+   *
+   *    Idle   + 1st press → show "Press Ctrl+C again to exit", arm 2s window
+   *    Idle   + 2nd press → exit
+   *    Loading + 1st press → abort current turn, show hint, arm 2s window
+   *    Loading + 2nd press → exit
+   *
+   *  The arm window auto-expires (notice clears via the effect above). */
+  const handleCtrlC = useCallback(() => {
+    const now = Date.now()
+    const armed = now - ctrlCArmedAtRef.current < ctrlCArmWindowMs
+    if (armed) {
+      // Second press within the window — user really means it. Exit cleanly
+      // (Ink unmount → gracefulShutdown via onCleanupReady).
+      exit()
+      return
+    }
+    ctrlCArmedAtRef.current = now
+    if (state.isLoading) {
+      abort()
+    }
+    setNotice('Press Ctrl+C again to exit')
+  }, [exit, abort, state.isLoading])
 
   // Register cleanup function for graceful exit (SIGINT)
   useEffect(() => {
@@ -480,7 +530,10 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       messages={state.messages}
       initialContentRows={getHeaderRowCount(state.modelId)}
       onSubmit={handleSubmit}
-      onInterrupt={exit}
+      onInterrupt={handleCtrlC}
+      onEscapeCancel={abort}
+      isLoading={state.isLoading}
+      notice={notice}
       // Suppress the spinner's "Thinking" line while a select dialog is up,
       // but keep ChatInput itself visible — the dialog is rendered INSIDE
       // its cell buffer now, not in Ink's top subtree.

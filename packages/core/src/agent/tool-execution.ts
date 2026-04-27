@@ -67,10 +67,11 @@ async function executeWriteTool(toolName: string, input: Record<string, unknown>
 async function executeShell(
   command: string,
   timeout: number,
+  signal: AbortSignal | undefined,
   callbacks: AgentCallbacks,
   toolCallId: string,
 ): Promise<{ output: string; isError: boolean }> {
-  const proc = getShellProvider().spawn(command, { timeout })
+  const proc = getShellProvider().spawn(command, { timeout, signal })
 
   reportProgress(toolCallId, 'Running command...')
 
@@ -234,7 +235,7 @@ async function handleToolCall(
       else state.filesModified.add(input.filePath as string)
     } else if (toolName === 'shell') {
       const timeout = (input.timeout as number) ?? 30000
-      const shellResult = await executeShell(input.command as string, timeout, callbacks, toolCallId)
+      const shellResult = await executeShell(input.command as string, timeout, options.abortSignal, callbacks, toolCallId)
       output = shellResult.output
       isError = shellResult.isError
     } else {
@@ -256,7 +257,28 @@ export async function processToolCalls(
   options: AgentOptions,
   callbacks: AgentCallbacks,
 ): Promise<void> {
-  for (const tc of toolCalls) {
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i]!
+    // User pressed Esc / Ctrl+C. The currently running tool (if any) has
+    // already been SIGKILL'd via the shell provider's cancelSignal. For
+    // every remaining tool_call from this turn we still need to push a
+    // synthetic tool_result — orphan tool_calls without a matching result
+    // would make the next API request fail with "tool_use without
+    // tool_result" the moment the user types another prompt.
+    if (options.abortSignal?.aborted) {
+      for (let j = i; j < toolCalls.length; j++) {
+        const skipped = toolCalls[j]!
+        pushToolResult(
+          state,
+          callbacks,
+          skipped.toolCallId,
+          skipped.toolName,
+          '[Tool execution interrupted by user]',
+          true,
+        )
+      }
+      return
+    }
     await handleToolCall(tc, state, options, callbacks)
   }
 }

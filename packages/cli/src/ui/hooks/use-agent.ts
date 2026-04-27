@@ -1,5 +1,5 @@
 // @x-code-cli/cli — Agent state management hook
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   agentLoop,
@@ -76,6 +76,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
 
   const modelRef = useRef<LanguageModel>(initialModel)
   const modelIdRef = useRef<string>(options.modelId)
+  /** Mirrors `state.activeToolCalls.length` for the abort() callback, which
+   *  needs to read it synchronously without depending on the React state
+   *  closure (re-binding the callback per state change would force ChatInput
+   *  to re-attach its key handler every render). */
+  const activeToolCallsLenRef = useRef(0)
   // Mirror the /thinking toggle so the agent loop reads the LATEST value
   // even when it was changed mid-session — same pattern as modelIdRef.
   // Initial value comes from CLI options (which read it from
@@ -98,6 +103,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   }, [])
 
   const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage)
+
+  // Keep the ref synchronized with state so abort() can decide between
+  // `[Request interrupted by user]` and `... for tool use` without taking a
+  // state dependency in its useCallback (which would re-bind the prop every
+  // render).
+  useEffect(() => {
+    activeToolCallsLenRef.current = state.activeToolCalls.length
+  }, [state.activeToolCalls.length])
 
   /** Initialize memories (once). Project context comes from AGENTS.md at the repo
    *  root (walked up from cwd, Codex-style), not from language-specific manifest
@@ -281,11 +294,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           if (entry.showTimer) clearTimeout(entry.showTimer)
         }
         pendingToolsRef.current.clear()
+        // User-cancel path: agentLoop swallows AbortError into a clean
+        // 'aborted' outcome and returns normally, so we shouldn't reach
+        // here for an Esc/Ctrl+C abort. But if some unaborted-aware
+        // helper (e.g. memory load) does throw mid-flight while the
+        // controller is also aborted, suppress the error banner — the
+        // `[Request interrupted by user]` notice that abort() already
+        // wrote into messages is the user-visible signal we want.
+        const wasAborted = controller.signal.aborted
         setState((prev) => ({
           ...prev,
           isLoading: false,
           activeToolCalls: [],
-          error: classifyApiError(err).message,
+          error: wasAborted ? null : classifyApiError(err).message,
         }))
       }
     },
@@ -325,11 +346,50 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     })
   }, [])
 
-  /** Abort current operation */
+  /** Abort the in-flight turn. Mirrors Claude Code's onCancel:
+   *
+   *    1. Flush any buffered streamed text into messages so the user sees
+   *       what the model produced before pressing Esc.
+   *    2. Append a `[Request interrupted by user]` (or `for tool use`)
+   *       notice so both the UI and the next-turn model context show
+   *       why the response stopped.
+   *    3. Trigger AbortController so streamText / shell execa unwind.
+   *
+   *  No-op when nothing is in flight (no controller or already aborted).
+   *  React state cleanup (isLoading=false, activeToolCalls=[]) happens in
+   *  submit()'s success path once agentLoop returns the 'aborted' outcome. */
   const abort = useCallback(() => {
-    abortControllerRef.current?.abort()
-    setState((prev) => ({ ...prev, isLoading: false }))
-  }, [])
+    const controller = abortControllerRef.current
+    if (!controller || controller.signal.aborted) return
+
+    // Drain the stream buffer first — appendMessage runs synchronously via
+    // setState so the partial assistant reply lands BEFORE the interrupt
+    // notice in scrollback order.
+    flushBuffer()
+
+    const forToolUse = activeToolCallsLenRef.current > 0
+    const noticeText = forToolUse
+      ? '[Request interrupted by user for tool use]'
+      : '[Request interrupted by user]'
+
+    appendMessage({
+      id: `interrupt-${Date.now()}`,
+      role: 'assistant',
+      content: noticeText,
+      timestamp: Date.now(),
+      kind: 'command-result',
+    })
+
+    // Mirror the notice into the agent loop's message history so the next
+    // turn's API call has explicit context that the previous turn was
+    // user-interrupted — without it the model would see an unfinished
+    // assistant message and might silently try to resume.
+    if (loopStateRef.current) {
+      loopStateRef.current.messages.push({ role: 'user', content: noticeText })
+    }
+
+    controller.abort()
+  }, [flushBuffer, appendMessage])
 
   /** Save session and cleanup */
   const cleanup = useCallback(async () => {

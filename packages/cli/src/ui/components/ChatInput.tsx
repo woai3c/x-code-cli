@@ -165,7 +165,20 @@ interface ChatInputProps {
    *  needlessly pre-scroll rows the banner left blank. */
   initialContentRows?: number
   onSubmit: (text: string) => void
+  /** Fired on Ctrl+C. Wired to the App's double-press handler — first press
+   *  cancels the in-flight turn (if any) and arms the exit hint, second
+   *  press within the arm window exits the process. */
   onInterrupt: () => void
+  /** Fired on Esc when a turn is in flight (`isLoading`). Mirrors Claude
+   *  Code's `chat:cancel`: cancels the AI request + running tool, but
+   *  never exits the process. No-op when no modal is up. */
+  onEscapeCancel?: () => void
+  /** True while an AI request / tool is running. Drives the Esc-cancel
+   *  routing and the `esc to interrupt` spinner hint. */
+  isLoading?: boolean
+  /** Transient one-line notice shown above the spinner (e.g. "Press Ctrl+C
+   *  again to exit"). Cleared by the parent after a short timeout. */
+  notice?: string | null
   /** Ignore keyboard input (and hide the input cursor). */
   disabled?: boolean
   /** Fully hide the region (e.g. while a SelectOptions dialog is showing
@@ -519,6 +532,9 @@ export function ChatInput({
   initialContentRows = 0,
   onSubmit,
   onInterrupt,
+  onEscapeCancel,
+  isLoading = false,
+  notice,
   disabled,
   hidden,
   spinner,
@@ -536,7 +552,6 @@ export function ChatInput({
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
   const nextPasteIdRef = useRef(1)
-  const lastEscRef = useRef(0)
   const activeRef = useRef(false)
   const prevFrameRef = useRef<Cell[][]>([])
   /** Timestamp (ms) of the last stdout.write that actually hit the
@@ -878,13 +893,14 @@ export function ChatInput({
         return
       }
       if (key === 'escape') {
-        const now = Date.now()
-        if (now - lastEscRef.current < 500 && text.length > 0) {
-          dispatch({ type: 'RESET' })
-          setPastedContents({})
-          setCompletionIndex(0)
-        }
-        lastEscRef.current = now
+        // Only fires when no modal is up (the permission / selectRequest
+        // gates above early-return on every key including Esc, making
+        // them effectively "swallow" Esc — matches Claude Code's
+        // `chat:cancel` isActive guard). When idle we deliberately do
+        // nothing — the previous "double-tap to clear input" gesture
+        // was removed for parity with Claude Code, where Esc has one
+        // crisp meaning: cancel the in-flight turn.
+        if (isLoading && onEscapeCancel) onEscapeCancel()
         return
       }
       if (key === 'backspace') {
@@ -1163,6 +1179,17 @@ export function ChatInput({
       frame.push(cells)
     }
 
+    // Transient notice line (e.g. "Press Ctrl+C again to exit"). Dim, no
+    // "Error:" prefix — it's informational, not a failure. Cleared by the
+    // parent on a timer. Sits in the same slot as `errorMessage` so the two
+    // never both render (parent never sets both at once).
+    if (notice) {
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells(notice, S_DIM))
+      frame.push(cells)
+    }
+
     // (Streaming assistant text does NOT live here. Each complete line
     // emitted by useStreamBuffer is committed as a `streamingChunk`
     // message and written straight to scrollback above this cell buffer
@@ -1193,6 +1220,10 @@ export function ChatInput({
       if (spinner.totalTokens != null && spinner.totalTokens > 0) {
         parts.push(`${arrow} ${formatTokens(spinner.totalTokens)} tokens`)
       }
+      // Only show the cancel hint when we're actually able to honor an Esc
+      // press (no modal open — the parent suppresses the spinner in that
+      // case anyway, but be defensive).
+      parts.push('esc to interrupt')
       const meta = parts.length > 0 ? ` (${parts.join(' · ')})` : ''
 
       // Top margin ONLY when the permission dialog sits immediately above
