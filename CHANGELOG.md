@@ -1,3 +1,13 @@
+## v0.1.11 (2026-04-27)
+
+### Features
+
+- float live frame to sit immediately below content (26106f4)
+
+### Bug Fixes
+
+- stabilize bottom-area rendering during streaming (483cddd)
+
 ## v0.1.10 (2026-04-26)
 
 ### Features
