@@ -210,6 +210,14 @@ interface ChatInputProps {
    *  isn't reversible on shrink. */
   selectRequest?: SelectRequest | null
   commands?: readonly SlashCommand[]
+  /** Fired on Shift+Tab. Cycles approval modes (default → acceptEdits
+   *  → plan → default). Suppressed when a modal is up; debouncing is
+   *  the parent's job. */
+  onCyclePermissionMode?: () => void
+  /** Current approval mode, drives the indicator row beneath the input
+   *  (`⏸ plan mode` / `⚡ accept edits`). Defaults to 'default' — no
+   *  indicator rendered. */
+  permissionMode?: 'default' | 'acceptEdits' | 'plan'
 }
 
 // ── Reducer for atomic text + cursor updates ──────────────────────────
@@ -469,6 +477,8 @@ function permissionTitle(toolName: string): string {
       return 'X-Code wants to write a file'
     case 'edit':
       return 'X-Code wants to edit a file'
+    case 'enterPlanMode':
+      return 'X-Code wants to enter plan mode'
     default:
       return `X-Code wants to use ${toolName}`
   }
@@ -509,6 +519,15 @@ function permissionContentCells(toolName: string, input: Record<string, unknown>
     cells.push(...textToCells(fp, S_ACCENT))
     return cells
   }
+  if (toolName === 'enterPlanMode') {
+    // Plan-mode entry has no per-call input — describe the consequence
+    // so the user knows what Yes/No actually means.
+    const cells: Cell[] = []
+    cells.push({ char: ' ', style: S_NONE, width: 1 })
+    cells.push({ char: ' ', style: S_NONE, width: 1 })
+    cells.push(...textToCells('Read-only exploration; no edits until you approve a plan.', S_DIM))
+    return cells
+  }
   return null
 }
 
@@ -543,6 +562,8 @@ export function ChatInput({
   permission,
   selectRequest,
   commands = [],
+  onCyclePermissionMode,
+  permissionMode = 'default',
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const cursorRef = useRef(0)
@@ -949,6 +970,13 @@ export function ChatInput({
         }
         return
       }
+      if (key === 'shift-tab') {
+        // Mode-cycle is the only Shift+Tab semantic right now. Modal
+        // dialogs already early-return above, so we only fire when the
+        // input is the focused surface.
+        if (onCyclePermissionMode) onCyclePermissionMode()
+        return
+      }
       if (key === 'up') {
         if (matches.length > 0) setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
         else moveCursorVertically(-1)
@@ -1345,11 +1373,27 @@ export function ChatInput({
     // scrollback rows behind when it closes (mirrors Claude Code's
     // log-update.ts fullResetSequence_CAUSES_FLICKER approach).
     if (selectRequest) {
-      const qLines = selectRequest.question.split('\n')
-      for (const q of qLines) {
+      // Cap the in-dialog question rendering so a model that puts a
+      // 200-line plan body into the question field (it shouldn't, but
+      // happens with weaker models) doesn't blow out the frame and
+      // push the option list off-screen. Long questions get truncated
+      // with a "(N more lines — see scrollback above)" footer; the
+      // full body is rendered as a normal scrollback message before
+      // the dialog opens (see use-agent.ts onAskUser / onPlanApprovalRequest).
+      const MAX_QUESTION_LINES = 6
+      const allLines = selectRequest.question.split('\n')
+      const truncated = allLines.length > MAX_QUESTION_LINES
+      const visibleLines = truncated ? allLines.slice(0, MAX_QUESTION_LINES) : allLines
+      for (const q of visibleLines) {
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push(...textToCells(`? ${q}`, S_ACCENT_BOLD))
+        frame.push(cells)
+      }
+      if (truncated) {
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells(`? \u2026 (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
         frame.push(cells)
       }
       selectRequest.options.forEach((opt, i) => {
@@ -1438,6 +1482,23 @@ export function ChatInput({
 
     // Bottom separator
     frame.push(textToCells(sepText, S_GRAY))
+
+    // Permission-mode indicator. Pinned BELOW the input box so the user
+    // sees it as a status footer of the input — matches Claude Code's
+    // layout where mode hints sit under the input separator. Hidden in
+    // default mode; no row is reserved, so zero visual cost when the
+    // feature isn't engaged.
+    if (permissionMode === 'plan') {
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells('\u23f8 plan mode  ·  shift+tab to cycle  ·  /plan to toggle', S_DIM))
+      frame.push(cells)
+    } else if (permissionMode === 'acceptEdits') {
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells('\u26a1 accept edits  ·  shift+tab to cycle', S_DIM))
+      frame.push(cells)
+    }
 
     // Completion menu
     if (matches.length > 0) {

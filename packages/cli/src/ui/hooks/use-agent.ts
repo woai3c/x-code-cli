@@ -17,6 +17,7 @@ import type {
   DisplayToolCall,
   LanguageModel,
   LoopState,
+  PermissionMode,
   TokenUsage,
 } from '@x-code-cli/core'
 
@@ -58,9 +59,13 @@ export interface AgentState {
   error: string | null
   /** Live model id — mirrors modelIdRef so UI can re-render on /model change. */
   modelId: string
+  /** Live approval mode for this session. Mirrors `LoopState.permissionMode`
+   *  so the bottom UI indicator can re-render whenever the model or the
+   *  user (Shift+Tab) flips it. */
+  permissionMode: PermissionMode
 }
 
-const initialState: Omit<AgentState, 'modelId'> = {
+const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   messages: [],
   isLoading: false,
   activeToolCalls: [],
@@ -72,10 +77,20 @@ const initialState: Omit<AgentState, 'modelId'> = {
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
-  const [state, setState] = useState<AgentState>({ ...initialState, modelId: options.modelId })
+  const [state, setState] = useState<AgentState>({
+    ...initialState,
+    modelId: options.modelId,
+    permissionMode: options.permissionMode ?? 'default',
+  })
 
   const modelRef = useRef<LanguageModel>(initialModel)
   const modelIdRef = useRef<string>(options.modelId)
+  /** Mirrors state.permissionMode for the agentLoop options on each
+   *  submit. The loop reads it via options.permissionMode at start; once
+   *  inside the loop, the agent's tool dispatch mutates LoopState
+   *  directly, and we mirror that back here via the onPlanModeChange
+   *  callback. */
+  const permissionModeRef = useRef<PermissionMode>(options.permissionMode ?? 'default')
   /** Mirrors `state.activeToolCalls.length` for the abort() callback, which
    *  needs to read it synchronously without depending on the React state
    *  closure (re-binding the callback per state change would force ChatInput
@@ -218,8 +233,65 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         },
         onAskUser: (question, opts) => {
           return new Promise<string>((resolve) => {
-            setState((prev) => ({ ...prev, pendingQuestion: { question, options: opts, resolve } }))
+            // In plan mode, append two UI-side meta options the model
+            // doesn't see in its tool input. Mirrors Claude Code's
+            // QuestionView footer (`Chat about this` /
+            // `Skip interview and plan immediately`) — the model is
+            // taught about them via the system-prompt overlay and
+            // recognizes them by their literal label when they come
+            // back as the answer.
+            const augmented = permissionModeRef.current === 'plan'
+              ? [
+                  ...opts,
+                  {
+                    label: 'Chat about this',
+                    description: 'Reply in conversation without picking an option above.',
+                  },
+                  {
+                    label: 'Skip interview and plan immediately',
+                    description: 'Stop the questions — produce the final plan now with everything gathered so far.',
+                  },
+                ]
+              : opts
+            setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve } }))
           })
+        },
+        onPlanApprovalRequest: (planText) => {
+          // Two-step UX: commit the plan body to scrollback as a regular
+          // assistant message (full markdown rendering — headings,
+          // bullets, code blocks all look right) and then pop a tight
+          // Yes/No dialog. Putting a 50-line plan body inside the
+          // SelectOptions `question` field instead overflows the frame,
+          // pushes Yes/No off-screen, and produces a wall of `?`-prefixed
+          // raw markdown the user can't navigate. The plan file on disk
+          // is still the authoritative copy — this scrollback render is
+          // for inline review.
+          appendMessage({
+            id: `plan-approval-${Date.now()}`,
+            role: 'assistant',
+            content: planText,
+            timestamp: Date.now(),
+          })
+          return new Promise<boolean>((resolve) => {
+            setState((prev) => ({
+              ...prev,
+              pendingQuestion: {
+                question: 'Approve the plan above?',
+                options: [
+                  { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
+                  { label: 'No', description: 'Stay in plan mode and let the model revise.' },
+                ],
+                resolve: (answer) => resolve(answer === 'Yes'),
+              },
+            }))
+          })
+        },
+        onPlanModeChange: (mode) => {
+          permissionModeRef.current = mode
+          setState((prev) => ({ ...prev, permissionMode: mode }))
+          // Mode is session-scoped (matches Claude Code) — not
+          // persisted to user config. Each new session starts in
+          // 'default' unless `--plan` was passed.
         },
         onShellOutput: (chunk) => {
           setState((prev) => ({ ...prev, shellOutput: prev.shellOutput + chunk }))
@@ -262,7 +334,17 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         loopStateRef.current = await agentLoop(
           content,
           modelRef.current,
-          { ...options, modelId: modelIdRef.current, thinking: thinkingRef.current, abortSignal: controller.signal },
+          {
+            ...options,
+            modelId: modelIdRef.current,
+            thinking: thinkingRef.current,
+            // permissionMode only matters for the FIRST submit (when
+            // createLoopState is called inside agentLoop). For subsequent
+            // submits the existing LoopState carries the live mode, so
+            // this read is just a no-op fallthrough.
+            permissionMode: permissionModeRef.current,
+            abortSignal: controller.signal,
+          },
           callbacks,
           loopStateRef.current ?? undefined,
         )
@@ -415,9 +497,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     }
     pendingToolsRef.current.clear()
     resetBuffer()
-    // Preserve the current live model id when clearing — user expects the
-    // model they just picked to stay after /clear.
-    setState((prev) => ({ ...initialState, modelId: prev.modelId }))
+    // Preserve the current live model id and approval mode when clearing
+    // — user expects the model they just picked AND the plan-mode toggle
+    // they just flipped to stay after /clear (which only nukes the
+    // conversation, not session-wide settings).
+    setState((prev) => ({ ...initialState, modelId: prev.modelId, permissionMode: prev.permissionMode }))
   }, [resetBuffer])
 
   /** Manual context compression */
@@ -444,6 +528,43 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
 
   /** Read the current /thinking toggle (for status display). */
   const getThinking = useCallback(() => thinkingRef.current, [])
+
+  /** Toggle plan mode on/off (Shift+Tab). When already inside a session
+   *  (loopStateRef populated), mutate the LIVE LoopState too — otherwise
+   *  the model would still see the old mode on its next turn because
+   *  agentLoop reads from `state.permissionMode`, not options. Cache
+   *  invalidation is the same as the enterPlanMode tool path: drop the
+   *  systemPromptCache so the next turn rebuilds it with the new
+   *  overlay state. */
+  /** Set permission mode directly. Use this for /plan-style direct
+   *  setters where the user is unambiguously asking for a specific
+   *  target. Updates LoopState live (so the next agent turn picks up
+   *  the new mode), invalidates the system-prompt cache (so the next
+   *  turn rebuilds the prompt with the right overlay), reserves /
+   *  clears the plan-file path, and mirrors the change into the React
+   *  state for UI re-render. */
+  const setPermissionMode = useCallback((next: PermissionMode) => {
+    if (permissionModeRef.current === next) return
+    permissionModeRef.current = next
+    if (loopStateRef.current) {
+      loopStateRef.current.permissionMode = next
+      loopStateRef.current.systemPromptCache = null
+      // Clear the path on leaving plan mode so a future re-entry gets a
+      // fresh slug derived from whatever the user is asking next; the
+      // path is re-derived lazily in agentLoop / enterPlanMode handler
+      // from the next user message.
+      if (next !== 'plan') loopStateRef.current.currentPlanPath = null
+    }
+    setState((prev) => ({ ...prev, permissionMode: next }))
+  }, [])
+
+  /** 3-way cycle on Shift+Tab. Order: default → acceptEdits → plan →
+   *  default. Mirrors Claude Code's default rotation. */
+  const cyclePermissionMode = useCallback(() => {
+    const cur = permissionModeRef.current
+    const next: PermissionMode = cur === 'default' ? 'acceptEdits' : cur === 'acceptEdits' ? 'plan' : 'default'
+    setPermissionMode(next)
+  }, [setPermissionMode])
 
   /** Add a system/info message (for slash command output) */
   const addInfoMessage = useCallback(
@@ -509,6 +630,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     switchModel,
     setThinking,
     getThinking,
+    cyclePermissionMode,
+    setPermissionMode,
     saveCurrentSession,
     addInfoMessage,
     addUserMessage,

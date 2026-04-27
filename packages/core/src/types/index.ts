@@ -5,6 +5,29 @@ import type { LanguageModel, ModelMessage } from 'ai'
 
 export type PermissionLevel = 'always-allow' | 'ask' | 'deny'
 
+/** Approval mode for the current session.
+ *
+ *    'default'      — normal flow: write tools ask, model can call anything.
+ *    'plan'         — read-only mode: the model is told (via system-prompt
+ *                     overlay) to explore + write a plan to a session-local
+ *                     plan file but make no other edits. Enforcement is
+ *                     prompt-based — matching Claude Code, no hard
+ *                     permission-layer block — so a non-compliant model
+ *                     would still hit the regular `ask` prompt for
+ *                     write/edit/shell.
+ *    'acceptEdits'  — write tools (writeFile / edit) auto-approve without
+ *                     asking; shell still goes through normal classification
+ *                     (always-allow / ask / deny) so destructive commands
+ *                     stay gated. Useful right after a plan is approved —
+ *                     the user already vetted the plan, having to click
+ *                     "Yes" on every writeFile during implementation is
+ *                     pure friction. exitPlanMode auto-switches into this
+ *                     mode on approval; the user can also enter it
+ *                     manually via Shift+Tab cycling.
+ *
+ *  Cycling order on Shift+Tab: default → acceptEdits → plan → default. */
+export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
+
 // ─── Token usage ───
 
 export interface TokenUsage {
@@ -76,6 +99,13 @@ export interface AgentCallbacks {
     input: Record<string, unknown>
   }) => Promise<boolean>
   onAskUser: (question: string, options: { label: string; description: string }[]) => Promise<string>
+  /** Triggered by `exitPlanMode`. Resolve `true` to leave plan mode and
+   *  let the model start implementing; resolve `false` to reject the plan
+   *  and keep the model in plan mode for further iteration. */
+  onPlanApprovalRequest: (planText: string) => Promise<boolean>
+  /** Fired whenever permissionMode flips so the UI can resync the bottom
+   *  indicator and (when persisting) write the new value to user config. */
+  onPlanModeChange: (mode: PermissionMode) => void
   onShellOutput: (chunk: string) => void
   onUsageUpdate: (usage: TokenUsage) => void
   onContextCompressed: (summary: string) => void
@@ -94,6 +124,9 @@ export interface AgentOptions {
    *  Persisted in `~/.x-code/config.json` as `thinking: boolean`,
    *  toggled at runtime via `/thinking on|off`. Defaults to false. */
   thinking?: boolean
+  /** Initial permission mode for the session. Defaults to 'default'.
+   *  Set from `--plan` CLI flag or `loadUserConfig().permissionMode`. */
+  permissionMode?: PermissionMode
   systemPromptExtra?: string
   abortSignal?: AbortSignal
 }

@@ -90,11 +90,117 @@ If you find a saved memory contradicts what you now observe, delete or update it
 - Working Directory: {cwd}
 - Is Git Repo: {isGitRepo}`
 
+/** Plan-mode overlay appended to the base system prompt when
+ *  `permissionMode === 'plan'`. Verbatim port of Claude Code's
+ *  interview-phase plan-mode prompt (`messages.ts:3331-3382`), with
+ *  read-only tool names + plan-file path substituted for our codebase.
+ *  The overlay lives in the byte-stable systemPromptCache and is
+ *  rebuilt only when permissionMode flips — within a mode, every turn
+ *  reuses the same prefix, preserving prefix-cache hits.
+ *
+ *  Why the iterative-interview shape matters: the BIG behavioral
+ *  difference between plan mode and default mode in Claude Code is
+ *  that plan mode is **conversational and turn-bounded** — every turn
+ *  ends with either askUser or exitPlanMode, never with the model just
+ *  trailing off. That's what gives plan mode its "user is in the
+ *  driver's seat" feel. Without this rule, plan mode collapses into
+ *  default mode with a read-only suffix and offers no real UX value.
+ *  See a.log in the repo for an example of the right behavior shape. */
+const PLAN_MODE_OVERLAY = `
+
+Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
+
+## Plan File Info
+The plan file for this session lives at: {planFilePath}
+This is the ONLY file you are allowed to edit. Use writeFile to create it (first time) and edit to update it. All other write/shell tools are off-limits until the user approves your plan via exitPlanMode.
+
+## Iterative Planning Workflow
+
+You are pair-planning with the user. Explore the code to build context, ask the user questions when you hit decisions you can't make alone, and write your findings into the plan file as you go. The plan file (above) is the ONLY file you may edit — it starts as a rough skeleton and gradually becomes the final plan.
+
+### The Loop
+
+Repeat this cycle until the plan is complete:
+
+1. **Explore** — Use readFile, glob, grep, listDir, webSearch, webFetch to read code. Look for existing functions, utilities, and patterns to reuse.
+2. **Update the plan file** — After each discovery, immediately capture what you learned. Don't wait until the end.
+3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, use askUser. Then go back to step 1.
+
+### First Turn
+
+Start by quickly scanning a few key files to form an initial understanding of the task scope. Then write a skeleton plan (headers and rough notes) and ask the user your first round of questions. Don't explore exhaustively before engaging the user.
+
+### Asking Good Questions
+
+- Never ask what you could find out by reading the code.
+- Focus on things only the user can answer: requirements, preferences, tradeoffs, edge case priorities.
+- Scale depth to the task — a vague feature request needs many rounds; a focused bug fix may need one or none.
+- Each option's \`description\` should make the tradeoff of that choice obvious in one line.
+
+### askUser Footer Options (auto-injected in plan mode — do not include yourself)
+
+The UI automatically appends two extra options to every askUser menu while in plan mode:
+- **"Chat about this"** — the user wants to discuss without picking from your menu. If they choose this, engage them conversationally; do NOT immediately re-issue another askUser menu.
+- **"Skip interview and plan immediately"** — the user is done with interviews. Stop asking questions, write the final plan to the plan file using everything you have so far, then call exitPlanMode.
+
+You will see these come back as the answer string verbatim ("User answered: Chat about this" / "User answered: Skip interview and plan immediately") — recognize and honor them. Do NOT include either of these in your own \`options\` array; the UI adds them.
+
+### Plan File Structure
+Your plan file should be divided into clear sections using markdown headers, based on the request. Fill out these sections as you go.
+- Begin with a **Context** section: explain why this change is being made — the problem or need it addresses, what prompted it, and the intended outcome.
+- Include only your recommended approach, not all alternatives.
+- Keep the file concise enough to scan quickly, but detailed enough to execute effectively.
+- Include the paths of critical files to be modified.
+- Reference existing functions and utilities you found that should be reused, with their file paths.
+- End with a **Verification** section describing how to test the changes (run the code, run tests).
+
+### When to Converge
+
+Your plan is ready when you've addressed all ambiguities and it covers: what to change, which files to modify, what existing code to reuse (with file paths), and how to verify the changes. Call exitPlanMode when the plan is ready for approval.
+
+### Ending Your Turn
+
+Your turn should only end by either:
+- Using **askUser** to gather more information, OR
+- Calling **exitPlanMode** when the plan is ready for approval.
+
+This is critical — your turn should only end with one of these two tools. Do not stop unless it's for these 2 reasons.
+
+### exitPlanMode is the ONLY way to leave plan mode (HARD RULE)
+
+Plan mode is a state — calling askUser does NOT and CANNOT leave it. Even if the user picks an option labelled "yes", "approve", "全接受", "looks good", "start", "ok", "execute", or anything similar in your askUser menu, **you are still in plan mode** and writing files will still hit per-file permission prompts. This is the most common way agents get plan mode wrong: they bake an "approve plan?" question into an askUser menu, the user picks Yes, and the agent proceeds to call writeFile expecting it to just work — but the mode never flipped.
+
+**The only correct path to start implementing**:
+
+1. Write your plan to the plan file.
+2. Call **exitPlanMode** with the plan body as the \`plan\` argument.
+3. The user sees an approval dialog and chooses Yes/No.
+4. On Yes the system flips mode to acceptEdits — your subsequent writeFile / edit calls auto-approve.
+5. On No you stay in plan mode; revise and call exitPlanMode again.
+
+**Forbidden patterns** (do not do any of these):
+- askUser({ question: "Approve this plan?", options: [...] })
+- askUser({ question: "Should I proceed?", options: [...] })
+- askUser({ question: "Ready to implement?", options: [...] })
+- askUser({ question: "How does this plan look?", options: [...] })
+- askUser asking the user to choose between "execute everything" / "execute partially" — that's an exitPlanMode decision, not an askUser one.
+
+If you find yourself wanting to ask "is the plan good?" in any form: stop, call exitPlanMode instead.
+
+**askUser is for**: clarifying requirements, choosing between technical approaches DURING planning (e.g. "Redis vs in-memory cache?"), prioritizing what to include. Never for plan approval.`
+
 /** Build the full system prompt with dynamic values and optional knowledge context */
 export function buildSystemPrompt(options?: {
   knowledgeContext?: string
   modelId?: string
   isGitRepo?: boolean
+  /** When true, append the plan-mode overlay (read-only constraints +
+   *  exitPlanMode handoff). Pair with `planFilePath` so the model knows
+   *  which path is allowed for writes. */
+  planMode?: boolean
+  /** Absolute path to the session's plan file. Required when
+   *  `planMode === true`; ignored otherwise. */
+  planFilePath?: string
 }): string {
   const shellProvider = getShellProvider()
 
@@ -106,6 +212,10 @@ export function buildSystemPrompt(options?: {
 
   if (options?.knowledgeContext) {
     prompt += '\n\n' + options.knowledgeContext
+  }
+
+  if (options?.planMode) {
+    prompt += PLAN_MODE_OVERLAY.replace(/\{planFilePath\}/g, options.planFilePath ?? '<unset>')
   }
 
   return prompt

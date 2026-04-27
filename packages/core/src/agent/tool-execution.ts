@@ -11,6 +11,26 @@ import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { toolResultMessage } from './messages.js'
+import { makePlanFilePath, readPlan, writePlan } from './plan-storage.js'
+
+/** Walk back through state.messages and grab the most recent user
+ *  message's text — used as the slug source for the plan filename. */
+function lastUserMessageText(messages: LoopState['messages']): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m && m.role === 'user') {
+      const content = m.content
+      if (typeof content === 'string') return content
+      if (Array.isArray(content)) {
+        return content
+          .filter((p): p is { type: 'text'; text: string } => p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+          .map((p) => p.text)
+          .join(' ')
+      }
+    }
+  }
+  return ''
+}
 
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
@@ -157,6 +177,202 @@ async function handleToolCall(
     return
   }
 
+  // ── enterPlanMode tool ──
+  // Flip state.permissionMode → 'plan', invalidate the system-prompt
+  // cache so the next turn rebuilds it with the overlay, and reserve a
+  // plan-file path on state.currentPlanPath WITHOUT actually creating
+  // the file (the path is just a string until the model decides it
+  // wants a scratchpad). Plan mode is a conversation state, not a
+  // forced "write to a file" workflow — for Q&A and discussion the
+  // model never touches the file. The path is created lazily, the
+  // first time the model calls writeFile/edit on it (or when
+  // exitPlanMode persists the approved plan).
+  if (toolName === 'enterPlanMode') {
+    if (state.permissionMode === 'plan') {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        'Already in plan mode. Continue the conversation; call exitPlanMode when the user has asked for an implementation and you have a plan ready.',
+      )
+      return
+    }
+    // Approval gate. Mirrors Claude Code: model can recommend plan
+    // mode but cannot enter on its own — user has to consent so the
+    // mode flip never feels like the model unilaterally hijacking the
+    // session. The same dialog component the write-tool path uses
+    // renders a "X-Code wants to enter plan mode" prompt with Yes/No.
+    const approved = await callbacks.onAskPermission({ toolCallId, toolName, input })
+    if (!approved) {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        'User declined to enter plan mode. Continue with the user\'s request in default mode — make whatever edits or shell calls the task requires (subject to per-tool permission).',
+        true,
+      )
+      return
+    }
+    state.permissionMode = 'plan'
+    state.systemPromptCache = null
+    // Derive the plan file path. Prefer the model-supplied `topic`
+    // (3-5 English words summarizing the task — works for non-English
+    // user requests too because the model translates) over the raw
+    // user message (which slugify would drop entirely if it's CJK,
+    // leaving a timestamp-only filename).
+    if (!state.currentPlanPath) {
+      const topic = (input.topic as string | undefined)?.trim()
+      const slugSource = topic && topic.length > 0 ? topic : lastUserMessageText(state.messages)
+      state.currentPlanPath = makePlanFilePath(slugSource)
+    }
+    callbacks.onPlanModeChange('plan')
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      [
+        'Entered plan mode (user approved).',
+        '',
+        'Read-only tools are unrestricted (readFile, glob, grep, listDir, webSearch, webFetch).',
+        `Plan file path for this session: ${state.currentPlanPath}`,
+        'Use writeFile/edit on the plan file to build your plan; do NOT edit any other files',
+        'or run state-changing shell commands until the user approves your plan via exitPlanMode.',
+        '',
+        'Workflow: explore → update plan file → askUser → repeat.',
+        '',
+        'CRITICAL: when the plan is ready, call **exitPlanMode** to request approval — NOT',
+        'askUser. askUser cannot leave plan mode no matter how the user answers; only',
+        'exitPlanMode flips the mode and unblocks your writeFile/edit/shell calls.',
+      ].join('\n'),
+    )
+    return
+  }
+
+  // ── exitPlanMode tool ──
+  // Triggers the user-approval gate. The plan body comes from
+  // `input.plan` (passed verbatim by the model). We persist it to the
+  // session's plan file as a permanent record before showing the
+  // approval dialog — that way even rejected plans leave a trace, and
+  // approved plans live alongside the implementation that follows.
+  // Approval flips state back to 'default' and invalidates the
+  // system-prompt cache so the next turn drops the plan-mode overlay.
+  // Rejection keeps the model in plan mode and tells it to revise.
+  if (toolName === 'exitPlanMode') {
+    if (state.permissionMode !== 'plan') {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        'Error: not in plan mode. exitPlanMode is only valid when the session is in plan mode.',
+        true,
+      )
+      return
+    }
+    // Source of truth for the plan body is the plan file the model has
+    // been writing to during planning (matches Claude Code: the model
+    // builds the plan incrementally via writeFile/edit, then calls
+    // exitPlanMode which reads the file). The optional `plan` override
+    // exists for rare cases where the model wants to substitute the
+    // file content with something different.
+    const planPath = state.currentPlanPath ?? makePlanFilePath(lastUserMessageText(state.messages))
+    state.currentPlanPath = planPath
+    const planOverride = (input.plan as string | undefined)?.trim()
+    let planBody = planOverride ?? ''
+    if (!planBody) {
+      planBody = (await readPlan(planPath)).trim()
+    }
+    if (!planBody) {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        `Error: the plan file at ${planPath} is empty. Write your plan to that file using writeFile or edit, then call exitPlanMode again.`,
+        true,
+      )
+      return
+    }
+
+    // If the model passed an override, persist it back to the plan
+    // file so the on-disk record matches what the user sees / approves.
+    let savedPath: string | null = planPath
+    if (planOverride) {
+      try {
+        savedPath = await writePlan(planPath, planBody)
+        state.currentPlanPath = savedPath
+      } catch {
+        // Disk failure (read-only fs, permissions) is non-fatal — fall
+        // through to the approval dialog with the in-memory body.
+      }
+    }
+
+    const approved = await callbacks.onPlanApprovalRequest(planBody)
+    if (approved) {
+      // Default post-approval mode is `acceptEdits` — the user just
+      // vetted the plan, so making them click "Yes" on every writeFile
+      // / edit during implementation is pure friction. Shell commands
+      // still go through normal classification (always-allow for read-
+      // only, ask for mixed, deny for destructive) so we don't blanket-
+      // approve `rm -rf` on plan approval. Matches Claude Code's
+      // default "Yes, auto-accept edits" behavior.
+      state.permissionMode = 'acceptEdits'
+      state.systemPromptCache = null
+      const persisted = savedPath ?? state.currentPlanPath
+      state.currentPlanPath = null
+      callbacks.onPlanModeChange('acceptEdits')
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        [
+          'Plan approved by user. Plan mode has been exited.',
+          persisted ? `The approved plan is saved at: ${persisted}` : '',
+          'You can now edit files and run shell commands. Start implementing the plan.',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      )
+      // Also inject a system-reminder-style user-role meta message so
+      // the model treats the mode flip as a fresh top-level instruction
+      // rather than just a tool result. Mirrors Claude Code's
+      // `## Exited Plan Mode` attachment (messages.ts:3847-3852) — gives
+      // the next turn a clear "the rules just changed" anchor.
+      state.messages.push({
+        role: 'user',
+        content: [
+          '## Exited Plan Mode',
+          '',
+          'You have exited plan mode. You can now make edits, run tools, and take actions.',
+          'Write tools (writeFile, edit) are now auto-approved (acceptEdits mode); shell commands',
+          'still go through normal permission classification.',
+          persisted ? `The plan file is located at ${persisted} if you need to reference it.` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      })
+      return
+    }
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      [
+        'Plan rejected by user. You are still in plan mode.',
+        'Read the user\'s next message for feedback, revise the plan accordingly,',
+        'and call exitPlanMode again with the revised body. Consider asking the user',
+        'a clarifying question via askUser if you are unsure what to change.',
+      ].join('\n'),
+      true,
+    )
+    return
+  }
+
   // ── Doom-loop detection ──
   // For manual tools we pre-block. For auto-executed tools the call has
   // already run (result landed in state.messages via collectTurnResponse);
@@ -215,6 +431,7 @@ async function handleToolCall(
       { toolCallId, toolName, input },
       options.trustMode,
       callbacks.onAskPermission,
+      state.permissionMode,
     )
     if (!approved) {
       pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')

@@ -3,6 +3,7 @@
 // Types
 export type {
   PermissionLevel,
+  PermissionMode,
   TokenUsage,
   DisplayMessage,
   DisplayToolCall,
@@ -29,6 +30,7 @@ export { createModelRegistry } from './providers/registry.js'
 export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
+export { makePlanFilePath } from './agent/plan-storage.js'
 export { classifyApiError } from './agent/api-errors.js'
 export { buildUserContent, extractFileReferences, ingestFile, classifyFile } from './agent/file-ingest.js'
 export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'

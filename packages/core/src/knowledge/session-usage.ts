@@ -30,8 +30,17 @@ function getSessionsDir(): string {
   return path.join(process.cwd(), SESSIONS_DIR)
 }
 
-function getUsagePath(sessionId: string): string {
-  return path.join(getSessionsDir(), `${sessionId}.usage.json`)
+/** Build the on-disk filename for a session. Mirrors plan-file naming
+ *  (`<slug>-<sessionId>.usage.json`) so `ls .x-code/sessions/` shows
+ *  what each session was about, not just an opaque timestamp. The slug
+ *  is derived from the user's first message in agentLoop and stays
+ *  fixed for the lifetime of the session — see `LoopState.taskSlug`.
+ *  Empty slug (e.g. CJK-only first message) falls back to
+ *  timestamp-only naming, matching the plan-file path's behavior in
+ *  the same situation. */
+function getUsagePathForState(state: { sessionId: string; taskSlug: string }): string {
+  const base = state.taskSlug ? `${state.taskSlug}-${state.sessionId}` : state.sessionId
+  return path.join(getSessionsDir(), `${base}.usage.json`)
 }
 
 function getLatestUsagePath(): string {
@@ -54,7 +63,7 @@ export async function persistUsageSnapshot(state: LoopState, modelId: string): P
     await fs.mkdir(getSessionsDir(), { recursive: true })
     const json = JSON.stringify(snapshot, null, 2)
     await Promise.all([
-      fs.writeFile(getUsagePath(state.sessionId), json, 'utf-8'),
+      fs.writeFile(getUsagePathForState(state), json, 'utf-8'),
       fs.writeFile(getLatestUsagePath(), json, 'utf-8'),
     ])
   } catch {

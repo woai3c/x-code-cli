@@ -41,6 +41,18 @@ export async function runPrintMode(
       process.stderr.write(`\n[cannot ask question in -p mode: ${question}]\n`)
       return ''
     },
+    onPlanApprovalRequest: async () => {
+      // Non-interactive — can't show an approval dialog. Deny so the
+      // model stays in plan mode and writes a final plan rather than
+      // pretending the user accepted something they never saw.
+      process.stderr.write(`\n[plan approval not available in -p mode — pass --plan + interactive session]\n`)
+      return false
+    },
+    onPlanModeChange: () => {
+      // No UI to update in print mode; the mode change still takes
+      // effect on LoopState, which is the only place it actually
+      // matters for this short-lived run.
+    },
     onShellOutput: () => {},
     onUsageUpdate: () => {},
     onContextCompressed: () => {},

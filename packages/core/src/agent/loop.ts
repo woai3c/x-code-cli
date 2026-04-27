@@ -18,6 +18,23 @@ import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { lightCompactMessages } from './light-compact.js'
 import { createLoopState } from './loop-state.js'
+import { makePlanFilePath, slugify } from './plan-storage.js'
+
+/** Pull plain text out of a UserContent payload for slugification.
+ *  UserContent can be a string OR a multi-part array (text/image/file
+ *  parts after `buildUserContent` ingests `@path` references); we only
+ *  care about the text segments — image / file parts contribute
+ *  nothing to a human-readable filename. */
+function userContentToText(content: UserContent): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .filter((p): p is { type: 'text'; text: string } => p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+      .map((p) => p.text)
+      .join(' ')
+  }
+  return ''
+}
 import type { LoopState } from './loop-state.js'
 import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
 import { drainStreamResult } from './stream-utils.js'
@@ -319,8 +336,26 @@ export async function agentLoop(
   callbacks: AgentCallbacks,
   existingState?: LoopState,
 ): Promise<LoopState> {
-  const state = existingState ?? createLoopState()
+  const state = existingState ?? createLoopState(options.permissionMode ?? 'default')
   state.messages.push({ role: 'user', content: userMessage })
+
+  // Derive the session task-slug ONCE per session, on the first turn.
+  // Drives session-usage filenames (`<slug>-<sessionId>.usage.json`).
+  // Set-once: changing it mid-session would orphan the file the
+  // previous turn already wrote to. Empty for CJK-only first messages
+  // — session-usage then falls back to pure timestamp naming.
+  if (!state.taskSlug) {
+    state.taskSlug = slugify(userContentToText(userMessage))
+  }
+
+  // Lazy plan-file path derivation. We derive ONCE per plan-mode
+  // session (the first turn that's in plan mode without a path
+  // already set) from the user's task text. Re-deriving on every
+  // plan-mode turn would overwrite the path the model has been
+  // editing, so the !currentPlanPath guard is critical.
+  if (state.permissionMode === 'plan' && !state.currentPlanPath) {
+    state.currentPlanPath = makePlanFilePath(userContentToText(userMessage))
+  }
 
   // Session continuation is handled explicitly by the UI: if the user accepts
   // the resume prompt, the pending work is embedded directly in their first
@@ -355,11 +390,19 @@ export async function agentLoop(
     // Zhipu, xAI). If this string changes between turns — e.g. because
     // buildSystemPrompt interpolates a fresh timestamp — the cache misses
     // every request.
+    //
+    // The plan-mode overlay is folded into this same byte-stable cache.
+    // tool-execution invalidates the cache (sets it to null) when
+    // permissionMode flips, so each mode's prompt stays cache-friendly
+    // for as long as the mode is active. Only the boundary turn pays the
+    // cache miss.
     if (!state.systemPromptCache) {
       state.systemPromptCache = buildSystemPrompt({
         knowledgeContext: fullKnowledgeContext,
         modelId: options.modelId,
         isGitRepo,
+        planMode: state.permissionMode === 'plan',
+        planFilePath: state.currentPlanPath ?? undefined,
       })
     }
     const systemPrompt = state.systemPromptCache

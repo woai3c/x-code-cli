@@ -1,6 +1,6 @@
 // @x-code-cli/core — Permission system (3-level model)
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
-import type { PermissionLevel } from '../types/index.js'
+import type { PermissionLevel, PermissionMode } from '../types/index.js'
 
 type PermissionInput = Record<string, unknown>
 
@@ -61,14 +61,33 @@ export function getPermissionLevel(toolName: string, input: PermissionInput): Pe
   return rule(input)
 }
 
-/** Check permission with trust mode support */
+/** Check permission with trust mode + permission-mode support.
+ *
+ *  `permissionMode` semantics:
+ *    - 'default': behave exactly as before — `ask`-level tools prompt.
+ *    - 'acceptEdits': auto-allow `writeFile` and `edit` (the two tools
+ *      whose default level is `ask` purely because they write files —
+ *      the user opted into accepting all such writes). Shell still goes
+ *      through normal classification so destructive commands stay
+ *      gated, and `deny`-level results still deny.
+ *    - 'plan': pure prompt-based enforcement (mirrors Claude Code) —
+ *      no permission-layer change. The system-prompt overlay tells the
+ *      model not to write; if it ignores that, the regular `ask`
+ *      prompt still fires.
+ *
+ *  Trust mode is the global override and beats everything except an
+ *  explicit `deny`. */
 export async function checkPermission(
   toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
   trustMode: boolean,
   onAskPermission: (toolCall: { toolCallId: string; toolName: string; input: PermissionInput }) => Promise<boolean>,
+  permissionMode: PermissionMode = 'default',
 ): Promise<boolean> {
   const level = getPermissionLevel(toolCall.toolName, toolCall.input)
   if (level === 'deny') return false
   if (level === 'always-allow' || trustMode) return true
+  if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
+    return true
+  }
   return onAskPermission(toolCall)
 }

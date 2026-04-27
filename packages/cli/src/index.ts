@@ -121,6 +121,13 @@ async function main() {
       default: 100,
       describe: 'Maximum agent loop turns',
     })
+    .option('plan', {
+      type: 'boolean',
+      default: false,
+      // No short alias — `-p` is already `--print`. Plan mode constrains the
+      // model to read-only exploration + a plan file until the user approves.
+      describe: 'Start the session in plan mode (read-only exploration; user must approve before code edits)',
+    })
     .version(VERSION)
     .alias('v', 'version')
     .help()
@@ -176,6 +183,11 @@ async function main() {
     // jumps). The /thinking command in App.tsx hot-swaps this flag
     // without restart via useAgent's setThinking.
     thinking: loadUserConfig().thinking ?? false,
+    // Plan mode is session-scoped (matches Claude Code) — only the
+    // `--plan` CLI flag opts in at startup. Mid-session toggles via
+    // /plan or Shift+Tab don't persist, so each new launch starts in
+    // 'default' unless explicitly requested.
+    permissionMode: argv.plan ? 'plan' : 'default',
   }
 
   // Combine prompt with stdin

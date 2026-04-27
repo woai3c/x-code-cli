@@ -116,4 +116,8 @@ When adding a provider, also update `packages/core/tests/config.test.ts:PROVIDER
 - **Comments**: heavy comments are reserved for *why* (especially terminal-protocol workarounds in `ChatInput.tsx` and `use-prompt-input.ts`). The codebase reads as a series of "we tried X first, then Y broke, so we do Z" notes — keep that style when adding new edge-case handling.
 - **Per-user state**: `.x-code/` at repo root is **gitignored** and holds session summaries / auto-memory / local prefs. Tests redirect this via `process.env.X_CODE_HOME = <tmpdir>`.
 - **Logging**: `DEBUG_STDOUT=1 xc` writes to `~/.x-code/logs/debug.log` (10 MB rolling). `debugLog()` calls in core are no-ops without that env var.
-- **Don't auto-commit.** Wait for the user to verify the change before staging or committing.
+- **Don't auto-commit.** Typecheck / build / tests passing is **not** authorization to commit — the user verifies UI and runtime behavior in the live CLI before anything lands in history. After making changes, stop, summarize what changed, and wait for an explicit go-ahead.
+  - Phrases that DO authorize: `提交`, `commit`, `commit it`, `提交一下`, `ok ship it`.
+  - Phrases that do **not**: `good`, `looks right`, `可以的`, `继续`, `不错` — those mean "the work looks done", not "land it in git".
+  - One authorization covers one chunk only. After committing chunk A, follow-up changes B need a fresh authorization — do not roll the earlier "commit" instruction forward.
+  - Don't `git commit --amend` or stage and commit "fix-forward" patches when a previous commit got criticism; revert/reset and let the user decide what to do with the change.

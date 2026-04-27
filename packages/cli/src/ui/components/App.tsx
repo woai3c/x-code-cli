@@ -33,6 +33,7 @@ export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   { name: '/model', description: 'Pick a model (no-arg = interactive) — choice is saved' },
   { name: '/thinking', description: 'Toggle extended thinking on/off (no-arg = show status) — saved' },
+  { name: '/plan', description: 'Toggle plan mode on/off (no-arg = show status) — saved' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
   { name: '/init', description: 'Initialize project knowledge' },
@@ -119,6 +120,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     addUserMessage,
     addCommandMessage,
     askQuestion,
+    cyclePermissionMode,
+    setPermissionMode,
   } = useAgent(model, options)
 
   // Transient one-line hint shown above the spinner. Today only used for the
@@ -212,6 +215,10 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
 
         case 'thinking':
           handleThinkingToggle(text, arg)
+          return
+
+        case 'plan':
+          handlePlanToggle(text, arg)
           return
 
         case 'clear':
@@ -457,6 +464,50 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     commitThinkingChange(commandText, next)
   }
 
+  /** Toggle plan mode via /plan. Direct enter/exit, no picker — the
+   *  Shift+Tab cycle (default → acceptEdits → plan → default) is
+   *  multi-step, but `/plan` is the user explicitly asking for plan
+   *  mode, so we go directly. `/plan` toggles plan ↔ whatever-was-
+   *  before; `/plan on` / `/plan off` are idempotent setters for
+   *  scripted flows. Matches Claude Code's `/plan` single-line
+   *  confirmation output. */
+  function handlePlanToggle(commandText: string, arg: string) {
+    const current = state.permissionMode === 'plan'
+    const trimmed = arg.trim().toLowerCase()
+
+    let next: boolean
+    if (!trimmed) {
+      next = !current
+    } else if (trimmed === 'on' || trimmed === 'true' || trimmed === '1' || trimmed === 'enable' || trimmed === 'enabled') {
+      next = true
+    } else if (
+      trimmed === 'off' ||
+      trimmed === 'false' ||
+      trimmed === '0' ||
+      trimmed === 'disable' ||
+      trimmed === 'disabled'
+    ) {
+      next = false
+    } else {
+      addCommandMessage(commandText, `Unknown value: \`${arg}\`. Use \`/plan\`, \`/plan on\`, or \`/plan off\`.`)
+      return
+    }
+
+    if (next === current) {
+      addCommandMessage(commandText, `Plan mode is already **${current ? 'on' : 'off'}** — no change.`)
+      return
+    }
+
+    // /plan jumps directly between plan and default, bypassing the
+    // 3-way cycle. Two flips of cyclePermissionMode would land in
+    // 'plan' from 'default' but skip 'acceptEdits' — we want a clean
+    // direct setter, so apply the mode on loopState ourselves and let
+    // the existing onPlanModeChange callback path do the React state
+    // / UI sync via setPermissionMode below.
+    setPermissionMode(next ? 'plan' : 'default')
+    addCommandMessage(commandText, next ? 'Enabled plan mode' : 'Disabled plan mode')
+  }
+
   async function handleCompact() {
     addInfoMessage('Compressing context...')
     await compact()
@@ -532,6 +583,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       onSubmit={handleSubmit}
       onInterrupt={handleCtrlC}
       onEscapeCancel={abort}
+      onCyclePermissionMode={cyclePermissionMode}
+      permissionMode={state.permissionMode}
       isLoading={state.isLoading}
       notice={notice}
       // Suppress the spinner's "Thinking" line while a select dialog is up,
