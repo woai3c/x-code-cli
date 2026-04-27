@@ -92,6 +92,21 @@ function isTypeValidationError(err: unknown, msg: string): boolean {
   )
 }
 
+/** Provider rejection due to malformed tool_call ↔ tool_result pairing
+ *  in the message history. Most often surfaces against DeepSeek with a
+ *  specific wording; OpenAI and others have variants. The
+ *  `repairOrphanToolCalls` sweep in `runTurn` should prevent this from
+ *  happening — but if it leaks through (or for older session state),
+ *  surface a directly actionable message instead of the raw provider
+ *  dump. */
+function isMalformedToolHistoryError(msg: string): boolean {
+  return (
+    msg.includes("Messages with role 'tool' must be a response to a preceding message with 'tool_calls'") ||
+    msg.includes('tool_calls and tool_call_ids') ||
+    msg.includes('tool_call_id')
+  )
+}
+
 /** Pull a provider name out of "Anthropic API key is missing" → "Anthropic". */
 function extractProviderName(msg: string): string {
   const m = msg.match(/^(\w+)\s+API key/i)
@@ -197,6 +212,13 @@ export function classifyApiError(err: unknown): ClassifiedError {
   if (isTypeValidationError(err, msg)) {
     return {
       message: `Provider returned an error: ${msg}. Try a different model with /model.`,
+      retryable: false,
+    }
+  }
+  if (isMalformedToolHistoryError(msg)) {
+    return {
+      message:
+        'Conversation history has an orphan tool call (model emitted a malformed tool input that the SDK rejected). The next turn will auto-repair, but if this keeps happening you can /clear to reset the conversation.',
       retryable: false,
     }
   }

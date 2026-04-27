@@ -50,6 +50,80 @@ type ToolResultLike = {
   }
 }
 
+/** Synthesize a tool-result message for a tool_call whose input failed
+ *  Zod validation (or otherwise didn't execute). Without this, the
+ *  assistant message ends up with an orphan tool_call — the next API
+ *  request fails with provider errors like
+ *  "tool must be a response to a preceding message with tool_calls".
+ *  Wire-shape mirrors how the AI SDK normally emits tool results. */
+function synthesizeToolErrorResult(toolCallId: string, toolName: string, errorMessage: string): ModelMessage {
+  return {
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId,
+        toolName,
+        output: { type: 'text', value: `Error: ${errorMessage}` },
+      } as never, // AI SDK's narrow union doesn't admit the partial we construct here; wire-shape is correct.
+    ],
+  } as ModelMessage
+}
+
+/**
+ * Walk `messages` and append synthetic tool-result entries for any
+ * assistant tool_call that lacks a matching tool result. Models can emit
+ * malformed tool inputs (e.g. todoWrite with missing required fields) —
+ * the SDK validates, fails, and emits a tool-error event but in some
+ * cases doesn't push a paired tool-result into response.messages. The
+ * orphan tool_call would then poison every subsequent API request
+ * because providers strictly require tool_call ↔ tool_result pairing.
+ *
+ * Mutates `messages` in place. Idempotent (running twice is a no-op).
+ */
+export function repairOrphanToolCalls(messages: ModelMessage[]): void {
+  // Collect every tool_call_id that appears in an assistant message.
+  const expected = new Set<string>()
+  const toolNameById = new Map<string, string>()
+  for (const msg of messages) {
+    if (msg.role !== 'assistant') continue
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content as Array<{ type?: string; toolCallId?: string; toolName?: string }>) {
+      if (part?.type === 'tool-call' && typeof part.toolCallId === 'string') {
+        expected.add(part.toolCallId)
+        if (typeof part.toolName === 'string') toolNameById.set(part.toolCallId, part.toolName)
+      }
+    }
+  }
+
+  // Collect every tool_call_id that's already covered by a tool-result.
+  const fulfilled = new Set<string>()
+  for (const msg of messages) {
+    if (msg.role !== 'tool') continue
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content as Array<{ type?: string; toolCallId?: string }>) {
+      if (part?.type === 'tool-result' && typeof part.toolCallId === 'string') {
+        fulfilled.add(part.toolCallId)
+      }
+    }
+  }
+
+  // Append synthetic results for orphans, preserving overall ordering
+  // (orphans always go at the end — they never had a real result, so
+  // their position is purely a placeholder for the next API request).
+  for (const id of expected) {
+    if (fulfilled.has(id)) continue
+    const name = toolNameById.get(id) ?? 'unknown'
+    messages.push(
+      synthesizeToolErrorResult(
+        id,
+        name,
+        'Tool input failed validation (likely missing required fields). The assistant should retry with the correct schema.',
+      ),
+    )
+  }
+}
+
 /**
  * Walk `messages` in place and truncate any oversized tool-result parts. Only
  * mutates the `output.value` field; the rest of the message structure is

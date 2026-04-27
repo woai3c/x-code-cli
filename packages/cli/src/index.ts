@@ -375,12 +375,12 @@ function readStdin(): Promise<string> {
 // REPL mid-session. We swallow the rejection and let the loop's onError
 // path render a friendly message instead.
 process.on('unhandledRejection', (reason) => {
-  if (process.env.XC_DEBUG) {
+  if (process.env.DEBUG_STDOUT) {
     console.error('[unhandledRejection]', reason)
   }
 })
 process.on('uncaughtException', (err) => {
-  if (process.env.XC_DEBUG) {
+  if (process.env.DEBUG_STDOUT) {
     console.error('[uncaughtException]', err)
   }
 })

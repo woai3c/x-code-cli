@@ -41,7 +41,7 @@ import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { processToolCalls } from './tool-execution.js'
-import { truncateToolResultsInMessages } from './tool-result-sanitize.js'
+import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 
 export type { LoopState } from './loop-state.js'
 
@@ -232,6 +232,17 @@ async function runTurn(
   systemPrompt: string,
   callbacks: AgentCallbacks,
 ): Promise<TurnOutcome> {
+  // Defensive sweep BEFORE every API call: if the previous turn left
+  // an assistant tool_call without a paired tool_result anywhere in
+  // state.messages (model emitted malformed tool input → SDK rejected
+  // with tool-error and never produced a result; or a turn errored
+  // mid-flight), append a synthetic error result so the request body
+  // is well-formed. Providers strictly require tool_call ↔ tool_result
+  // pairing and reject the whole request with confusing errors like
+  // "tool must be a response to a preceding message with tool_calls".
+  // Idempotent — running every turn is cheap and bulletproof.
+  repairOrphanToolCalls(state.messages)
+
   // Text-only providers (DeepSeek, custom) would 400 on any surviving
   // image/file parts. Rewrite those parts to OCR'd text in-place before
   // the stream starts. Multimodal providers short-circuit inside the
