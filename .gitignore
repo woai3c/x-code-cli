@@ -145,7 +145,4 @@ vite.config.ts.timestamp-*
 .x-code/
 
 # Copied into packages at publish time by CI — not source
-packages/cli/README.md
-packages/cli/README.en.md
-packages/cli/LICENSE
-packages/core/LICENSE
+tmp
