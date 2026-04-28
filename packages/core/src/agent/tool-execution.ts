@@ -23,7 +23,10 @@ function lastUserMessageText(messages: LoopState['messages']): string {
       if (typeof content === 'string') return content
       if (Array.isArray(content)) {
         return content
-          .filter((p): p is { type: 'text'; text: string } => p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+          .filter(
+            (p): p is { type: 'text'; text: string } =>
+              p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string',
+          )
           .map((p) => p.text)
           .join(' ')
       }
@@ -50,7 +53,10 @@ async function executeWriteTool(toolName: string, input: Record<string, unknown>
     const content = input.content as string
     reportProgress(toolCallId, `Writing ${filePath}`)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    const isNew = await fs.access(filePath).then(() => false, () => true)
+    const isNew = await fs.access(filePath).then(
+      () => false,
+      () => true,
+    )
     await fs.writeFile(filePath, content, 'utf-8')
     const parts = content.split('\n')
     const lineCount = content.endsWith('\n') ? parts.length - 1 : parts.length
@@ -95,15 +101,35 @@ async function executeShell(
 
   reportProgress(toolCallId, 'Running command...')
 
+  // Throttle the live progress message to at most one update per 50ms.
+  // Why: PowerShell `Format-Table` and similar table-rendering commands
+  // emit many lines in a single ~1ms burst, each as its own `data` event
+  // here. Without throttling we'd fire reportProgress 5-10× per millisec,
+  // each one becoming a setState → ChatInput render → deferred stdout
+  // write. The deferred queue absorbs most of the burst into one frame,
+  // but if the deferred-fire timer happens to land ~1ms before the
+  // tool-result commit arrives, the user sees a visible "progress text
+  // flashes, then result block scrolls in" pair. Throttling at the
+  // source cuts the storm to ≤20 updates/sec — fast enough to feel
+  // live, slow enough to dramatically reduce the chance that any
+  // deferred-fire collides with the upcoming tool-result commit.
+  // The model still sees full output via the `result` field; this only
+  // throttles the live progress display, not what reaches the LLM.
+  let lastProgressTime = 0
+  const PROGRESS_THROTTLE_MS = 50
+
   const onChunk = (chunk: Buffer) => {
     const s = chunk.toString()
     callbacks.onShellOutput(s)
+    const now = Date.now()
+    if (now - lastProgressTime < PROGRESS_THROTTLE_MS) return
     // Take the last non-empty line of the chunk as the progress message.
     // Long-running commands (tsc, test suites) stream many lines; showing
     // the most recent is a natural "what's happening right now" signal.
     const lines = s.split(/\r?\n/).filter((l) => l.trim().length > 0)
     const last = lines[lines.length - 1]
     if (last) {
+      lastProgressTime = now
       const trimmed = last.length > 120 ? last.slice(0, 117) + '...' : last
       reportProgress(toolCallId, trimmed)
     }
@@ -208,7 +234,10 @@ async function handleToolCall(
     state.todos = allDone ? [] : normalized
     callbacks.onTodosUpdate(state.todos)
     const dropped = raw.length - normalized.length
-    const droppedNote = dropped > 0 ? ` ${dropped} entr${dropped === 1 ? 'y was' : 'ies were'} dropped because they had neither content nor activeForm — please include both fields next time so the user sees clean labels.` : ''
+    const droppedNote =
+      dropped > 0
+        ? ` ${dropped} entr${dropped === 1 ? 'y was' : 'ies were'} dropped because they had neither content nor activeForm — please include both fields next time so the user sees clean labels.`
+        : ''
     pushToolResult(
       state,
       callbacks,
@@ -254,7 +283,7 @@ async function handleToolCall(
         callbacks,
         toolCallId,
         toolName,
-        'User declined to enter plan mode. Continue with the user\'s request in default mode — make whatever edits or shell calls the task requires (subject to per-tool permission).',
+        "User declined to enter plan mode. Continue with the user's request in default mode — make whatever edits or shell calls the task requires (subject to per-tool permission).",
         true,
       )
       return
@@ -412,7 +441,7 @@ async function handleToolCall(
       toolName,
       [
         'Plan rejected by user. You are still in plan mode.',
-        'Read the user\'s next message for feedback, revise the plan accordingly,',
+        "Read the user's next message for feedback, revise the plan accordingly,",
         'and call exitPlanMode again with the revised body. Consider asking the user',
         'a clarifying question via askUser if you are unsure what to change.',
       ].join('\n'),
@@ -449,13 +478,10 @@ async function handleToolCall(
 
     if (loopCheck.kind === 'hard-block') {
       const answer = await callbacks
-        .onAskUser(
-          `The model keeps calling ${toolName} with identical arguments. How do you want to proceed?`,
-          [
-            { label: 'Pause', description: 'Pause the turn — you can type a new instruction.' },
-            { label: 'Continue', description: 'Let the model keep trying; the loop guard stays armed.' },
-          ],
-        )
+        .onAskUser(`The model keeps calling ${toolName} with identical arguments. How do you want to proceed?`, [
+          { label: 'Pause', description: 'Pause the turn — you can type a new instruction.' },
+          { label: 'Continue', description: 'Let the model keep trying; the loop guard stays armed.' },
+        ])
         .catch(() => 'Pause')
       if (answer.toLowerCase().startsWith('pause')) {
         // Clear the recent-calls window so the guard doesn't immediately
@@ -500,7 +526,13 @@ async function handleToolCall(
       else state.filesModified.add(input.filePath as string)
     } else if (toolName === 'shell') {
       const timeout = (input.timeout as number) ?? 30000
-      const shellResult = await executeShell(input.command as string, timeout, options.abortSignal, callbacks, toolCallId)
+      const shellResult = await executeShell(
+        input.command as string,
+        timeout,
+        options.abortSignal,
+        callbacks,
+        toolCallId,
+      )
       output = shellResult.output
       isError = shellResult.isError
     } else {

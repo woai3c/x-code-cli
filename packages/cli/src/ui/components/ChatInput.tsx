@@ -590,6 +590,14 @@ export function ChatInput({
   const lastFlushTimeRef = useRef(0)
   /** Pending deferred (non-commit) write that can be superseded by a commit. */
   const deferredFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Last `spinnerFrame` value seen by the flush effect. We compare against
+   *  the current frame to distinguish "this render was triggered by a
+   *  spinner tick" (spinner glyph cycled) from "this render was triggered
+   *  by typing / content change" (spinner unchanged). The two cases want
+   *  different deferred-flush windows: spinner ticks should defer longer
+   *  (~24ms) so the next text-stream commit can absorb them, but typing
+   *  must defer briefly (~8ms) or it visibly stutters under a held key. */
+  const lastFlushedSpinnerFrameRef = useRef<number | null>(null)
   /** Height of the frame currently sitting at the bottom of the terminal
    *  (the value that prevFrameRef was last set to). Tracked separately
    *  because prevFrameRef gets reset to [] on transitions (post-hidden,
@@ -723,7 +731,9 @@ export function ChatInput({
       forceRender()
     }
     stdout.on('resize', onResize)
-    return () => { stdout.off('resize', onResize) }
+    return () => {
+      stdout.off('resize', onResize)
+    }
   }, [stdout])
 
   // ── Cursor visibility lifecycle (Claude-Code pattern). ──
@@ -739,9 +749,17 @@ export function ChatInput({
   // (HIDE_CURSOR write at componentDidMount) and :189 (SHOW_CURSOR
   // at componentWillUnmount).
   useEffect(() => {
-    try { process.stdout.write('\x1b[?25l') } catch { /* tty closed */ }
+    try {
+      process.stdout.write('\x1b[?25l')
+    } catch {
+      /* tty closed */
+    }
     return () => {
-      try { process.stdout.write('\x1b[?25h') } catch { /* tty closed */ }
+      try {
+        process.stdout.write('\x1b[?25h')
+      } catch {
+        /* tty closed */
+      }
     }
   }, [])
 
@@ -1160,8 +1178,7 @@ export function ChatInput({
         const vl = visualLines[v]
         if (vl.rawLineIdx !== rawCursorLine) continue
         const endCol = vl.startCol + vl.text.length
-        const isLastChunkOfRawLine =
-          v + 1 >= visualLines.length || visualLines[v + 1].rawLineIdx !== rawCursorLine
+        const isLastChunkOfRawLine = v + 1 >= visualLines.length || visualLines[v + 1].rawLineIdx !== rawCursorLine
         if (
           cursorColInRaw >= vl.startCol &&
           (cursorColInRaw < endCol || (cursorColInRaw === endCol && isLastChunkOfRawLine))
@@ -1305,9 +1322,7 @@ export function ChatInput({
             const decoration = label.length + 5
             const safetyMargin = 4
             const maxPreviewLen = Math.max(40, termWidth - decoration - safetyMargin)
-            const trimmed = preview.length > maxPreviewLen
-              ? preview.slice(0, maxPreviewLen - 1) + '…'
-              : preview
+            const trimmed = preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + '…' : preview
             row1.push(...textToCells(`(${trimmed})`, S_BLUE_PURPLE))
           }
           frame.push(row1)
@@ -1676,8 +1691,7 @@ export function ChatInput({
     // pendingFreeBlanks changes (after a commit absorbs blanks, after
     // a frame-size change, etc.) so the cell-diff loop further down
     // always writes at the position the frame will end up at.
-    const computeFrameTop = (blanks: number) =>
-      Math.max(1, termRows - nextH + 1 - blanks)
+    const computeFrameTop = (blanks: number) => Math.max(1, termRows - nextH + 1 - blanks)
     let frameTop = computeFrameTop(freeBlanksAboveFrameRef.current)
     // Geometry trace — diagnostics for the "input box drifting / dialog
     // duplicate" symptom. Logs the inputs the bottom-anchor formula
@@ -1728,9 +1742,9 @@ export function ChatInput({
     const oldTermRows = lastTermRowsRef.current
     const oldTermWidth = lastTermWidthRef.current
     const didResize =
-      oldFrameH > 0 && activeRef.current &&
-      ((oldTermRows > 0 && oldTermRows !== termRows) ||
-       (oldTermWidth > 0 && oldTermWidth !== termWidth))
+      oldFrameH > 0 &&
+      activeRef.current &&
+      ((oldTermRows > 0 && oldTermRows !== termRows) || (oldTermWidth > 0 && oldTermWidth !== termWidth))
     if (didResize) {
       const widthChanged = oldTermWidth > 0 && oldTermWidth !== termWidth
       if (widthChanged) {
@@ -1743,7 +1757,7 @@ export function ChatInput({
         const newW = Math.max(1, termWidth)
         const sepRowsAfterReflow = Math.ceil(oldSepLen / newW)
         // 2 separator rows expanded, the rest stayed at 1 row each
-        const reflowedFrameH = (oldFrameH - 2) + 2 * sepRowsAfterReflow
+        const reflowedFrameH = oldFrameH - 2 + 2 * sepRowsAfterReflow
         const extraRows = Math.max(0, reflowedFrameH - oldFrameH)
         const eraseFrom = Math.max(1, frameTop - extraRows)
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
@@ -1751,9 +1765,8 @@ export function ChatInput({
         // Height-only change: use the actual last-rendered top (the
         // frame may have been floating before the resize, so the
         // bottom-anchor formula is no longer reliable).
-        const oldFrameTop = lastFrameTopRef.current > 0
-          ? lastFrameTopRef.current
-          : Math.max(1, oldTermRows - oldFrameH + 1)
+        const oldFrameTop =
+          lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, oldTermRows - oldFrameH + 1)
         const eraseFrom = Math.min(oldFrameTop, frameTop)
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
       }
@@ -1837,10 +1850,7 @@ export function ChatInput({
       // ~115-row ExitPlanMode plan) leaving ~30 blank rows in scrollback
       // history above the rendered plan body.
       const maxUsefulPreScroll = Math.max(0, termRows - availSpace)
-      const preScrollRows = Math.max(
-        0,
-        Math.min(scrollRows + nextH - availSpace, maxUsefulPreScroll),
-      )
+      const preScrollRows = Math.max(0, Math.min(scrollRows + nextH - availSpace, maxUsefulPreScroll))
       debugLog(
         'chatinput.geom.commit',
         `scrollRows=${scrollRows} nextH=${nextH} oldFrameH=${oldFrameH} ` +
@@ -1989,9 +1999,7 @@ export function ChatInput({
       if (oldFrameH > 0 && nextH < oldFrameH && !permission) {
         // Use the actual previous frame top (floating-frame model means
         // the OLD frame may have sat above the bottom-anchor position).
-        const oldTop = lastFrameTopRef.current > 0
-          ? lastFrameTopRef.current
-          : Math.max(1, termRows - oldFrameH + 1)
+        const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
         for (let i = 0; i < oldFrameH; i++) {
           preBuf += `\x1b[${oldTop + i};1H\x1b[K`
         }
@@ -2077,9 +2085,7 @@ export function ChatInput({
         // leaves the prior tool-progress lines visible above the dialog
         // instead of flashing blanks during the approval window.
         pendingFreeBlanks = freeBlanksAboveFrameRef.current + deltaH
-        const oldTop = lastFrameTopRef.current > 0
-          ? lastFrameTopRef.current
-          : Math.max(1, termRows - oldFrameH + 1)
+        const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
         frameTop = computeFrameTop(pendingFreeBlanks)
         debugLog(
           'chatinput.geom.shrink',
@@ -2248,10 +2254,7 @@ export function ChatInput({
       // Still need to apply the pending blank-rows update; the
       // shrink path may have computed a new value.
       if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
-        debugLog(
-          'chatinput.geom.persist-noop',
-          `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks}`,
-        )
+        debugLog('chatinput.geom.persist-noop', `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks}`)
       }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
       return
@@ -2277,10 +2280,22 @@ export function ChatInput({
     //   • Commit frames (carrying new scrollback) write IMMEDIATELY — they
     //     cancel any pending deferred write since commits involve complex
     //     scroll/frame state that must be written atomically.
-    //   • Non-commit frames are DEFERRED by 8ms. If a commit frame arrives
-    //     within that window, the deferred frame is discarded and only the
-    //     commit frame is painted. If not, the deferred frame fires after
-    //     8ms — still fast enough for smooth spinner animation.
+    //   • Non-commit frames are DEFERRED. Two windows:
+    //       — Spinner ticks (spinnerFrame changed since last flush): 24ms.
+    //         A wider window so a useStreamBuffer 150ms-drain commit
+    //         landing 1-20ms after the spinner tick supersedes the
+    //         spinner-only write instead of producing a back-to-back
+    //         spinner-cell + commit pair (the visible "tick + content
+    //         scroll-in" flicker observed during long streaming
+    //         responses).
+    //       — Everything else (typing, content changes that didn't tick
+    //         the spinner): 8ms. Held-down letter keys produce one
+    //         non-commit render per keystroke; a wider window here
+    //         visibly stutters under continuous typing because each
+    //         keystroke's deferred-fire happens on the wider cadence
+    //         instead of feeling immediate.
+    //     If a commit arrives during the deferred window, the deferred
+    //     frame is discarded and only the commit is painted.
     //   • Additionally, non-commit frames within 16ms of the last write
     //     are dropped entirely (spinner coalescing).
 
@@ -2288,14 +2303,14 @@ export function ChatInput({
       const ok = process.stdout.write(payload)
       if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
       lastFlushTimeRef.current = Date.now()
+      lastFlushedSpinnerFrameRef.current = spinner != null ? spinnerFrame : null
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
       lastFrameTopRef.current = frameTop
       if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
         debugLog(
           'chatinput.geom.persist',
-          `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
-            `frameTop=${frameTop} nextH=${nextH}`,
+          `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` + `frameTop=${frameTop} nextH=${nextH}`,
         )
       }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
@@ -2322,19 +2337,41 @@ export function ChatInput({
       // prompt is never retried. Symptom: tool-call row stuck showing
       // "⠴ Running... (↓ N tokens)" forever with frozen input.
       const isSpinnerTick = nextH === lastFrameHRef.current
-      if (isSpinnerTick && now - lastFlushTimeRef.current < 16) {
-        debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms`)
+      // True when this render's only meaningful change is the spinner
+      // glyph cycling — content/text/dialogs are unchanged. We can be
+      // far more aggressive about dropping these because the next commit
+      // will repaint the entire frame anyway, picking up the latest
+      // spinner glyph as part of the full redraw.
+      const spinnerTicked = spinner != null && spinnerFrame !== lastFlushedSpinnerFrameRef.current
+      // Coalesce window. Pure spinner ticks during streaming are dropped
+      // wholesale: useStreamBuffer drains every ~150ms, and each drain
+      // commits a scrollback row + repaints the whole frame (and thus
+      // the spinner glyph). If the previous stdout write was less than
+      // 150ms ago, we're in a streaming burst and the next commit will
+      // catch up the spinner — emitting the spinner cell now is wasted
+      // motion AND a flicker source (deferred-fire lands 1-25ms before
+      // the very next commit on average, producing back-to-back writes).
+      // For non-spinner same-height renders (typing, single-cell edits)
+      // keep the original 16ms window so input echo stays snappy.
+      const coalesceWindow = spinnerTicked ? 150 : 16
+      if (isSpinnerTick && now - lastFlushTimeRef.current < coalesceWindow) {
+        debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms spinner=${spinnerTicked ? 1 : 0}`)
         return
       }
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
       }
+      // Spinner ticks that DID escape the coalesce window above (i.e.
+      // we're idle, no commit happened recently) still get a slightly
+      // longer 24ms defer in case a late commit arrives. Typing /
+      // content uses 8ms.
+      const deferMs = spinnerTicked ? 24 : 8
       deferredFlushRef.current = setTimeout(() => {
         deferredFlushRef.current = null
         doFlush()
-        debugLog('chatinput.flush.deferred-fired', `delayed=8ms`)
-      }, 8)
-      debugLog('chatinput.flush.deferred', 'non-commit frame deferred 8ms')
+        debugLog('chatinput.flush.deferred-fired', `delayed=${deferMs}ms`)
+      }, deferMs)
+      debugLog('chatinput.flush.deferred', `non-commit frame deferred ${deferMs}ms`)
     }
   })
 

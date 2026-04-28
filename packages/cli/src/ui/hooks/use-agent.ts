@@ -116,7 +116,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
    *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
    *  later results fall through to an 'unknown' label. */
   const pendingToolsRef = useRef<
-    Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number; showTimer: ReturnType<typeof setTimeout> | null }>
+    Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number }>
   >(new Map())
 
   /** Append a single message to `messages` (used by the stream buffer). */
@@ -169,20 +169,24 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
           appendTextDelta(delta)
         },
         onToolCall: (toolCallId, toolName, input) => {
+          // Drain the streaming-text buffer AND register the live tool row
+          // in the same synchronous tick so React 18 auto-batching folds
+          // both setStates into one render → one ChatInput frame → one
+          // stdout.write. The previous 4ms `setTimeout` deferral was
+          // designed to skip the "Running…" frame for sub-5ms tools, but
+          // for slow tools (WebSearch, shell, network) it produced the
+          // exact double-write pattern (text-commit frame, then 4ms later
+          // tool-row frame) that surfaces as visible flicker on
+          // text→tool-call transitions. Fast tools now flash a brief
+          // "Running…" row before the result replaces it — acceptable
+          // tradeoff: the slow-tool case is the dominant one in real use,
+          // and the flash is shorter (~1 frame) than the previous flicker.
           flushBuffer()
-          const entry = { toolName, input, startedAt: Date.now(), showTimer: null as ReturnType<typeof setTimeout> | null }
-          pendingToolsRef.current.set(toolCallId, entry)
-          // Defer showing "Running…" by 4ms. Fast tools (listDir, glob,
-          // readFile) complete in <5ms — if onToolResult arrives before
-          // the timer fires, the "Running…" state is skipped entirely,
-          // avoiding a redundant commit frame that causes flicker.
-          entry.showTimer = setTimeout(() => {
-            entry.showTimer = null
-            setState((prev) => ({
-              ...prev,
-              activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
-            }))
-          }, 4)
+          pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
+          setState((prev) => ({
+            ...prev,
+            activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
+          }))
         },
         onToolProgress: (toolCallId, message) => {
           setState((prev) => {
@@ -196,10 +200,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
         onToolResult: (toolCallId, result, isError) => {
           const pending = pendingToolsRef.current.get(toolCallId)
           pendingToolsRef.current.delete(toolCallId)
-          if (pending?.showTimer) {
-            clearTimeout(pending.showTimer)
-            pending.showTimer = null
-          }
           const durationMs = pending ? Date.now() - pending.startedAt : 0
           setState((prev) => {
             const tc: DisplayToolCall = {
@@ -379,15 +379,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
             })
           }
         }
-        for (const entry of pendingToolsRef.current.values()) {
-          if (entry.showTimer) clearTimeout(entry.showTimer)
-        }
         pendingToolsRef.current.clear()
         setState((prev) => ({ ...prev, isLoading: false, activeToolCalls: [] }))
       } catch (err) {
-        for (const entry of pendingToolsRef.current.values()) {
-          if (entry.showTimer) clearTimeout(entry.showTimer)
-        }
         pendingToolsRef.current.clear()
         // User-cancel path: agentLoop swallows AbortError into a clean
         // 'aborted' outcome and returns normally, so we shouldn't reach
@@ -505,9 +499,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Clear conversation */
   const clear = useCallback(() => {
     loopStateRef.current = null
-    for (const entry of pendingToolsRef.current.values()) {
-      if (entry.showTimer) clearTimeout(entry.showTimer)
-    }
     pendingToolsRef.current.clear()
     resetBuffer()
     // Preserve the current live model id and approval mode when clearing
