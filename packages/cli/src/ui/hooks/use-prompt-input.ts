@@ -61,7 +61,6 @@ export type PromptKey =
   | 'backspace'
   | 'delete'
   | 'tab'
-  | 'shift-tab'
   | 'escape'
   | 'up'
   | 'down'
@@ -246,11 +245,10 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       if (data === '\x1b[3~') return dispatchKey('delete')
       if (data === '\x1b[5~') return dispatchKey('pageup')
       if (data === '\x1b[6~') return dispatchKey('pagedown')
-      // Shift+Tab — used to cycle approval modes (default ↔ plan).
-      // Most terminals encode it as the DECRC backtab `\x1b[Z`; xterm and
-      // descendants are unanimous, Windows Terminal / VS Code / iTerm all
-      // follow suit, so a single match covers the realistic surface.
-      if (data === '\x1b[Z') return dispatchKey('shift-tab')
+      // (Mode-cycle key bindings — Shift+Tab `\x1b[Z` and the Alt+M
+      // `\x1b m` Windows fallback — were removed; mode switching is
+      // driven exclusively by slash commands now. See ChatInput hint
+      // text and the /plan handler in App.tsx.)
 
       // Unknown escape sequences — drop so they don't show up as literal
       // "\x1b[…" text in the input.

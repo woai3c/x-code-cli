@@ -120,7 +120,6 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     addUserMessage,
     addCommandMessage,
     askQuestion,
-    cyclePermissionMode,
     setPermissionMode,
   } = useAgent(model, options)
 
@@ -498,12 +497,9 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       return
     }
 
-    // /plan jumps directly between plan and default, bypassing the
-    // 3-way cycle. Two flips of cyclePermissionMode would land in
-    // 'plan' from 'default' but skip 'acceptEdits' — we want a clean
-    // direct setter, so apply the mode on loopState ourselves and let
-    // the existing onPlanModeChange callback path do the React state
-    // / UI sync via setPermissionMode below.
+    // /plan jumps directly between plan and default. We apply the mode
+    // on loopState ourselves and let the existing onPlanModeChange
+    // callback path do the React state / UI sync via setPermissionMode.
     setPermissionMode(next ? 'plan' : 'default')
     addCommandMessage(commandText, next ? 'Enabled plan mode' : 'Disabled plan mode')
   }
@@ -583,7 +579,6 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
       onSubmit={handleSubmit}
       onInterrupt={handleCtrlC}
       onEscapeCancel={abort}
-      onCyclePermissionMode={cyclePermissionMode}
       permissionMode={state.permissionMode}
       isLoading={state.isLoading}
       notice={notice}

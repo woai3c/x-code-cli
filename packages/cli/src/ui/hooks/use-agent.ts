@@ -542,13 +542,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   /** Read the current /thinking toggle (for status display). */
   const getThinking = useCallback(() => thinkingRef.current, [])
 
-  /** Toggle plan mode on/off (Shift+Tab). When already inside a session
-   *  (loopStateRef populated), mutate the LIVE LoopState too — otherwise
-   *  the model would still see the old mode on its next turn because
-   *  agentLoop reads from `state.permissionMode`, not options. Cache
-   *  invalidation is the same as the enterPlanMode tool path: drop the
-   *  systemPromptCache so the next turn rebuilds it with the new
-   *  overlay state. */
   /** Set permission mode directly. Use this for /plan-style direct
    *  setters where the user is unambiguously asking for a specific
    *  target. Updates LoopState live (so the next agent turn picks up
@@ -570,14 +563,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     }
     setState((prev) => ({ ...prev, permissionMode: next }))
   }, [])
-
-  /** 3-way cycle on Shift+Tab. Order: default → acceptEdits → plan →
-   *  default. Mirrors Claude Code's default rotation. */
-  const cyclePermissionMode = useCallback(() => {
-    const cur = permissionModeRef.current
-    const next: PermissionMode = cur === 'default' ? 'acceptEdits' : cur === 'acceptEdits' ? 'plan' : 'default'
-    setPermissionMode(next)
-  }, [setPermissionMode])
 
   /** Add a system/info message (for slash command output) */
   const addInfoMessage = useCallback(
@@ -643,7 +628,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     switchModel,
     setThinking,
     getThinking,
-    cyclePermissionMode,
     setPermissionMode,
     saveCurrentSession,
     addInfoMessage,

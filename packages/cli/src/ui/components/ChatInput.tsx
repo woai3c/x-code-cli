@@ -215,10 +215,6 @@ interface ChatInputProps {
    *  isn't reversible on shrink. */
   selectRequest?: SelectRequest | null
   commands?: readonly SlashCommand[]
-  /** Fired on Shift+Tab. Cycles approval modes (default → acceptEdits
-   *  → plan → default). Suppressed when a modal is up; debouncing is
-   *  the parent's job. */
-  onCyclePermissionMode?: () => void
   /** Current approval mode, drives the indicator row beneath the input
    *  (`⏸ plan mode` / `⚡ accept edits`). Defaults to 'default' — no
    *  indicator rendered. */
@@ -568,7 +564,6 @@ export function ChatInput({
   permission,
   selectRequest,
   commands = [],
-  onCyclePermissionMode,
   permissionMode = 'default',
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
@@ -974,13 +969,6 @@ export function ChatInput({
           dispatch({ type: 'SET_TEXT', text: currentMatch.name, cursor: currentMatch.name.length })
           setCompletionIndex(0)
         }
-        return
-      }
-      if (key === 'shift-tab') {
-        // Mode-cycle is the only Shift+Tab semantic right now. Modal
-        // dialogs already early-return above, so we only fire when the
-        // input is the focused surface.
-        if (onCyclePermissionMode) onCyclePermissionMode()
         return
       }
       if (key === 'up') {
@@ -1600,16 +1588,20 @@ export function ChatInput({
     // sees it as a status footer of the input — matches Claude Code's
     // layout where mode hints sit under the input separator. Hidden in
     // default mode; no row is reserved, so zero visual cost when the
-    // feature isn't engaged.
+    // feature isn't engaged. Mode switching is driven by slash commands
+    // only (/plan toggles plan mode); the Shift+Tab keybinding was
+    // removed because Windows needs Node ≥22.17 VT input mode for it,
+    // and the Alt+M fallback is too easily clobbered by IDE menu
+    // shortcuts to be a reliable contract.
     if (permissionMode === 'plan') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells('\u23f8 plan mode  ·  shift+tab to cycle  ·  /plan to toggle', S_DIM))
+      cells.push(...textToCells(`\u23f8 plan mode  ·  /plan to toggle`, S_DIM))
       frame.push(cells)
     } else if (permissionMode === 'acceptEdits') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells('\u26a1 accept edits  ·  shift+tab to cycle', S_DIM))
+      cells.push(...textToCells('\u26a1 accept edits', S_DIM))
       frame.push(cells)
     }
 
