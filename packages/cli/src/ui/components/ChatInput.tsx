@@ -313,6 +313,14 @@ const S_SUCCESS = '\x1b[38;2;78;186;101;1m' // success rgb(78,186,101) #4eba65
 // (`c.hex(SUCCESS)('●')` is non-bold there). If live used the bold variant,
 // the dot would visibly "de-bold" at the moment the tool finishes.
 const S_SUCCESS_DOT = '\x1b[0m\x1b[38;2;78;186;101m'
+// Dim half of the running-tool bullet pulse animation. Same green hue as
+// S_SUCCESS_DOT, but with the ANSI dim attribute (2) layered on top so
+// terminals render it as a subdued shade of the same color rather than
+// a different color entirely. Toggling between this and S_SUCCESS_DOT
+// every few spinner frames produces the bright↔dim "heartbeat" CC uses
+// to signal a tool is actively running, so the user can tell at a glance
+// which committed line in scrollback turned into the live row.
+const S_SUCCESS_DOT_DIM = '\x1b[0m\x1b[38;2;78;186;101;2m'
 // Bold with NO foreground color — matches committed `c.bold(label)`.
 // Must start with `\x1b[0m` to reset any prior foreground so bold doesn't
 // inherit a color from the preceding cell (same reasoning as S_DIM).
@@ -1276,11 +1284,30 @@ export function ChatInput({
 
           const row1: Cell[] = []
           row1.push({ char: ' ', style: S_NONE, width: 1 })
-          row1.push(...textToCells('●', S_SUCCESS_DOT))
+          // Pulse the bullet bright↔dim while the tool runs. Period of
+          // 6 frames per phase (= ~480ms at 80ms per spinner tick) reads
+          // as a heartbeat without being distracting. When the tool
+          // finishes and the row commits to scrollback,
+          // `stdout-writer.formatToolCall` paints a steady non-pulsing
+          // bullet — same hue, no dim — so the transition is just "stop
+          // pulsing", not a color change.
+          const dotStyle = spinnerFrame % 6 < 3 ? S_SUCCESS_DOT : S_SUCCESS_DOT_DIM
+          row1.push(...textToCells('●', dotStyle))
           row1.push({ char: ' ', style: S_NONE, width: 1 })
           row1.push(...textToCells(label, S_BOLD))
           if (preview) {
-            const trimmed = preview.length > 80 ? preview.slice(0, 77) + '...' : preview
+            // Mirror stdout-writer.formatToolCall's truncation budget so
+            // the live row and the committed scrollback row truncate at
+            // the same point — otherwise the visible text shifts at the
+            // moment the tool finishes (e.g. live shows "...rg)" but
+            // committed shows "...rgs.command)"). Reserve label.length+5
+            // for ` ● <label>(` and `)`, plus a safety margin.
+            const decoration = label.length + 5
+            const safetyMargin = 4
+            const maxPreviewLen = Math.max(40, termWidth - decoration - safetyMargin)
+            const trimmed = preview.length > maxPreviewLen
+              ? preview.slice(0, maxPreviewLen - 1) + '…'
+              : preview
             row1.push(...textToCells(`(${trimmed})`, S_BLUE_PURPLE))
           }
           frame.push(row1)
@@ -1652,6 +1679,23 @@ export function ChatInput({
     const computeFrameTop = (blanks: number) =>
       Math.max(1, termRows - nextH + 1 - blanks)
     let frameTop = computeFrameTop(freeBlanksAboveFrameRef.current)
+    // Geometry trace — diagnostics for the "input box drifting / dialog
+    // duplicate" symptom. Logs the inputs the bottom-anchor formula
+    // depends on so we can see which render is the one that starts
+    // shifting blanks. Cheap (no JSON.stringify of large structures), so
+    // safe to leave on under DEBUG_STDOUT=1.
+    debugLog(
+      'chatinput.geom.in',
+      `termRows=${termRows} oldFrameH=${oldFrameH} nextH=${nextH} ` +
+        `blanks=${freeBlanksAboveFrameRef.current} frameTop=${frameTop} ` +
+        `lastTop=${lastFrameTopRef.current} ` +
+        `permission=${permission ? '1' : '0'} ` +
+        `select=${selectRequest ? '1' : '0'} ` +
+        `activeTools=${activeToolCalls?.length ?? 0} ` +
+        `todos=${todos?.length ?? 0} ` +
+        `spinner=${spinner ? '1' : '0'} ` +
+        `didCommit=${messages.length > writtenMessageCountRef.current ? '1' : '0'}`,
+    )
 
     // First render: seed the "blanks above frame" tracker. The banner
     // (initialContentRows) occupies the top of the viewport; everything
@@ -1796,6 +1840,12 @@ export function ChatInput({
       const preScrollRows = Math.max(
         0,
         Math.min(scrollRows + nextH - availSpace, maxUsefulPreScroll),
+      )
+      debugLog(
+        'chatinput.geom.commit',
+        `scrollRows=${scrollRows} nextH=${nextH} oldFrameH=${oldFrameH} ` +
+          `availSpace=${availSpace} preScroll=${preScrollRows} ` +
+          `freeBlanks=${freeBlanks}`,
       )
       // Write scrollbackContent DIRECTLY after the last row of real
       // scrollback — this consumes the free-blank region row-by-row
@@ -1950,6 +2000,12 @@ export function ChatInput({
         preBuf += `\x1b[${oldTop};1H`
         pendingFreeBlanks = freeBlanksAboveFrameRef.current + oldFrameH
         frameTop = computeFrameTop(pendingFreeBlanks)
+        debugLog(
+          'chatinput.geom.commit-shrink-erase',
+          `oldTop=${oldTop} oldFrameH=${oldFrameH} nextH=${nextH} ` +
+            `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
+            `frameTop=${frameTop}`,
+        )
         prevFrameRef.current = []
         handledCommitWithFrame = true
       }
@@ -1999,6 +2055,12 @@ export function ChatInput({
         // grows downward. With scroll, frameTop drops to the bottom-anchor
         // position (newFreeBlanks=0).
         frameTop = computeFrameTop(pendingFreeBlanks)
+        debugLog(
+          'chatinput.geom.grow',
+          `delta=${deltaH} absorbed=${absorbed} scrolled=${needsScroll} ` +
+            `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
+            `frameTop=${frameTop}`,
+        )
         // Pre-erase the newly-occupied bottom-of-frame rows so any stale
         // cells (from prior renders or auto-scroll residue) don't bleed
         // through before the diff below repaints them.
@@ -2019,6 +2081,12 @@ export function ChatInput({
           ? lastFrameTopRef.current
           : Math.max(1, termRows - oldFrameH + 1)
         frameTop = computeFrameTop(pendingFreeBlanks)
+        debugLog(
+          'chatinput.geom.shrink',
+          `delta=${deltaH} blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
+            `oldTop=${oldTop} newTop=${frameTop} ` +
+            `eraseSkipped=${permission ? '1' : '0'}`,
+        )
         if (!permission) {
           for (let i = 0; i < deltaH; i++) {
             preBuf += `\x1b[${oldTop + nextH + i};1H\x1b[K`
@@ -2179,6 +2247,12 @@ export function ChatInput({
       lastFlushTimeRef.current = Date.now()
       // Still need to apply the pending blank-rows update; the
       // shrink path may have computed a new value.
+      if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
+        debugLog(
+          'chatinput.geom.persist-noop',
+          `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks}`,
+        )
+      }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
       return
     }
@@ -2186,7 +2260,7 @@ export function ChatInput({
     const payload = preBuf + buf + esu
     debugLog(
       'chatinput.flush',
-      `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current}`,
+      `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current} pendingBlanks=${pendingFreeBlanks} frameTop=${frameTop} nextH=${nextH}`,
     )
     debugLog('chatinput.flush.payload', JSON.stringify(payload))
 
@@ -2217,6 +2291,13 @@ export function ChatInput({
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
       lastFrameTopRef.current = frameTop
+      if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
+        debugLog(
+          'chatinput.geom.persist',
+          `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
+            `frameTop=${frameTop} nextH=${nextH}`,
+        )
+      }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
     }
 

@@ -57,9 +57,30 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${secs}s`
 }
 
+/**
+ * Truncate `s` so it fits visually in `maxLen` printable cells. We use a
+ * UTF ellipsis (…) as the truncation marker — single cell, looks
+ * tighter than three dots, matches CC's truncated previews.
+ */
+function truncatePreview(s: string, maxLen: number): string {
+  if (maxLen < 4 || s.length <= maxLen) return s
+  return s.slice(0, maxLen - 1) + '…'
+}
+
 function formatToolCall(tc: DisplayToolCall): string {
   const label = getToolLabel(tc.toolName)
-  const inputPreview = getToolInputPreview(tc.toolName, tc.input)
+  const rawPreview = getToolInputPreview(tc.toolName, tc.input)
+  // Cap the preview so long Bash commands / file paths don't wrap into a
+  // ragged multi-line block in scrollback. Compute the budget against the
+  // terminal width so wide terminals get more room. The line1 prefix is
+  // ` ● <label>(` and we close with `)`, so reserve label.length + 5 cells
+  // for decoration; leave a small safety margin for the trailing
+  // `\x1b[K` / cursor positioning the terminal may add.
+  const cols = Math.max(40, process.stdout.columns ?? 120)
+  const decoration = label.length + 5
+  const safetyMargin = 4
+  const maxPreviewLen = Math.max(40, cols - decoration - safetyMargin)
+  const inputPreview = truncatePreview(rawPreview, maxPreviewLen)
   const resultSummary = getToolResultSummary(tc.toolName, tc.output, tc.status)
   const isDenied = tc.status === 'denied'
   const isError = tc.status === 'error'
@@ -116,12 +137,40 @@ function toCRLF(s: string): string {
   return s.replace(/\r?\n/g, '\r\n')
 }
 
+/**
+ * Has the previous scrollback write left a fully blank row below its last
+ * line of content? Used to keep the spacing between adjacent entities at
+ * exactly one blank row regardless of which entity wrote first.
+ *
+ * Why we need this flag: streaming text chunks each end with a single
+ * `\n` (cursor on the next row, no trailing blank) so a tool call that
+ * commits right after a stream would butt against the text. User
+ * messages and finalized tool/text writes already leave a trailing
+ * blank, so back-to-back blocks don't need any extra spacer. The flag
+ * lets the next entity decide: if the previous write didn't already
+ * draw a blank below itself, prepend one; otherwise don't.
+ *
+ * Initialized to `true` so the very first write of a session doesn't
+ * draw a leading blank row at the top of the terminal.
+ */
+let prevWriteEndedWithBlankRow = true
+
+/** Reset the spacing flag — call when the scrollback is cleared (e.g.
+ *  /clear) so the next write doesn't think there's still a blank above. */
+export function resetScrollbackSpacing(): void {
+  prevWriteEndedWithBlankRow = true
+}
+
 /** Print a DisplayMessage to stdout. */
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
     debugLog('stdout.user', content)
     writeUserMessage(write, content, msg.kind === 'command-echo')
+    // writeUserMessage always emits a trailing `\n\n` (or `\n` for the
+    // compact slash-echo) — in both cases the next entity will sit on a
+    // fresh row with the preceding blank already in place.
+    prevWriteEndedWithBlankRow = msg.kind !== 'command-echo'
     return
   }
 
@@ -135,6 +184,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     const head = `  ${c.gray('⎿')}  ${c.gray(lines[0] ?? '')}`
     const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${c.gray(l)}`)
     write(toCRLF([head, ...tail].join('\n') + '\n'))
+    prevWriteEndedWithBlankRow = false
     return
   }
 
@@ -142,7 +192,21 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   if (msg.toolCalls && msg.toolCalls.length > 0) {
     for (const tc of msg.toolCalls) {
       debugLog('stdout.tool-call-line', `${tc.toolName} ${tc.status}`)
-      write(toCRLF(normalizeLineEndings(formatToolCall(tc)) + '\n'))
+      // Prepend a `\n` if the previous write (most often the final
+      // streaming-chunk of an assistant text body) didn't leave a blank
+      // row below it. Without this guard, text→tool transitions paste
+      // the bullet row directly under the text — exactly the "no
+      // breathing room above the tool" issue the user flagged. After
+      // writes that already ended with `\n\n` the flag is true and we
+      // skip the leading newline so we don't double-blank.
+      const lead = prevWriteEndedWithBlankRow ? '' : '\n'
+      // Trailing `\n\n` keeps a blank row below the tool block so the
+      // next entity (another tool, an assistant text continuation, the
+      // next user prompt) sits one row away. Matches Claude Code's
+      // scrollback rhythm and avoids the dense "wall of bullets" that
+      // piles up when the model fires many tools in a single turn.
+      write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n\n'))
+      prevWriteEndedWithBlankRow = true
     }
   }
 
@@ -156,7 +220,12 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     // the visual paragraph break — so pass the whitespace through
     // directly instead.
     if (msg.streamingChunk && content.trim() === '') {
+      // A bare paragraph-break token. It already encodes a blank line
+      // (whitespace-only `\n` or `\n\n`); after writing it the cursor
+      // sits below a blank row, so the next entity doesn't need to
+      // prepend another one.
       write(toCRLF(content))
+      prevWriteEndedWithBlankRow = content.endsWith('\n\n') || content.endsWith('\n')
       return
     }
 
@@ -181,8 +250,15 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       // token shapes or the catch-fallback plain-text path).
       const out = indented.endsWith('\n') ? indented : indented + '\n'
       write(toCRLF(out))
+      // A streaming chunk that ends with `\n\n` is a paragraph-break
+      // boundary (renderMarkdown puts \n\n after a heading + blank line
+      // pair, etc.) — the next entity sits below a real blank row.
+      // Anything else only ended with a single `\n`, so we still need
+      // the next entity to draw its own blank above.
+      prevWriteEndedWithBlankRow = out.endsWith('\n\n')
     } else {
       write(toCRLF(indented + '\n\n'))
+      prevWriteEndedWithBlankRow = true
     }
   }
 }
