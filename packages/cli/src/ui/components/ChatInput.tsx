@@ -1822,7 +1822,25 @@ export function ChatInput({
       // and leave the residual blanks below the frame.
       const freeBlanks = freeBlanksAboveFrameRef.current
       const availSpace = oldFrameH + freeBlanks
-      const preScrollRows = Math.max(0, scrollRows + nextH - availSpace)
+      // Cap pre-scroll to the actual count of viewport rows holding old
+      // content above the frame (`termRows - availSpace`). The naive
+      // `scrollRows + nextH - availSpace` overshoots whenever new content
+      // exceeds what fits between the top of the viewport and the frame —
+      // each \n past that point auto-scrolls a *blank* row into real
+      // scrollback, leaving a visible gap of empty lines between the
+      // user's previous history and the just-committed message. The
+      // remaining shortfall is absorbed naturally by auto-scroll while
+      // `scrollbackContent` is being written below (each wrapped line
+      // beyond termRows triggers one row of LF-driven scroll, same
+      // mechanism — just interleaved with content instead of upfront
+      // blanks). Symptom this cures: long tool-result commits (e.g. a
+      // ~115-row ExitPlanMode plan) leaving ~30 blank rows in scrollback
+      // history above the rendered plan body.
+      const maxUsefulPreScroll = Math.max(0, termRows - availSpace)
+      const preScrollRows = Math.max(
+        0,
+        Math.min(scrollRows + nextH - availSpace, maxUsefulPreScroll),
+      )
       // Write scrollbackContent DIRECTLY after the last row of real
       // scrollback — this consumes the free-blank region row-by-row
       // instead of leaving it stranded as a visible gap between the
