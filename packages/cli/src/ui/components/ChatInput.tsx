@@ -34,7 +34,7 @@ import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
 import type { ActiveToolCall } from '../hooks/use-agent.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
-import { writeMessageToStdout } from '../stdout-writer.js'
+import { lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
 import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 
 const PASTE_REF_MIN_LINES = 3
@@ -1266,10 +1266,31 @@ export function ChatInput({
         // rendering paths (ink-like cells here vs chalk stdout there)
         // so we align the styles by hand.
         //
+        // Same reasoning applies to the leading-blank row above the tool
+        // block: `stdout-writer.formatToolCall`'s commit path prepends a
+        // `\n` whenever the previous write didn't already end blank, so
+        // the committed tool sits one row below the preceding text. The
+        // live frame must mirror that decision RIGHT NOW — otherwise the
+        // user sees the blank row "appear" the instant the tool commits
+        // (live frame replaced by scrollback), which reads as a one-row
+        // downward jolt of every row below. Permission's own top-margin
+        // case is already handled above; this branch covers tool-only
+        // and tool+permission stacks.
+        if (!permission && !lastWriteEndedWithBlankRow()) frame.push([])
+        //
         // Layout mirrors committed:
         //    ` ● ToolName(preview)`
         //      ⎿  ⠋ progress text               ← only live, vanishes at commit
         tools.forEach((tc, idx) => {
+          // Separator between adjacent live tools. The committed-tool
+          // path emits `\n\n` after each tool, so consecutive committed
+          // tools always have one blank row between them. Without the
+          // same blank in the live frame, parallel tool calls render
+          // glued together until one finishes and commits — at which
+          // point the spacing "pops in" (the user's "stuck then
+          // separate" jolt).
+          if (idx > 0) frame.push([])
+
           const label = getToolLabel(tc.toolName)
           const preview = getToolInputPreview(tc.toolName, tc.input)
 
@@ -2189,7 +2210,18 @@ export function ChatInput({
           endIdx = last + 1 // exclusive bound
         }
 
-        if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
+        // Force-clear branch: prevRow is empty AND nextRow is empty.
+        // Normally an "empty stays empty" row is a no-op, but when the
+        // upstream grow/shrink path resets prevFrameRef to [] to force a
+        // full repaint, an empty row at this position can shadow stale
+        // characters left on screen by the previous (taller) frame —
+        // most visibly the input box's `─` top separator peeking through
+        // a newly inserted blank between two parallel tool blocks. The
+        // explicit \x1b[K wipes whatever the terminal still has at this
+        // row before the redraw moves on.
+        if (prevRow.length === 0 && nextRow.length === 0) {
+          buf += `\x1b[${absRow};1H\x1b[K`
+        } else if (diffIdx < nextRow.length || nextRow.length < prevRow.length) {
           // Absolute-position to (absRow, diffIdx's visual column).
           let col = 0
           for (let c = 0; c < diffIdx; c++) col += nextRow[c].width

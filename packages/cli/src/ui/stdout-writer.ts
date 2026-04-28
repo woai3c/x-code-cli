@@ -161,6 +161,16 @@ export function resetScrollbackSpacing(): void {
   prevWriteEndedWithBlankRow = true
 }
 
+/** Did the most recent scrollback write leave a fully blank row below its
+ *  last line of content? Read by ChatInput's frame builder so the live
+ *  tool/spinner block can apply the SAME leading-blank rule that the
+ *  committed-tool path uses — without it, the live frame draws flush
+ *  against streaming text and the blank "appears" only when the tool
+ *  finishes (a visible spacing jump). */
+export function lastWriteEndedWithBlankRow(): boolean {
+  return prevWriteEndedWithBlankRow
+}
+
 /** Print a DisplayMessage to stdout. */
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
   if (msg.role === 'user') {
