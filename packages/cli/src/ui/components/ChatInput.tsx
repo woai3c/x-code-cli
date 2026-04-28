@@ -168,7 +168,12 @@ export interface PermissionRequest {
 
 export interface SelectRequest {
   question: string
-  options: { label: string; description: string }[]
+  /** `freeform: true` marks the auto-appended "Other" row that opens an
+   *  inline text input instead of resolving with the literal label.
+   *  Mirrors Claude Code's `__other__` sentinel — kept as a flag here so
+   *  the resolver returns the typed text directly without a sentinel
+   *  round-trip. */
+  options: { label: string; description: string; freeform?: boolean }[]
   onResolve: (answer: string) => void
 }
 
@@ -654,10 +659,17 @@ export function ChatInput({
   // new dialog opens (keyed on the question string since that's what changes).
   const [selectIndex, setSelectIndex] = useState(0)
   const [lastSelectKey, setLastSelectKey] = useState<string | null>(null)
+  // Inline text buffer for the "Other" freeform option. Captured as
+  // {text, cursor} so the inverse-video cursor renders the same way as
+  // the main input. Preserved while navigating between options in the
+  // same dialog (so the user can re-enter "Other" without losing what
+  // they typed) but cleared when a new dialog opens.
+  const [freeform, setFreeform] = useState<{ text: string; cursor: number }>({ text: '', cursor: 0 })
   const selectKey = selectRequest ? selectRequest.question : null
   if (selectKey !== lastSelectKey) {
     setLastSelectKey(selectKey)
     setSelectIndex(0)
+    setFreeform({ text: '', cursor: 0 })
   }
 
   // Spinner animation — self-contained so the parent doesn't have to
@@ -851,12 +863,38 @@ export function ChatInput({
         }
         return
       }
-      if (selectRequest) return // block typing while select dialog is up
+      if (selectRequest) {
+        // Typing on a freeform option ("Other") feeds the inline text
+        // buffer; on regular options it's still swallowed so the user
+        // can't type into the hidden input behind the dialog.
+        const opt = selectRequest.options[selectIndex]
+        if (opt?.freeform) {
+          setFreeform(({ text, cursor }) => ({
+            text: text.slice(0, cursor) + chunk + text.slice(cursor),
+            cursor: cursor + chunk.length,
+          }))
+        }
+        return
+      }
       dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
       setCompletionIndex(0)
     },
     onPaste: (content) => {
-      if (permission || selectRequest) return // ignore pastes while a dialog is up
+      if (permission) return
+      if (selectRequest) {
+        // Allow paste into the freeform buffer (e.g. pasting a long
+        // path or model id). Skip the large-paste reference machinery
+        // — it's a usability hit for free-text answers, which are
+        // expected to be short.
+        const opt = selectRequest.options[selectIndex]
+        if (opt?.freeform) {
+          setFreeform(({ text, cursor }) => ({
+            text: text.slice(0, cursor) + content + text.slice(cursor),
+            cursor: cursor + content.length,
+          }))
+        }
+        return
+      }
       const lineCount = content.split(/\r\n|\r|\n/).length
       const isLarge = lineCount >= PASTE_REF_MIN_LINES || content.length >= PASTE_REF_MIN_CHARS
       const pos = cursorRef.current
@@ -883,9 +921,14 @@ export function ChatInput({
         }
         return
       }
-      // Select-options dialog captures the same keys.
+      // Select-options dialog captures navigation + submit keys. When
+      // the highlighted option is `freeform`, editing keys (backspace,
+      // delete, left, right, home, end) also feed its inline text
+      // buffer instead of being swallowed.
       if (selectRequest) {
         const len = selectRequest.options.length
+        const opt = selectRequest.options[selectIndex]
+        const isFreeform = !!opt?.freeform
         if (key === 'up') {
           setSelectIndex((i) => (i > 0 ? i - 1 : len - 1))
           return
@@ -894,9 +937,54 @@ export function ChatInput({
           setSelectIndex((i) => (i < len - 1 ? i + 1 : 0))
           return
         }
+        if (isFreeform) {
+          if (key === 'backspace') {
+            setFreeform(({ text, cursor }) =>
+              cursor === 0
+                ? { text, cursor }
+                : { text: text.slice(0, cursor - 1) + text.slice(cursor), cursor: cursor - 1 },
+            )
+            return
+          }
+          if (key === 'delete') {
+            setFreeform(({ text, cursor }) =>
+              cursor >= text.length
+                ? { text, cursor }
+                : { text: text.slice(0, cursor) + text.slice(cursor + 1), cursor },
+            )
+            return
+          }
+          if (key === 'left') {
+            setFreeform(({ text, cursor }) => ({ text, cursor: Math.max(0, cursor - 1) }))
+            return
+          }
+          if (key === 'right') {
+            setFreeform(({ text, cursor }) => ({ text, cursor: Math.min(text.length, cursor + 1) }))
+            return
+          }
+          if (key === 'home') {
+            setFreeform(({ text }) => ({ text, cursor: 0 }))
+            return
+          }
+          if (key === 'end') {
+            setFreeform(({ text }) => ({ text, cursor: text.length }))
+            return
+          }
+        }
         if (key === 'return') {
           const picked = selectRequest.options[selectIndex]
-          if (picked) selectRequest.onResolve(picked.label)
+          if (!picked) return
+          if (picked.freeform) {
+            const trimmed = freeform.text.trim()
+            // Empty buffer on Enter: ignore so the user isn't bounced
+            // out of the dialog with an empty answer. The visible
+            // cursor + dialog hint already signal that typing is
+            // expected here.
+            if (!trimmed) return
+            selectRequest.onResolve(trimmed)
+          } else {
+            selectRequest.onResolve(picked.label)
+          }
           return
         }
         return
@@ -1433,14 +1521,34 @@ export function ChatInput({
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push(...textToCells(active ? '\u276f ' : '  ', active ? S_ACCENT : S_NONE))
         cells.push(...textToCells(opt.label, active ? S_ACCENT : S_NONE))
-        if (opt.description) {
+        if (opt.freeform && active) {
+          // Inline text input. Drawn on the same row as the label,
+          // separated by `: `; the inverse-video cell at `cursor` IS
+          // the cursor (terminal hardware cursor stays hidden \u2014 see
+          // the mount-time `\x1b[?25l`). When the buffer is empty
+          // we still need a single cursor cell so the user sees
+          // somewhere to type.
+          cells.push(...textToCells(': ', S_NONE))
+          const t = freeform.text
+          const c = freeform.cursor
+          const before = t.slice(0, c)
+          const cursorChar = c < t.length ? t[c] : ' '
+          const after = c < t.length ? t.slice(c + 1) : ''
+          cells.push(...textToCells(before, S_NONE))
+          cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
+          cells.push(...textToCells(after, S_NONE))
+        } else if (opt.description) {
           cells.push(...textToCells(`  \u2014 ${opt.description}`, S_DIM))
         }
         frame.push(cells)
       })
       const hint: Cell[] = []
       hint.push({ char: ' ', style: S_NONE, width: 1 })
-      hint.push(...textToCells('\u2191\u2193 Navigate  Enter Confirm', S_DIM))
+      const activeOpt = selectRequest.options[selectIndex]
+      const hintText = activeOpt?.freeform
+        ? '\u2191\u2193 Navigate  Type your answer  Enter Confirm'
+        : '\u2191\u2193 Navigate  Enter Confirm'
+      hint.push(...textToCells(hintText, S_DIM))
       frame.push(hint)
     }
 

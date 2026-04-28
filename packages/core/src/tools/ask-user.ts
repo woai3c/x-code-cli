@@ -20,7 +20,7 @@ export const askUser = tool({
       .min(2)
       .max(6)
       .describe(
-        'Choices (an "Other" free-text entry is auto-appended). 2-6 entries — for plan-mode interview menus 4-6 entries with both action options ("plan high-priority items") and meta options ("just discuss further") work best.',
+        'Choices. DO NOT include an "Other"/freeform/custom-input option — the UI auto-appends one as the last row, so adding your own creates a duplicate. 2-6 entries — for plan-mode interview menus 4-6 entries with both action options ("plan high-priority items") and meta options ("just discuss further") work best.',
       ),
   }),
   // No execute — through callback to trigger UI rendering

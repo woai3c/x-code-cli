@@ -33,8 +33,19 @@ export interface PendingPermission {
 
 interface PendingQuestion {
   question: string
-  options: { label: string; description: string }[]
+  options: { label: string; description: string; freeform?: boolean }[]
   resolve: (answer: string) => void
+}
+
+/** Auto-appended trailing option that opens an inline text input.
+ *  Mirrors Claude Code's `__other__` row: the model is told (via the
+ *  askUser tool's schema description) NOT to add its own "Other"
+ *  entry — the UI appends this one at render time so every askUser
+ *  dialog is consistently escapable into free text. */
+const OTHER_OPTION = {
+  label: 'Other',
+  description: 'Type a custom answer.',
+  freeform: true as const,
 }
 
 /** In-flight tool call visible in the live/dynamic UI area. Multiple entries
@@ -247,9 +258,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
             // taught about them via the system-prompt overlay and
             // recognizes them by their literal label when they come
             // back as the answer.
-            const augmented = permissionModeRef.current === 'plan'
+            //
+            // The trailing OTHER_OPTION is appended last so it's always
+            // the final row regardless of plan-mode footer presence.
+            const planMeta = permissionModeRef.current === 'plan'
               ? [
-                  ...opts,
                   {
                     label: 'Chat about this',
                     description: 'Reply in conversation without picking an option above.',
@@ -259,7 +272,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
                     description: 'Stop the questions — produce the final plan now with everything gathered so far.',
                   },
                 ]
-              : opts
+              : []
+            const augmented = [...opts, ...planMeta, OTHER_OPTION]
             setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve } }))
           })
         },
@@ -431,7 +445,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
    *  the user chose (or the free-form "Other" text). */
   const askQuestion = useCallback((question: string, options: { label: string; description: string }[]) => {
     return new Promise<string>((resolve) => {
-      setState((prev) => ({ ...prev, pendingQuestion: { question, options, resolve } }))
+      const augmented = [...options, OTHER_OPTION]
+      setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve } }))
     })
   }, [])
 
