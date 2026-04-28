@@ -15,7 +15,11 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { XCODE_DIR } from '../utils.js'
+import { generateText } from 'ai'
+import type { LanguageModel } from 'ai'
+
+import { getThinkingProviderOptions } from '../providers/thinking.js'
+import { debugLog, XCODE_DIR } from '../utils.js'
 
 const PLANS_SUBDIR = 'plans'
 const SLUG_MAX_LEN = 40
@@ -59,12 +63,96 @@ function plansDir(): string {
  *  can stash the path on LoopState before the file actually exists.
  *  Format: `<slug>-<timestamp>.md` (slug-only when timestamp could
  *  conflict, timestamp-only when the task text produces an empty
- *  slug). */
-export function makePlanFilePath(taskText: string, now: Date = new Date()): string {
-  const slug = slugify(taskText)
-  const ts = formatTimestamp(now)
+ *  slug). Pass `opts.slug` when the caller already has a precomputed
+ *  slug (e.g. agentLoop's session-wide LLM-generated `taskSlug`) to
+ *  skip the local slugify pass — important for non-ASCII task text
+ *  where slugify would return empty. */
+export function makePlanFilePath(
+  taskText: string,
+  opts?: { slug?: string; now?: Date },
+): string {
+  const slug = opts?.slug ?? slugify(taskText)
+  const ts = formatTimestamp(opts?.now ?? new Date())
   const name = slug ? `${slug}-${ts}` : ts
   return path.join(plansDir(), `${name}.md`)
+}
+
+/** Min length of a locally-slugified result for the fast path to
+ *  apply. Below this we assume the user's first message had little
+ *  ASCII content (typical CJK-only message: 0; "fix bug": ≥6) and ask
+ *  the model for an English summary instead of producing an unhelpful
+ *  one-letter filename. */
+const ASCII_FAST_PATH_MIN_LEN = 6
+
+/** Cap on raw user text sent to the slug model. The summary only
+ *  needs the gist; a 5000-character paste would just waste input
+ *  tokens. */
+const TASK_TEXT_TRUNCATE = 500
+
+/** Hard cap on output tokens for the slug call. Sized for "2-4 short
+ *  English words" (~10 visible tokens) PLUS a comfortable margin for
+ *  reasoning models that emit hidden thinking tokens before any
+ *  visible text. We disable thinking explicitly below where the
+ *  provider supports it, but DeepSeek's `disabled` and Anthropic's
+ *  `disabled` aren't always honored on every model id, so the budget
+ *  has to survive a small amount of forced reasoning too. */
+const SLUG_MAX_OUTPUT_TOKENS = 256
+
+/** Derive a human-skimmable filename slug for the session.
+ *
+ *  Fast path: if `slugify(taskText)` already produces ≥6 chars (i.e.
+ *  the user typed something English-y), return it directly — zero
+ *  network, zero tokens. Covers the entire English-prompt user base.
+ *
+ *  Slow path: for CJK-only / emoji-heavy / very short first messages
+ *  where slugify returns empty or near-empty, make ONE isolated
+ *  generateText call asking for 2-4 lowercase English words. No
+ *  message history, no tools, no system context — just the user's
+ *  raw text (truncated) and a strict instruction. Disables thinking
+ *  on providers that support it so the small token budget isn't
+ *  spent on hidden reasoning before any visible text appears.
+ *
+ *  Returns '' on any failure (including abort). Callers treat empty
+ *  as "fall back to timestamp-only naming", matching pre-existing
+ *  behavior so adding this helper can't regress anyone. */
+export async function generateTaskSlug(
+  taskText: string,
+  model: LanguageModel,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const localSlug = slugify(taskText)
+  if (localSlug.length >= ASCII_FAST_PATH_MIN_LEN) {
+    debugLog('slug.fast-path', `len=${localSlug.length} slug="${localSlug}"`)
+    return localSlug
+  }
+
+  debugLog('slug.llm-start', `taskTextLen=${taskText.length} modelId=${modelId}`)
+  try {
+    const { text, usage, finishReason } = await generateText({
+      model,
+      abortSignal: signal,
+      providerOptions: getThinkingProviderOptions(modelId, false) as Parameters<
+        typeof generateText
+      >[0]['providerOptions'],
+      system:
+        'You convert user task descriptions into short English filename slugs. ' +
+        'Reply with ONLY 2 to 4 lowercase English words separated by spaces. ' +
+        'No punctuation, no quotes, no explanation, no prefixes like "slug:". ' +
+        'If the input is non-English, translate the gist into English first.',
+      prompt: taskText.slice(0, TASK_TEXT_TRUNCATE),
+      maxOutputTokens: SLUG_MAX_OUTPUT_TOKENS,
+    })
+    const slug = slugify(text)
+    debugLog(
+      'slug.llm-result',
+      `finishReason=${finishReason} rawText="${(text ?? '').slice(0, 80)}" slug="${slug}" tokens=${usage?.outputTokens ?? '?'}`,
+    )
+    return slug
+  } catch (err) {
+    debugLog('slug.llm-error', err instanceof Error ? err.message : String(err))
+    return ''
+  }
 }
 
 /** Make sure the plan directory exists. Recursive mkdir so we don't have

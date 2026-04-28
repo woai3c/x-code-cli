@@ -18,7 +18,7 @@ import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { lightCompactMessages } from './light-compact.js'
 import { createLoopState } from './loop-state.js'
-import { makePlanFilePath, slugify } from './plan-storage.js'
+import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 
 /** Pull plain text out of a UserContent payload for slugification.
  *  UserContent can be a string OR a multi-part array (text/image/file
@@ -351,22 +351,24 @@ export async function agentLoop(
   state.messages.push({ role: 'user', content: userMessage })
 
   // Derive the session task-slug ONCE per session, on the first turn.
-  // Drives session-usage filenames (`<slug>-<sessionId>.usage.json`).
-  // Set-once: changing it mid-session would orphan the file the
-  // previous turn already wrote to. Empty for CJK-only first messages
-  // — session-usage then falls back to pure timestamp naming.
-  if (!state.taskSlug) {
-    state.taskSlug = slugify(userContentToText(userMessage))
-  }
-
-  // Lazy plan-file path derivation. We derive ONCE per plan-mode
-  // session (the first turn that's in plan mode without a path
-  // already set) from the user's task text. Re-deriving on every
-  // plan-mode turn would overwrite the path the model has been
-  // editing, so the !currentPlanPath guard is critical.
-  if (state.permissionMode === 'plan' && !state.currentPlanPath) {
-    state.currentPlanPath = makePlanFilePath(userContentToText(userMessage))
-  }
+  // Drives session-usage filenames (`<slug>-<sessionId>.usage.json`)
+  // and (when in plan mode) plan-file names. Set-once: changing it
+  // mid-session would orphan the file the previous turn already wrote
+  // to.
+  //
+  // For non-ASCII first messages (CJK, emoji-only) `generateTaskSlug`
+  // makes one isolated generateText round-trip to summarize the task
+  // into 2-4 English words; for ASCII messages it short-circuits to a
+  // local slugify with no network. We kick it off in parallel with
+  // knowledge / git-stat below so the round-trip overlaps with disk
+  // work and doesn't add serial latency to the first turn. The
+  // resulting slug is awaited before any session-usage write or plan
+  // file is created (well before the first runTurn), so paths are
+  // never written with a stale empty slug.
+  const taskText = userContentToText(userMessage)
+  const taskSlugPromise: Promise<string> = state.taskSlug
+    ? Promise.resolve(state.taskSlug)
+    : generateTaskSlug(taskText, model, options.modelId, options.abortSignal)
 
   // Session continuation is handled explicitly by the UI: if the user accepts
   // the resume prompt, the pending work is embedded directly in their first
@@ -379,6 +381,23 @@ export async function agentLoop(
     .stat(path.join(process.cwd(), '.git'))
     .then(() => true)
     .catch(() => false)
+
+  // Resolve the slug now — must be set before any persistUsageSnapshot
+  // (per-turn) or plan-file write below. `generateTaskSlug` returns ''
+  // on failure, in which case session/plan files fall back to the
+  // pure-timestamp naming we had before this helper existed.
+  state.taskSlug = await taskSlugPromise
+
+  // Lazy plan-file path derivation. We derive ONCE per plan-mode
+  // session (the first turn that's in plan mode without a path
+  // already set) from the user's task text. Re-deriving on every
+  // plan-mode turn would overwrite the path the model has been
+  // editing, so the !currentPlanPath guard is critical. Pass the
+  // session-wide slug so non-ASCII task text still gets a readable
+  // filename instead of timestamp-only.
+  if (state.permissionMode === 'plan' && !state.currentPlanPath) {
+    state.currentPlanPath = makePlanFilePath(taskText, { slug: state.taskSlug })
+  }
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
 

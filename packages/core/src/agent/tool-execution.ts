@@ -290,15 +290,20 @@ async function handleToolCall(
     }
     state.permissionMode = 'plan'
     state.systemPromptCache = null
-    // Derive the plan file path. Prefer the model-supplied `topic`
-    // (3-5 English words summarizing the task — works for non-English
-    // user requests too because the model translates) over the raw
-    // user message (which slugify would drop entirely if it's CJK,
-    // leaving a timestamp-only filename).
+    // Derive the plan file path. Slug priority:
+    //   1. Model-supplied `topic` (3-5 English words specific to the
+    //      current task — most accurate when the user is mid-session
+    //      and the topic has shifted).
+    //   2. `state.taskSlug` (set once per session by agentLoop using
+    //      either local slugify or a one-shot LLM summary — already
+    //      handles CJK first messages).
+    //   3. Raw last-user-message text (final fallback; slugify will
+    //      reduce CJK to empty → timestamp-only filename).
     if (!state.currentPlanPath) {
       const topic = (input.topic as string | undefined)?.trim()
-      const slugSource = topic && topic.length > 0 ? topic : lastUserMessageText(state.messages)
-      state.currentPlanPath = makePlanFilePath(slugSource)
+      const fallbackText = lastUserMessageText(state.messages)
+      const explicitSlug = topic && topic.length > 0 ? topic : state.taskSlug || undefined
+      state.currentPlanPath = makePlanFilePath(fallbackText, { slug: explicitSlug })
     }
     callbacks.onPlanModeChange('plan')
     pushToolResult(
@@ -351,7 +356,9 @@ async function handleToolCall(
     // exitPlanMode which reads the file). The optional `plan` override
     // exists for rare cases where the model wants to substitute the
     // file content with something different.
-    const planPath = state.currentPlanPath ?? makePlanFilePath(lastUserMessageText(state.messages))
+    const planPath =
+      state.currentPlanPath ??
+      makePlanFilePath(lastUserMessageText(state.messages), { slug: state.taskSlug || undefined })
     state.currentPlanPath = planPath
     const planOverride = (input.plan as string | undefined)?.trim()
     let planBody = planOverride ?? ''
