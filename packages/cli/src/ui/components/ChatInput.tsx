@@ -555,6 +555,11 @@ export function ChatInput({
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const cursorRef = useRef(0)
+  // Double-tap Esc to clear the input (idle mode only; loading mode uses
+  // single Esc to cancel the in-flight turn). Timestamp of the last Esc
+  // that didn't already clear; second press within DOUBLE_ESC_WINDOW_MS
+  // triggers RESET.
+  const lastEscapeAtRef = useRef(0)
   useLayoutEffect(() => {
     cursorRef.current = cursor
   })
@@ -1003,14 +1008,28 @@ export function ChatInput({
         return
       }
       if (key === 'escape') {
-        // Only fires when no modal is up (the permission / selectRequest
-        // gates above early-return on every key including Esc, making
-        // them effectively "swallow" Esc — matches Claude Code's
-        // `chat:cancel` isActive guard). When idle we deliberately do
-        // nothing — the previous "double-tap to clear input" gesture
-        // was removed for parity with Claude Code, where Esc has one
-        // crisp meaning: cancel the in-flight turn.
-        if (isLoading && onEscapeCancel) onEscapeCancel()
+        // Modal dialogs (permission / selectRequest) gate above and
+        // already swallow Esc. Here we only see Esc that reached the
+        // input. Two distinct gestures:
+        //   - loading: single Esc cancels the in-flight turn.
+        //   - idle:    double-tap Esc clears input + pasted refs (matches
+        //     Claude Code). Single Esc is a no-op so a stray press
+        //     doesn't wipe a draft.
+        if (isLoading && onEscapeCancel) {
+          onEscapeCancel()
+          return
+        }
+        if (text.length === 0 && Object.keys(pastedContents).length === 0) return
+        const now = Date.now()
+        const DOUBLE_ESC_WINDOW_MS = 500
+        if (now - lastEscapeAtRef.current <= DOUBLE_ESC_WINDOW_MS) {
+          dispatch({ type: 'RESET' })
+          setPastedContents({})
+          setCompletionIndex(0)
+          lastEscapeAtRef.current = 0
+        } else {
+          lastEscapeAtRef.current = now
+        }
         return
       }
       if (key === 'backspace') {
