@@ -50,7 +50,25 @@ const MAX_VISIBLE_LINES = 10
 // Using the non-Mac glyphs (`*` instead of `✽` for the brightest frame) on
 // every platform — `*` is monospace-safe everywhere and the visual diff
 // against `✻` is small enough that the breathe still reads cleanly.
-const SPINNER_BASE_FRAMES = ['·', '✢', '*', '✶', '✻', '✽']
+//
+// Windows-specific fallback: legacy ConHost (cmd.exe / Windows PowerShell
+// host launched outside Windows Terminal) defaults to Lucida Console or
+// — on CJK locales — SimSun / NSimSun / MS Gothic. None of those fonts
+// carry the U+2722-U+273D dingbat range (`✢ ✶ ✻ ✽`), so the spinner
+// alternated between visible glyphs (`·` `*`) and missing-glyph boxes (`□`)
+// every ~200ms — the user described it as "alternating between a square
+// and the animation". The cure is to swap to ASCII/Latin-1 frames for the
+// Windows-without-WT-or-VSCode case. Detection mirrors the env-var
+// shape we use elsewhere: WT_SESSION → Windows Terminal (Cascadia Mono,
+// has the dingbats); TERM_PROGRAM=vscode → VSCode integrated terminal
+// (font is whatever VSCode's editor.fontFamily is, defaults Cascadia Mono);
+// neither set on win32 → very likely legacy ConHost with a font that
+// misses U+27xx, so use the ASCII pulse instead.
+const NEEDS_ASCII_SPINNER =
+  process.platform === 'win32' && !process.env.WT_SESSION && process.env.TERM_PROGRAM !== 'vscode'
+const SPINNER_BASE_FRAMES = NEEDS_ASCII_SPINNER
+  ? ['·', ':', '+', '*', '+', ':']
+  : ['·', '✢', '*', '✶', '✻', '✽']
 const SPINNER_FRAMES = [...SPINNER_BASE_FRAMES, ...[...SPINNER_BASE_FRAMES].reverse()]
 
 // ── CJK width helpers ───────────────────────────────────────────────────
@@ -416,50 +434,6 @@ const S_CURSOR = '\x1b[7m'
 const BSU = '\x1b[?2026h'
 const ESU_SHOW = '\x1b[?2026l\x1b[?25h'
 const ESU_HIDE = '\x1b[?2026l\x1b[?25l'
-
-/** Heuristic: does this terminal honor DEC 2026 Synchronized Output Mode
- *  strictly enough that cursor-position changes inside a BSU/ESU block
- *  are atomized into one paint? On terminals that pass this check, the
- *  cell-diff loop's intra-frame cursor walks are invisible — cursor
- *  ends at the input anchor as a single observable jump. On terminals
- *  that don't, every intermediate cursor position is drawn at 5–10 Hz
- *  during streaming, which users perceive as cursor jitter / flicker.
- *
- *  We only read environment variables — no async stdin probe — to keep
- *  startup synchronous and avoid races with the first key the user
- *  presses. Mirrors the env-var checks in Claude Code's
- *  `isSynchronizedOutputSupported()` (terminal.ts):
- *    - WT_SESSION                → Windows Terminal (modern)
- *    - TERM_PROGRAM=iTerm.app    → iTerm2
- *    - TERM_PROGRAM=vscode       → VSCode integrated terminal (xterm.js)
- *    - TERM_PROGRAM=ghostty      → Ghostty
- *    - TERM_PROGRAM=WezTerm      → WezTerm
- *    - KITTY_WINDOW_ID           → kitty
- *    - ALACRITTY_*               → Alacritty (sync supported since 0.13)
- *    - TERM=xterm-kitty          → kitty fallback
- *  TMUX presence forces the weak path even if the outer terminal is
- *  capable — tmux multiplexes and breaks intra-frame atomicity.
- *
- *  Default for unknown terminals: WEAK. Conservative — better to drop
- *  the on-screen cursor visibly during streaming on a capable terminal
- *  than to flicker on a weak one. PowerShell launched from the Win10
- *  Start menu typically lands in conhost without WT_SESSION set, which
- *  is the exact case where users see flicker. */
-function isCapableTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.TMUX) return false
-  if (env.WT_SESSION) return true
-  const tp = env.TERM_PROGRAM
-  // VSCode IS in this list — Claude Code's `isSynchronizedOutputSupported()`
-  // treats vscode as capable (terminal.ts:86). VSCode's xterm.js
-  // honors DEC 2026 strictly enough that with the cursor hidden
-  // app-wide (see useEffect at component mount) cell-diff renders
-  // are atomic and the user sees zero flicker.
-  if (tp === 'vscode' || tp === 'iTerm.app' || tp === 'ghostty' || tp === 'WezTerm') return true
-  if (env.KITTY_WINDOW_ID || env.TERM === 'xterm-kitty') return true
-  if (env.ALACRITTY_WINDOW_ID || env.ALACRITTY_LOG || env.ALACRITTY_SOCKET) return true
-  return false
-}
-const TERMINAL_IS_CAPABLE = isCapableTerminal()
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
 // (modeled on codex-rs insert_history.rs) but was reverted because it
@@ -1631,46 +1605,45 @@ export function ChatInput({
       }
     }
 
-    // ── Plan b: weak-terminal streaming bail-out. ────────────────────────
+    // ── Plan b: weak-terminal streaming bail-out (REMOVED). ──────────────
     //
-    // On terminals that don't atomize the BSU/ESU window (see
-    // TERMINAL_IS_CAPABLE), every text commit during streaming visibly
-    // mispaints the bottom frame: pre-scroll with `\n.repeat(N)` shifts
-    // the frame up into scrollback, then we redraw it at the new bottom
-    // — but the redraw isn't atomic with the scroll, so the user sees
-    // the frame at the scrolled position for a beat (the "input box
-    // jitter" symptom). Hiding the cursor (Plan a) only suppresses
-    // cursor-position jitter; the frame mispaint is independent.
+    // History: we used to clear the entire frame (`frame.length = 0`)
+    // during streaming on terminals that didn't honor DEC 2026 sync —
+    // the rationale was that pre-scroll (`\n.repeat(N)`) followed by a
+    // non-atomic frame redraw produced visible "input box jitter" at
+    // the bottom row. Hiding the frame cured the jitter at the cost of
+    // hiding the input box, spinner, separators, elapsed-time, active
+    // tool list, and todos for the entire reply.
     //
-    // The fix: during streaming on weak terminals, render NO frame at
-    // all (nextH = 0). The commit logic then falls into the simple
-    // `else if (didCommitMessages)` branch that just writes scrollback
-    // content at the natural cursor position, with no pre-scroll, no
-    // erase, no frame redraw — and crucially no frame to mispaint.
-    // The screen behaves exactly like a plain `console.log` stream
-    // during the AI's reply (which is what scrollback writes already
-    // are), and the input frame reappears in one atomic redraw at the
-    // bottom when streaming ends (spinner becomes null), via the
-    // existing frame-grow path.
+    // Why we dropped it: two things changed since.
     //
-    // Consequences during streaming on weak terminals:
-    //   - No spinner row, no separators, no input box pinned to bottom
-    //   - User can still type: keystrokes go into local state and are
-    //     submitted as usual, but they aren't echoed on screen until
-    //     the input frame is redrawn at end-of-stream
-    //   - Mid-stream tool dialogs (permission/select) are SKIPPED here
-    //     — but in App.tsx the spinner prop is gated on
-    //     `!selectActive && !permissionRequest`, so when a dialog
-    //     opens, spinner becomes null and the frame reappears
-    //     immediately, restoring the dialog UX
+    //  1. The streaming-chunk bookkeeping was broken at the time —
+    //     `freeBlanksAboveFrameRef` wasn't decremented when chunks
+    //     filled the blank rows below the (hidden) frame, so the
+    //     end-of-turn commit computed wrong preScroll and the
+    //     `\x1b[J` swept away half the reply. Hiding the frame masked
+    //     the symptom on capable terminals (xterm.js's scrollback
+    //     quirks held the missing rows) but the underlying account was
+    //     wrong. With the Plan b path now decrementing scrollRows
+    //     correctly (~25 lines below this point), pre-scroll only
+    //     fires when freeBlanks is actually exhausted, not on every
+    //     chunk. That alone reduces the jitter source dramatically.
+    //
+    //  2. The capable-terminal whitelist above used to miss every
+    //     mainstream Linux desktop terminal (no VTE_VERSION check),
+    //     so Ubuntu/Fedora users on GNOME Terminal hit the bail-out
+    //     unconditionally and lost their input box during every AI
+    //     reply — same problem class as ConHost on Windows. Even
+    //     after we expanded the whitelist, ConHost-class terminals
+    //     remain "weak" by definition; the right answer for them is
+    //     visible-with-some-jitter, not invisible.
     //
     // Capable terminals (Windows Terminal, iTerm2, Ghostty, kitty,
-    // Alacritty, WezTerm) skip this branch entirely and get the full
-    // frame as before.
-    if (spinner && !TERMINAL_IS_CAPABLE) {
-      frame.length = 0
-      cursorAnchor = null
-    }
+    // Alacritty, WezTerm, VTE 0.68+, foot, contour, Warp, Zed) get the
+    // smooth atomic-DEC-2026 path. Weak terminals (legacy ConHost via
+    // cmd.exe / Windows PowerShell host) get the same frame, just with
+    // potentially-visible cursor walks during cell-diff redraws — a
+    // tradeoff users explicitly preferred over a missing input box.
 
     // ── Diff against previous frame and emit one buffered write ──────────
     //
@@ -1937,10 +1910,41 @@ export function ChatInput({
           // Auto-scroll triggered by LF at termRows is universally honored.
           preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
         }
-        // Erase from startRow to the bottom of the screen. startRow is at
-        // or above the (post-scroll) top of the old frame, so this clears
-        // both the shifted old-frame cells and the leftover-blank region.
-        preBuf += `\x1b[${startRow};1H\x1b[J`
+        // Erase ONLY the rows that previously held OLD frame cells —
+        // not the entire `[startRow, termRows]` range. The screen-wide
+        // `\x1b[J` we used here before manifests on weak terminals
+        // (cmd.exe / Windows PowerShell host / GNOME Terminal pre-VTE
+        // 0.68 / Ubuntu console) as a visible "blank flash" of the
+        // bottom 30+ rows before the rewrite catches up. Per-row
+        // `\x1b[K` clears each old-frame row in turn, then the
+        // subsequent scrollback + frame writes immediately overwrite
+        // them — so the user sees writes happening instead of "screen
+        // blanked then redrawn." Symptom this cures: streaming replies
+        // produced a strobe-like flicker at the COMMIT_BATCH_MS cadence
+        // (~7Hz) that users described as "辣眼睛 / eye-straining".
+        //
+        // Why this is safe:
+        //   - scrollbackContent overwrites rows [startRow, startRow+scrollRows).
+        //   - The frame write below overwrites rows [frameTop, frameTop+nextH).
+        //   - Rows past oldFrameBottom were ALREADY blank pre-render
+        //     (blanks below the old frame), so they don't need clearing.
+        //   - The only rows with stale cells outside the new write
+        //     coverage are OLD frame rows past the new frame's bottom
+        //     — handled by the explicit tail-clear after the frame loop.
+        //   - When preScrollRows > 0, the LF auto-scroll above shifts
+        //     OLD frame rows ABOVE startRow into history; rows in
+        //     [startRow, termRows] post-scroll are blanks created by
+        //     the scroll, no remnants to clear.
+        const oldFrameTopForClear =
+          lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
+        const oldFrameBottomForClear = oldFrameTopForClear + oldFrameH - 1
+        // Only clear rows in [startRow, oldFrameBottom] — never extend
+        // past oldFrameBottom because below that was already blank.
+        const clearEnd = Math.min(oldFrameBottomForClear, termRows)
+        for (let r = startRow; r <= clearEnd; r++) {
+          preBuf += `\x1b[${r};1H\x1b[K`
+        }
+        preBuf += `\x1b[${startRow};1H`
         preBuf += scrollbackContent
         // scrollbackContent lands the cursor at col 1 of the row
         // immediately below its last row. That matches the new frame top
@@ -2016,6 +2020,32 @@ export function ChatInput({
         )
         prevFrameRef.current = []
         handledCommitWithFrame = true
+      }
+      // Account for streamed-content rows so freeBlanks tracks reality.
+      // Plan b runs every render where messages committed but the frame
+      // is hidden (nextH=0, the streaming bail-out) — i.e. on every chunk
+      // of an AI reply. `scrollbackContent` is about to be written into
+      // rows the renderer previously thought were blank (the `freeBlanks`
+      // budget seeded from termRows-banner-frameH on first paint). Without
+      // this decrement, freeBlanks stays at its initial value for the
+      // entire response, so the FINAL render at end-of-stream (nextH:0→3,
+      // takes the main FULL-REDRAW path) computes availSpace=oldFrameH+
+      // freeBlanks=40, preScroll=0, and \x1b[J wipes the streamed body.
+      // xterm.js / VSCode's terminal accidentally papered over this via
+      // its own scrollback quirks (see SU comment around line 1932); on
+      // ConHost / Windows PowerShell host / GNOME Terminal / xterm /
+      // every other target, the body really did get wiped, leaving only
+      // the last 1-2 lines above the input box once the spinner stopped.
+      // Mirror of the leftoverBlanks bookkeeping the main commit path
+      // does at line ~1869 — same idea, just applied on the Plan b side.
+      if (scrollRows > 0) {
+        const before = pendingFreeBlanks
+        pendingFreeBlanks = Math.max(0, pendingFreeBlanks - scrollRows)
+        frameTop = computeFrameTop(pendingFreeBlanks)
+        debugLog(
+          'chatinput.geom.commit-streaming',
+          `scrollRows=${scrollRows} blanks ${before}->${pendingFreeBlanks} frameTop=${frameTop}`,
+        )
       }
       preBuf += scrollbackContent
     }
