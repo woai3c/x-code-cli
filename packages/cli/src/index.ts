@@ -331,7 +331,7 @@ function printResumeHint(): void {
   const key = info.taskSlug ? `${info.taskSlug}-${info.sessionId}` : info.sessionId
   const cmd = chalk.cyan(`xc --resume ${key}`)
   const dim = chalk.gray
-  process.stdout.write(`${dim('› Resume this session:')} ${cmd}\n`)
+  process.stdout.write(`${dim('Resume this session:')} ${cmd}\n`)
 }
 
 /** Load .env file from cwd (walk up to find it, like dotenv convention) */

@@ -574,6 +574,16 @@ export function ChatInput({
   const lastFlushTimeRef = useRef(0)
   /** Pending deferred (non-commit) write that can be superseded by a commit. */
   const deferredFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Monotonic counter incremented by every successful `doFlush`. The
+   *  deferred-write path captures this at SCHEDULE time and re-checks
+   *  at FIRE time: if the value has changed, a commit-path flush ran
+   *  in the interim and our spinner-only frame is stale (the commit
+   *  already repainted the cell). Closes the race the bare
+   *  `clearTimeout` cancellation can't catch — when the macrotask
+   *  for the deferred timer is already queued AND a commit's useEffect
+   *  also queues a flush in the same tick, both writes hit stdout
+   *  1-2ms apart and the user sees a visible flicker. */
+  const flushGenRef = useRef(0)
   /** Last `spinnerFrame` value seen by the flush effect. We compare against
    *  the current frame to distinguish "this render was triggered by a
    *  spinner tick" (spinner glyph cycled) from "this render was triggered
@@ -2503,6 +2513,10 @@ export function ChatInput({
         )
       }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
+      // Bump the generation. Any pending deferred-flush macrotask whose
+      // captured flushId now differs from this value will short-circuit
+      // when it runs — see the schedule path below.
+      flushGenRef.current++
     }
 
     if (didCommitMessages) {
@@ -2532,33 +2546,55 @@ export function ChatInput({
       // will repaint the entire frame anyway, picking up the latest
       // spinner glyph as part of the full redraw.
       const spinnerTicked = spinner != null && spinnerFrame !== lastFlushedSpinnerFrameRef.current
-      // Coalesce window. Pure spinner ticks during streaming are dropped
-      // wholesale: useStreamBuffer drains every ~150ms, and each drain
-      // commits a scrollback row + repaints the whole frame (and thus
-      // the spinner glyph). If the previous stdout write was less than
-      // 150ms ago, we're in a streaming burst and the next commit will
-      // catch up the spinner — emitting the spinner cell now is wasted
-      // motion AND a flicker source (deferred-fire lands 1-25ms before
-      // the very next commit on average, producing back-to-back writes).
-      // For non-spinner same-height renders (typing, single-cell edits)
-      // keep the original 16ms window so input echo stays snappy.
-      const coalesceWindow = spinnerTicked ? 150 : 16
-      if (isSpinnerTick && now - lastFlushTimeRef.current < coalesceWindow) {
-        debugLog('chatinput.flush.coalesced', `dt=${now - lastFlushTimeRef.current}ms spinner=${spinnerTicked ? 1 : 0}`)
+      // Coalesce. Only drop back-to-back same-height frames within a
+      // single terminal refresh window (16ms) — anything wider gets
+      // through. The job of preventing spinner-vs-commit flicker is
+      // handed to the deferred-fire mechanism below: a wide spinner
+      // deferMs lets in-flight commits clearTimeout the deferred,
+      // turning would-be near-collisions into single commit-only
+      // writes. We deliberately do NOT coalesce against commit time
+      // here — that approach (drop spinner-only frames during
+      // streaming) tied the spinner glyph to commit cadence, which is
+      // visibly jittery at the variable 50-300ms gaps that
+      // useStreamBuffer's COMMIT_BATCH_MS produces.
+      const coalesceWindow = 16
+      const dt = now - lastFlushTimeRef.current
+      if (isSpinnerTick && dt < coalesceWindow) {
+        debugLog('chatinput.flush.coalesced', `dt=${dt}ms spinner=${spinnerTicked ? 1 : 0}`)
         return
       }
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
       }
-      // Spinner ticks that DID escape the coalesce window above (i.e.
-      // we're idle, no commit happened recently) still get a slightly
-      // longer 24ms defer in case a late commit arrives. Typing /
-      // content uses 8ms.
-      const deferMs = spinnerTicked ? 24 : 8
+      // Spinner ticks defer 100ms — long enough that a useStreamBuffer
+      // commit arriving 50-200ms after the spinner tick reliably hits
+      // the clearTimeout below before the deferred can fire, collapsing
+      // the spinner+commit pair into a single commit-only write. Must
+      // remain strictly less than the 200ms spinner-tick interval — at
+      // ≥200ms a back-to-back tick would re-arm the timer perpetually
+      // and the spinner would freeze. Typing edits keep the original
+      // 8ms so held-key echo stays snappy.
+      const deferMs = spinnerTicked ? 100 : 8
+      // Capture flush generation at SCHEDULE time. If a commit-path
+      // doFlush() runs before our timer fires, flushGenRef advances and
+      // our deferred frame becomes stale (its cells were built from a
+      // pre-commit React state). setImmediate yields one Node tick so
+      // any React commit queued in the same macrotask flushes first;
+      // the staleness check then short-circuits us.
+      const flushId = flushGenRef.current
       deferredFlushRef.current = setTimeout(() => {
         deferredFlushRef.current = null
-        doFlush()
-        debugLog('chatinput.flush.deferred-fired', `delayed=${deferMs}ms`)
+        setImmediate(() => {
+          if (flushId !== flushGenRef.current) {
+            debugLog(
+              'chatinput.flush.deferred-stale',
+              `flushId=${flushId} gen=${flushGenRef.current}`,
+            )
+            return
+          }
+          doFlush()
+          debugLog('chatinput.flush.deferred-fired', `delayed=${deferMs}ms`)
+        })
       }, deferMs)
       debugLog('chatinput.flush.deferred', `non-commit frame deferred ${deferMs}ms`)
     }
