@@ -7,14 +7,17 @@ import {
   MODEL_ALIASES,
   PROVIDER_MODELS,
   createModelRegistry,
+  estimateTokenCount,
   getAvailableProviders,
+  getContextWindow,
   initProject,
-  listSessionUsageSnapshots,
-  loadLatestUsageSnapshot,
+  listSessions,
+  loadSession,
+  pickLatestSession,
   resolveModelId,
   saveUserConfig,
 } from '@x-code-cli/core'
-import type { AgentOptions, LanguageModel, SessionUsageSnapshot, TokenUsage } from '@x-code-cli/core'
+import type { AgentOptions, LanguageModel, LoadedSession, SessionListEntry, TokenUsage } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
@@ -25,7 +28,23 @@ interface AppProps {
   model: LanguageModel
   options: AgentOptions
   initialPrompt?: string
+  /** Pre-loaded session from `xc --continue`. Hydrates the agent on
+   *  first render so messages appear in scrollback before the user
+   *  sends anything. Null when starting fresh. */
+  initialSession?: LoadedSession | null
+  /** When 'pick', App pops the resume picker on mount — the
+   *  `xc --resume` flag path. Once Ink is ready (so askQuestion can
+   *  render), the same code path as `/resume` runs. */
+  resumeIntent?: 'pick' | null
   onCleanupReady?: (fn: () => Promise<void>) => void
+  /** Hand the post-Ink resume hint a live snapshot of the session.
+   *  Wired in app.tsx — the registered getter is called from
+   *  index.ts's gracefulShutdown after the terminal is reset, so the
+   *  hint lands in the user's shell prompt area where they can copy
+   *  the `xc --resume <id>` command. */
+  onSessionInfoReady?: (
+    getter: () => { sessionId: string; taskSlug: string; messageCount: number } | null,
+  ) => void
 }
 
 /** Slash commands — used for both help text and tab completion */
@@ -36,11 +55,12 @@ export const SLASH_COMMANDS = [
   { name: '/plan', description: 'Toggle plan mode on/off (no-arg = show status) — saved' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
+  { name: '/resume', description: 'Pick a past session in this project to resume' },
   { name: '/init', description: 'Initialize project knowledge' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage history', description: 'List past sessions in this project' },
-  { name: '/session save', description: 'Save current session' },
-  { name: '/exit', description: 'Exit (saves session)' },
+  { name: '/session save', description: 'Force-flush the current session jsonl to disk' },
+  { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
 /** Render TokenUsage as a markdown block for /usage. cacheReadTokens is a
@@ -65,21 +85,68 @@ function formatUsageReport(usage: TokenUsage, modelId: string, source: 'live' | 
   ].join('\n')
 }
 
+/** Build a "context X% used — consider /compact" hint when a resumed
+ *  session's last-known input-token count (or character estimate, whichever
+ *  is larger) is past 60% of the model's context window. Returns null
+ *  below the threshold. We use the loaded `tokenUsage.inputTokens` first
+ *  (the real number the provider reported on the last turn) and fall
+ *  back to a character-based estimate when no usage line was recorded
+ *  (e.g. interrupted before the first turn finished). The threshold is
+ *  intentionally lower than the auto-compaction trigger (80%) so the
+ *  user has a chance to /compact manually before the next turn either
+ *  succeeds noisily or fires the auto path. */
+function compactionHintForResume(
+  tokens: number | null,
+  estimatedTokens: number,
+  modelId: string,
+): string | null {
+  const window = getContextWindow(modelId)
+  const used = Math.max(tokens ?? 0, estimatedTokens)
+  if (used === 0) return null
+  const pct = (used / window) * 100
+  if (pct < 60) return null
+  return `\n\n_Context is at **${pct.toFixed(0)}%** of the ${window.toLocaleString('en-US')}-token window — consider \`/compact\` before continuing, or it'll auto-compress on the next turn._`
+}
+
+/** "5 minutes ago" / "2 hours ago" / "3 days ago" format, capped at days
+ *  before falling back to a date. The picker shows this next to each
+ *  session preview — relative time is more skimmable than ISO timestamps
+ *  when you're scanning for "the one I worked on last week". */
+function formatRelativeTime(epochMs: number): string {
+  const diff = Date.now() - epochMs
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hrs = Math.floor(min / 60)
+  if (hrs < 48) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 14) return `${days}d ago`
+  return new Date(epochMs).toISOString().slice(0, 10)
+}
+
 /** Render the per-session history list. Newest first; same project only.
+ *  Sourced from the project's `.x-code/sessions/*.jsonl` files via
+ *  `listSessions` — each row's totals come from the LAST `usage` meta
+ *  entry in the file's tail (that's all the picker reads). Sessions
+ *  with no usage line yet (interrupted before the first turn finished)
+ *  show "—" for totals.
  *  Kept as a fenced code block so column alignment survives the markdown
  *  pipeline (otherwise the renderer collapses runs of spaces). */
-function formatUsageHistory(snapshots: SessionUsageSnapshot[]): string {
-  if (snapshots.length === 0) {
+function formatUsageHistory(sessions: SessionListEntry[]): string {
+  if (sessions.length === 0) {
     return '**Usage history** — no past sessions found in this project.'
   }
   const fmt = (n: number) => n.toLocaleString('en-US')
-  const rows = snapshots.map((s) => {
-    const date = s.updatedAt.slice(0, 16).replace('T', ' ')
+  const rows = sessions.map((s) => {
+    const date = new Date(s.mtime).toISOString().slice(0, 16).replace('T', ' ')
+    const usage = s.tokenUsage
+    const total = usage ? fmt(usage.totalTokens) : '—'
     const hit =
-      s.usage.inputTokens > 0
-        ? `${((s.usage.cacheReadTokens / s.usage.inputTokens) * 100).toFixed(0)}%`
+      usage && usage.inputTokens > 0
+        ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(0)}%`
         : '—'
-    return { date, id: s.id, model: s.modelId, total: fmt(s.usage.totalTokens), hit }
+    return { date, id: s.sessionId, model: s.modelId, total, hit }
   })
   const headers = { date: 'Updated', id: 'Session', model: 'Model', total: 'Total', hit: 'Cache' }
   const widths = {
@@ -92,7 +159,7 @@ function formatUsageHistory(snapshots: SessionUsageSnapshot[]): string {
   const line = (r: typeof headers) =>
     `${r.date.padEnd(widths.date)}  ${r.id.padEnd(widths.id)}  ${r.model.padEnd(widths.model)}  ${r.total.padStart(widths.total)}  ${r.hit.padStart(widths.hit)}`
   const body = ['```', line(headers), ...rows.map(line), '```'].join('\n')
-  return `**Usage history** — ${snapshots.length} session${snapshots.length === 1 ? '' : 's'} in this project\n\n${body}`
+  return `**Usage history** — ${sessions.length} session${sessions.length === 1 ? '' : 's'} in this project\n\n${body}`
 }
 
 const HELP_TEXT =
@@ -101,7 +168,15 @@ const HELP_TEXT =
   `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
   `\nKeyboard: Esc to interrupt the current turn · ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} (twice) to exit`
 
-export function App({ model, options, initialPrompt, onCleanupReady }: AppProps) {
+export function App({
+  model,
+  options,
+  initialPrompt,
+  initialSession,
+  resumeIntent,
+  onCleanupReady,
+  onSessionInfoReady,
+}: AppProps) {
   const { exit } = useApp()
   const {
     state,
@@ -112,6 +187,8 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     cleanup,
     clear,
     compact,
+    resume,
+    getSessionInfo,
     switchModel,
     setThinking,
     getThinking,
@@ -121,7 +198,7 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     addCommandMessage,
     askQuestion,
     setPermissionMode,
-  } = useAgent(model, options)
+  } = useAgent(model, options, initialSession)
 
   // Transient one-line hint shown above the spinner. Today only used for the
   // "Press Ctrl+C again to exit" double-press prompt — kept narrow on purpose
@@ -177,10 +254,111 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
     onCleanupReady?.(cleanup)
   }, [cleanup]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle initial prompt
+  // Register the post-exit session-info getter. Index.ts uses it after
+  // resetTerminal to print "Resume: xc --resume <id>" to the shell.
+  // Stable across renders since getSessionInfo reads loopStateRef
+  // directly — registering once on mount is sufficient.
   useEffect(() => {
+    onSessionInfoReady?.(getSessionInfo)
+  }, [getSessionInfo]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** /resume — list every past session in this project and let the user
+   *  pick one to load. Reuses the askQuestion picker (same dialog as
+   *  /model and the askUser tool) so we get consistent keyboard
+   *  navigation, "Other"-as-freeform escape hatch, and Esc-to-cancel
+   *  for free.
+   *
+   *  Picker label format: `[<short prompt>] <relative time> · N msgs`
+   *  Each option carries the absolute file path in its description so
+   *  the user can verify which session they're picking. After the user
+   *  selects, we call `loadSession` (full file read this time, not the
+   *  head/tail enrich pass) and pass it to `useAgent.resume` which
+   *  hot-swaps the agent state. Wrapped in useCallback so the on-mount
+   *  effect can reference it without tripping the react-hooks linter
+   *  (function declarations defined later in the component body get
+   *  flagged for closure-freshness even though JS hoists them). */
+  const handleResume = useCallback(async () => {
+    const sessions = await listSessions()
+    if (sessions.length === 0) {
+      addInfoMessage(
+        '**No past sessions found in this project.** Sessions are saved automatically — start working and one will appear here next time.',
+      )
+      return
+    }
+    const choices = sessions.slice(0, 30).map((s) => {
+      const preview = (s.firstPrompt || '(empty)').slice(0, 60).replace(/\s+/g, ' ').trim()
+      const ago = formatRelativeTime(s.mtime)
+      const totalTokens = s.tokenUsage ? s.tokenUsage.totalTokens.toLocaleString('en-US') : '—'
+      return {
+        label: `${preview}  ·  ${ago}`,
+        description: `${s.modelId}  ·  ${totalTokens} tokens  ·  ${s.sessionId}`,
+        filePath: s.filePath,
+      }
+    })
+    const answer = await askQuestion(
+      `Pick a session to resume (${sessions.length} total in this project):`,
+      choices.map((c) => ({ label: c.label, description: c.description })),
+    )
+    const picked = choices.find((c) => c.label === answer)
+    if (!picked) {
+      // User typed a free-form value into "Other". Treat as cancelled —
+      // we don't try to fuzzy-match against session ids; the picker is
+      // the supported way to pick.
+      addInfoMessage('Resume cancelled.')
+      return
+    }
+    const loaded = await loadSession(picked.filePath)
+    if (!loaded) {
+      addInfoMessage(`Failed to load session at ${picked.filePath}. The file may be corrupted.`)
+      return
+    }
+    resume(loaded)
+    const hint =
+      compactionHintForResume(
+        loaded.tokenUsage.inputTokens || null,
+        estimateTokenCount(loaded.messages),
+        loaded.modelId,
+      ) ?? ''
+    addInfoMessage(
+      `**Resumed session:** ${loaded.firstPrompt.slice(0, 80) || '(no first prompt)'}\n\nContinuing from ${loaded.messages.length} message${loaded.messages.length === 1 ? '' : 's'}.${hint}`,
+    )
+  }, [addInfoMessage, askQuestion, resume])
+
+  // On-mount resume handling. Three mutually-exclusive paths set up by
+  // the CLI entry:
+  //   - initialSession set: `xc -c` already loaded the most recent
+  //     session synchronously. useAgent has hydrated the scrollback
+  //     from it; we just need to drop a banner so the user knows they
+  //     resumed (rather than thinking the messages are mysteriously
+  //     pre-populated). No async work — just a visual hint.
+  //   - resumeIntent === 'pick': `xc -r` wants the picker. We pop the
+  //     same dialog as `/resume`.
+  //   - neither: regular launch, optionally with initialPrompt to
+  //     auto-submit.
+  // The picker awaits askQuestion, which only resolves once the user
+  // chooses, so we firewall it inside the effect and ignore the
+  // returned promise — Ink doesn't care about pending async work in
+  // effects.
+  useEffect(() => {
+    if (initialSession) {
+      const preview = initialSession.firstPrompt.slice(0, 80) || '(no first prompt)'
+      const hint =
+        compactionHintForResume(
+          initialSession.tokenUsage.inputTokens || null,
+          estimateTokenCount(initialSession.messages),
+          initialSession.modelId,
+        ) ?? ''
+      addInfoMessage(
+        `**Resumed session** — ${preview}\n\nRestored ${initialSession.messages.length} message${initialSession.messages.length === 1 ? '' : 's'}. Continuing the same conversation.${hint}`,
+      )
+      return
+    }
+    if (resumeIntent === 'pick') {
+      void handleResume()
+      return
+    }
     if (initialPrompt) {
-      submit(initialPrompt)
+      void submit(initialPrompt)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -228,6 +406,11 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
         case 'compact':
           echoCommand(text)
           await handleCompact()
+          return
+
+        case 'resume':
+          echoCommand(text)
+          await handleResume()
           return
 
         case 'init':
@@ -530,24 +713,25 @@ export function App({ model, options, initialPrompt, onCleanupReady }: AppProps)
   }
 
   /** /usage — show token totals and cache-hit ratio for this session.
-   *  Prefers the live in-memory tally from useAgent (always current);
-   *  on a fresh process with no turns yet, falls back to the last snapshot
-   *  persisted in .x-code/sessions/latest.usage.json for this project.
-   *  `/usage history` lists every past session in the current project. */
+   *  Prefers the live in-memory tally from useAgent (always current); on
+   *  a fresh process with no turns yet, falls back to the most recent
+   *  session jsonl in this project (its last `usage` meta line). The
+   *  fallback path lets the user check yesterday's totals without
+   *  starting a new turn. `/usage history` lists every past session. */
   async function handleUsage(arg: string) {
     if (arg.toLowerCase() === 'history') {
-      const snapshots = await listSessionUsageSnapshots()
-      addInfoMessage(formatUsageHistory(snapshots))
+      const sessions = await listSessions()
+      addInfoMessage(formatUsageHistory(sessions))
       return
     }
     let usage: TokenUsage = state.usage
     let modelId = state.modelId
     let source: 'live' | 'snapshot' = 'live'
     if (usage.totalTokens === 0) {
-      const snapshot = await loadLatestUsageSnapshot()
-      if (snapshot) {
-        usage = snapshot.usage
-        modelId = snapshot.modelId
+      const latest = await pickLatestSession()
+      if (latest && latest.tokenUsage) {
+        usage = latest.tokenUsage
+        modelId = latest.modelId
         source = 'snapshot'
       }
     }

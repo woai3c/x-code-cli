@@ -12,12 +12,15 @@ import {
   createModelRegistry,
   getAvailableProviders,
   getEnvVarName,
+  listSessions,
+  loadSession,
   loadUserConfig,
+  pickLatestSession,
   resolveModelId,
 } from '@x-code-cli/core'
-import type { AgentOptions } from '@x-code-cli/core'
+import type { AgentOptions, LoadedSession } from '@x-code-cli/core'
 
-import { getCleanupFn, startApp } from './app.js'
+import { getCleanupFn, getSessionExitInfo, startApp } from './app.js'
 import { VERSION } from './version.js'
 
 const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
@@ -88,6 +91,12 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   if (cleanup) cleanup().catch(() => undefined)
 
   resetTerminal()
+  // Print AFTER resetTerminal so the line lands cleanly above the
+  // shell prompt — colors are reset, raw mode is off, cursor is
+  // visible. The hint reads from a synchronously-captured snapshot
+  // (registered by App via onSessionInfoReady), so we don't depend
+  // on the still-running async cleanup.
+  printResumeHint()
   process.exit(exitCode)
 }
 
@@ -127,6 +136,23 @@ async function main() {
       // No short alias — `-p` is already `--print`. Plan mode constrains the
       // model to read-only exploration + a plan file until the user approves.
       describe: 'Start the session in plan mode (read-only exploration; user must approve before code edits)',
+    })
+    .option('continue', {
+      alias: 'c',
+      type: 'boolean',
+      default: false,
+      describe: 'Resume the most recent session in this project (no picker)',
+    })
+    .option('resume', {
+      alias: 'r',
+      type: 'string',
+      // Optional value: `xc --resume` (no value) opens the picker; `xc
+      // --resume <id-or-slug>` jumps directly to the session whose
+      // filename matches. Yargs treats this as a string-typed flag, so
+      // `argv.resume === undefined` means "flag not given", `''` means
+      // "given without a value", and any other string is the user's
+      // lookup key.
+      describe: 'Resume a session: `--resume` opens the picker; `--resume <id>` jumps directly',
     })
     .version(VERSION)
     .alias('v', 'version')
@@ -190,6 +216,45 @@ async function main() {
     permissionMode: argv.plan ? 'plan' : 'default',
   }
 
+  // Resume / continue. Three resume entry points:
+  //   1. `--continue` (-c): loads the most recent session synchronously
+  //      here, no picker. Quick muscle-memory continuation.
+  //   2. `--resume <id>`: looks up the session by id / slug / filename
+  //      prefix and loads it directly. The post-exit hint we print
+  //      ("Resume: xc --resume <id>") feeds back into this branch.
+  //   3. `--resume` (no value): defer to the in-Ink picker via
+  //      resumeIntent='pick', so the user can browse.
+  // --continue takes precedence if both are set, matching CC.
+  let initialSession: LoadedSession | null = null
+  let resumeIntent: 'pick' | null = null
+  if (argv.continue) {
+    const latest = await pickLatestSession()
+    if (!latest) {
+      console.error('Note: --continue specified but no past sessions found in this project. Starting a fresh session.')
+    } else {
+      const loaded = await loadSession(latest.filePath)
+      if (loaded) initialSession = loaded
+    }
+  } else if (typeof argv.resume === 'string') {
+    if (argv.resume === '') {
+      resumeIntent = 'pick'
+    } else {
+      const filePath = await findSessionFile(argv.resume)
+      if (!filePath) {
+        console.error(
+          `Error: no session found matching "${argv.resume}". Run \`xc --resume\` to pick from the list, or \`xc -c\` for the most recent.`,
+        )
+        process.exit(1)
+      }
+      const loaded = await loadSession(filePath)
+      if (!loaded) {
+        console.error(`Error: failed to load session at ${filePath}. The file may be corrupted.`)
+        process.exit(1)
+      }
+      initialSession = loaded
+    }
+  }
+
   // Combine prompt with stdin
   const fullPrompt = [stdinContent, prompt].filter(Boolean).join('\n\n')
 
@@ -216,11 +281,57 @@ async function main() {
   }
 
   // Start the app — waitUntilExit resolves when Ink unmounts (including on Ctrl+C)
-  const waitUntilExit = startApp(model, options, fullPrompt || undefined)
+  const waitUntilExit = startApp(model, options, fullPrompt || undefined, {
+    initialSession,
+    resumeIntent,
+  })
   await waitUntilExit()
 
   // Normal exit path (including Ctrl+C which unmounts Ink first)
   await gracefulShutdown(0)
+}
+
+/** Resolve a user-provided session lookup key into a session jsonl
+ *  path. Accepts the same forms a user might paste from the post-exit
+ *  hint we print:
+ *    - bare sessionId (`20260101-120000-000`)
+ *    - slug (`fix-login`)
+ *    - full filename stem (`fix-login-20260101-120000-000`)
+ *  Exact matches are preferred; if nothing exact matches, falls back
+ *  to a prefix match against the sessionId (long enough to disambiguate).
+ *  Returns the file path of the first match, newest first, or null. */
+async function findSessionFile(input: string): Promise<string | null> {
+  const sessions = await listSessions()
+  for (const s of sessions) {
+    if (s.sessionId === input) return s.filePath
+    if (s.taskSlug && s.taskSlug === input) return s.filePath
+    if (s.taskSlug && `${s.taskSlug}-${s.sessionId}` === input) return s.filePath
+  }
+  if (input.length >= 8) {
+    for (const s of sessions) {
+      if (s.sessionId.startsWith(input)) return s.filePath
+    }
+  }
+  return null
+}
+
+/** Print a copy-pasteable resume hint after Ink has unmounted and the
+ *  terminal has been reset. Mirrors Claude Code's exit behavior so a
+ *  user closing the chat sees exactly how to come back to the same
+ *  thread. We prefer the slug-prefixed id when available because it's
+ *  human-skimmable in `ls` output; we fall back to the bare sessionId
+ *  for slug-less sessions (CJK-only first messages).
+ *
+ *  Suppressed in --print mode (no Ink) and when the session has no
+ *  messages yet (user launched but never submitted) — we'd be pointing
+ *  at an empty jsonl. */
+function printResumeHint(): void {
+  const info = getSessionExitInfo()
+  if (!info) return
+  const key = info.taskSlug ? `${info.taskSlug}-${info.sessionId}` : info.sessionId
+  const cmd = chalk.cyan(`xc --resume ${key}`)
+  const dim = chalk.gray
+  process.stdout.write(`${dim('› Resume this session:')} ${cmd}\n`)
 }
 
 /** Load .env file from cwd (walk up to find it, like dotenv convention) */
@@ -399,6 +510,7 @@ process.on('SIGINT', () => {
     // so the shell prompt is usable. Without this reset, raw mode / hidden
     // cursor / bracketed paste mode can leak into the shell.
     resetTerminal()
+    printResumeHint()
     process.exit(0)
   }
 })

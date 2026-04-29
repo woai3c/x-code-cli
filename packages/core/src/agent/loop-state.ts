@@ -47,6 +47,15 @@ export interface LoopState {
    *  Survives `/clear` (matches Claude Code) so a multi-feature
    *  checklist isn't wiped by an unrelated context reset. */
   todos: TodoItem[]
+  /** Number of messages already persisted to the session jsonl file.
+   *  The agent loop calls `flushPendingMessages` at turn boundaries,
+   *  which appends `state.messages.slice(persistedMessageCount)` and
+   *  bumps the counter. Reset to `state.messages.length` after any
+   *  compaction (light or deep) — those rewritten messages get
+   *  re-flushed after a `compact-boundary` line so the loader's
+   *  "everything-after-last-boundary wins" rule reconstructs the same
+   *  in-memory state on resume. See `agent/session-store.ts`. */
+  persistedMessageCount: number
 }
 
 /** Generate a human-skimmable session id: `YYYYMMDD-HHMMSS-mmm` (local
@@ -83,5 +92,6 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     currentPlanPath: null,
     taskSlug: '',
     todos: [],
+    persistedMessageCount: 0,
   }
 }

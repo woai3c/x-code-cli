@@ -3,10 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   agentLoop,
+  appendInterrupted,
   buildUserContent,
   capabilitiesOf,
   classifyApiError,
   compressMessages,
+  flushPendingMessages,
+  hydrateLoopState,
   initMemories,
   saveSession,
 } from '@x-code-cli/core'
@@ -16,7 +19,9 @@ import type {
   DisplayMessage,
   DisplayToolCall,
   LanguageModel,
+  LoadedSession,
   LoopState,
+  ModelMessage,
   PermissionMode,
   TodoItem,
   TokenUsage,
@@ -94,11 +99,117 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   todos: [],
 }
 
-export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
+type ContentPartLike = { type?: string; text?: string; toolCallId?: string; toolName?: string; input?: unknown; output?: unknown }
+
+/** Pull plain text out of a ModelMessage's content. CoreMessage content
+ *  is either a string or an array of typed parts; we only render text
+ *  parts (image / file / tool-call go through other paths). */
+function extractText(content: ModelMessage['content']): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return (content as ContentPartLike[])
+    .filter((p) => p?.type === 'text' && typeof p.text === 'string')
+    .map((p) => p.text as string)
+    .join('')
+}
+
+/** Pull a string output out of a tool-result part. AI SDK normalises
+ *  tool outputs to `{ type: 'text' | 'error-text' | ..., value: string }`,
+ *  but older / provider-specific shapes also pass through, so we
+ *  defensively coerce. */
+function readToolOutput(part: ContentPartLike): { output: string; isError: boolean } {
+  const out = part.output as { type?: string; value?: unknown } | string | undefined
+  if (typeof out === 'string') return { output: out, isError: false }
+  if (out && typeof out === 'object') {
+    const isError = out.type === 'error-text' || out.type === 'error-json'
+    const value = out.value
+    if (typeof value === 'string') return { output: value, isError }
+    if (value !== undefined) return { output: JSON.stringify(value), isError }
+  }
+  return { output: '', isError: false }
+}
+
+/** Convert a loaded ModelMessage[] back into the DisplayMessage[] shape
+ *  that ChatInput renders. Splits each assistant message with N
+ *  tool-calls into N+1 DisplayMessages (one text-only when there's
+ *  text, then one per tool-call) so the live agent flow's rendering
+ *  pattern is preserved verbatim — multiple parallel tool calls in a
+ *  single turn still appear as separate `⎿` rows.
+ *
+ *  Tool messages don't become DisplayMessages of their own; their
+ *  output is stitched onto the matching tool-call DisplayMessage by
+ *  `toolCallId`. */
+function modelMessagesToDisplay(messages: ModelMessage[]): DisplayMessage[] {
+  // First pass: index every tool_result by id so we can attach outputs
+  // when we encounter the originating tool_call later.
+  const toolResults = new Map<string, { output: string; isError: boolean }>()
+  for (const msg of messages) {
+    if (msg.role !== 'tool' || !Array.isArray(msg.content)) continue
+    for (const part of msg.content as ContentPartLike[]) {
+      if (part?.type === 'tool-result' && typeof part.toolCallId === 'string') {
+        toolResults.set(part.toolCallId, readToolOutput(part))
+      }
+    }
+  }
+  const out: DisplayMessage[] = []
+  let counter = 0
+  // Use distinct base timestamps so the message ordering is preserved
+  // visually — Date.now() would produce identical ts for back-to-back
+  // hydrated messages, which is fine for sorting but reads weirdly in
+  // the debug log.
+  const baseTs = Date.now() - messages.length
+  for (const msg of messages) {
+    counter++
+    if (msg.role === 'system' || msg.role === 'tool') continue
+    const id = `hydrated-${counter}`
+    const ts = baseTs + counter
+    if (msg.role === 'user') {
+      const text = extractText(msg.content)
+      if (text) out.push({ id, role: 'user', content: text, timestamp: ts })
+      continue
+    }
+    // assistant
+    const text = extractText(msg.content)
+    if (text) out.push({ id: `${id}-text`, role: 'assistant', content: text, timestamp: ts })
+    if (Array.isArray(msg.content)) {
+      let tcIdx = 0
+      for (const part of msg.content as ContentPartLike[]) {
+        if (part?.type !== 'tool-call' || typeof part.toolCallId !== 'string') continue
+        tcIdx++
+        const result = toolResults.get(part.toolCallId)
+        const tc: DisplayToolCall = {
+          id: `${id}-tc-${tcIdx}`,
+          toolName: part.toolName ?? 'unknown',
+          input: (part.input as Record<string, unknown>) ?? {},
+          output: result?.output,
+          status: result ? (result.isError ? 'error' : 'completed') : 'pending',
+        }
+        out.push({
+          id: `${id}-tcm-${tcIdx}`,
+          role: 'assistant',
+          content: '',
+          toolCalls: [tc],
+          timestamp: ts,
+        })
+      }
+    }
+  }
+  return out
+}
+
+export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
+  // If we were launched with a pre-loaded session (--continue), seed the
+  // initial UI state from it so messages appear in scrollback before the
+  // user submits anything. Token usage is also restored so /usage shows
+  // the right totals immediately. The loopStateRef is hydrated in a
+  // matching useEffect below — refs can't be set during the useState
+  // initializer because useState runs before any other hook.
   const [state, setState] = useState<AgentState>({
     ...initialState,
     modelId: options.modelId,
     permissionMode: options.permissionMode ?? 'default',
+    messages: initialSession ? modelMessagesToDisplay(initialSession.messages) : initialState.messages,
+    usage: initialSession ? { ...initialSession.tokenUsage } : initialState.usage,
   })
 
   const modelRef = useRef<LanguageModel>(initialModel)
@@ -144,6 +255,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
   useEffect(() => {
     activeToolCallsLenRef.current = state.activeToolCalls.length
   }, [state.activeToolCalls.length])
+
+  // Hydrate the LoopState ref from the pre-loaded session on first
+  // render. Refs can't be initialised in useState (which runs first), so
+  // we do it here. Once-only — guarded by initializedRef downstream.
+  // useEffect order: this runs after mount but BEFORE the initialPrompt
+  // submit effect in App, so by the time the user sends their first
+  // message in a resumed session, agentLoop sees `existingState` and
+  // continues the same conversation.
+  useEffect(() => {
+    if (initialSession && !loopStateRef.current) {
+      loopStateRef.current = hydrateLoopState(initialSession, options.permissionMode ?? 'default')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Initialize memories (once). Project context comes from AGENTS.md at the repo
    *  root (walked up from cwd, Codex-style), not from language-specific manifest
@@ -490,6 +614,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     // assistant message and might silently try to resume.
     if (loopStateRef.current) {
       loopStateRef.current.messages.push({ role: 'user', content: noticeText })
+      // Persist the abort to the jsonl: drop an `interrupted` meta line
+      // (informational — picker can show "interrupted" tags) and flush
+      // the unsaved tail (which now includes the notice we just pushed)
+      // so resume picks up exactly where the user stopped. Both are
+      // fire-and-forget; never block the abort path on FS errors.
+      void appendInterrupted(loopStateRef.current)
+      void flushPendingMessages(loopStateRef.current)
     }
 
     controller.abort()
@@ -500,6 +631,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     if (loopStateRef.current) {
       await saveSession(loopStateRef.current, modelRef.current)
     }
+  }, [])
+
+  /** Synchronous snapshot of the live session for the post-exit hint
+   *  printed by index.ts. Returns null when no LoopState exists yet
+   *  (user launched but never submitted) — index.ts skips the hint in
+   *  that case so we don't suggest resuming an empty file. */
+  const getSessionInfo = useCallback(() => {
+    const ls = loopStateRef.current
+    if (!ls || ls.messages.length === 0) return null
+    return { sessionId: ls.sessionId, taskSlug: ls.taskSlug, messageCount: ls.messages.length }
   }, [])
 
   /** Save session without exiting */
@@ -522,6 +663,45 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     // conversation, not session-wide settings).
     setState((prev) => ({ ...initialState, modelId: prev.modelId, permissionMode: prev.permissionMode }))
   }, [resetBuffer])
+
+  /** Mid-session resume: hot-swap the agent state to a previously-saved
+   *  session. Hydrates loopStateRef from the jsonl so the next agent
+   *  submit appends to the SAME file (filename derives from sessionId +
+   *  taskSlug, both preserved by hydrate). Live model and approval mode
+   *  carry over from the current session; the resumed session's stored
+   *  `modelId` is informational only (in /usage history).
+   *
+   *  Display-side: we APPEND the converted history to whatever's already
+   *  in `state.messages`. We can't replace, because ChatInput's
+   *  scrollback-commit diff (`writtenMessageCountRef` in ChatInput.tsx)
+   *  treats `messages` as append-only — the only reset trigger is
+   *  `length < writtenCount`. Replacing 1 item with 6 leaves the diff
+   *  pointing at the wrong slice and the user sees nothing. Appending
+   *  matches Claude Code's scrollback discipline ("/resume just
+   *  continues; the old prompt and the loaded history both stay
+   *  visible") and avoids any diff edge case.
+   *
+   *  Transient UI state (activeToolCalls, shellOutput, todos, error)
+   *  belongs to the OLD session and is reset — those tool calls /
+   *  shells / checklists never ran for the loaded session. */
+  const resume = useCallback(
+    (loaded: LoadedSession) => {
+      pendingToolsRef.current.clear()
+      resetBuffer()
+      loopStateRef.current = hydrateLoopState(loaded, permissionModeRef.current)
+      const converted = modelMessagesToDisplay(loaded.messages)
+      setState((prev) => ({
+        ...prev,
+        activeToolCalls: [],
+        shellOutput: '',
+        error: null,
+        todos: [],
+        messages: [...prev.messages, ...converted],
+        usage: { ...loaded.tokenUsage },
+      }))
+    },
+    [resetBuffer],
+  )
 
   /** Manual context compression */
   const compact = useCallback(async () => {
@@ -631,6 +811,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions) {
     cleanup,
     clear,
     compact,
+    resume,
+    getSessionInfo,
     switchModel,
     setThinking,
     getThinking,

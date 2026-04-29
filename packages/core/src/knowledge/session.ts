@@ -1,47 +1,31 @@
-// @x-code-cli/core — Session memory (structured JSON summaries for cross-session continuation)
-import fs from 'node:fs/promises'
-import path from 'node:path'
-
+// @x-code-cli/core — LLM-generated session summaries (used by the agent
+// loop's deep compaction path).
+//
+// What used to live here: `saveSessionSummary` + `loadLatestSession`,
+// which wrote `<sessionId>.json` and `latest.json` into
+// `.x-code/sessions/`. Both are gone — the full session transcript now
+// lives in a single `.jsonl` per session (see `agent/session-store.ts`),
+// and compaction summaries are embedded as `compact-boundary` meta lines
+// inside that same jsonl. One file per session, no out-of-band siblings.
+//
+// What remains: `generateSessionSummary` — a small isolated `generateText`
+// call that the loop invokes when context overflows and needs to be
+// compressed into a paragraph. The result is fed to `markBoundaryAndReflush`
+// (in session-store) and also wrapped into a "[Previous conversation
+// summary]" user message that replaces the discarded prefix in
+// `state.messages`.
 import { generateText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import type { SessionSummary } from '../types/index.js'
-import { XCODE_DIR } from '../utils.js'
 
-const SESSIONS_DIR = `${XCODE_DIR}/sessions`
 /** Number of recent messages to include when generating session summaries */
 const SESSION_SUMMARY_MESSAGE_COUNT = 20
 
-function getSessionsDir(): string {
-  return path.join(process.cwd(), SESSIONS_DIR)
-}
-
-function getLatestPath(): string {
-  return path.join(getSessionsDir(), 'latest.json')
-}
-
-/** Load the most recent session summary */
-export async function loadLatestSession(): Promise<SessionSummary | null> {
-  try {
-    const raw = await fs.readFile(getLatestPath(), 'utf-8')
-    return JSON.parse(raw) as SessionSummary
-  } catch {
-    return null
-  }
-}
-
-/** Save a session summary */
-export async function saveSessionSummary(summary: SessionSummary): Promise<void> {
-  const dir = getSessionsDir()
-  await fs.mkdir(dir, { recursive: true })
-
-  await fs.writeFile(getLatestPath(), JSON.stringify(summary, null, 2), 'utf-8')
-
-  const archivePath = path.join(dir, `${summary.id}.json`)
-  await fs.writeFile(archivePath, JSON.stringify(summary, null, 2), 'utf-8')
-}
-
-/** Generate a session summary from messages using the model */
+/** Generate a session summary from messages using the model. Returns the
+ *  full structured `SessionSummary` (title + status + key results +
+ *  pendingWork + decisions) — callers typically want the `summary` field
+ *  for context replacement and the rest for picker / display purposes. */
 export async function generateSessionSummary(
   messages: ModelMessage[],
   model: LanguageModel,
@@ -98,27 +82,4 @@ Return ONLY valid JSON, no markdown fencing.`,
       status: 'completed',
     }
   }
-}
-
-/** Format session summary for system prompt injection */
-export function formatSessionForPrompt(session: SessionSummary): string {
-  const lines = [
-    `### Previous Session`,
-    `Title: ${session.title}`,
-    `Status: ${session.status}`,
-    `Summary: ${session.summary}`,
-  ]
-  if (session.keyResults.length > 0) {
-    lines.push('Key results:')
-    for (const r of session.keyResults) lines.push(`- ${r}`)
-  }
-  if (session.pendingWork.length > 0) {
-    lines.push('Pending work:')
-    for (const w of session.pendingWork) lines.push(`- ${w}`)
-  }
-  if (session.decisions.length > 0) {
-    lines.push('Decisions:')
-    for (const d of session.decisions) lines.push(`- ${d}`)
-  }
-  return lines.join('\n')
 }

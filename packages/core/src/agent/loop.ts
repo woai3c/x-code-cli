@@ -6,8 +6,7 @@ import { generateText, streamText } from 'ai'
 import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
-import { generateSessionSummary, saveSessionSummary } from '../knowledge/session.js'
-import { persistUsageSnapshot } from '../knowledge/session-usage.js'
+import { generateSessionSummary } from '../knowledge/session.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
@@ -19,6 +18,12 @@ import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from 
 import { lightCompactMessages } from './light-compact.js'
 import { createLoopState } from './loop-state.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
+import {
+  appendHeader,
+  appendUsage,
+  flushPendingMessages,
+  markBoundaryAndReflush,
+} from './session-store.js'
 
 /** Pull plain text out of a UserContent payload for slugification.
  *  UserContent can be a string OR a multi-part array (text/image/file
@@ -91,19 +96,33 @@ async function checkAndCompressContext(
     callbacks.onContextCompressed(
       `Dropped ${light.dropped} looped tool-call message(s) to reclaim context${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
-    if (!stillOver) return
+    if (!stillOver) {
+      // Light compaction succeeded — write a boundary so resume won't
+      // resurrect the dropped loop-guard pairs (they're still on disk
+      // pre-boundary, but the loader cuts at the latest boundary). The
+      // boundary carries no summary text since nothing was summarised.
+      void markBoundaryAndReflush(state)
+      return
+    }
   }
 
+  let summaryText = ''
   try {
     const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
       ...state.filesModified,
     ])
-    await saveSessionSummary(summary)
+    summaryText = summary.summary
   } catch {
-    // Don't block compression on session save failure
+    // Summary generation failed — fall through with empty text. The
+    // compressMessages call below still runs its own LLM summarisation,
+    // so context still shrinks; we just lose the structured summary
+    // that would have ridden along on the boundary line for picker UX.
   }
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
+  // Write a compact-boundary line + re-flush the trimmed messages so
+  // the post-boundary jsonl content equals the new in-memory state.
+  void markBoundaryAndReflush(state, summaryText)
   callbacks.onContextCompressed('Context compressed to fit context window.')
 }
 
@@ -120,6 +139,10 @@ async function handleContextTooLong(
   if (state.messages.length <= KEEP_RECENT) return false
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
+  // Same boundary discipline as the proactive path — reactive compact
+  // also shrinks state.messages in place, so the jsonl needs a
+  // compact-boundary marker to keep loader semantics consistent.
+  void markBoundaryAndReflush(state)
   callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
   return true
 }
@@ -194,7 +217,11 @@ async function collectTurnResponse(
     state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
     if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
     callbacks.onUsageUpdate(state.tokenUsage)
-    void persistUsageSnapshot(state, modelId)
+    // Persist a usage snapshot inline with the jsonl transcript. Per-turn
+    // cadence: the picker's tail-scan only ever needs the LATEST entry, but
+    // we write every turn so a crashed process doesn't lose its final
+    // counts. Fire-and-forget — never blocks the loop.
+    void appendUsage(state, modelId)
   }
 
   return result.finishReason
@@ -399,6 +426,12 @@ export async function agentLoop(
     state.currentPlanPath = makePlanFilePath(taskText, { slug: state.taskSlug })
   }
 
+  // Write the session header to its jsonl file (idempotent for resumes —
+  // the header line already exists in that case and we skip). Must come
+  // AFTER taskSlug resolution because the filename is `<slug>-<id>.jsonl`.
+  // Fire-and-forget — never blocks the loop on FS errors.
+  void appendHeader(state, options.modelId, taskText)
+
   const compressionThreshold = getCompressionThreshold(options.modelId)
 
   // Auto-continuation on `length` finish. Reasoning models can exhaust the
@@ -411,6 +444,15 @@ export async function agentLoop(
 
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
+
+    // Sweep any unpersisted messages from the prior iteration (or the
+    // initial user message on iter 1) into the jsonl. Diff-based: only
+    // appends `state.messages.slice(persistedMessageCount)`, so it's a
+    // no-op when nothing has changed. Must come BEFORE
+    // checkAndCompressContext — if compaction fires it rewrites the array
+    // in place and writes its own boundary + re-flush, which assumes the
+    // pre-compaction tail is already on disk.
+    void flushPendingMessages(state)
 
     await checkAndCompressContext(state, model, compressionThreshold, callbacks)
 
@@ -502,30 +544,25 @@ export async function agentLoop(
     callbacks.onError(new Error(`Reached maximum turns (${options.maxTurns}). Stopping agent loop.`))
   }
 
+  // Final flush — catches the last iteration's content when we exit via
+  // 'stop'/'error' (the next-iter flush at the top of the loop never
+  // runs in those cases). Abort path: useAgent.abort() pushes the
+  // `[Request interrupted by user]` notice AFTER agentLoop returns, so
+  // it's responsible for its own flush — see use-agent.ts.
+  void flushPendingMessages(state)
+
   return state
 }
 
-/** Save session on exit. Summary generation makes an LLM call that can be
- *  slow, so we bound it with a 2s timeout — on Ctrl+C we want to return
- *  to the shell promptly, not wait for a roundtrip. If the timeout fires
- *  or the call fails, we silently skip (session summaries are nice-to-have,
- *  not critical for exit). */
-export async function saveSession(state: LoopState, model: LanguageModel, timeoutMs = 2000): Promise<void> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const summary = await generateSessionSummary(
-      state.messages,
-      model,
-      state.sessionId,
-      state.startedAt,
-      [...state.filesModified],
-      controller.signal,
-    )
-    await saveSessionSummary(summary)
-  } catch {
-    // Timeout or any other failure — skip summary silently.
-  } finally {
-    clearTimeout(timer)
-  }
+/** Sync any in-memory messages to the session jsonl. Called on exit /
+ *  cleanup paths so a process kill doesn't lose the last turn. Per-turn
+ *  appends already happen during agentLoop — this is the safety-net
+ *  drain for whatever is left. Tolerant of a half-initialized state
+ *  (no taskSlug yet etc.); flushPendingMessages no-ops when there's
+ *  nothing to write. The `model` parameter is kept for API stability
+ *  with the previous summary-generating implementation but is unused
+ *  here — summaries now ride along on `compact-boundary` lines, not
+ *  on a separate exit-time call. */
+export async function saveSession(state: LoopState, _model: LanguageModel): Promise<void> {
+  await flushPendingMessages(state)
 }

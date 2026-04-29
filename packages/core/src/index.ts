@@ -33,6 +33,12 @@ export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
 export { makePlanFilePath } from './agent/plan-storage.js'
+export {
+  COMPRESSION_TRIGGER_RATIO,
+  estimateTokenCount,
+  getCompressionThreshold,
+  getContextWindow,
+} from './agent/context-window.js'
 export { classifyApiError } from './agent/api-errors.js'
 export { buildUserContent, extractFileReferences, ingestFile, classifyFile } from './agent/file-ingest.js'
 export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'
@@ -57,7 +63,18 @@ export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog } from './utils.js'
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'
 export { getAutoMemory, initMemories } from './knowledge/auto-memory.js'
-export { loadLatestSession, saveSessionSummary, formatSessionForPrompt } from './knowledge/session.js'
-export { loadLatestUsageSnapshot, listSessionUsageSnapshots } from './knowledge/session-usage.js'
-export type { SessionUsageSnapshot } from './knowledge/session-usage.js'
+export { generateSessionSummary } from './knowledge/session.js'
 export { initProject } from './knowledge/init.js'
+
+// Session store (per-session jsonl transcript — used by /resume,
+// /usage history, and the CLI startup --resume / --continue flags).
+export {
+  appendInterrupted,
+  flushPendingMessages,
+  getSessionFilePath,
+  hydrateLoopState,
+  listSessions,
+  loadSession,
+  pickLatestSession,
+} from './agent/session-store.js'
+export type { LoadedSession, SessionListEntry } from './agent/session-store.js'

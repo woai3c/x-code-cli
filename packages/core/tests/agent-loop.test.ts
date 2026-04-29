@@ -38,10 +38,24 @@ vi.mock('../src/knowledge/loader.js', () => ({
 }))
 
 vi.mock('../src/knowledge/session.js', () => ({
-  loadLatestSession: vi.fn().mockResolvedValue(null),
-  formatSessionForPrompt: vi.fn().mockReturnValue(''),
   generateSessionSummary: vi.fn().mockResolvedValue({}),
-  saveSessionSummary: vi.fn().mockResolvedValue(undefined),
+}))
+
+// Block jsonl persistence — keep tests free of fs side effects in the
+// project's `.x-code/sessions/` (which would leak between runs and pollute
+// developers' repos when they execute the suite locally).
+vi.mock('../src/agent/session-store.js', () => ({
+  appendHeader: vi.fn().mockResolvedValue(undefined),
+  appendUsage: vi.fn().mockResolvedValue(undefined),
+  appendInterrupted: vi.fn().mockResolvedValue(undefined),
+  flushPendingMessages: vi.fn().mockResolvedValue(undefined),
+  markBoundaryAndReflush: vi.fn().mockResolvedValue(undefined),
+  getSessionFilePath: vi.fn().mockReturnValue(''),
+  hydrateLoopState: vi.fn(),
+  listSessions: vi.fn().mockResolvedValue([]),
+  loadSession: vi.fn().mockResolvedValue(null),
+  pickLatestSession: vi.fn().mockResolvedValue(null),
+  shortIdFor: vi.fn().mockReturnValue(''),
 }))
 
 describe('agent loop', () => {
