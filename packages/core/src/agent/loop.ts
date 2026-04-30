@@ -216,14 +216,16 @@ async function collectTurnResponse(
     state.tokenUsage.cacheCreationTokens += usage.inputTokenDetails?.cacheWriteTokens ?? 0
     state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
     // Snapshot the current context-window occupancy from this response —
-    // overwrite, not accumulate. Strictly speaking "context" is the input
-    // side only (system + history + tools + current user message); the
-    // output is what the model just generated and hasn't entered context
-    // yet. AI SDK's `inputTokens` already includes cache_read + cache_write
-    // (it's the full prompt the model saw), so this single field captures
-    // exactly what the user wants to see in the footer "N / M · X%"
-    // indicator. Cumulative counters above remain for /usage billing.
-    state.tokenUsage.currentContextTokens = usage.inputTokens ?? 0
+    // overwrite, not accumulate. Includes input + output because every
+    // major provider (Anthropic, OpenAI, Google, DeepSeek, Moonshot,
+    // Alibaba, xAI) defines context window as the SHARED budget pool of
+    // input + output: input + output ≤ context_window is the architectural
+    // constraint (single KV-cache cap). AI SDK's `inputTokens` already
+    // includes cache_read + cache_write, so this is the full
+    // prompt-the-model-saw plus what it just wrote — directly comparable
+    // to `getContextWindow(modelId)` in the footer "N / M · X%" indicator.
+    // Cumulative counters above remain for /usage billing summaries.
+    state.tokenUsage.currentContextTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
     if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
     callbacks.onUsageUpdate(state.tokenUsage)
     // Persist a usage snapshot inline with the jsonl transcript. Per-turn

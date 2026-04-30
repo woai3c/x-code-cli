@@ -65,18 +65,20 @@ export interface TokenUsage {
    *  Billed at a premium over normal input rate but unlocks cheap reads on
    *  subsequent turns. Zero on providers that don't separate creation from read. */
   cacheCreationTokens: number
-  /** Current context-window occupancy — `input_tokens` of the MOST RECENT
-   *  API response (already includes cache_read + cache_write since AI SDK
-   *  v6 normalises them into `inputTokens`). Unlike the cumulative fields
-   *  above, this is a SNAPSHOT — overwritten each turn, not accumulated.
-   *  Drives the footer "N / M · X%" indicator (Gemini-CLI / opencode style).
+  /** Current context-window occupancy — `input_tokens + output_tokens` of
+   *  the MOST RECENT API response (`inputTokens` already includes cache_read
+   *  + cache_write since AI SDK v6 normalises them into one field). Unlike
+   *  the cumulative fields above, this is a SNAPSHOT — overwritten each
+   *  turn, not accumulated. Drives the footer "N / M · X%" indicator.
    *
-   *  Why input only (not input + output): "context" is what the model SEES
-   *  on a request — system prompt + history + tools + current user message.
-   *  The output is what it just generated and hasn't entered context yet
-   *  (it'll roll into next turn's input as part of the assistant history,
-   *  but at the moment we snapshot this it's still on the response side).
-   *  The cumulative fields above remain for `/usage` billing summaries. */
+   *  Why input + output (matching every provider's definition):
+   *  every major LLM API — Anthropic, OpenAI, Google Gemini, DeepSeek,
+   *  Moonshot, Alibaba, xAI — defines "context window" as the shared
+   *  budget pool of input + output, with `input + output ≤ context_window`
+   *  as the architectural constraint (single KV-cache cap). Showing input
+   *  alone in the footer would be a different number than what users see
+   *  when reading provider docs about model context windows. The cumulative
+   *  fields above remain for `/usage` billing summaries. */
   currentContextTokens: number
 }
 

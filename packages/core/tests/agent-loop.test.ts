@@ -112,7 +112,7 @@ describe('agent loop', () => {
     expect(usageArg.inputTokens).toBe(100)
     expect(usageArg.outputTokens).toBe(20)
     expect(usageArg.totalTokens).toBe(120)
-    expect(usageArg.currentContextTokens).toBe(100)
+    expect(usageArg.currentContextTokens).toBe(120)
 
     expect(state.turnCount).toBe(1)
     expect(state.messages.length).toBeGreaterThan(0)
