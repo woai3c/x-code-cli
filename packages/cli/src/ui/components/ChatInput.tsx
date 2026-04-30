@@ -366,6 +366,7 @@ const S_BOLD = '\x1b[0m\x1b[1m'
 // (147,165,255) which is a DIFFERENT shade, producing a visible
 // color shift at the live→committed handoff.
 const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;177;185;249m'
+const S_BLUE_PURPLE_BOLD = '\x1b[0m\x1b[38;2;177;185;249;1m'
 const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
 const S_ERROR_FG = '\x1b[38;2;255;107;128m' // error rgb(255,107,128) #ff6b80
@@ -1602,21 +1603,21 @@ export function ChatInput({
       for (const q of visibleLines) {
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(`? ${q}`, S_ACCENT_BOLD))
+        cells.push(...textToCells(q, S_BLUE_PURPLE_BOLD))
         frame.push(cells)
       }
       if (truncated) {
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(`? \u2026 (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
+        cells.push(...textToCells(`\u2026 (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
         frame.push(cells)
       }
       selectRequest.options.forEach((opt, i) => {
         const active = i === selectIndex
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(active ? '\u276f ' : '  ', active ? S_ACCENT : S_NONE))
-        cells.push(...textToCells(opt.label, active ? S_ACCENT : S_NONE))
+        cells.push(...textToCells(active ? '\u276f ' : '  ', active ? S_BLUE_PURPLE : S_NONE))
+        cells.push(...textToCells(opt.label, active ? S_BLUE_PURPLE : S_NONE))
         if (opt.freeform && active) {
           // Inline text input. Drawn on the same row as the label,
           // separated by `: `; the inverse-video cell at `cursor` IS
