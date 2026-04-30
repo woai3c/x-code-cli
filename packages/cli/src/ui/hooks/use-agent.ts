@@ -69,6 +69,7 @@ export interface ActiveToolCall {
   toolName: string
   input: Record<string, unknown>
   progress?: string
+  subToolHistory?: string[]
 }
 
 export interface AgentState {
@@ -201,6 +202,18 @@ function modelMessagesToDisplay(messages: ModelMessage[]): DisplayMessage[] {
     }
   }
   return out
+}
+
+function previewSubInput(input: Record<string, unknown>): string {
+  const val =
+    (input.filePath as string) ??
+    (input.command as string) ??
+    (input.pattern as string) ??
+    (input.query as string) ??
+    (input.dirPath as string) ??
+    (input.path as string) ??
+    ''
+  return val.length > 80 ? val.slice(0, 77) + '...' : val
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
@@ -466,6 +479,30 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // shape and applied auto-clear semantics; we just store what
           // it gives us so ChatInput can re-render the todo panel.
           setState((prev) => ({ ...prev, todos }))
+        },
+        onSubAgentEvent: (event) => {
+          if (event.kind === 'tool-call') {
+            setState((prev) => {
+              const idx = prev.activeToolCalls.findIndex((t) => t.id === event.toolCallId)
+              if (idx < 0) return prev
+              const tc = prev.activeToolCalls[idx]!
+              const label = `${event.subToolName}: ${previewSubInput(event.subInput as Record<string, unknown> ?? {})}`
+              const history = [...(tc.subToolHistory ?? []), label]
+              const next = prev.activeToolCalls.slice()
+              next[idx] = { ...tc, progress: label, subToolHistory: history }
+              return { ...prev, activeToolCalls: next }
+            })
+          }
+          if (event.kind === 'end') {
+            const turnInfo = `${event.turnCount}t`
+            const tokInfo = event.tokenUsage.totalTokens > 1000
+              ? `${(event.tokenUsage.totalTokens / 1000).toFixed(1)}k tok`
+              : `${event.tokenUsage.totalTokens} tok`
+            const durInfo = event.durationMs > 1000
+              ? `${(event.durationMs / 1000).toFixed(1)}s`
+              : `${event.durationMs}ms`
+            callbacks.onToolProgress(event.toolCallId, `Done (${turnInfo}, ${tokInfo}, ${durInfo})`)
+          }
         },
         onShellOutput: (chunk) => {
           setState((prev) => ({ ...prev, shellOutput: prev.shellOutput + chunk }))

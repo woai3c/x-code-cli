@@ -6,13 +6,14 @@ import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
-import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
+import type { AgentCallbacks, AgentOptions, LanguageModel, TodoItem } from '../types/index.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { toolResultMessage } from './messages.js'
 import { makePlanFilePath, readPlan, writePlan } from './plan-storage.js'
+import { runSubAgent } from './sub-agents/runner.js'
 
 /** Walk back through state.messages and grab the most recent user
  *  message's text — used as the slug source for the plan filename. */
@@ -208,12 +209,15 @@ type ToolCall = { toolName: string; toolCallId: string; input: Record<string, un
  *  can't pre-block these — only record for loop detection and annotate. */
 const AUTO_EXECUTED_TOOLS = new Set(['readFile', 'glob', 'grep', 'listDir', 'webFetch', 'webSearch', 'saveKnowledge'])
 
-/** Handle a single tool call. Returns when the call has been fully dispatched. */
+/** Handle a single tool call. Returns when the call has been fully dispatched.
+ *  `parentModel` is the LanguageModel instance for the current loop — needed
+ *  by the task tool to pass as fallback when the sub-agent doesn't override. */
 async function handleToolCall(
   tc: ToolCall,
   state: LoopState,
   options: AgentOptions,
   callbacks: AgentCallbacks,
+  parentModel: LanguageModel,
 ): Promise<void> {
   const { toolName, input, toolCallId } = tc
 
@@ -264,15 +268,53 @@ async function handleToolCall(
       dropped > 0
         ? ` ${dropped} entr${dropped === 1 ? 'y was' : 'ies were'} dropped because they had neither content nor activeForm — please include both fields next time so the user sees clean labels.`
         : ''
+    // Verification nudge: when completing a 3+ item list and none of
+    // them look like a verification step, remind the model to verify.
+    const VERIFY_RE = /\b(verif|test|check|lint|build|typecheck|tsc)\b/i
+    const needsVerifyNudge =
+      allDone &&
+      normalized.length >= 3 &&
+      !normalized.some((t) => VERIFY_RE.test(t.content) || VERIFY_RE.test(t.activeForm))
+    const verifyNote = needsVerifyNudge
+      ? ' Before wrapping up, verify your work — run tests, lint, or type-check as appropriate for this project.'
+      : ''
     pushToolResult(
       state,
       callbacks,
       toolCallId,
       toolName,
       allDone
-        ? `All todos completed. Checklist cleared. Continue with the task or close it out as appropriate.${droppedNote}`
+        ? `All todos completed. Checklist cleared.${verifyNote}${droppedNote}`
         : `Todo list updated. Keep the checklist current — mark items completed immediately when finished, and ensure exactly one item is in_progress.${droppedNote}`,
     )
+    return
+  }
+
+  // ── task tool (sub-agent dispatch) ──
+  if (toolName === 'task') {
+    const agentName = input.subagent_type as string
+    const description = input.description as string
+    const taskPrompt = input.prompt as string
+
+    reportProgress(toolCallId, `Task: ${description} (${agentName})`)
+
+    const result = await runSubAgent(
+      {
+        parentState: state,
+        parentOptions: options,
+        callbacks,
+        toolCallId,
+        agentName,
+        description,
+        prompt: taskPrompt,
+        knowledgeContext: state.knowledgeContext ?? '',
+        isGitRepo: state.isGitRepo ?? false,
+      },
+      parentModel,
+    )
+
+    const statsLine = `<task_stats tool_calls="${result.toolCallCount}" tokens="${result.tokenUsage.totalTokens}" duration_ms="${result.durationMs}" />`
+    pushToolResult(state, callbacks, toolCallId, toolName, `${result.resultText}\n${statsLine}`)
     return
   }
 
@@ -580,12 +622,14 @@ async function handleToolCall(
   pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(output), isError)
 }
 
-/** Handle all tool calls from a single model turn, sequentially. */
+/** Handle all tool calls from a single model turn, sequentially.
+ *  `parentModel` is threaded through so the task tool can pass it to runSubAgent. */
 export async function processToolCalls(
   toolCalls: ToolCall[],
   state: LoopState,
   options: AgentOptions,
   callbacks: AgentCallbacks,
+  parentModel: LanguageModel,
 ): Promise<void> {
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!
@@ -609,6 +653,6 @@ export async function processToolCalls(
       }
       return
     }
-    await handleToolCall(tc, state, options, callbacks)
+    await handleToolCall(tc, state, options, callbacks, parentModel)
   }
 }

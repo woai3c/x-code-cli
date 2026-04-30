@@ -11,6 +11,7 @@ import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
+import { createTaskTool } from '../tools/task.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
@@ -262,6 +263,39 @@ function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
   return false
 }
 
+/** Build the effective tool set for this loop, applying:
+ *  1. The static tool registry (always)
+ *  2. The task tool (when subAgentRegistry is present)
+ *  3. options.toolFilter allow/deny (for sub-agent loops)
+ *
+ *  Computed once per session and cached — the tool set is stable within
+ *  a session (registry doesn't change, filter doesn't change). */
+function buildTools(options: AgentOptions) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tools: Record<string, any> = { ...toolRegistry }
+
+  if (options.subAgentRegistry) {
+    tools.task = createTaskTool(options.subAgentRegistry)
+  }
+
+  const filter = options.toolFilter
+  if (filter) {
+    if (filter.allow) {
+      const allowSet = new Set(filter.allow)
+      for (const name of Object.keys(tools)) {
+        if (!allowSet.has(name)) delete tools[name]
+      }
+    }
+    if (filter.deny) {
+      for (const name of filter.deny) {
+        delete tools[name]
+      }
+    }
+  }
+
+  return tools
+}
+
 /** Run one agent turn: stream to UI, collect response. Resilient to errors. */
 async function runTurn(
   state: LoopState,
@@ -269,6 +303,8 @@ async function runTurn(
   options: AgentOptions,
   systemPrompt: string,
   callbacks: AgentCallbacks,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  effectiveTools: Record<string, any>,
 ): Promise<TurnOutcome> {
   // Defensive sweep BEFORE every API call: if the previous turn left
   // an assistant tool_call without a paired tool_result anywhere in
@@ -316,7 +352,7 @@ async function runTurn(
       model,
       system: cached.system,
       messages: cached.messages,
-      tools: toolRegistry,
+      tools: effectiveTools,
       maxRetries: 3,
       abortSignal: options.abortSignal,
       // Explicit ceiling so provider defaults don't silently truncate long
@@ -420,6 +456,10 @@ export async function agentLoop(
     .then(() => true)
     .catch(() => false)
 
+  // Cache knowledge context and git status on state for sub-agent use
+  state.knowledgeContext = fullKnowledgeContext
+  state.isGitRepo = isGitRepo
+
   // Resolve the slug now — must be set before any persistUsageSnapshot
   // (per-turn) or plan-file write below. `generateTaskSlug` returns ''
   // on failure, in which case session/plan files fall back to the
@@ -444,6 +484,11 @@ export async function agentLoop(
   void appendHeader(state, options.modelId, taskText)
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
+
+  // Build the effective tool set once per session — includes the task
+  // tool when a subAgentRegistry is available, and applies toolFilter
+  // for sub-agent loops. Stable for the session lifetime.
+  const effectiveTools = buildTools(options)
 
   // Auto-continuation on `length` finish. Reasoning models can exhaust the
   // output token budget before the user-visible reply completes — the old
@@ -490,7 +535,7 @@ export async function agentLoop(
     }
     const systemPrompt = state.systemPromptCache
 
-    const outcome = await runTurn(state, model, options, systemPrompt, callbacks)
+    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools)
 
     if (outcome.kind === 'error') break
     if (outcome.kind === 'aborted') break
@@ -512,7 +557,7 @@ export async function agentLoop(
         callbacks.onError(new Error(classifyApiError(err).message))
         break
       }
-      await processToolCalls(toolCalls, state, options, callbacks)
+      await processToolCalls(toolCalls, state, options, callbacks, model)
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
       if (options.abortSignal?.aborted) break

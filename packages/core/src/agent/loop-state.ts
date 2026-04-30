@@ -56,6 +56,15 @@ export interface LoopState {
    *  "everything-after-last-boundary wins" rule reconstructs the same
    *  in-memory state on resume. See `agent/session-store.ts`. */
   persistedMessageCount: number
+
+  // ── Sub-agent support (set once in agentLoop, read by tool-execution) ──
+
+  /** Cached knowledge context for sub-agent system prompts. Set once in
+   *  agentLoop after buildKnowledgeContext resolves; transparent to
+   *  sub-agent loops (they don't call buildKnowledgeContext themselves). */
+  knowledgeContext?: string
+  /** Whether cwd is a git repo. Cached for sub-agent system prompts. */
+  isGitRepo?: boolean
 }
 
 /** Generate a human-skimmable session id: `YYYYMMDD-HHMMSS-mmm` (local

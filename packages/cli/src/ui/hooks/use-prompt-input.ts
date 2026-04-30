@@ -223,7 +223,7 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         return
       }
       if (data === '\t') return dispatchKey('tab')
-      if (data === '\x1b') return dispatchKey('escape')
+      if (data === '\x1b' || data === '\x1b\x1b') return dispatchKey('escape')
 
       // Ctrl+C — flush and call the interrupt handler (which triggers Ink's
       // clean unmount via useApp().exit()). We do NOT send SIGINT because on

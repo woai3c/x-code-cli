@@ -29,6 +29,8 @@ export function getToolLabel(toolName: string): string {
   if (n === 'saveknowledge') return 'SaveKnowledge'
   if (n === 'enterplanmode') return 'EnterPlanMode'
   if (n === 'exitplanmode') return 'ExitPlanMode'
+  if (n === 'task') return 'Task'
+  if (n === 'todowrite') return 'TodoWrite'
   return toolName
 }
 
@@ -63,6 +65,13 @@ export function getToolInputPreview(toolName: string, input: Record<string, unkn
   // Web tools
   if (n === 'websearch' || n === 'webfetch') {
     return (input.query as string) || (input.url as string) || ''
+  }
+
+  // Task (sub-agent)
+  if (n === 'task') {
+    const desc = (input.description as string) || ''
+    const agent = (input.subagent_type as string) || ''
+    return agent ? `${desc} (${agent})` : desc
   }
 
   // Generic: try common parameter names before falling back
@@ -129,6 +138,28 @@ export function getToolResultSummary(toolName: string, output: string | undefine
     return `${lines.length} result${lines.length !== 1 ? 's' : ''}`
   }
 
+  // Task (sub-agent) — show a CC-style stats summary line
+  if (n === 'task') {
+    const statsMatch = output.match(/<task_stats\s+tool_calls="(\d+)"\s+tokens="(\d+)"\s+duration_ms="(\d+)"\s*\/>/)
+    const resultMatch = output.match(/<task_result>\n?([\s\S]*?)\n?<\/task_result>/)
+    const body = resultMatch ? resultMatch[1]! : output.replace(/<task_stats[^/]*\/>/, '').trim()
+    const lines = body.trim().split('\n').filter((l) => l.trim())
+
+    if (statsMatch) {
+      const toolCalls = parseInt(statsMatch[1]!, 10)
+      const tokens = parseInt(statsMatch[2]!, 10)
+      const durationMs = parseInt(statsMatch[3]!, 10)
+      const toolStr = toolCalls === 1 ? '1 tool use' : `${toolCalls} tool uses`
+      const tokenStr = formatTokenCount(tokens)
+      const durStr = formatTaskDuration(durationMs)
+      return `Done (${toolStr} · ${tokenStr} tokens · ${durStr})`
+    }
+
+    if (lines.length === 0) return 'Done'
+    if (lines.length <= 3) return lines.join('\n')
+    return lines.slice(0, 2).join('\n') + `\n... +${lines.length - 2} lines`
+  }
+
   // Web tools — compact one-line status in scrollback, matching Claude
   // Code's pattern. The "which websites" info lives on the STREAMING
   // progress line (⎿ ⠋ Found N results: host1, host2, host3) while the
@@ -161,4 +192,19 @@ export function getToolResultSummary(toolName: string, output: string | undefine
   if (lines.length === 0) return 'Done'
   if (lines.length <= 3) return lines.join('\n')
   return lines.slice(0, 2).join('\n') + `\n... +${lines.length - 2} lines`
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
+  return String(tokens)
+}
+
+function formatTaskDuration(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`
+  const seconds = Math.floor(ms / 1_000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSecs = seconds % 60
+  return remainingSecs > 0 ? `${minutes}m ${remainingSecs}s` : `${minutes}m`
 }

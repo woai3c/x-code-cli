@@ -115,6 +115,21 @@ function sliceByWidth(str: string, maxCols: number): string {
   return str.slice(0, i)
 }
 
+function truncateCellRow(cells: Cell[], maxWidth: number): Cell[] {
+  let w = 0
+  for (let i = 0; i < cells.length; i++) {
+    if (w + cells[i]!.width > maxWidth) {
+      const truncated = cells.slice(0, i)
+      if (w + 1 <= maxWidth) {
+        truncated.push({ char: '\u2026', style: cells[i]!.style, width: 1 })
+      }
+      return truncated
+    }
+    w += cells[i]!.width
+  }
+  return cells
+}
+
 function skipByWidth(str: string, skipCols: number): number {
   let w = 0,
     i = 0
@@ -1088,6 +1103,7 @@ export function ChatInput({
         // `dismissible` falsy so Esc is swallowed; otherwise the model
         // gets a silent empty answer back from its askUser call.
         if (key === 'escape' && selectRequest.dismissible) {
+          debugLog('chatinput.select-dismiss', 'esc')
           selectRequest.onResolve('')
           return
         }
@@ -1615,29 +1631,50 @@ export function ChatInput({
           }
           frame.push(row1)
 
-          // Row 2: ⎿ + spinner glyph + progress text. This is the ONLY
-          // "is running" signal — when the tool finishes, row2 goes away
-          // and the committed scrollback entry keeps row1 plus a result
-          // summary in its place.
-          // ⎿ and the trailing meta suffix use S_GRAY_90 (matches the
-          // committed scrollback's `c.gray('⎿')` and `c.gray(' (Xs)')`)
-          // so they don't change color the instant the tool transitions
-          // from live frame to scrollback. Only the in-progress text
-          // ("Running..."/progress) stays in S_DIM — that's running-
-          // specific content that gets replaced wholesale on completion,
-          // so its color doesn't need to match anything in scrollback.
-          const row2: Cell[] = []
-          row2.push(...textToCells('   ', S_NONE))
-          row2.push(...textToCells('⎿', S_GRAY_90))
-          row2.push({ char: ' ', style: S_NONE, width: 1 })
-          row2.push({ char: ' ', style: S_NONE, width: 1 })
-          row2.push(...textToCells(glyph, S_SPINNER))
-          row2.push({ char: ' ', style: S_NONE, width: 1 })
-          row2.push(...textToCells(tc.progress ?? 'Running...', S_DIM))
-          if (idx === tools.length - 1 && meta) {
-            row2.push(...textToCells(meta, S_GRAY_90))
+          // Sub-tool history: for task (sub-agent) tools, show the last
+          // few tool calls as stacked `⎿` rows (like CC). Other tools
+          // keep a single progress row.
+          const history = tc.subToolHistory
+          const isTask = tc.toolName.toLowerCase().replace(/[_-]/g, '') === 'task'
+          if (isTask && history && history.length > 1) {
+            const MAX_VISIBLE = 4
+            const start = Math.max(0, history.length - MAX_VISIBLE)
+            for (let hi = start; hi < history.length; hi++) {
+              const isFirst = hi === start
+              const isLast = hi === history.length - 1
+              const row: Cell[] = []
+              row.push(...textToCells('   ', S_NONE))
+              if (isFirst) {
+                row.push(...textToCells('⎿', S_GRAY_90))
+              } else {
+                row.push({ char: ' ', style: S_NONE, width: 1 })
+              }
+              row.push({ char: ' ', style: S_NONE, width: 1 })
+              row.push({ char: ' ', style: S_NONE, width: 1 })
+              if (isLast) {
+                row.push(...textToCells(glyph, S_SPINNER))
+                row.push({ char: ' ', style: S_NONE, width: 1 })
+              }
+              row.push(...textToCells(history[hi]!, isLast ? S_DIM : S_GRAY_90))
+              if (isLast && idx === tools.length - 1 && meta) {
+                row.push(...textToCells(meta, S_GRAY_90))
+              }
+              frame.push(truncateCellRow(row, Math.max(20, termWidth - 1)))
+            }
+          } else {
+            const row2: Cell[] = []
+            row2.push(...textToCells('   ', S_NONE))
+            row2.push(...textToCells('⎿', S_GRAY_90))
+            row2.push({ char: ' ', style: S_NONE, width: 1 })
+            row2.push({ char: ' ', style: S_NONE, width: 1 })
+            row2.push(...textToCells(glyph, S_SPINNER))
+            row2.push({ char: ' ', style: S_NONE, width: 1 })
+            row2.push(...textToCells(tc.progress ?? 'Running...', S_DIM))
+            if (idx === tools.length - 1 && meta) {
+              row2.push(...textToCells(meta, S_GRAY_90))
+            }
+            frame.push(row2)
           }
-          frame.push(row2)
         })
       } else {
         // Build the whole prefix (` ${glyph} ${label}...`) under ONE style
@@ -1708,11 +1745,12 @@ export function ChatInput({
       const allLines = selectRequest.question.split('\n')
       const truncated = allLines.length > MAX_QUESTION_LINES
       const visibleLines = truncated ? allLines.slice(0, MAX_QUESTION_LINES) : allLines
+      const maxRowW = Math.max(20, termWidth - 1)
       for (const q of visibleLines) {
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push(...textToCells(q, S_BLUE_PURPLE_BOLD))
-        frame.push(cells)
+        frame.push(truncateCellRow(cells, maxRowW))
       }
       if (truncated) {
         const cells: Cell[] = []
@@ -1720,19 +1758,49 @@ export function ChatInput({
         cells.push(...textToCells(`\u2026 (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
         frame.push(cells)
       }
-      selectRequest.options.forEach((opt, i) => {
+
+      // Viewport-scroll the options list when there are too many to fit
+      // on screen. Reserve rows for the question header, hint line, and
+      // a small safety margin. The visible window follows the active
+      // selection index so the highlighted row is always in view. When
+      // scrolled, dim "... N more above/below" indicators are shown.
+      const termRows = stdout?.rows ?? 25
+      const questionRows = (truncated ? visibleLines.length + 1 : visibleLines.length)
+      const hintRows = 1
+      const chromeRows = questionRows + hintRows + 2
+      const maxVisibleOptions = Math.max(3, termRows - chromeRows)
+      const opts = selectRequest.options
+      const totalOpts = opts.length
+      const needsScroll = totalOpts > maxVisibleOptions
+
+      let vpStart = 0
+      let vpEnd = totalOpts
+      if (needsScroll) {
+        const half = Math.floor(maxVisibleOptions / 2)
+        vpStart = Math.max(0, selectIndex - half)
+        vpEnd = vpStart + maxVisibleOptions
+        if (vpEnd > totalOpts) {
+          vpEnd = totalOpts
+          vpStart = Math.max(0, vpEnd - maxVisibleOptions)
+        }
+      }
+
+      if (needsScroll && vpStart > 0) {
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells(`  \u2191 ${vpStart} more above`, S_DIM))
+        frame.push(cells)
+      }
+
+      const maxRowWidth = Math.max(20, termWidth - 1)
+      for (let i = vpStart; i < vpEnd; i++) {
+        const opt = opts[i]!
         const active = i === selectIndex
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push(...textToCells(active ? '\u276f ' : '  ', active ? S_BLUE_PURPLE : S_NONE))
         cells.push(...textToCells(opt.label, active ? S_BLUE_PURPLE : S_NONE))
         if (opt.freeform && active) {
-          // Inline text input. Drawn on the same row as the label,
-          // separated by `: `; the inverse-video cell at `cursor` IS
-          // the cursor (terminal hardware cursor stays hidden \u2014 see
-          // the mount-time `\x1b[?25l`). When the buffer is empty
-          // we still need a single cursor cell so the user sees
-          // somewhere to type.
           cells.push(...textToCells(': ', S_NONE))
           const t = freeform.text
           const c = freeform.cursor
@@ -1745,14 +1813,23 @@ export function ChatInput({
         } else if (opt.description) {
           cells.push(...textToCells(`  \u2014 ${opt.description}`, S_DIM))
         }
+        frame.push(truncateCellRow(cells, maxRowWidth))
+      }
+
+      if (needsScroll && vpEnd < totalOpts) {
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells(`  \u2193 ${totalOpts - vpEnd} more below`, S_DIM))
         frame.push(cells)
-      })
+      }
+
       const hint: Cell[] = []
       hint.push({ char: ' ', style: S_NONE, width: 1 })
-      const activeOpt = selectRequest.options[selectIndex]
+      const activeOpt = opts[selectIndex]
+      const escHint = selectRequest.dismissible ? '  Esc Cancel' : ''
       const hintText = activeOpt?.freeform
-        ? '\u2191\u2193 Navigate  Type your answer  Enter Confirm'
-        : '\u2191\u2193 Navigate  Enter Confirm'
+        ? `\u2191\u2193 Navigate  Type your answer  Enter Confirm${escHint}`
+        : `\u2191\u2193 Navigate  Enter Confirm${escHint}`
       hint.push(...textToCells(hintText, S_DIM))
       frame.push(hint)
 
@@ -1766,11 +1843,6 @@ export function ChatInput({
       if (activeOpt?.preview && activeOpt.preview.length > 0) {
         frame.push([{ char: ' ', style: S_NONE, width: 1 }])
         for (const row of activeOpt.preview) {
-          // Each row is already an ANSI-styled string from render-diff
-          // (`buildSyntaxThemePreview` etc.). We indent it 2 cells to
-          // align under the option labels above, then convert ANSI to
-          // cells. Indent cells use S_NONE so they don't inherit any
-          // color from the preview row's first SGR escape.
           const cells: Cell[] = []
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           cells.push({ char: ' ', style: S_NONE, width: 1 })

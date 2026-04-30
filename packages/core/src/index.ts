@@ -33,7 +33,7 @@ export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
 export { computeEditDiff } from './agent/diff.js'
 export type { EditDiffHunk, EditDiffPayload } from './agent/diff.js'
-export { buildSystemPrompt } from './agent/system-prompt.js'
+export { buildSystemPrompt, buildSubAgentSystemPrompt } from './agent/system-prompt.js'
 export { makePlanFilePath } from './agent/plan-storage.js'
 export {
   COMPRESSION_TRIGGER_RATIO,
@@ -67,6 +67,10 @@ export { buildKnowledgeContext } from './knowledge/loader.js'
 export { getAutoMemory, initMemories } from './knowledge/auto-memory.js'
 export { generateSessionSummary } from './knowledge/session.js'
 export { initProject } from './knowledge/init.js'
+
+// Sub-agents
+export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from './agent/sub-agents/index.js'
+export type { SubAgentDefinition, SubAgentEvent, SubAgentTrace } from './agent/sub-agents/index.js'
 
 // Session store (per-session jsonl transcript — used by /resume,
 // /usage history, and the CLI startup --resume / --continue flags).

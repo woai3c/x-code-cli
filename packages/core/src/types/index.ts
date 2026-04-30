@@ -2,6 +2,8 @@
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import type { EditDiffPayload } from '../agent/diff.js'
+import type { SubAgentEvent } from '../agent/sub-agents/types.js'
+import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
 
 // ─── Permission ───
 
@@ -163,6 +165,9 @@ export interface AgentCallbacks {
   onUsageUpdate: (usage: TokenUsage) => void
   onContextCompressed: (summary: string) => void
   onError: (error: Error) => void
+  /** Fired by the sub-agent runner to stream progress from child agent loops.
+   *  The CLI UI uses these events to build the collapsed/expanded task block. */
+  onSubAgentEvent?: (event: SubAgentEvent) => void
 }
 
 // ─── Agent options ───
@@ -182,6 +187,21 @@ export interface AgentOptions {
   permissionMode?: PermissionMode
   systemPromptExtra?: string
   abortSignal?: AbortSignal
+
+  // ── Sub-agent support ──
+
+  /** Provider registry for resolving sub-agent model overrides.
+   *  Injected by the CLI at startup. Absent = sub-agents inherit the
+   *  parent model (no independent model selection). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  modelRegistry?: { languageModel: (...args: any[]) => LanguageModel }
+  /** Sub-agent registry. Injected by the CLI at startup after scanning
+   *  built-in + custom agent definitions. Absent = task tool is not
+   *  registered (no sub-agent support). */
+  subAgentRegistry?: SubAgentRegistry
+  /** Tool allow/deny filter. Used by sub-agent loops to restrict
+   *  which tools the child can call. `task` is always in `deny`. */
+  toolFilter?: { allow?: string[]; deny?: string[] }
 }
 
 // ─── Knowledge ───
@@ -333,3 +353,8 @@ export const PROVIDER_KEY_URLS: Record<string, string> = {
 // ─── Re-export AI SDK types ───
 
 export type { ModelMessage, LanguageModel }
+
+// ─── Re-export sub-agent types ───
+
+export type { SubAgentEvent, SubAgentDefinition, SubAgentTrace } from '../agent/sub-agents/types.js'
+export type { SubAgentRegistry } from '../agent/sub-agents/registry.js'

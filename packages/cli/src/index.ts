@@ -10,6 +10,7 @@ import {
   PROVIDER_DETECTION_ORDER,
   PROVIDER_KEY_URLS,
   createModelRegistry,
+  createSubAgentRegistry,
   getAvailableProviders,
   getEnvVarName,
   listSessions,
@@ -212,9 +213,10 @@ async function main() {
     }
   }
 
-  // Create registry and get model
-  const registry = createModelRegistry()
-  const model = registry.languageModel(modelId as `${string}:${string}`)
+  // Create registries and get model
+  const providerRegistry = createModelRegistry()
+  const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
+  const subAgentRegistry = await createSubAgentRegistry()
 
   const options: AgentOptions = {
     modelId,
@@ -232,6 +234,8 @@ async function main() {
     // /plan or Shift+Tab don't persist, so each new launch starts in
     // 'default' unless explicitly requested.
     permissionMode: argv.plan ? 'plan' : 'default',
+    modelRegistry: providerRegistry,
+    subAgentRegistry,
   }
 
   // Resume / continue. Three resume entry points:
