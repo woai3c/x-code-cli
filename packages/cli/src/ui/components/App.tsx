@@ -213,9 +213,11 @@ export function App({
     setPermissionMode,
   } = useAgent(model, options, initialSession)
 
-  // Transient one-line hint shown above the spinner. Today only used for the
-  // "Press Ctrl+C again to exit" double-press prompt — kept narrow on purpose
-  // so future use-cases have a single rendering slot to share.
+  // Transient one-line hint shown below the input box (in ChatInput's
+  // footer slot, alongside the plan-mode / accept-edits indicators). Today
+  // only used for the "Press Ctrl+C again to exit" double-press prompt —
+  // kept narrow on purpose so future use-cases have a single rendering
+  // slot to share. Mirrors Claude Code's PromptInputFooter placement.
   const [notice, setNotice] = useState<string | null>(null)
   // Timestamp of the most recent Ctrl+C. While inside the arm window the
   // next Ctrl+C exits; outside it, Ctrl+C just re-arms (and cancels the

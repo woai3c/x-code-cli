@@ -211,8 +211,9 @@ interface ChatInputProps {
   /** True while an AI request / tool is running. Drives the Esc-cancel
    *  routing and the `esc to interrupt` spinner hint. */
   isLoading?: boolean
-  /** Transient one-line notice shown above the spinner (e.g. "Press Ctrl+C
-   *  again to exit"). Cleared by the parent after a short timeout. */
+  /** Transient one-line notice shown below the input box, in the same
+   *  footer slot as the plan-mode / accept-edits indicators (e.g. "Press
+   *  Ctrl+C again to exit"). Cleared by the parent after a short timeout. */
   notice?: string | null
   /** Ignore keyboard input (and hide the input cursor). */
   disabled?: boolean
@@ -1392,17 +1393,6 @@ export function ChatInput({
       frame.push(cells)
     }
 
-    // Transient notice line (e.g. "Press Ctrl+C again to exit"). Dim, no
-    // "Error:" prefix — it's informational, not a failure. Cleared by the
-    // parent on a timer. Sits in the same slot as `errorMessage` so the two
-    // never both render (parent never sets both at once).
-    if (notice) {
-      const cells: Cell[] = []
-      cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(notice, S_DIM))
-      frame.push(cells)
-    }
-
     // (Streaming assistant text does NOT live here. Each complete line
     // emitted by useStreamBuffer is committed as a `streamingChunk`
     // message and written straight to scrollback above this cell buffer
@@ -1820,16 +1810,27 @@ export function ChatInput({
     // Bottom separator
     frame.push(textToCells(sepText, S_GRAY))
 
-    // Permission-mode indicator. Pinned BELOW the input box so the user
-    // sees it as a status footer of the input — matches Claude Code's
-    // layout where mode hints sit under the input separator. Hidden in
-    // default mode; no row is reserved, so zero visual cost when the
-    // feature isn't engaged. Mode switching is driven by slash commands
-    // only (/plan toggles plan mode); the Shift+Tab keybinding was
-    // removed because Windows needs Node ≥22.17 VT input mode for it,
-    // and the Alt+M fallback is too easily clobbered by IDE menu
-    // shortcuts to be a reliable contract.
-    if (permissionMode === 'plan') {
+    // Footer slot below the input box — matches Claude Code's layout where
+    // PromptInputFooter sits under the input separator. Three mutually
+    // exclusive states share this row, in priority order:
+    //
+    //   1. notice  — transient hint like "Press Ctrl+C again to exit". Wins
+    //      because it's time-sensitive (parent clears it on a 2s timer).
+    //   2. plan-mode indicator — persistent mode footer.
+    //   3. accept-edits indicator — persistent mode footer.
+    //
+    // No row is reserved when none apply, so default mode keeps a zero
+    // visual footprint. Mode switching is driven by slash commands only
+    // (/plan toggles plan mode); the Shift+Tab keybinding was removed
+    // because Windows needs Node ≥22.17 VT input mode for it, and the
+    // Alt+M fallback is too easily clobbered by IDE menu shortcuts to be
+    // a reliable contract.
+    if (notice) {
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      cells.push(...textToCells(notice, S_DIM))
+      frame.push(cells)
+    } else if (permissionMode === 'plan') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
       cells.push(...textToCells(`\u23f8 plan mode  ·  /plan to toggle`, S_DIM))
