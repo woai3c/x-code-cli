@@ -1845,7 +1845,7 @@ export function ChatInput({
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         const nameStr = cmd.name.padEnd(maxNameLen + 2)
         if (sel) {
-          cells.push(...textToCells(nameStr, S_ACCENT_BOLD))
+          cells.push(...textToCells(nameStr, S_BLUE_PURPLE_BOLD))
           cells.push(...textToCells(cmd.description, S_RESET))
         } else {
           cells.push(...textToCells(nameStr + cmd.description, S_DIM))
