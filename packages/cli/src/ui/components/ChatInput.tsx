@@ -31,7 +31,9 @@ import { useStdout } from 'ink'
 import { debugLog, getPermissionLevel } from '@x-code-cli/core'
 import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
 
+import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank } from '../file-completion.js'
 import type { ActiveToolCall } from '../hooks/use-agent.js'
+import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
@@ -40,6 +42,7 @@ import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
 const MAX_VISIBLE_LINES = 10
+const MAX_AT_COMPLETIONS = 8
 // Asterisk-pulse glyphs that breathe at the same screen position rather
 // than rotating dot patterns (which the eye reads as area shake/flicker).
 // Forward + reversed produces a 12-frame `·, ✢, *, ✶, ✻, ✽, ✽, ✻, ✶, *, ✢, ·`
@@ -121,6 +124,30 @@ function skipByWidth(str: string, skipCols: number): number {
     i += ch.length
   }
   return i
+}
+
+/** Truncate a slash-separated path FROM THE START so the basename always
+ *  survives. `packages/core/src/agent/very-long-name.ts` → `…/agent/very-long-name.ts`.
+ *  Only used by the @-completion menu — readers care about WHICH file far
+ *  more than they care about its top-level package, so dropping leading
+ *  directories preserves the most informative chars. Falls back to a
+ *  tail-trim only when the basename itself overflows. */
+function truncatePathFromStart(p: string, maxCols: number): string {
+  if (visualWidth(p) <= maxCols) return p
+  const segs = p.split('/')
+  const basename = segs[segs.length - 1] ?? ''
+  // Basename alone overflows: tail-trim it (rare — basenames rarely exceed
+  // a terminal width, but a single very-long file shouldn't crash render).
+  if (visualWidth(basename) >= maxCols - 1) {
+    return '…' + basename.slice(basename.length - Math.max(1, maxCols - 1))
+  }
+  let acc = basename
+  for (let i = segs.length - 2; i >= 0; i--) {
+    const next = segs[i] + '/' + acc
+    if (visualWidth('…/' + next) > maxCols) break
+    acc = next
+  }
+  return '…/' + acc
 }
 
 /** Strip ANSI CSI + OSC escape sequences so visual width math ignores them.
@@ -633,6 +660,13 @@ export function ChatInput({
   })
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
+  const [atCompletionIndex, setAtCompletionIndex] = useState(0)
+  // Tracks the trigger-key (atIdx + query) the user dismissed via Esc.
+  // The menu hides while atTrigger.atIdx + query equals this; once the
+  // user types or backspaces the trigger naturally changes and the
+  // menu reopens — no need for an explicit "clear" path.
+  const [atDismissed, setAtDismissed] = useState<string | null>(null)
+  const { entries: fileEntries } = useFileCompletion()
   const nextPasteIdRef = useRef(1)
   const activeRef = useRef(false)
   const prevFrameRef = useRef<Cell[][]>([])
@@ -856,6 +890,35 @@ export function ChatInput({
 
   const safeIndex = matches.length > 0 ? completionIndex % matches.length : 0
   const currentMatch = matches.length > 0 ? matches[safeIndex] : null
+
+  // ── @-mention file completion ──
+  // detectAtToken is cheap; recompute every render so it tracks cursor
+  // moves (left/right arrows) without explicit invalidation.
+  const atTrigger = useMemo(() => detectAtToken(text, cursor), [text, cursor])
+  const atMatches = useMemo(() => {
+    if (!atTrigger.active) return [] as FileEntry[]
+    return scoreAndRank(fileEntries as FileEntry[], atTrigger.query).slice(0, MAX_AT_COMPLETIONS)
+  }, [atTrigger, fileEntries])
+  const safeAtIndex = atMatches.length > 0 ? atCompletionIndex % atMatches.length : 0
+  const atDismissedKey = `${atTrigger.atIdx}:${atTrigger.query}`
+  const atMenuVisible = atTrigger.active && atDismissed !== atDismissedKey
+  // Slash menu wins when both could fire (`/` only triggers at line start so
+  // they rarely collide — only via paste). Hard mutex prevents double-render.
+  const activeMenu: 'slash' | 'at' | null =
+    matches.length > 0 ? 'slash' : atMenuVisible ? 'at' : null
+
+  // Reset the @-menu cursor whenever the trigger token shifts so the
+  // highlight always starts at the top entry of the new result set.
+  // Uses the "store previous prop in state + setState during render"
+  // pattern from the React docs — preferred over useEffect because it
+  // avoids an extra commit and avoids react-hooks/set-state-in-effect.
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  const atTriggerKey = `${atTrigger.atIdx}:${atTrigger.query}:${atTrigger.active}`
+  const [lastAtTriggerKey, setLastAtTriggerKey] = useState(atTriggerKey)
+  if (lastAtTriggerKey !== atTriggerKey) {
+    setLastAtTriggerKey(atTriggerKey)
+    setAtCompletionIndex(0)
+  }
 
   /** Erase the frame region at its pinned location (last `lastFrameHRef`
    *  rows of the terminal) and clear prevFrameRef. Returns the ANSI
@@ -1089,6 +1152,21 @@ export function ChatInput({
         return
       }
       if (key === 'return') {
+        // @-completion: Enter picks the highlighted file but DOES NOT
+        // submit — user is mid-prompt and likely wants to keep typing
+        // after the path lands. Falls through to slash/submit when the
+        // menu is empty (the "@xxx with no matches" case sends the
+        // text as-is, so the user can mention a npm package or a
+        // not-yet-existing file without an extra keystroke to dismiss).
+        if (activeMenu === 'at' && atMatches.length > 0) {
+          const picked = atMatches[safeAtIndex]
+          if (picked) {
+            const out = applyCompletion(text, atTrigger.atIdx, atTrigger.tokenEnd, picked)
+            dispatch({ type: 'SET_TEXT', text: out.text, cursor: out.cursor })
+            setAtCompletionIndex(0)
+            return
+          }
+        }
         // Active slash-command completion: Enter picks the highlighted
         // command directly instead of submitting whatever's in the input
         // (usually just `/` or a prefix), matching Claude Code's behavior.
@@ -1102,6 +1180,14 @@ export function ChatInput({
         return
       }
       if (key === 'escape') {
+        // @-menu open: Esc just dismisses the menu for the current
+        // trigger. Once the user types/backspaces the trigger key
+        // changes and the menu reopens automatically, so there's no
+        // explicit "re-arm" path.
+        if (activeMenu === 'at') {
+          setAtDismissed(atDismissedKey)
+          return
+        }
         // Modal dialogs (permission / selectRequest) gate above and
         // already swallow Esc. Here we only see Esc that reached the
         // input. Two distinct gestures:
@@ -1166,6 +1252,15 @@ export function ChatInput({
         return
       }
       if (key === 'tab') {
+        if (activeMenu === 'at' && atMatches.length > 0) {
+          const picked = atMatches[safeAtIndex]
+          if (picked) {
+            const out = applyCompletion(text, atTrigger.atIdx, atTrigger.tokenEnd, picked)
+            dispatch({ type: 'SET_TEXT', text: out.text, cursor: out.cursor })
+            setAtCompletionIndex(0)
+          }
+          return
+        }
         if (currentMatch) {
           dispatch({ type: 'SET_TEXT', text: currentMatch.name, cursor: currentMatch.name.length })
           setCompletionIndex(0)
@@ -1173,11 +1268,19 @@ export function ChatInput({
         return
       }
       if (key === 'up') {
+        if (activeMenu === 'at') {
+          if (atMatches.length > 0) setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
+          return
+        }
         if (matches.length > 0) setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
         else moveCursorVertically(-1)
         return
       }
       if (key === 'down') {
+        if (activeMenu === 'at') {
+          if (atMatches.length > 0) setAtCompletionIndex((p) => (p + 1) % atMatches.length)
+          return
+        }
         if (matches.length > 0) setCompletionIndex((p) => (p + 1) % matches.length)
         else moveCursorVertically(1)
         return
@@ -1880,8 +1983,11 @@ export function ChatInput({
       frame.push(cells)
     }
 
-    // Completion menu
-    if (matches.length > 0) {
+    // Completion menu — at most one of slash / at renders per frame
+    // (activeMenu enforces the mutex). Two writers in the same frame
+    // would both compete for the rows above the input box, and a
+    // resize would clobber whichever drew last.
+    if (activeMenu === 'slash') {
       const maxNameLen = matches.reduce((max, cmd) => Math.max(max, cmd.name.length), 0)
       for (let i = 0; i < matches.length; i++) {
         const cmd = matches[i]
@@ -1897,6 +2003,31 @@ export function ChatInput({
           cells.push(...textToCells(nameStr + cmd.description, S_DIM))
         }
         frame.push(cells)
+      }
+    } else if (activeMenu === 'at') {
+      if (atMatches.length === 0) {
+        // No-matches placeholder — keeps the user oriented when
+        // typing `@vitejs/plugin-react` or any token that doesn't
+        // map to a local file. The text still goes out to the model
+        // verbatim on Enter; the placeholder is purely a UI hint.
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells('No matches', S_DIM))
+        frame.push(cells)
+      } else {
+        const maxColWidth = Math.max(10, termWidth - 4)
+        for (let i = 0; i < atMatches.length; i++) {
+          const entry = atMatches[i]
+          const sel = i === safeAtIndex
+          const cells: Cell[] = []
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          const display = '@' + entry.relPath + (entry.isDirectory ? '/' : '')
+          const truncated = truncatePathFromStart(display, maxColWidth)
+          cells.push(...textToCells(truncated, sel ? S_BLUE_PURPLE_BOLD : S_DIM))
+          frame.push(cells)
+        }
       }
     }
 
