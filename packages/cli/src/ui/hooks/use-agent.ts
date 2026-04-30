@@ -38,8 +38,14 @@ export interface PendingPermission {
 
 interface PendingQuestion {
   question: string
-  options: { label: string; description: string; freeform?: boolean }[]
+  options: { label: string; description: string; freeform?: boolean; preview?: string[] }[]
   resolve: (answer: string) => void
+  /** True when Esc should dismiss the dialog (resolves with empty string).
+   *  User-initiated pickers (`/syntax`, `/model`, …) set this — the user
+   *  may have opened the menu just to look. AI-initiated questions
+   *  (`onAskUser`, plan approval) leave it falsy so the model isn't
+   *  silently fed an empty answer. */
+  dismissible?: boolean
 }
 
 /** Auto-appended trailing option that opens an inline text input.
@@ -240,6 +246,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const pendingToolsRef = useRef<
     Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number }>
   >(new Map())
+  /** Edit-tool diff payloads keyed by toolCallId. Filled by `onFileEdit`
+   *  (which fires from tool-execution right before `onToolResult`) and
+   *  drained by `onToolResult` to attach the diff to the new
+   *  DisplayToolCall. Keyed separately from pendingToolsRef because not
+   *  every tool produces a diff and we don't want a default empty
+   *  field bloating the pending record. */
+  const pendingEditDiffsRef = useRef<Map<string, import('@x-code-cli/core').EditDiffPayload>>(new Map())
 
   /** Append a single message to `messages` (used by the stream buffer). */
   const appendMessage = useCallback((msg: DisplayMessage) => {
@@ -332,9 +345,18 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             return { ...prev, activeToolCalls: next }
           })
         },
+        onFileEdit: (toolCallId, payload) => {
+          // Stash the structured patch so the upcoming onToolResult can
+          // attach it to the DisplayToolCall. Cleared in onToolResult so a
+          // permission-denied / errored re-attempt of the same toolCallId
+          // can't accidentally inherit a stale diff.
+          pendingEditDiffsRef.current.set(toolCallId, payload)
+        },
         onToolResult: (toolCallId, result, isError) => {
           const pending = pendingToolsRef.current.get(toolCallId)
           pendingToolsRef.current.delete(toolCallId)
+          const editPayload = pendingEditDiffsRef.current.get(toolCallId)
+          pendingEditDiffsRef.current.delete(toolCallId)
           const durationMs = pending ? Date.now() - pending.startedAt : 0
           setState((prev) => {
             const tc: DisplayToolCall = {
@@ -344,6 +366,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               output: result,
               status: isError ? 'error' : 'completed',
               durationMs,
+              ...(editPayload ? { editPayload } : {}),
             }
             return {
               ...prev,
@@ -567,12 +590,18 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  that `askUser` uses, exposed for slash commands like /model that need
    *  an interactive picker. Returns a promise that resolves to the label
    *  the user chose (or the free-form "Other" text). */
-  const askQuestion = useCallback((question: string, options: { label: string; description: string }[]) => {
-    return new Promise<string>((resolve) => {
-      const augmented = [...options, OTHER_OPTION]
-      setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve } }))
-    })
-  }, [])
+  const askQuestion = useCallback(
+    (question: string, options: { label: string; description: string; preview?: string[] }[]) => {
+      return new Promise<string>((resolve) => {
+        const augmented = [...options, OTHER_OPTION]
+        setState((prev) => ({
+          ...prev,
+          pendingQuestion: { question, options: augmented, resolve, dismissible: true },
+        }))
+      })
+    },
+    [],
+  )
 
   /** Abort the in-flight turn. Mirrors Claude Code's onCancel:
    *

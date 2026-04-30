@@ -24,6 +24,7 @@ import { Chalk } from 'chalk'
 import { debugLog } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
+import { renderEditDiff } from './render-diff.js'
 import { renderMarkdown } from './render-markdown.js'
 import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
 import { getToolInputPreview, getToolLabel, getToolResultSummary } from './tool-display.js'
@@ -90,6 +91,22 @@ function formatToolCall(tc: DisplayToolCall): string {
   const dotColor = isFailure ? ERROR : SUCCESS
   const previewSuffix = inputPreview ? c.hex(BLUE_PURPLE)(`(${inputPreview})`) : ''
   const line1 = ` ${c.hex(dotColor)('●')} ${c.bold(label)}${previewSuffix}`
+
+  // Edit / writeFile success path: render the structured diff under the
+  // bullet INSTEAD of the plain "Wrote N lines" / "Applied changes" summary.
+  // We only take this branch when the tool actually succeeded — failed
+  // edits keep the regular markdown summary so the red error message lands
+  // where the user expects to read it.
+  if (tc.editPayload && !isFailure) {
+    const cols = Math.max(40, process.stdout.columns ?? 120)
+    const diffLines = renderEditDiff(tc.editPayload, cols)
+    const head = `   ${c.gray('⎿')}  ${diffLines[0] ?? ''}`
+    const body = diffLines.slice(1)
+    const durSuffix = durationStr ? c.gray(` (${durationStr})`) : ''
+    const combined = body.length > 0 ? [head, ...body] : [head]
+    combined[combined.length - 1] = combined[combined.length - 1] + durSuffix
+    return `${line1}\n${combined.join('\n')}`
+  }
 
   if (!resultSummary) return line1
 

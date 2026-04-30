@@ -172,9 +172,21 @@ export interface SelectRequest {
    *  inline text input instead of resolving with the literal label.
    *  Mirrors Claude Code's `__other__` sentinel — kept as a flag here so
    *  the resolver returns the typed text directly without a sentinel
-   *  round-trip. */
-  options: { label: string; description: string; freeform?: boolean }[]
+   *  round-trip.
+   *
+   *  `preview` carries pre-rendered ANSI lines that the dialog draws
+   *  below the option list whenever this option is the focused one.
+   *  Used by the `/syntax` picker to show a live color sample of each
+   *  theme as the user arrows through. Each row should already be a
+   *  complete ANSI-styled string — the dialog wraps it in a `RawAnsi`-
+   *  like cell row without further processing. */
+  options: { label: string; description: string; freeform?: boolean; preview?: string[] }[]
   onResolve: (answer: string) => void
+  /** True for user-initiated pickers (slash commands like `/syntax`,
+   *  `/model`) — Esc dismisses the dialog with an empty answer. AI-
+   *  initiated dialogs (askUser tool, plan approval) leave this falsy:
+   *  Esc is swallowed so the model isn't silently fed a blank answer. */
+  dismissible?: boolean
 }
 
 interface ChatInputProps {
@@ -454,6 +466,52 @@ const ESU_HIDE = '\x1b[?2026l\x1b[?25l'
 function textToCells(text: string, style: string): Cell[] {
   const cells: Cell[] = []
   for (const ch of text) cells.push({ char: ch, style, width: charWidth(ch) })
+  return cells
+}
+
+/** Parse a string that already contains ANSI SGR escapes into Cell[]. Used
+ *  by the select-options dialog's preview pane so a `/syntax` preview row
+ *  built by render-diff (full of fg/bg color escapes) can be drawn into
+ *  the cell buffer with each char carrying its correct active style.
+ *
+ *  Each cell's `style` is `\x1b[0m` followed by every SGR escape that's
+ *  active at that point — the cell-diff emitter relies on each cell's
+ *  style being self-contained (it just blits `cell.style` on transitions
+ *  without first resetting), so we always lead with reset to wipe
+ *  whatever the previous cell left in the terminal SGR state. SGR resets
+ *  (`\x1b[0m` / `\x1b[m`) clear the active stack; non-reset escapes are
+ *  appended (we don't bother diffing fg-vs-bg-vs-attr buckets, since
+ *  ANSI itself handles late escapes overriding earlier ones — the row
+ *  may emit a few redundant bytes, but it always renders correctly). */
+function ansiTextToCells(text: string): Cell[] {
+  const cells: Cell[] = []
+  const active: string[] = []
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]!
+    if (ch === '\x1b' && text[i + 1] === '[') {
+      let j = i + 2
+      while (j < text.length && !/[A-Za-z]/.test(text[j]!)) j++
+      if (j >= text.length) {
+        // Unterminated — treat as literal and bail out of escape mode.
+        i++
+        continue
+      }
+      const escape = text.slice(i, j + 1)
+      if (/^\x1b\[0?m$/.test(escape)) {
+        active.length = 0
+      } else if (/^\x1b\[[0-9;]*m$/.test(escape)) {
+        active.push(escape)
+      }
+      // Non-SGR CSI sequences are simply skipped — none should appear
+      // in our preview rows but we don't want them as visible text.
+      i = j + 1
+      continue
+    }
+    const style = active.length === 0 ? S_NONE : '\x1b[0m' + active.join('')
+    cells.push({ char: ch, style, width: charWidth(ch) })
+    i++
+  }
   return cells
 }
 
@@ -944,6 +1002,15 @@ export function ChatInput({
         const len = selectRequest.options.length
         const opt = selectRequest.options[selectIndex]
         const isFreeform = !!opt?.freeform
+        // Esc dismisses user-initiated pickers (slash commands like
+        // /syntax, /model) — the user may have just been browsing and
+        // shouldn't be forced to commit. AI-initiated dialogs leave
+        // `dismissible` falsy so Esc is swallowed; otherwise the model
+        // gets a silent empty answer back from its askUser call.
+        if (key === 'escape' && selectRequest.dismissible) {
+          selectRequest.onResolve('')
+          return
+        }
         if (key === 'up') {
           setSelectIndex((i) => (i > 0 ? i - 1 : len - 1))
           return
@@ -1579,6 +1646,29 @@ export function ChatInput({
         : '\u2191\u2193 Navigate  Enter Confirm'
       hint.push(...textToCells(hintText, S_DIM))
       frame.push(hint)
+
+      // Live preview pane. The focused option may carry a `preview`
+      // array of pre-rendered ANSI rows (e.g. the `/syntax` picker
+      // attaches a colored diff snippet per theme). Render below the
+      // hint with one blank-row separator so the visual block reads as
+      // "options \u2193 preview". When the focused option has no preview
+      // (e.g. the auto-appended `Other` row) the pane simply doesn't
+      // appear \u2014 no flicker as the user arrows past it.
+      if (activeOpt?.preview && activeOpt.preview.length > 0) {
+        frame.push([{ char: ' ', style: S_NONE, width: 1 }])
+        for (const row of activeOpt.preview) {
+          // Each row is already an ANSI-styled string from render-diff
+          // (`buildSyntaxThemePreview` etc.). We indent it 2 cells to
+          // align under the option labels above, then convert ANSI to
+          // cells. Indent cells use S_NONE so they don't inherit any
+          // color from the preview row's first SGR escape.
+          const cells: Cell[] = []
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          cells.push(...ansiTextToCells(row))
+          frame.push(cells)
+        }
+      }
     }
 
     // Todo panel. Driven by the model's `todoWrite` tool; gives the

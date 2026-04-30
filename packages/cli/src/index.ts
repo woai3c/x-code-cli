@@ -21,6 +21,8 @@ import {
 import type { AgentOptions, LoadedSession } from '@x-code-cli/core'
 
 import { getCleanupFn, getSessionExitInfo, startApp } from './app.js'
+import { setSyntaxTheme } from './ui/syntax-highlight.js'
+import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
 import { VERSION } from './version.js'
 
 const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
@@ -191,6 +193,22 @@ async function main() {
     } else {
       printNoApiKeyMessage()
       process.exit(0)
+    }
+  }
+
+  // Apply persisted UI theme. Done early (before startApp) so the very
+  // first scrollback row — including any messages we hydrate from a
+  // resumed session containing edit / write tool calls — already paints
+  // under the user's chosen theme (diff bg + syntax palette). Unknown
+  // values (stale config, hand-edited file) silently fall back to the
+  // default. The selected theme drives BOTH the diff bg colors (read
+  // by render-diff.ts at render time) and the syntax-highlight palette
+  // (set globally on the syntax-highlight module).
+  {
+    const t = parseThemeName(loadUserConfig().theme)
+    if (t !== null) {
+      setTheme(t)
+      setSyntaxTheme(getThemeColors(t).syntaxPalette)
     }
   }
 

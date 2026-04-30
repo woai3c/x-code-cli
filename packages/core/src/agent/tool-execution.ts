@@ -8,6 +8,7 @@ import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
+import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { toolResultMessage } from './messages.js'
@@ -46,20 +47,41 @@ function countOccurrences(content: string, search: string): number {
   return count
 }
 
-/** Execute a write tool (writeFile / edit). */
-async function executeWriteTool(toolName: string, input: Record<string, unknown>, toolCallId: string): Promise<string> {
+/** Execute a write tool (writeFile / edit).
+ *
+ *  In addition to returning the model-facing result string, fires
+ *  `callbacks.onFileEdit` (when defined) with the structured patch so the
+ *  UI can render a colored diff under the tool bullet. The diff payload is
+ *  a UI-only side channel — it never lands in `state.messages` and the
+ *  model only sees the short result string. */
+async function executeWriteTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  toolCallId: string,
+  callbacks: AgentCallbacks,
+): Promise<string> {
   if (toolName === 'writeFile') {
     const filePath = input.filePath as string
     const content = input.content as string
     reportProgress(toolCallId, `Writing ${filePath}`)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    const isNew = await fs.access(filePath).then(
-      () => false,
-      () => true,
-    )
+    // Read old content BEFORE writing so we can diff. Treat any read
+    // failure as "file did not exist" — covers the common ENOENT path
+    // plus permission / EISDIR edge cases (we'd error on write anyway).
+    let oldContent: string | null = null
+    try {
+      oldContent = await fs.readFile(filePath, 'utf-8')
+    } catch {
+      oldContent = null
+    }
     await fs.writeFile(filePath, content, 'utf-8')
+    const isNew = oldContent === null
     const parts = content.split('\n')
     const lineCount = content.endsWith('\n') ? parts.length - 1 : parts.length
+
+    const payload = computeEditDiff(filePath, oldContent, content)
+    if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
+
     if (isNew) {
       return `File created: ${filePath} (${lineCount} lines)`
     }
@@ -83,6 +105,10 @@ async function executeWriteTool(toolName: string, input: Record<string, unknown>
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
     await fs.writeFile(filePath, newContent, 'utf-8')
+
+    const payload = computeEditDiff(filePath, content, newContent)
+    if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
+
     return `File edited: ${filePath}`
   }
 
@@ -525,7 +551,7 @@ async function handleToolCall(
   let isError = false
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
-      output = await executeWriteTool(toolName, input, toolCallId)
+      output = await executeWriteTool(toolName, input, toolCallId, callbacks)
       // executeWriteTool returns "Error: ..." strings for in-band failures
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.

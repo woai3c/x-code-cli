@@ -1,6 +1,8 @@
 // @x-code-cli/core — Public type definitions
 import type { LanguageModel, ModelMessage } from 'ai'
 
+import type { EditDiffPayload } from '../agent/diff.js'
+
 // ─── Permission ───
 
 export type PermissionLevel = 'always-allow' | 'ask' | 'deny'
@@ -102,6 +104,11 @@ export interface DisplayToolCall {
   status: 'pending' | 'running' | 'completed' | 'denied' | 'error'
   /** How long the tool call took to execute (milliseconds) */
   durationMs?: number
+  /** Structured patch produced by writeFile / edit — drives the colored
+   *  diff block under the tool bullet in scrollback. Absent for non-edit
+   *  tools, hydrated history (we don't recompute on session resume), and
+   *  edits that actually had no effect (oldContent === newContent). */
+  editPayload?: EditDiffPayload
 }
 
 // ─── Agent callbacks (core → UI bridge) ───
@@ -114,6 +121,12 @@ export interface AgentCallbacks {
    *  shown in the live UI; the final summary comes through onToolResult. */
   onToolProgress: (toolCallId: string, message: string) => void
   onToolResult: (toolCallId: string, result: string, isError?: boolean) => void
+  /** Optional. Fired right BEFORE `onToolResult` for a successful
+   *  writeFile / edit, carrying the structured patch + line counts so the
+   *  UI can render a diff block under the tool bullet. Skipped for
+   *  permission-denied / errored writes (the file wasn't actually changed)
+   *  and for no-op edits that produced an identical file. */
+  onFileEdit?: (toolCallId: string, payload: EditDiffPayload) => void
   onAskPermission: (toolCall: {
     toolCallId: string
     toolName: string

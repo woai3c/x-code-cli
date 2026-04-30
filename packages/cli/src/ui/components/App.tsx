@@ -13,6 +13,7 @@ import {
   initProject,
   listSessions,
   loadSession,
+  loadUserConfig,
   pickLatestSession,
   resolveModelId,
   saveUserConfig,
@@ -21,6 +22,17 @@ import type { AgentOptions, LanguageModel, LoadedSession, SessionListEntry, Toke
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
+import { buildThemePreview } from '../render-diff.js'
+import { setSyntaxTheme } from '../syntax-highlight.js'
+import {
+  DEFAULT_THEME,
+  THEMES,
+  getTheme,
+  getThemeColors,
+  parseThemeName,
+  setTheme,
+  type ThemeName,
+} from '../theme.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 
@@ -52,6 +64,7 @@ export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   { name: '/model', description: 'Pick a model (no-arg = interactive) — choice is saved' },
   { name: '/thinking', description: 'Toggle extended thinking on/off (no-arg = show status) — saved' },
+  { name: '/theme', description: 'Pick UI theme (no-arg = interactive picker) — drives diff colors + syntax palette' },
   { name: '/plan', description: 'Toggle plan mode on/off (no-arg = show status) — saved' },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
@@ -324,6 +337,72 @@ export function App({
     )
   }, [addInfoMessage, askQuestion, resume])
 
+  /** Resolve a ThemeName back to its display label. */
+  function themeLabel(name: ThemeName): string {
+    return THEMES.find((t) => t.name === name)?.label ?? name
+  }
+
+  /** Apply a theme: update the active UI-theme state AND switch the
+   *  syntax-highlight palette to the one bundled with the theme.
+   *  Centralized so /theme, the first-run picker, and the startup
+   *  loader all stay in sync — easy to forget one of the two and end
+   *  up with bg colors that don't match the code colors. */
+  function applyTheme(name: ThemeName) {
+    setTheme(name)
+    setSyntaxTheme(getThemeColors(name).syntaxPalette)
+  }
+
+  /**
+   * First-run onboarding picker. Fires once when `config.json` has no
+   * `theme` key — i.e. brand-new users on their first interactive
+   * launch (resumes / `--print` / inline initial prompts skip it; see
+   * the launch-flow effect below). After the user picks (or dismisses)
+   * we persist the choice so the next launch never re-asks, even if
+   * they bailed without an explicit selection — that's also their
+   * answer ("default is fine").
+   */
+  async function runFirstRunThemePicker() {
+    addInfoMessage(
+      [
+        '**Welcome to X-Code!**',
+        '',
+        'Choose the theme that looks best with your terminal. You can change it any time with `/theme`.',
+      ].join('\n'),
+    )
+
+    const cols = Math.max(40, process.stdout.columns ?? 100)
+    // Reserve room for the dialog's left margin (1 indent) + preview
+    // sub-indent (2). The preview helper does its own padding to fill
+    // the column, so being slightly generous on the budget is fine.
+    const previewWidth = Math.max(40, cols - 4)
+    const choices = THEMES.map((t) => ({
+      name: t.name,
+      label: t.label,
+      description: t.description,
+      preview: buildThemePreview(t.name, previewWidth),
+    }))
+
+    const answer = await askQuestion(
+      'Pick a theme:',
+      choices.map((c) => ({ label: c.label, description: c.description, preview: c.preview })),
+    )
+
+    const picked = choices.find((c) => c.label === answer)
+    const parsedFree = parseThemeName(answer ?? '')
+    const resolved = picked ? picked.name : (parsedFree ?? DEFAULT_THEME)
+
+    applyTheme(resolved)
+    saveUserConfig({ theme: resolved })
+
+    if (picked || parsedFree !== null) {
+      addInfoMessage(`Theme set to **${themeLabel(resolved)}**. Type a message to get started.`)
+    } else {
+      addInfoMessage(
+        `Using default theme **${themeLabel(resolved)}**. Run \`/theme\` any time to switch.`,
+      )
+    }
+  }
+
   // On-mount resume handling. Three mutually-exclusive paths set up by
   // the CLI entry:
   //   - initialSession set: `xc -c` already loaded the most recent
@@ -355,6 +434,16 @@ export function App({
     }
     if (resumeIntent === 'pick') {
       void handleResume()
+      return
+    }
+    // First-run theme picker — only on plain interactive launches (no
+    // resume, no auto-submitted initial prompt). Detected by absence of
+    // `theme` in the on-disk config. Once the user picks (or dismisses)
+    // we persist a value so this branch never re-fires. Resume / inline-
+    // prompt launches deliberately skip — those users came here to
+    // work, not to configure.
+    if (!initialPrompt && loadUserConfig().theme === undefined) {
+      void runFirstRunThemePicker()
       return
     }
     if (initialPrompt) {
@@ -392,6 +481,10 @@ export function App({
 
         case 'thinking':
           handleThinkingToggle(text, arg)
+          return
+
+        case 'theme':
+          await handleThemeSwitch(text, arg)
           return
 
         case 'plan':
@@ -511,6 +604,13 @@ export function App({
     )
     const picked = choices.find((c) => c.label === answer)
     if (!picked) {
+      // Empty answer = Esc-dismissed dialog. Quiet cancel — don't run
+      // it through resolveModelId (which would print "Could not resolve
+      // model: " with a blank id).
+      if (!answer) {
+        addCommandMessage(commandText, `Cancelled — model stays **${renderModelLabel(state.modelId)}**.`)
+        return
+      }
       // User chose "Other" or typed something free-form. Treat it as a
       // direct model id / alias so power users can still jump to exotic
       // models the picker doesn't list.
@@ -644,6 +744,96 @@ export function App({
       return
     }
     commitThinkingChange(commandText, next)
+  }
+
+  // themeLabel + applyTheme + runFirstRunThemePicker live ABOVE the
+  // launch useEffect (the one at lines ~350) because that effect is what
+  // fires the first-run picker. `react-compiler` flags references-before-
+  // declaration inside effects with `[]` deps, so we hoist these helpers
+  // up there. The /theme handlers (commitThemeChange, handleThemeSwitch)
+  // stay near the other slash-command handlers since they're called from
+  // the regular handleSubmit path which has looser hoisting requirements.
+
+  /** Apply a theme switch: flip BOTH the active UI theme and its bundled
+   *  syntax palette so the very next diff render uses the new colors,
+   *  persist to user config, echo a confirmation. The agent loop /
+   *  scrollback writer don't cache colors, so the change is visible
+   *  immediately on the next tool result — no restart needed. */
+  function commitThemeChange(commandText: string, name: ThemeName) {
+    applyTheme(name)
+    saveUserConfig({ theme: name })
+    addCommandMessage(commandText, `Set theme to **${themeLabel(name)}**.`)
+  }
+
+  /**
+   * `/theme` — pick the UI theme. Drives diff bg colors AND the
+   * associated syntax-highlight palette.
+   *
+   * No arg → interactive picker showing all six themes with the current
+   *   selection marked `●` and a live preview that recolors as the user
+   *   arrows through. Same UX as `/model` and `/thinking`.
+   * `<theme-name>` → direct switch. Accepts the canonical kebab-case
+   *   names (`dark`, `light`, `dark-daltonized`, `light-daltonized`,
+   *   `dark-ansi`, `light-ansi`) plus aliases (`colorblind`, `ansi`,
+   *   etc.) — see `parseThemeName`.
+   *
+   * Persisted to ~/.x-code/config.json so the choice survives restarts.
+   */
+  async function handleThemeSwitch(commandText: string, arg: string) {
+    const current = getTheme()
+
+    if (arg.trim()) {
+      const next = parseThemeName(arg)
+      if (next === null) {
+        const names = THEMES.map((t) => t.name).join(', ')
+        addCommandMessage(commandText, `Unknown theme: \`${arg}\`. Available: ${names}.`)
+        return
+      }
+      if (next === current) {
+        addCommandMessage(commandText, `Theme is already **${themeLabel(next)}** — no change.`)
+        return
+      }
+      commitThemeChange(commandText, next)
+      return
+    }
+
+    // No arg → interactive picker. Show every theme; mark the current
+    // one with `●`. Same dialog component the model picker uses, plus
+    // a live preview pane that recolors as the user arrows through.
+    const cols = Math.max(40, process.stdout.columns ?? 100)
+    const previewWidth = Math.max(40, cols - 4)
+    const choices = THEMES.map((t) => ({
+      name: t.name,
+      label: `${t.name === current ? '● ' : '  '}${t.label}`,
+      description: t.description,
+      preview: buildThemePreview(t.name, previewWidth),
+    }))
+    const answer = await askQuestion(
+      `Current: **${themeLabel(current)}**. Choose the text style that looks best with your terminal (● = current):`,
+      choices.map((c) => ({ label: c.label, description: c.description, preview: c.preview })),
+    )
+    const picked = choices.find((c) => c.label === answer)
+    if (!picked) {
+      const free = parseThemeName(answer ?? '')
+      if (free === null) {
+        addCommandMessage(
+          commandText,
+          `Cancelled — theme stays **${themeLabel(current)}**.`,
+        )
+        return
+      }
+      if (free === current) {
+        addCommandMessage(commandText, `Theme is already **${themeLabel(free)}** — no change.`)
+        return
+      }
+      commitThemeChange(commandText, free)
+      return
+    }
+    if (picked.name === current) {
+      addCommandMessage(commandText, `Theme is already **${themeLabel(current)}** — no change.`)
+      return
+    }
+    commitThemeChange(commandText, picked.name)
   }
 
   /** Toggle plan mode via /plan. Direct enter/exit, no picker — the
@@ -796,6 +986,7 @@ export function App({
               question: state.pendingQuestion.question,
               options: state.pendingQuestion.options,
               onResolve: resolveQuestion,
+              dismissible: state.pendingQuestion.dismissible,
             }
           : null
       }

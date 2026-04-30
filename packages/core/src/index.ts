@@ -31,6 +31,8 @@ export { createModelRegistry } from './providers/registry.js'
 // Agent
 export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
 export type { LoopState } from './agent/loop.js'
+export { computeEditDiff } from './agent/diff.js'
+export type { EditDiffHunk, EditDiffPayload } from './agent/diff.js'
 export { buildSystemPrompt } from './agent/system-prompt.js'
 export { makePlanFilePath } from './agent/plan-storage.js'
 export {
