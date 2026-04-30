@@ -633,6 +633,13 @@ export function ChatInput({
   const lastFlushTimeRef = useRef(0)
   /** Pending deferred (non-commit) write that can be superseded by a commit. */
   const deferredFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Pending throttled commit. Set when a commit fires within MIN_COMMIT_GAP_MS
+   *  of the previous write — the commit's payload waits just long enough that
+   *  it lands in a fresh terminal paint cycle instead of inside the same vsync
+   *  as the previous write. Distinct from `deferredFlushRef` because the
+   *  defer path must NOT cancel a throttled commit (cancelling would lose
+   *  the new scrollback content the commit's preBuf carries). */
+  const commitThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Monotonic counter incremented by every successful `doFlush`. The
    *  deferred-write path captures this at SCHEDULE time and re-checks
    *  at FIRE time: if the value has changed, a commit-path flush ran
@@ -2616,8 +2623,47 @@ export function ChatInput({
         deferredFlushRef.current = null
         debugLog('chatinput.flush.deferred-cancelled', 'commit superseded deferred frame')
       }
-      doFlush()
+      // Newer commit's payload (incl. fresher scrollback + spinner glyph)
+      // supersedes any previously throttled commit.
+      if (commitThrottleRef.current !== null) {
+        clearTimeout(commitThrottleRef.current)
+        commitThrottleRef.current = null
+        debugLog('chatinput.flush.commit-throttle-superseded', 'newer commit replaces throttled')
+      }
+      const dt = Date.now() - lastFlushTimeRef.current
+      // Minimum gap between consecutive stdout writes. Two writes inside
+      // the same terminal paint window (~16ms vsync) appear as flicker
+      // even when each is wrapped in BSU/ESU — DEC 2026 sync is per-write
+      // atomic but doesn't span writes. Most common cause: a 160ms spinner
+      // deferred-fire (T) followed by a useStreamBuffer drain commit
+      // (T+10–50ms). Throttling the commit to land ≥50ms after the last
+      // write puts it in a fresh paint cycle. 50ms = ~3 vsyncs, enough
+      // headroom on terminals that buffer multiple frames.
+      const MIN_COMMIT_GAP_MS = 50
+      if (lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
+        const delay = MIN_COMMIT_GAP_MS - dt
+        commitThrottleRef.current = setTimeout(() => {
+          commitThrottleRef.current = null
+          doFlush()
+          debugLog('chatinput.flush.commit-throttled-fired', `delay=${delay}ms`)
+        }, delay)
+        debugLog('chatinput.flush.commit-throttled', `delay=${delay}ms dt=${dt}ms`)
+      } else {
+        doFlush()
+      }
     } else {
+      // A throttled commit is in flight and will paint within MIN_COMMIT_GAP_MS.
+      // Its captured payload already contains the latest scrollback + frame
+      // diff (incl. current spinner glyph). Firing a non-commit write here
+      // would land 0–50ms before the throttled commit and reintroduce the
+      // exact two-writes-per-vsync flicker the throttle exists to prevent.
+      // Trade-off: typing edits that arrive during the wait are not displayed
+      // until the throttle fires + the next render — bounded by ~50ms +
+      // next spinner tick. Acceptable for streaming; rare otherwise.
+      if (commitThrottleRef.current !== null) {
+        debugLog('chatinput.flush.deferred-skipped', 'commit throttle pending')
+        return
+      }
       const now = Date.now()
       // Only coalesce identical-height frames (spinner ticks, single-cell
       // input edits). A frame-height change signals a structural update —
@@ -2657,15 +2703,23 @@ export function ChatInput({
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
       }
-      // Spinner ticks defer 100ms — long enough that a useStreamBuffer
-      // commit arriving 50-200ms after the spinner tick reliably hits
-      // the clearTimeout below before the deferred can fire, collapsing
-      // the spinner+commit pair into a single commit-only write. Must
-      // remain strictly less than the 200ms spinner-tick interval — at
-      // ≥200ms a back-to-back tick would re-arm the timer perpetually
-      // and the spinner would freeze. Typing edits keep the original
-      // 8ms so held-key echo stays snappy.
-      const deferMs = spinnerTicked ? 100 : 8
+      // Spinner ticks defer 160ms. Rationale:
+      //   - useStreamBuffer drains 150ms after a chunk queues, then a
+      //     React render scheduling adds ~10ms before our commit lands.
+      //     A 160ms defer lets that drain-driven commit reliably hit
+      //     the clearTimeout above BEFORE our spinner-only write fires,
+      //     collapsing the spinner+commit pair into a single commit-only
+      //     write (the commit's full-frame redraw repaints the spinner
+      //     glyph anyway).
+      //   - Previous value was 100ms. Symptom: spinner outer-enter at
+      //     queue+42ms → defer fires at queue+142ms; drain commit at
+      //     queue+160ms — spinner wrote 18ms before commit, two stdout
+      //     writes per vsync = visible flicker.
+      //   - Must remain strictly less than the 200ms spinner-tick
+      //     interval — at ≥200ms a back-to-back tick would re-arm the
+      //     timer perpetually and the spinner would freeze.
+      // Typing edits keep the original 8ms so held-key echo stays snappy.
+      const deferMs = spinnerTicked ? 160 : 8
       // Capture flush generation at SCHEDULE time. If a commit-path
       // doFlush() runs before our timer fires, flushGenRef advances and
       // our deferred frame becomes stale (its cells were built from a
@@ -2697,6 +2751,10 @@ export function ChatInput({
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
+      }
+      if (commitThrottleRef.current !== null) {
+        clearTimeout(commitThrottleRef.current)
+        commitThrottleRef.current = null
       }
       if (activeRef.current) {
         eraseRegion()
