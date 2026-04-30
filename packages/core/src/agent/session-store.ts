@@ -271,6 +271,7 @@ const EMPTY_USAGE: TokenUsage = {
   totalTokens: 0,
   cacheReadTokens: 0,
   cacheCreationTokens: 0,
+  currentContextTokens: 0,
 }
 
 /** Walk a session jsonl and reconstruct a LoadedSession.

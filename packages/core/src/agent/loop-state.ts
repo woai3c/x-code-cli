@@ -76,7 +76,7 @@ function generateSessionId(now: Date = new Date()): string {
 export function createLoopState(initialMode: PermissionMode = 'default'): LoopState {
   return {
     messages: [],
-    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, currentContextTokens: 0 },
     lastInputTokens: 0,
     sessionId: generateSessionId(),
     startedAt: new Date().toISOString(),

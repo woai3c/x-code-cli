@@ -966,8 +966,17 @@ export function App({
           ? {
               label: 'Thinking',
               mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
-              totalTokens: state.usage.totalTokens,
             }
+          : null
+      }
+      contextUsage={
+        // Footer indicator (`6.6k / 200k · 3%`) — uses the snapshot from the
+        // most recent API response, NOT cumulative session counters.
+        // Cumulative double-counts the message history every turn (cache-
+        // served input still shows in `inputTokens`) so its numbers balloon
+        // far past actual billing. Hidden until the first turn lands.
+        state.usage.currentContextTokens > 0
+          ? { used: state.usage.currentContextTokens, window: getContextWindow(state.modelId) }
           : null
       }
       activeToolCalls={state.activeToolCalls}

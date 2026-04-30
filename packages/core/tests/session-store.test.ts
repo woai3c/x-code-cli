@@ -329,7 +329,7 @@ describe('session-store: hydrateLoopState', () => {
       { role: 'user', content: 'q' },
       { role: 'assistant', content: 'a' },
     ]
-    s.tokenUsage = { inputTokens: 50, outputTokens: 5, totalTokens: 55, cacheReadTokens: 0, cacheCreationTokens: 0 }
+    s.tokenUsage = { inputTokens: 50, outputTokens: 5, totalTokens: 55, cacheReadTokens: 0, cacheCreationTokens: 0, currentContextTokens: 50 }
     s.turnCount = 1
     await appendHeader(s, 'anthropic:claude-sonnet-4-6', 'q')
     await flushPendingMessages(s)

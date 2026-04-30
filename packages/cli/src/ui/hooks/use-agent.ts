@@ -100,7 +100,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   shellOutput: '',
   permissionQueue: [],
   pendingQuestion: null,
-  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, currentContextTokens: 0 },
   error: null,
   todos: [],
 }

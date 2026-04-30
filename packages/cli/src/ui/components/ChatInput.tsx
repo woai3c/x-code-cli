@@ -157,7 +157,6 @@ export interface SlashCommand {
 export interface SpinnerState {
   label: string
   mode: 'requesting' | 'responding' | 'thinking' | 'tool-use'
-  totalTokens?: number
 }
 
 export interface PermissionRequest {
@@ -255,6 +254,13 @@ interface ChatInputProps {
    *  (`⏸ plan mode` / `⚡ accept edits`). Defaults to 'default' — no
    *  indicator rendered. */
   permissionMode?: 'default' | 'acceptEdits' | 'plan'
+  /** Context-window occupancy for the right side of the footer row.
+   *  Renders as `6.6k / 200k · 3%` — gives the user a quick "how full is
+   *  the window" reading without staring at a single arrow-token number.
+   *  Mirrors the Gemini-CLI / opencode pattern (token info lives in the
+   *  footer, not next to the spinner). Pass null to hide entirely (e.g.
+   *  before any API response has landed). */
+  contextUsage?: { used: number; window: number } | null
 }
 
 // ── Reducer for atomic text + cursor updates ──────────────────────────
@@ -588,6 +594,7 @@ function formatElapsed(ms: number): string {
 }
 
 function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
   return `${tokens}`
 }
@@ -612,6 +619,7 @@ export function ChatInput({
   selectRequest,
   commands = [],
   permissionMode = 'default',
+  contextUsage,
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const cursorRef = useRef(0)
@@ -1413,16 +1421,16 @@ export function ChatInput({
     // block stays compact (no separate Thinking row competing for space).
     if (spinner) {
       const glyph = SPINNER_FRAMES[spinnerFrame]
-      const arrow = spinner.mode === 'requesting' ? '↑' : '↓'
       // Derive elapsed time at render time so we don't need a setState in
       // the spinner effect. The setSpinnerFrame tick is what drives the
       // ~80ms re-render that recomputes this value.
       const elapsedMs = loadingStartRef.current === 0 ? 0 : Date.now() - loadingStartRef.current
       const parts: string[] = []
       if (elapsedMs >= 2000) parts.push(formatElapsed(elapsedMs))
-      if (spinner.totalTokens != null && spinner.totalTokens > 0) {
-        parts.push(`${arrow} ${formatTokens(spinner.totalTokens)} tokens`)
-      }
+      // Token count is no longer shown next to the spinner — it now lives
+      // in the footer below the input box (see contextUsage rendering)
+      // because cumulative session counts double-count cache-served history
+      // and "context size" snapshots only feel useful with a denominator.
       // Only show the cancel hint when we're actually able to honor an Esc
       // press (no modal open — the parent suppresses the spinner in that
       // case anyway, but be defensive).
@@ -1810,35 +1818,65 @@ export function ChatInput({
     // Bottom separator
     frame.push(textToCells(sepText, S_GRAY))
 
-    // Footer slot below the input box — matches Claude Code's layout where
-    // PromptInputFooter sits under the input separator. Three mutually
-    // exclusive states share this row, in priority order:
+    // Footer slot below the input box. Left side: notice / mode indicator
+    // (mutually exclusive — at most one). Right side: context-window
+    // occupancy (`6.6k / 200k · 3%`), shown whenever a usage snapshot is
+    // available. The two halves are independent — context indicator can
+    // stand alone with default mode, and the mode indicator still appears
+    // on its own when no usage has landed yet.
     //
+    // Left-side priority order:
     //   1. notice  — transient hint like "Press Ctrl+C again to exit". Wins
     //      because it's time-sensitive (parent clears it on a 2s timer).
-    //   2. plan-mode indicator — persistent mode footer.
-    //   3. accept-edits indicator — persistent mode footer.
+    //   2. plan-mode indicator.
+    //   3. accept-edits indicator.
     //
-    // No row is reserved when none apply, so default mode keeps a zero
-    // visual footprint. Mode switching is driven by slash commands only
-    // (/plan toggles plan mode); the Shift+Tab keybinding was removed
-    // because Windows needs Node ≥22.17 VT input mode for it, and the
-    // Alt+M fallback is too easily clobbered by IDE menu shortcuts to be
-    // a reliable contract.
+    // The row is omitted entirely when neither half has content, so default
+    // mode with a fresh session keeps a zero-row visual footprint. Mode
+    // switching is driven by slash commands only (/plan toggles plan mode);
+    // the Shift+Tab keybinding was removed because Windows needs Node ≥22.17
+    // VT input mode, and the Alt+M fallback is too easily clobbered by IDE
+    // menu shortcuts to be a reliable contract.
+    let leftCells: Cell[] | null = null
     if (notice) {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
       cells.push(...textToCells(notice, S_DIM))
-      frame.push(cells)
+      leftCells = cells
     } else if (permissionMode === 'plan') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
       cells.push(...textToCells(`\u23f8 plan mode  ·  /plan to toggle`, S_DIM))
-      frame.push(cells)
+      leftCells = cells
     } else if (permissionMode === 'acceptEdits') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
       cells.push(...textToCells('\u26a1 accept edits', S_DIM))
+      leftCells = cells
+    }
+
+    let rightText: string | null = null
+    if (contextUsage && contextUsage.used > 0 && contextUsage.window > 0) {
+      const pct = Math.round((contextUsage.used / contextUsage.window) * 100)
+      rightText = `${formatTokens(contextUsage.used)} / ${formatTokens(contextUsage.window)} · ${pct}%`
+    }
+
+    if (leftCells || rightText) {
+      const cells: Cell[] = []
+      const leftWidth = leftCells ? leftCells.reduce((s, c) => s + (c.width ?? 1), 0) : 0
+      if (leftCells) cells.push(...leftCells)
+      if (rightText) {
+        const rightWidth = visualWidth(rightText)
+        // Right-justify against the bottom-separator's right edge (separator
+        // width = termWidth - 1, so the text ends at column termWidth - 1).
+        // Force a 2-space gap from any left content so a long notice can't
+        // run straight into the right-side number on a narrow terminal.
+        const minGap = leftCells ? 2 : 0
+        const targetStart = Math.max(leftWidth + minGap, termWidth - 1 - rightWidth)
+        const padCount = Math.max(0, targetStart - leftWidth)
+        for (let i = 0; i < padCount; i++) cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells(rightText, S_DIM))
+      }
       frame.push(cells)
     }
 
