@@ -603,6 +603,7 @@ export function App({
     const answer = await askQuestion(
       `Current: ${state.modelId}\nPick a model (● = current):`,
       choices.map((c) => ({ label: c.label, description: c.description })),
+      { noOther: true },
     )
     const picked = choices.find((c) => c.label === answer)
     if (!picked) {
@@ -714,6 +715,7 @@ export function App({
     const answer = await askQuestion(
       `Extended thinking is currently **${current ? 'on' : 'off'}**. Pick a mode (● = current):`,
       choices,
+      { noOther: true },
     )
     const wantOn = answer === choices[0].label
     const wantOff = answer === choices[1].label
@@ -998,6 +1000,7 @@ export function App({
               options: state.pendingQuestion.options,
               onResolve: resolveQuestion,
               dismissible: state.pendingQuestion.dismissible,
+              layout: state.pendingQuestion.layout,
             }
           : null
       }

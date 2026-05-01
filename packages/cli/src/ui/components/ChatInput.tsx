@@ -228,6 +228,12 @@ export interface SelectRequest {
    *  initiated dialogs (askUser tool, plan approval) leave this falsy:
    *  Esc is swallowed so the model isn't silently fed a blank answer. */
   dismissible?: boolean
+  /** Controls how options with descriptions are rendered:
+   *  - `compact` (default): label and description on the same line,
+   *    right-padded into two aligned columns. Best for short labels.
+   *  - `compact-vertical`: description on a separate indented line
+   *    below the label. Best for long descriptions (askUser). */
+  layout?: 'compact' | 'compact-vertical'
 }
 
 interface ChatInputProps {
@@ -415,6 +421,7 @@ const S_BOLD = '\x1b[0m\x1b[1m'
 // (147,165,255) which is a DIFFERENT shade, producing a visible
 // color shift at the live→committed handoff.
 const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;177;185;249m'
+const S_BLUE_PURPLE_DIM = '\x1b[0m\x1b[38;2;177;185;249;2m'
 const S_BLUE_PURPLE_BOLD = '\x1b[0m\x1b[38;2;177;185;249;1m'
 const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
@@ -1741,6 +1748,12 @@ export function ChatInput({
       // with a "(N more lines — see scrollback above)" footer; the
       // full body is rendered as a normal scrollback message before
       // the dialog opens (see use-agent.ts onAskUser / onPlanApprovalRequest).
+
+      // Blank line above the question title for visual separation from
+      // scrollback content above (mirrors CC's PermissionRequestTitle
+      // sitting inside a padded container).
+      frame.push([{ char: ' ', style: S_NONE, width: 1 }])
+
       const MAX_QUESTION_LINES = 6
       const allLines = selectRequest.question.split('\n')
       const truncated = allLines.length > MAX_QUESTION_LINES
@@ -1749,7 +1762,7 @@ export function ChatInput({
       for (const q of visibleLines) {
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(q, S_BLUE_PURPLE_BOLD))
+        cells.push(...textToCells(q, S_BOLD))
         frame.push(truncateCellRow(cells, maxRowW))
       }
       if (truncated) {
@@ -1767,9 +1780,14 @@ export function ChatInput({
       const termRows = stdout?.rows ?? 25
       const questionRows = (truncated ? visibleLines.length + 1 : visibleLines.length)
       const hintRows = 1
-      const chromeRows = questionRows + hintRows + 2
-      const maxVisibleOptions = Math.max(3, termRows - chromeRows)
+      const separatorRow = 1
+      const blankLines = 3
+      const chromeRows = questionRows + separatorRow + hintRows + blankLines + 1
       const opts = selectRequest.options
+      const hasDescriptions = opts.some((o: { description?: string; freeform?: boolean }) => o.description && !o.freeform)
+      const isVertical = (selectRequest.layout ?? 'compact') === 'compact-vertical'
+      const rowsPerOption = (hasDescriptions && isVertical) ? 2 : 1
+      const maxVisibleOptions = Math.max(3, Math.floor((termRows - chromeRows) / rowsPerOption))
       const totalOpts = opts.length
       const needsScroll = totalOpts > maxVisibleOptions
 
@@ -1792,28 +1810,105 @@ export function ChatInput({
         frame.push(cells)
       }
 
+      // Blank line between question header and options for visual grouping
+      frame.push([{ char: ' ', style: S_NONE, width: 1 }])
+
       const maxRowWidth = Math.max(20, termWidth - 1)
-      for (let i = vpStart; i < vpEnd; i++) {
-        const opt = opts[i]!
-        const active = i === selectIndex
-        const cells: Cell[] = []
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(active ? '\u276f ' : '  ', active ? S_BLUE_PURPLE : S_NONE))
-        cells.push(...textToCells(opt.label, active ? S_BLUE_PURPLE : S_NONE))
-        if (opt.freeform && active) {
-          cells.push(...textToCells(': ', S_NONE))
-          const t = freeform.text
-          const c = freeform.cursor
-          const before = t.slice(0, c)
-          const cursorChar = c < t.length ? t[c] : ' '
-          const after = c < t.length ? t.slice(c + 1) : ''
-          cells.push(...textToCells(before, S_NONE))
-          cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
-          cells.push(...textToCells(after, S_NONE))
-        } else if (opt.description) {
-          cells.push(...textToCells(`  \u2014 ${opt.description}`, S_DIM))
+      const maxIdxWidth = totalOpts.toString().length
+      const layout = selectRequest.layout ?? 'compact'
+
+      if (layout === 'compact-vertical') {
+        // compact-vertical: description on a separate indented line below
+        // the label. Matches CC's QuestionView layout:
+        //   ❯ 1. Label        ← focused: pointer "suggestion", label "suggestion"
+        //      description     ← paddingLeft = maxIndexWidth + 4
+        //     2. Label         ← unfocused: no pointer, label default (no bold)
+        //      description     ← dim
+        // CC's paddingLeft = maxIndexWidth + 4:
+        //   1(pointer) + 1(gap) + maxIdxWidth + 1(dot) + 1(space) = maxIdxWidth + 4
+        const descIndent = maxIdxWidth + 4
+        for (let i = vpStart; i < vpEnd; i++) {
+          const opt = opts[i]!
+          const active = i === selectIndex
+          const idx = `${i + 1}.`.padEnd(maxIdxWidth + 2)
+          const labelStyle = active ? S_BLUE_PURPLE : S_NONE
+          const cells: Cell[] = []
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          if (active) {
+            cells.push(...textToCells('\u276f ', S_BLUE_PURPLE))
+          } else {
+            cells.push(...textToCells('  ', S_NONE))
+          }
+          cells.push(...textToCells(idx, S_DIM))
+          cells.push(...textToCells(opt.label, labelStyle))
+          if (opt.freeform && active) {
+            cells.push(...textToCells(': ', S_NONE))
+            const t = freeform.text
+            const c = freeform.cursor
+            const before = t.slice(0, c)
+            const cursorChar = c < t.length ? t[c] : ' '
+            const after = c < t.length ? t.slice(c + 1) : ''
+            cells.push(...textToCells(before, S_NONE))
+            cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
+            cells.push(...textToCells(after, S_NONE))
+          }
+          frame.push(truncateCellRow(cells, maxRowWidth))
+          if (opt.description && !opt.freeform) {
+            const descCells: Cell[] = []
+            descCells.push({ char: ' ', style: S_NONE, width: 1 })
+            descCells.push(...textToCells(' '.repeat(descIndent), S_NONE))
+            descCells.push(...textToCells(opt.description, S_ACCENT_DIM))
+            frame.push(truncateCellRow(descCells, maxRowWidth))
+          }
         }
-        frame.push(truncateCellRow(cells, maxRowWidth))
+      } else {
+        // compact (default): label and description on the same line,
+        // right-padded into two aligned columns.
+        // Compute max label column width for alignment.
+        let maxLabelW = 0
+        for (let i = vpStart; i < vpEnd; i++) {
+          const o = opts[i]!
+          const lw = visualWidth(o.label)
+          if (lw > maxLabelW) maxLabelW = lw
+        }
+        const gapBetween = 2
+        const labelCol = maxLabelW + gapBetween
+
+        for (let i = vpStart; i < vpEnd; i++) {
+          const opt = opts[i]!
+          const active = i === selectIndex
+          const idx = `${i + 1}.`.padEnd(maxIdxWidth + 2)
+          const cells: Cell[] = []
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+          if (active) {
+            cells.push(...textToCells('\u276f ', S_BLUE_PURPLE))
+          } else {
+            cells.push(...textToCells('  ', S_NONE))
+          }
+          cells.push(...textToCells(idx, S_DIM))
+
+          const labelStyle = active ? S_BLUE_PURPLE : S_NONE
+          cells.push(...textToCells(opt.label, labelStyle))
+
+          if (opt.freeform && active) {
+            cells.push(...textToCells(': ', S_NONE))
+            const t = freeform.text
+            const c = freeform.cursor
+            const before = t.slice(0, c)
+            const cursorChar = c < t.length ? t[c] : ' '
+            const after = c < t.length ? t.slice(c + 1) : ''
+            cells.push(...textToCells(before, S_NONE))
+            cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
+            cells.push(...textToCells(after, S_NONE))
+          } else if (opt.description) {
+            const curLabelW = visualWidth(opt.label)
+            const pad = Math.max(1, labelCol - curLabelW)
+            cells.push(...textToCells(' '.repeat(pad), S_NONE))
+            cells.push(...textToCells(opt.description, S_ACCENT_DIM))
+          }
+
+          frame.push(truncateCellRow(cells, maxRowWidth))
+        }
       }
 
       if (needsScroll && vpEnd < totalOpts) {
@@ -1823,13 +1918,16 @@ export function ChatInput({
         frame.push(cells)
       }
 
+      // Blank line between options and hint (CC: marginTop={1} on hint Box)
+      frame.push([{ char: ' ', style: S_NONE, width: 1 }])
+
       const hint: Cell[] = []
       hint.push({ char: ' ', style: S_NONE, width: 1 })
       const activeOpt = opts[selectIndex]
-      const escHint = selectRequest.dismissible ? '  Esc Cancel' : ''
+      const escHint = selectRequest.dismissible ? ' \u00b7 Esc to cancel' : ''
       const hintText = activeOpt?.freeform
-        ? `\u2191\u2193 Navigate  Type your answer  Enter Confirm${escHint}`
-        : `\u2191\u2193 Navigate  Enter Confirm${escHint}`
+        ? `Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Type your answer${escHint}`
+        : `Enter to select \u00b7 \u2191/\u2193 to navigate${escHint}`
       hint.push(...textToCells(hintText, S_DIM))
       frame.push(hint)
 

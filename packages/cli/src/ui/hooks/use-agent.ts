@@ -46,6 +46,7 @@ interface PendingQuestion {
    *  (`onAskUser`, plan approval) leave it falsy so the model isn't
    *  silently fed an empty answer. */
   dismissible?: boolean
+  layout?: 'compact' | 'compact-vertical'
 }
 
 /** Auto-appended trailing option that opens an inline text input.
@@ -434,7 +435,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
                 ]
               : []
             const augmented = [...opts, ...planMeta, OTHER_OPTION]
-            setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve } }))
+            setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve, layout: 'compact-vertical' } }))
           })
         },
         onPlanApprovalRequest: (planText) => {
@@ -628,12 +629,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  an interactive picker. Returns a promise that resolves to the label
    *  the user chose (or the free-form "Other" text). */
   const askQuestion = useCallback(
-    (question: string, options: { label: string; description: string; preview?: string[] }[]) => {
+    (question: string, options: { label: string; description: string; preview?: string[] }[], opts?: { layout?: 'compact' | 'compact-vertical'; noOther?: boolean }) => {
       return new Promise<string>((resolve) => {
-        const augmented = [...options, OTHER_OPTION]
+        const augmented = opts?.noOther ? options : [...options, OTHER_OPTION]
         setState((prev) => ({
           ...prev,
-          pendingQuestion: { question, options: augmented, resolve, dismissible: true },
+          pendingQuestion: { question, options: augmented, resolve, dismissible: true, layout: opts?.layout },
         }))
       })
     },
