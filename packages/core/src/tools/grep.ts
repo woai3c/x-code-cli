@@ -12,6 +12,10 @@ import { reportProgress } from './progress.js'
 
 const execFileAsync = promisify(execFile)
 
+const DEFAULT_HEAD_LIMIT = 250
+const MAX_COLUMNS = 500
+const RG_MAX_BUFFER = 20 * 1024 * 1024
+
 let _rgPath: string | null = null
 
 function getRipgrepPath(): string {
@@ -29,17 +33,26 @@ function getRipgrepPath(): string {
 
 export const grep = tool({
   description:
-    'Search file contents by regex pattern using ripgrep. Returns matching lines with file paths and line numbers.',
+    `Search file contents by regex pattern using ripgrep. Returns matching lines with file paths and line numbers. ` +
+    `Results are capped at headLimit lines (default ${DEFAULT_HEAD_LIMIT}). ` +
+    `Long lines are truncated at ${MAX_COLUMNS} chars.`,
   inputSchema: z.object({
     pattern: z.string().describe('Regex pattern to search for'),
     path: z.string().optional().describe('File or directory to search in (defaults to working directory)'),
     glob: z.string().optional().describe('Glob pattern to filter files (e.g. "*.ts", "*.{ts,tsx}")'),
-    maxResults: z.number().optional().describe('Max number of results (default: 50)'),
+    headLimit: z.number().optional().describe(`Max number of output lines (default: ${DEFAULT_HEAD_LIMIT})`),
   }),
-  execute: async ({ pattern, path: searchPath, glob: globPattern, maxResults }, { toolCallId }) => {
+  execute: async ({ pattern, path: searchPath, glob: globPattern, headLimit }, { toolCallId }) => {
     try {
       const rgPath = getRipgrepPath()
-      const args = ['--no-heading', '--line-number', '--color', 'never', '--max-count', String(maxResults ?? 50)]
+      const limit = headLimit ?? DEFAULT_HEAD_LIMIT
+      const args = [
+        '--no-heading',
+        '--line-number',
+        '--color', 'never',
+        '--max-columns', String(MAX_COLUMNS),
+        '--max-columns-preview',
+      ]
       if (globPattern) {
         args.push('--glob', globPattern)
       }
@@ -48,12 +61,16 @@ export const grep = tool({
 
       reportProgress(toolCallId, `Searching for /${pattern}/`)
       const { stdout } = await execFileAsync(rgPath, args, {
-        maxBuffer: 1024 * 1024,
+        maxBuffer: RG_MAX_BUFFER,
         timeout: 30000,
       })
       const out = stdout.trim()
       if (!out) return 'No matches found.'
-      return out
+
+      const lines = out.split('\n')
+      if (lines.length <= limit) return out
+      const truncated = lines.slice(0, limit).join('\n')
+      return `${truncated}\n\n... [${lines.length - limit} more lines not shown — at least ${lines.length} total matches, capped at ${limit}. Narrow your pattern or use glob to reduce results.]`
     } catch (err) {
       if (err && typeof err === 'object' && 'code' in err && err.code === 1) {
         return 'No matches found.'

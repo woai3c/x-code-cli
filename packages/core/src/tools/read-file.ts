@@ -19,18 +19,9 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { classifyFile } from '../agent/file-ingest.js'
+import { mediaTypeFor } from '../utils/media-type.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
-
-function mediaTypeFor(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase()
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
-  if (ext === '.png') return 'image/png'
-  if (ext === '.webp') return 'image/webp'
-  if (ext === '.gif') return 'image/gif'
-  if (ext === '.bmp') return 'image/bmp'
-  return 'image/png'
-}
 
 /** Threshold above which a no-args readFile call returns a partial head plus a
  *  hint to re-read specific ranges. Picked empirically: 500 lines of code is

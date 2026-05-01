@@ -1,4 +1,6 @@
 // @x-code-cli/core — Permission system (3-level model)
+import path from 'node:path'
+
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { PermissionLevel, PermissionMode } from '../types/index.js'
 import {
@@ -68,14 +70,46 @@ export function getPermissionLevel(toolName: string, input: PermissionInput): Pe
   return rule(input)
 }
 
+// ── Path safety for write tools ──
+// Sensitive dotfile / config paths that should never be auto-approved even
+// when acceptEdits is active. Matches Claude Code's isDangerousFilePathToAutoEdit.
+const SENSITIVE_PATH_PATTERNS = [
+  /[\\/]\.bashrc$/,
+  /[\\/]\.bash_profile$/,
+  /[\\/]\.profile$/,
+  /[\\/]\.zshrc$/,
+  /[\\/]\.zprofile$/,
+  /[\\/]\.gitconfig$/,
+  /[\\/]\.ssh[\\/]/,
+  /[\\/]\.env$/,
+  /[\\/]\.git[\\/]/,
+  /[\\/]\.vscode[\\/]/,
+  /[\\/]\.idea[\\/]/,
+]
+
+/** True when `filePath` is inside `projectDir` (or equals it). Normalizes
+ *  both to forward-slash lower-case so Windows drive-letter differences and
+ *  trailing separators don't cause false negatives. */
+export function isPathWithinProject(filePath: string, projectDir: string): boolean {
+  const normalize = (p: string) => path.resolve(p).replace(/\\/g, '/').toLowerCase()
+  const file = normalize(filePath)
+  const dir = normalize(projectDir)
+  return file === dir || file.startsWith(dir + '/')
+}
+
+function isSensitivePath(filePath: string): boolean {
+  return SENSITIVE_PATH_PATTERNS.some((re) => re.test(filePath))
+}
+
 /** Check permission with trust mode + permission-mode support.
  *
  *  `permissionMode` semantics:
  *    - 'default': behave exactly as before — `ask`-level tools prompt.
- *    - 'acceptEdits': auto-allow `writeFile` and `edit` (the two tools
- *      whose default level is `ask` purely because they write files —
- *      the user opted into accepting all such writes). Shell still goes
- *      through normal classification so destructive commands stay
+ *    - 'acceptEdits': auto-allow `writeFile` and `edit` **only if the
+ *      target path is inside the project directory** and not a sensitive
+ *      dotfile. Paths outside cwd or targeting .bashrc/.git/etc. fall
+ *      back to `ask` so the user must explicitly consent. Shell still
+ *      goes through normal classification so destructive commands stay
  *      gated, and `deny`-level results still deny.
  *    - 'plan': pure prompt-based enforcement (mirrors Claude Code) —
  *      no permission-layer change. The system-prompt overlay tells the
@@ -95,7 +129,12 @@ export async function checkPermission(
   if (level === 'deny') return false
   if (level === 'always-allow' || trustMode) return true
   if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
-    return true
+    const filePath = (toolCall.input.filePath as string) ?? ''
+    const projectDir = cwd ?? process.cwd()
+    if (filePath && isPathWithinProject(filePath, projectDir) && !isSensitivePath(filePath)) {
+      return true
+    }
+    // Path outside project or targeting sensitive file — fall through to ask
   }
   if (sessionRulesMatch(toolCall.toolName, toolCall.input)) return true
 

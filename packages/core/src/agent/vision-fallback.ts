@@ -21,6 +21,8 @@ import { generateText } from 'ai'
 import { getAvailableProviders } from '../config/index.js'
 import { createModelRegistry } from '../providers/registry.js'
 import { debugLog } from '../utils.js'
+import { LruCache } from '../utils/lru-cache.js'
+import { mediaTypeFor } from '../utils/media-type.js'
 
 export interface VisionProvider {
   /** Provider id, e.g. "google" / "zhipu". */
@@ -71,21 +73,11 @@ export function pickVisionProvider(): VisionProvider | null {
   return null
 }
 
-/** Same media-type mapping as file-ingest.ts uses for ImagePart hints. */
-function mediaTypeFor(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase()
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
-  if (ext === '.webp') return 'image/webp'
-  if (ext === '.gif') return 'image/gif'
-  if (ext === '.bmp') return 'image/bmp'
-  return 'image/png'
-}
-
 /** In-memory cache so re-attaching the same image (or the same image across
  *  multiple submits in one session) doesn't re-burn tokens on the sub-agent.
  *  Keyed by `${providerId}:${file size}:${first-64-bytes-base64}` — same
  *  cheap collision-resistant key strategy provider-compat.ts uses for OCR. */
-const captionCache = new Map<string, string>()
+const captionCache = new LruCache<string>({ maxEntries: 50 })
 
 async function cacheKey(filePath: string, providerModelId: string): Promise<string> {
   const buffer = await fs.readFile(filePath)

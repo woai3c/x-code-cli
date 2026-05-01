@@ -7,6 +7,7 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { LruCache } from '../utils/lru-cache.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 
@@ -17,9 +18,10 @@ const FETCH_TIMEOUT_MS = 15_000
 // This is a per-call cap; the model can always fetch again with a narrower prompt.
 const MAX_CONTENT_CHARS = 100_000
 // Raw HTML ceiling before turndown. 10 MB is comfortable for any real doc page;
-// enforced via content-length header (best-effort — chunked responses skip this,
-// in which case the 15 s fetch timeout bounds the download).
+// enforced both by content-length header AND by streaming body read (see
+// readResponseBody) so chunked responses are also bounded.
 const MAX_HTTP_BYTES = 10 * 1024 * 1024
+const MAX_URL_LENGTH = 2000
 const CACHE_TTL_MS = 15 * 60 * 1000
 const CACHE_MAX_ENTRIES = 50
 
@@ -31,33 +33,54 @@ const FALLBACK_UA = 'x-code-cli/0.1 (+https://github.com/woai3c/x-code-cli)'
 
 const YEAR = new Date().getFullYear()
 
-// ── Minimal in-memory LRU cache (URL → rendered markdown) ──
-interface CacheEntry {
-  markdown: string
-  at: number
-}
-const fetchCache = new Map<string, CacheEntry>()
+// ── SSRF protection ──
+// Reject URLs targeting internal/private networks. Mirrors Claude Code's
+// validateURL: hostname must have ≥2 dot-separated segments (rejects
+// `localhost`, bare hostnames), no embedded credentials, no non-HTTP schemes,
+// and no IPs in private/link-local/loopback ranges.
 
-function cacheGet(url: string): string | null {
-  const entry = fetchCache.get(url)
-  if (!entry) return null
-  if (Date.now() - entry.at > CACHE_TTL_MS) {
-    fetchCache.delete(url)
-    return null
-  }
-  // LRU: re-insert to move this entry to the tail (most-recently-used)
-  fetchCache.delete(url)
-  fetchCache.set(url, entry)
-  return entry.markdown
+const PRIVATE_IP_PATTERNS = [
+  /^127\./,                   // loopback
+  /^10\./,                    // 10.0.0.0/8
+  /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
+  /^192\.168\./,              // 192.168.0.0/16
+  /^169\.254\./,              // link-local (AWS/GCP metadata)
+  /^0\./,                     // 0.0.0.0/8
+  /^::1$/,                    // IPv6 loopback
+  /^fd[0-9a-f]{2}:/i,        // IPv6 ULA
+  /^fe80:/i,                  // IPv6 link-local
+]
+
+function isPrivateHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase()
+  if (lower === 'localhost' || lower.endsWith('.local') || lower.endsWith('.internal')) return true
+  // IP-literal in URL — strip surrounding brackets for IPv6
+  const bare = lower.startsWith('[') ? lower.slice(1, -1) : lower
+  return PRIVATE_IP_PATTERNS.some((re) => re.test(bare))
 }
 
-function cacheSet(url: string, markdown: string): void {
-  if (fetchCache.size >= CACHE_MAX_ENTRIES) {
-    const oldest = fetchCache.keys().next().value
-    if (oldest !== undefined) fetchCache.delete(oldest)
+/** @internal Exported for testing only. */
+export function validateFetchUrl(url: string): string | null {
+  if (url.length > MAX_URL_LENGTH) return `URL exceeds ${MAX_URL_LENGTH} character limit`
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return 'Invalid URL'
   }
-  fetchCache.set(url, { markdown, at: Date.now() })
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `Unsupported protocol: ${parsed.protocol} (only http/https allowed)`
+  }
+  if (parsed.username || parsed.password) return 'URLs with embedded credentials are not allowed'
+  const parts = parsed.hostname.split('.')
+  if (parts.length < 2) return `Hostname "${parsed.hostname}" is not a public domain (must have at least two segments)`
+  if (isPrivateHost(parsed.hostname)) {
+    return `Fetching private/internal address "${parsed.hostname}" is blocked for security`
+  }
+  return null
 }
+
+const fetchCache = new LruCache<string>({ maxEntries: CACHE_MAX_ENTRIES, ttlMs: CACHE_TTL_MS })
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -71,8 +94,38 @@ async function doFetch(url: string, userAgent: string): Promise<Response> {
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
       'Accept-Language': 'en-US,en;q=0.9',
     },
+    redirect: 'follow',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   })
+}
+
+/** Stream-read response body with a hard byte cap. Prevents OOM on chunked
+ *  responses where content-length is absent or lying. */
+async function readResponseBody(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return response.text()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    totalBytes += value.byteLength
+    if (totalBytes > maxBytes) {
+      await reader.cancel()
+      break
+    }
+    chunks.push(value)
+  }
+  const merged = new Uint8Array(Math.min(totalBytes, maxBytes))
+  let offset = 0
+  for (const chunk of chunks) {
+    const remaining = merged.byteLength - offset
+    if (remaining <= 0) break
+    const slice = chunk.byteLength > remaining ? chunk.subarray(0, remaining) : chunk
+    merged.set(slice, offset)
+    offset += slice.byteLength
+  }
+  return new TextDecoder().decode(merged)
 }
 
 function formatOutput(url: string, markdown: string, prompt?: string): string {
@@ -95,7 +148,10 @@ export const webFetch = tool({
   }),
   execute: async ({ url, prompt }, { toolCallId }) => {
     try {
-      const cached = cacheGet(url)
+      const urlError = validateFetchUrl(url)
+      if (urlError) return `Error: ${urlError}`
+
+      const cached = fetchCache.get(url)
       if (cached) {
         reportProgress(toolCallId, 'Using cached copy')
         return formatOutput(url, cached, prompt)
@@ -115,8 +171,7 @@ export const webFetch = tool({
         return `Error: HTTP ${response.status} ${response.statusText}`
       }
 
-      // Best-effort size guard: content-length is optional under chunked encoding,
-      // so we also rely on fetch's 15s timeout to bound pathological pages.
+      // Reject upfront when content-length exceeds the cap.
       const contentLength = Number(response.headers.get('content-length') ?? '0')
       if (contentLength > MAX_HTTP_BYTES) {
         const mb = Math.round(contentLength / 1024 / 1024)
@@ -124,11 +179,13 @@ export const webFetch = tool({
       }
 
       const contentType = response.headers.get('content-type') ?? ''
-      const body = await response.text()
+      // Stream-read with hard byte cap — prevents OOM on chunked responses
+      // where content-length is absent or lies.
+      const body = await readResponseBody(response, MAX_HTTP_BYTES)
 
       if (contentType.includes('application/json')) {
         const json = body.slice(0, MAX_CONTENT_CHARS)
-        cacheSet(url, json)
+        fetchCache.set(url, json)
         return formatOutput(url, json, prompt)
       }
 
@@ -145,7 +202,7 @@ export const webFetch = tool({
         markdown = markdown.slice(0, MAX_CONTENT_CHARS) + '\n\n... [content truncated]'
       }
 
-      cacheSet(url, markdown)
+      fetchCache.set(url, markdown)
       return formatOutput(url, markdown, prompt)
     } catch (err) {
       return formatToolError('fetching URL', err)

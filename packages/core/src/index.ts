@@ -65,6 +65,9 @@ export type { AllowRule } from './permissions/session-store.js'
 
 // Utils
 export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog } from './utils.js'
+export { LruCache } from './utils/lru-cache.js'
+export { mediaTypeFor } from './utils/media-type.js'
+export { extractText } from './utils/message-helpers.js'
 
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'

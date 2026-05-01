@@ -9,6 +9,12 @@ import os from 'node:os'
 
 export type ShellType = 'bash' | 'zsh' | 'powershell'
 
+// 20 MB — matches Claude Code's ripgrep buffer; generous enough for real
+// workloads, small enough to prevent an accidental `yes` or `find /` from
+// eating all memory. When exceeded, execa terminates the child with SIGTERM
+// and surfaces a "maxBuffer exceeded" error.
+export const MAX_SHELL_BUFFER = 20 * 1024 * 1024
+
 export interface ShellSpawnOptions {
   timeout: number
   env?: NodeJS.ProcessEnv
@@ -30,6 +36,7 @@ function createPosixProvider(executable: string, type: 'bash' | 'zsh'): ShellPro
     spawn(command, opts) {
       return execa(executable, ['-c', command], {
         timeout: opts.timeout,
+        maxBuffer: MAX_SHELL_BUFFER,
         cwd: opts.cwd,
         reject: false,
         cancelSignal: opts.signal,
@@ -75,6 +82,7 @@ function createPowerShellProvider(executable: string): ShellProvider {
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(wrapped)],
         {
           timeout: opts.timeout,
+          maxBuffer: MAX_SHELL_BUFFER,
           cwd: opts.cwd,
           reject: false,
           cancelSignal: opts.signal,
