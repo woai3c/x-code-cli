@@ -21,7 +21,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **文件附件**：在提示词中以 `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
 - **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage` 等
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **跨平台**：支持 Windows、macOS、Linux
 - **非交互模式**：`--print` 配合管道输入，可嵌入脚本与 CI
@@ -184,12 +184,12 @@ xc [options] [prompt]
 | `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                                     |
 | `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                   |
 | `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                 |
-| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）；`/usage history` 列出当前项目历史会话 |
+| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）                                       |
+| `/usage-history`      | 列出当前项目历史会话，可交互选择查看详情                                      |
 | `/clear`              | 清空当前会话                                                                  |
 | `/compact`            | 手动压缩上下文                                                                |
 | `/resume`             | 从当前项目的历史会话中选择一个恢复                                            |
 | `/init`               | 初始化项目知识库                                                              |
-| `/session save`       | 保存当前会话（不退出）                                                        |
 | `/exit`               | 保存会话并退出                                                                |
 
 ### 思考模式说明

@@ -707,16 +707,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const getSessionInfo = useCallback(() => {
     const ls = loopStateRef.current
     if (!ls || ls.messages.length === 0) return null
-    return { sessionId: ls.sessionId, taskSlug: ls.taskSlug, messageCount: ls.messages.length }
-  }, [])
-
-  /** Save session without exiting */
-  const saveCurrentSession = useCallback(async () => {
-    if (loopStateRef.current) {
-      await saveSession(loopStateRef.current, modelRef.current)
-      return true
-    }
-    return false
+    const firstUserMsg = ls.messages.find((m) => m.role === 'user')
+    const firstPrompt = firstUserMsg ? extractText(firstUserMsg.content).slice(0, 80) : ''
+    return { sessionId: ls.sessionId, taskSlug: ls.taskSlug, messageCount: ls.messages.length, firstPrompt }
   }, [])
 
   /** Clear conversation */
@@ -736,7 +729,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  submit appends to the SAME file (filename derives from sessionId +
    *  taskSlug, both preserved by hydrate). Live model and approval mode
    *  carry over from the current session; the resumed session's stored
-   *  `modelId` is informational only (in /usage history).
+   *  `modelId` is informational only (in /usage-history).
    *
    *  Display-side: we APPEND the converted history to whatever's already
    *  in `state.messages`. We can't replace, because ChatInput's
@@ -884,7 +877,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setThinking,
     getThinking,
     setPermissionMode,
-    saveCurrentSession,
     addInfoMessage,
     addUserMessage,
     addCommandMessage,

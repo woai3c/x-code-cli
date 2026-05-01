@@ -18,7 +18,7 @@ import {
   resolveModelId,
   saveUserConfig,
 } from '@x-code-cli/core'
-import type { AgentOptions, LanguageModel, LoadedSession, SessionListEntry, TokenUsage } from '@x-code-cli/core'
+import type { AgentOptions, LanguageModel, LoadedSession, TokenUsage } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
@@ -72,22 +72,31 @@ export const SLASH_COMMANDS = [
   { name: '/resume', description: 'Pick a past session in this project to resume' },
   { name: '/init', description: 'Initialize project knowledge' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
-  { name: '/usage history', description: 'List past sessions in this project' },
-  { name: '/session save', description: 'Force-flush the current session jsonl to disk' },
+  { name: '/usage-history', description: 'List past sessions in this project' },
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
 /** Render TokenUsage as a markdown block for /usage. cacheReadTokens is a
  *  subset of inputTokens, so the hit ratio is cacheRead / inputTokens — that
  *  matches what users care about ("of the prompt I sent, how much was cached"). */
-function formatUsageReport(usage: TokenUsage, modelId: string, source: 'live' | 'snapshot'): string {
+function formatUsageReport(
+  usage: TokenUsage,
+  modelId: string,
+  source: 'live' | 'snapshot' | 'history',
+  sessionName?: string,
+): string {
   const fmt = (n: number) => n.toLocaleString('en-US')
   const hitRatio =
     usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
-  const header = source === 'snapshot' ? '**Usage** (last session — no turns yet)' : '**Usage** (current session)'
-  return [
-    header,
-    '',
+  const headerMap = {
+    live: '**Usage** (current session)',
+    snapshot: '**Usage** (last session — no turns yet)',
+    history: '**Usage** (history)',
+  }
+  const header = headerMap[source]
+  const lines = [header, '']
+  if (sessionName) lines.push(`- Session:         ${sessionName}`)
+  lines.push(
     `- Model:           ${modelId}`,
     `- Input tokens:    ${fmt(usage.inputTokens)}`,
     `- Output tokens:   ${fmt(usage.outputTokens)}`,
@@ -96,7 +105,8 @@ function formatUsageReport(usage: TokenUsage, modelId: string, source: 'live' | 
     `- Total:           ${fmt(usage.totalTokens)}`,
     '',
     'Cache numbers depend on the provider — DeepSeek/Moonshot/Qwen may report 0 even when prefix caching is active.',
-  ].join('\n')
+  )
+  return lines.join('\n')
 }
 
 /** Build a "context X% used — consider /compact" hint when a resumed
@@ -139,42 +149,8 @@ function formatRelativeTime(epochMs: number): string {
   return new Date(epochMs).toISOString().slice(0, 10)
 }
 
-/** Render the per-session history list. Newest first; same project only.
- *  Sourced from the project's `.x-code/sessions/*.jsonl` files via
- *  `listSessions` — each row's totals come from the LAST `usage` meta
- *  entry in the file's tail (that's all the picker reads). Sessions
- *  with no usage line yet (interrupted before the first turn finished)
- *  show "—" for totals.
- *  Kept as a fenced code block so column alignment survives the markdown
- *  pipeline (otherwise the renderer collapses runs of spaces). */
-function formatUsageHistory(sessions: SessionListEntry[]): string {
-  if (sessions.length === 0) {
-    return '**Usage history** — no past sessions found in this project.'
-  }
-  const fmt = (n: number) => n.toLocaleString('en-US')
-  const rows = sessions.map((s) => {
-    const date = new Date(s.mtime).toISOString().slice(0, 16).replace('T', ' ')
-    const usage = s.tokenUsage
-    const total = usage ? fmt(usage.totalTokens) : '—'
-    const hit =
-      usage && usage.inputTokens > 0
-        ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(0)}%`
-        : '—'
-    return { date, id: s.sessionId, model: s.modelId, total, hit }
-  })
-  const headers = { date: 'Updated', id: 'Session', model: 'Model', total: 'Total', hit: 'Cache' }
-  const widths = {
-    date: Math.max(headers.date.length, ...rows.map((r) => r.date.length)),
-    id: Math.max(headers.id.length, ...rows.map((r) => r.id.length)),
-    model: Math.max(headers.model.length, ...rows.map((r) => r.model.length)),
-    total: Math.max(headers.total.length, ...rows.map((r) => r.total.length)),
-    hit: Math.max(headers.hit.length, ...rows.map((r) => r.hit.length)),
-  }
-  const line = (r: typeof headers) =>
-    `${r.date.padEnd(widths.date)}  ${r.id.padEnd(widths.id)}  ${r.model.padEnd(widths.model)}  ${r.total.padStart(widths.total)}  ${r.hit.padStart(widths.hit)}`
-  const body = ['```', line(headers), ...rows.map(line), '```'].join('\n')
-  return `**Usage history** — ${sessions.length} session${sessions.length === 1 ? '' : 's'} in this project\n\n${body}`
-}
+// formatUsageHistory was replaced by the interactive handleUsageHistory
+// picker inside the component — see handleUsageHistory().
 
 const HELP_TEXT =
   `X-Code CLI v${VERSION}\n\n` +
@@ -206,7 +182,6 @@ export function App({
     switchModel,
     setThinking,
     getThinking,
-    saveCurrentSession,
     addInfoMessage,
     addUserMessage,
     addCommandMessage,
@@ -516,15 +491,12 @@ export function App({
 
         case 'usage':
           echoCommand(text)
-          await handleUsage(arg)
+          await handleUsage()
           return
 
-        case 'session':
-          if (arg.toLowerCase() === 'save') {
-            await handleSessionSave(text)
-          } else {
-            addCommandMessage(text, 'Unknown session command. Use `/session save`.')
-          }
+        case 'usage-history':
+          echoCommand(text)
+          await handleUsageHistory()
           return
 
         case 'exit':
@@ -902,35 +874,77 @@ export function App({
     }
   }
 
-  async function handleSessionSave(commandText: string) {
-    const saved = await saveCurrentSession()
-    addCommandMessage(commandText, saved ? 'Session saved.' : 'No active session to save.')
-  }
-
-  /** /usage — show token totals and cache-hit ratio for this session.
-   *  Prefers the live in-memory tally from useAgent (always current); on
-   *  a fresh process with no turns yet, falls back to the most recent
-   *  session jsonl in this project (its last `usage` meta line). The
-   *  fallback path lets the user check yesterday's totals without
-   *  starting a new turn. `/usage history` lists every past session. */
-  async function handleUsage(arg: string) {
-    if (arg.toLowerCase() === 'history') {
-      const sessions = await listSessions()
-      addInfoMessage(formatUsageHistory(sessions))
-      return
-    }
+  async function handleUsage() {
     let usage: TokenUsage = state.usage
     let modelId = state.modelId
     let source: 'live' | 'snapshot' = 'live'
+    let sessionName: string | undefined
+    const info = getSessionInfo()
+    if (info?.firstPrompt) {
+      sessionName = info.firstPrompt
+    }
     if (usage.totalTokens === 0) {
       const latest = await pickLatestSession()
       if (latest && latest.tokenUsage) {
         usage = latest.tokenUsage
         modelId = latest.modelId
         source = 'snapshot'
+        sessionName = latest.firstPrompt.slice(0, 80) || undefined
       }
     }
-    addInfoMessage(formatUsageReport(usage, modelId, source))
+    addInfoMessage(formatUsageReport(usage, modelId, source, sessionName))
+  }
+
+  async function handleUsageHistory() {
+    const sessions = await listSessions()
+    if (sessions.length === 0) {
+      addInfoMessage('**Usage history** — no past sessions found in this project.')
+      return
+    }
+
+    const fmt = (n: number) => n.toLocaleString('en-US')
+    const choices = sessions.map((s) => {
+      const preview = (s.firstPrompt || '(empty)').slice(0, 50).replace(/\s+/g, ' ').trim()
+      const ago = formatRelativeTime(s.mtime)
+      const total = s.tokenUsage ? fmt(s.tokenUsage.totalTokens) : '—'
+      return {
+        label: `${preview}  ·  ${ago}`,
+        description: `${s.modelId}  ·  ${total} tokens`,
+        session: s,
+      }
+    })
+
+    const BACK_LABEL = '← Back to list'
+    const tick = () => new Promise<void>((r) => setTimeout(r, 50))
+
+    while (true) {
+      const answer = await askQuestion(
+        `**Usage history** — ${sessions.length} session${sessions.length === 1 ? '' : 's'}. Pick one to view details:`,
+        choices.map((c) => ({ label: c.label, description: c.description })),
+        { noOther: true },
+      )
+
+      const picked = choices.find((c) => c.label === answer)
+      if (!picked) break
+
+      const s = picked.session
+      const usage = s.tokenUsage
+      if (!usage) {
+        addInfoMessage(`**${(s.firstPrompt || '(empty)').slice(0, 60)}**\n\nNo usage data recorded (interrupted before first turn).`)
+      } else {
+        addInfoMessage(formatUsageReport(usage, s.modelId, 'history', s.firstPrompt.slice(0, 80) || undefined))
+      }
+
+      await tick()
+
+      const back = await askQuestion(
+        'Press Enter to return, or Esc to exit.',
+        [{ label: BACK_LABEL }],
+        { noOther: true },
+      )
+
+      if (!back) break
+    }
   }
 
   // RENDERING ARCHITECTURE

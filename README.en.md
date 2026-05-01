@@ -21,7 +21,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, and more
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Cross-platform** — runs on Windows, macOS, and Linux
 - **Non-interactive mode** — `--print` with pipes for scripts and CI
@@ -184,12 +184,12 @@ xc [options] [prompt]
 | `/thinking [on\|off]` | Enable / disable thinking mode (no argument opens the picker)                                            |
 | `/theme [name]`       | Switch UI theme (no argument opens the picker); controls diff colors and syntax-highlight palette         |
 | `/plan [on\|off]`     | Enable / disable plan mode (no argument toggles the current state)                                       |
-| `/usage`              | Show current-session token usage (including cache hit rate); `/usage history` lists past project sessions |
+| `/usage`              | Show current-session token usage (including cache hit rate)                                               |
+| `/usage-history`      | List past project sessions with interactive detail view                                                  |
 | `/clear`              | Clear the current conversation                                                                           |
 | `/compact`            | Manually compress context                                                                                |
 | `/resume`             | Pick a past session in this project to resume                                                            |
 | `/init`               | Initialize the project knowledge base                                                                    |
-| `/session save`       | Save the current session without exiting                                                                 |
 | `/exit`               | Save the session and exit                                                                                |
 
 ### Thinking-mode notes

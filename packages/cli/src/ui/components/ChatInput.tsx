@@ -2665,6 +2665,14 @@ export function ChatInput({
         const absorbed = Math.min(deltaH, freeBlanksAboveFrameRef.current)
         const needsScroll = deltaH - absorbed
         if (needsScroll > 0) {
+          // Erase the old frame before scrolling so that blank rows — not
+          // stale prompt/separator cells — get pushed into terminal scrollback.
+          // Without this, the `> ▊` prompt line becomes a permanent ghost in
+          // scrollback after the select dialog closes.
+          const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
+          for (let i = 0; i < oldFrameH; i++) {
+            preBuf += `\x1b[${oldTop + i};1H\x1b[K`
+          }
           preBuf += `\x1b[${termRows};1H` + '\n'.repeat(needsScroll)
         }
         pendingFreeBlanks = Math.max(0, freeBlanksAboveFrameRef.current - deltaH)
