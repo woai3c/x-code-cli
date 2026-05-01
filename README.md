@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) · [English](./README.en.md)
 
-**X-Code CLI** 是一个 AI Agent CLI——运行于终端中，通过自然语言与代码库交互，完成阅读、修改、调试和构建等开发任务，无需离开命令行。
+**X-Code CLI** 是一个运行在终端的开源 AI 编程助手——通过自然语言与代码库交互，完成阅读、修改、调试和构建等开发任务，无需离开命令行。
 
 X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 15 个工具（文件读写、Shell 执行、代码搜索、子 Agent 委派、任务追踪、计划模式等），并提供权限控制、上下文压缩、文件附件、知识库、会话恢复等能力。
 

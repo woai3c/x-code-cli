@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) · [English](./README.en.md)
 
-**X-Code CLI** is an AI Agent CLI — runs in the terminal, enabling natural-language interaction with the codebase to read, modify, debug, and build projects without leaving the command line.
+**X-Code CLI** is an open-source AI coding agent for your terminal — interact with your codebase using natural language to read, modify, debug, and build projects without leaving the command line.
 
 X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 15 built-in tools (file I/O, shell execution, code search, sub-agent delegation, task tracking, plan mode, etc.), and provides capabilities such as a permission model, context compression, file attachments, a knowledge system, and session resumption.
 
