@@ -1,3 +1,13 @@
+## v0.2.1 (2026-05-01)
+
+### Features
+
+- improve prefix extraction and session-only write rules (1511710)
+
+### Bug Fixes
+
+- sometimes cannot see the UI for asking permission (a42ef09)
+
 ## v0.2.0 (2026-05-01)
 
 ### Features
