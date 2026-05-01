@@ -6,6 +6,7 @@
 import { Chalk } from 'chalk'
 
 import { VERSION } from '../../version.js'
+import { GLYPH_HEADER_PIPE } from '../terminal-glyphs.js'
 
 const c = new Chalk({ level: 3 })
 
@@ -63,7 +64,7 @@ export function renderHeader(modelId: string): string {
 
   const lines = [
     c.hex(LOGO_COLOR).bold(logo),
-    ` ${c.dim(`v${VERSION}`)} ${c.dim('│')} ${c.hex(LOGO_COLOR)(provider)} ${c.dim('/')} ${c.hex(LOGO_COLOR).bold(modelName)}`,
+    ` ${c.dim(`v${VERSION}`)} ${c.dim(GLYPH_HEADER_PIPE)} ${c.hex(LOGO_COLOR)(provider)} ${c.dim('/')} ${c.hex(LOGO_COLOR).bold(modelName)}`,
     ` ${c.dim(`Type /help for commands, ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} to abort`)}`,
     '', // blank line after header
   ]

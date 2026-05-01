@@ -37,42 +37,26 @@ import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
+import {
+  GLYPH_ACCEPT_EDITS,
+  GLYPH_BULLET,
+  GLYPH_ELLIPSIS,
+  GLYPH_PLAN_MODE,
+  GLYPH_RESULT_BRACKET,
+  GLYPH_SELECT_POINTER,
+  GLYPH_TODO_BRACKET,
+  GLYPH_TODO_CHECK,
+  GLYPH_TODO_IN_PROGRESS,
+  GLYPH_TODO_PENDING,
+  RIGHT_MARGIN_SAFETY,
+  SPINNER_FRAMES,
+} from '../terminal-glyphs.js'
 import { getToolInputPreview, getToolLabel } from '../tool-display.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
 const MAX_VISIBLE_LINES = 10
 const MAX_AT_COMPLETIONS = 8
-// Asterisk-pulse glyphs that breathe at the same screen position rather
-// than rotating dot patterns (which the eye reads as area shake/flicker).
-// Forward + reversed produces a 12-frame `·, ✢, *, ✶, ✻, ✽, ✽, ✻, ✶, *, ✢, ·`
-// breathe cycle. Mirrors Claude Code's spinner glyph set
-// (D:\res\claude-code\src\components\Spinner\utils.ts:4-11 +
-// SpinnerGlyph.tsx:7), which is visually stable on terminals where high-
-// contrast braille rotation registers as flicker (VSCode xterm.js, ConHost).
-// Using the non-Mac glyphs (`*` instead of `✽` for the brightest frame) on
-// every platform — `*` is monospace-safe everywhere and the visual diff
-// against `✻` is small enough that the breathe still reads cleanly.
-//
-// Windows-specific fallback: legacy ConHost (cmd.exe / Windows PowerShell
-// host launched outside Windows Terminal) defaults to Lucida Console or
-// — on CJK locales — SimSun / NSimSun / MS Gothic. None of those fonts
-// carry the U+2722-U+273D dingbat range (`✢ ✶ ✻ ✽`), so the spinner
-// alternated between visible glyphs (`·` `*`) and missing-glyph boxes (`□`)
-// every ~200ms — the user described it as "alternating between a square
-// and the animation". The cure is to swap to ASCII/Latin-1 frames for the
-// Windows-without-WT-or-VSCode case. Detection mirrors the env-var
-// shape we use elsewhere: WT_SESSION → Windows Terminal (Cascadia Mono,
-// has the dingbats); TERM_PROGRAM=vscode → VSCode integrated terminal
-// (font is whatever VSCode's editor.fontFamily is, defaults Cascadia Mono);
-// neither set on win32 → very likely legacy ConHost with a font that
-// misses U+27xx, so use the ASCII pulse instead.
-const NEEDS_ASCII_SPINNER =
-  process.platform === 'win32' && !process.env.WT_SESSION && process.env.TERM_PROGRAM !== 'vscode'
-const SPINNER_BASE_FRAMES = NEEDS_ASCII_SPINNER
-  ? ['·', ':', '+', '*', '+', ':']
-  : ['·', '✢', '*', '✶', '✻', '✽']
-const SPINNER_FRAMES = [...SPINNER_BASE_FRAMES, ...[...SPINNER_BASE_FRAMES].reverse()]
 
 // ── CJK width helpers ───────────────────────────────────────────────────
 
@@ -121,7 +105,7 @@ function truncateCellRow(cells: Cell[], maxWidth: number): Cell[] {
     if (w + cells[i]!.width > maxWidth) {
       const truncated = cells.slice(0, i)
       if (w + 1 <= maxWidth) {
-        truncated.push({ char: '\u2026', style: cells[i]!.style, width: 1 })
+        truncated.push({ char: GLYPH_ELLIPSIS, style: cells[i]!.style, width: 1 })
       }
       return truncated
     }
@@ -1502,11 +1486,11 @@ export function ChatInput({
       displayLines = visualLines.slice(start, start + MAX_VISIBLE_LINES).map((v) => v.text)
       cursorLine = visCursorLine - start
       if (start > 0) {
-        displayLines[0] = `\u2026 (+${start} above)`
+        displayLines[0] = `${GLYPH_ELLIPSIS} (+${start} above)`
         if (cursorLine === 0) cursorLine = -1
       }
       if (start + MAX_VISIBLE_LINES < visualLines.length) {
-        displayLines[displayLines.length - 1] = `\u2026 (+${visualLines.length - start - MAX_VISIBLE_LINES} below)`
+        displayLines[displayLines.length - 1] = `${GLYPH_ELLIPSIS} (+${visualLines.length - start - MAX_VISIBLE_LINES} below)`
         if (cursorLine === displayLines.length - 1) cursorLine = -1
       }
     }
@@ -1620,7 +1604,7 @@ export function ChatInput({
           // bullet — same hue, no dim — so the transition is just "stop
           // pulsing", not a color change.
           const dotStyle = spinnerFrame % 6 < 3 ? S_SUCCESS_DOT : S_SUCCESS_DOT_DIM
-          row1.push(...textToCells('●', dotStyle))
+          row1.push(...textToCells(GLYPH_BULLET, dotStyle))
           row1.push({ char: ' ', style: S_NONE, width: 1 })
           row1.push(...textToCells(label, S_BOLD))
           if (preview) {
@@ -1633,7 +1617,7 @@ export function ChatInput({
             const decoration = label.length + 5
             const safetyMargin = 4
             const maxPreviewLen = Math.max(40, termWidth - decoration - safetyMargin)
-            const trimmed = preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + '…' : preview
+            const trimmed = preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + GLYPH_ELLIPSIS : preview
             row1.push(...textToCells(`(${trimmed})`, S_BLUE_PURPLE))
           }
           frame.push(row1)
@@ -1652,7 +1636,7 @@ export function ChatInput({
               const row: Cell[] = []
               row.push(...textToCells('   ', S_NONE))
               if (isFirst) {
-                row.push(...textToCells('⎿', S_GRAY_90))
+                row.push(...textToCells(GLYPH_RESULT_BRACKET, S_GRAY_90))
               } else {
                 row.push({ char: ' ', style: S_NONE, width: 1 })
               }
@@ -1671,7 +1655,7 @@ export function ChatInput({
           } else {
             const row2: Cell[] = []
             row2.push(...textToCells('   ', S_NONE))
-            row2.push(...textToCells('⎿', S_GRAY_90))
+            row2.push(...textToCells(GLYPH_RESULT_BRACKET, S_GRAY_90))
             row2.push({ char: ' ', style: S_NONE, width: 1 })
             row2.push({ char: ' ', style: S_NONE, width: 1 })
             row2.push(...textToCells(glyph, S_SPINNER))
@@ -1716,7 +1700,7 @@ export function ChatInput({
       const yesCells: Cell[] = []
       if (permissionSelected === 0) {
         yesCells.push(...textToCells('    ', S_NONE))
-        yesCells.push(...textToCells('\u276f Yes', S_SUCCESS))
+        yesCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes`, S_SUCCESS))
       } else {
         yesCells.push(...textToCells('      ', S_NONE))
         yesCells.push(...textToCells('Yes', S_ACCENT_DIM))
@@ -1726,7 +1710,7 @@ export function ChatInput({
       const noCells: Cell[] = []
       if (permissionSelected === 1) {
         noCells.push(...textToCells('    ', S_NONE))
-        noCells.push(...textToCells('\u276f No', S_ERROR_BOLD))
+        noCells.push(...textToCells(`${GLYPH_SELECT_POINTER} No`, S_ERROR_BOLD))
       } else {
         noCells.push(...textToCells('      ', S_NONE))
         noCells.push(...textToCells('No', S_ACCENT_DIM))
@@ -1768,7 +1752,7 @@ export function ChatInput({
       if (truncated) {
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(`\u2026 (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
+        cells.push(...textToCells(`${GLYPH_ELLIPSIS} (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
         frame.push(cells)
       }
 
@@ -1835,7 +1819,7 @@ export function ChatInput({
           const cells: Cell[] = []
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           if (active) {
-            cells.push(...textToCells('\u276f ', S_BLUE_PURPLE))
+            cells.push(...textToCells(`${GLYPH_SELECT_POINTER} `, S_BLUE_PURPLE))
           } else {
             cells.push(...textToCells('  ', S_NONE))
           }
@@ -1881,7 +1865,7 @@ export function ChatInput({
           const cells: Cell[] = []
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           if (active) {
-            cells.push(...textToCells('\u276f ', S_BLUE_PURPLE))
+            cells.push(...textToCells(`${GLYPH_SELECT_POINTER} `, S_BLUE_PURPLE))
           } else {
             cells.push(...textToCells('  ', S_NONE))
           }
@@ -1998,22 +1982,22 @@ export function ChatInput({
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         if (i === 0 && !hasAnchorAbove) {
-          cells.push(...textToCells('\u23bf', S_GRAY_90))
+          cells.push(...textToCells(GLYPH_TODO_BRACKET, S_GRAY_90))
         } else {
           cells.push({ char: ' ', style: S_NONE, width: 1 })
         }
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         if (t.status === 'completed') {
-          cells.push(...textToCells('\u2713', S_DIM))
+          cells.push(...textToCells(GLYPH_TODO_CHECK, S_DIM))
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           // ANSI 2 = dim, 9 = strikethrough.
           cells.push(...textToCells(t.content, '\x1b[0m\x1b[2;9m'))
         } else if (t.status === 'in_progress') {
-          cells.push(...textToCells('\u25fc', S_BOLD))
+          cells.push(...textToCells(GLYPH_TODO_IN_PROGRESS, S_BOLD))
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           cells.push(...textToCells(t.content, S_BOLD))
         } else {
-          cells.push(...textToCells('\u25fb', S_RESET))
+          cells.push(...textToCells(GLYPH_TODO_PENDING, S_RESET))
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           cells.push(...textToCells(t.content, S_RESET))
         }
@@ -2119,12 +2103,12 @@ export function ChatInput({
     } else if (permissionMode === 'plan') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`\u23f8 plan mode  ·  /plan to toggle`, S_DIM))
+      cells.push(...textToCells(`${GLYPH_PLAN_MODE} plan mode  ·  /plan to toggle`, S_DIM))
       leftCells = cells
     } else if (permissionMode === 'acceptEdits') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells('\u26a1 accept edits', S_DIM))
+      cells.push(...textToCells(`${GLYPH_ACCEPT_EDITS} accept edits`, S_DIM))
       leftCells = cells
     }
 
@@ -2145,7 +2129,7 @@ export function ChatInput({
         // Force a 2-space gap from any left content so a long notice can't
         // run straight into the right-side number on a narrow terminal.
         const minGap = leftCells ? 2 : 0
-        const targetStart = Math.max(leftWidth + minGap, termWidth - 1 - rightWidth)
+        const targetStart = Math.max(leftWidth + minGap, termWidth - 1 - RIGHT_MARGIN_SAFETY - rightWidth)
         const padCount = Math.max(0, targetStart - leftWidth)
         for (let i = 0; i < padCount; i++) cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push(...textToCells(rightText, S_DIM))

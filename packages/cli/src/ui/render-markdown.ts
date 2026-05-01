@@ -14,14 +14,14 @@
 import { Chalk } from 'chalk'
 import { type Token, type Tokens, marked } from 'marked'
 
+import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
 import { BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
 
 const c = new Chalk({ level: 3 })
 
 const EOL = '\n'
 
-// U+258E LEFT ONE QUARTER BLOCK — blockquote line prefix (Claude Code figures.ts)
-const BLOCKQUOTE_BAR = '\u258e'
+const BLOCKQUOTE_BAR = GLYPH_BLOCKQUOTE_BAR
 
 // Inline code tint — matches Claude Code's `permission` color (rgb(177,185,249))
 const CODE_INLINE = BLUE_PURPLE
@@ -284,7 +284,7 @@ function formatToken(
         // rendering and assume nothing happened).
         const marker =
           orderedListNumber === null
-            ? c.hex(BLUE_PURPLE)('\u2022')
+            ? c.hex(BLUE_PURPLE)(GLYPH_LIST_BULLET)
             : c.hex(BLUE_PURPLE)(`${getListNumber(listDepth, orderedListNumber)}.`)
         const content = tx.tokens
           ? tx.tokens

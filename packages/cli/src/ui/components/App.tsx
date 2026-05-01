@@ -33,6 +33,7 @@ import {
   setTheme,
   type ThemeName,
 } from '../theme.js'
+import { GLYPH_BULLET } from '../terminal-glyphs.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 
@@ -584,7 +585,7 @@ export function App({
     for (const [provider, models] of Object.entries(PROVIDER_MODELS)) {
       if (!providers.has(provider)) continue
       for (const m of models) {
-        const marker = m.id === state.modelId ? '● ' : '  '
+        const marker = m.id === state.modelId ? `${GLYPH_BULLET} ` : '  '
         choices.push({ id: m.id, label: `${marker}${m.label}`, description: `${m.id} — ${m.description}` })
       }
     }
@@ -601,7 +602,7 @@ export function App({
     // SelectOptions dialog is designed for human-readable choices, so we
     // look the id back up via the label we pushed.
     const answer = await askQuestion(
-      `Current: ${state.modelId}\nPick a model (● = current):`,
+      `Current: ${state.modelId}\nPick a model (${GLYPH_BULLET} = current):`,
       choices.map((c) => ({ label: c.label, description: c.description })),
       { noOther: true },
     )
@@ -700,8 +701,8 @@ export function App({
     // No-arg → interactive picker. We always show BOTH options so the
     // user sees the full state space, with `● ` marking the current
     // choice (mirroring `/model`'s rendering).
-    const onMarker = current ? '● ' : '  '
-    const offMarker = current ? '  ' : '● '
+    const onMarker = current ? `${GLYPH_BULLET} ` : '  '
+    const offMarker = current ? '  ' : `${GLYPH_BULLET} `
     const choices = [
       {
         label: `${onMarker}On`,
@@ -713,7 +714,7 @@ export function App({
       },
     ]
     const answer = await askQuestion(
-      `Extended thinking is currently **${current ? 'on' : 'off'}**. Pick a mode (● = current):`,
+      `Extended thinking is currently **${current ? 'on' : 'off'}**. Pick a mode (${GLYPH_BULLET} = current):`,
       choices,
       { noOther: true },
     )
@@ -808,12 +809,12 @@ export function App({
     const previewWidth = Math.max(40, cols - 4)
     const choices = THEMES.map((t) => ({
       name: t.name,
-      label: `${t.name === current ? '● ' : '  '}${t.label}`,
+      label: `${t.name === current ? `${GLYPH_BULLET} ` : '  '}${t.label}`,
       description: t.description,
       preview: buildThemePreview(t.name, previewWidth),
     }))
     const answer = await askQuestion(
-      `Current: **${themeLabel(current)}**. Choose the text style that looks best with your terminal (● = current):`,
+      `Current: **${themeLabel(current)}**. Choose the text style that looks best with your terminal (${GLYPH_BULLET} = current):`,
       choices.map((c) => ({ label: c.label, description: c.description, preview: c.preview })),
     )
     const picked = choices.find((c) => c.label === answer)
