@@ -52,4 +52,23 @@ describe('glob tool', () => {
 
     await fs.rm(tmpDir, { recursive: true })
   })
+
+  it('truncates results when exceeding the cap (200)', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-glob-cap-'))
+    const count = 210
+    for (let i = 0; i < count; i++) {
+      await fs.writeFile(path.join(tmpDir, `file-${String(i).padStart(4, '0')}.ts`), '')
+    }
+
+    const result = await glob.execute!(
+      { pattern: '*.ts', cwd: tmpDir },
+      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
+    ) as string
+    expect(result).toContain('more files not shown')
+    expect(result).toContain('capped at 200')
+    const lines = result.split('\n').filter((l) => l.includes('.ts') && !l.includes('...'))
+    expect(lines.length).toBeLessThanOrEqual(200)
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
 })

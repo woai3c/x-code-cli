@@ -74,4 +74,24 @@ describe('grep tool', () => {
     await fs.rm(tmpDir, { recursive: true })
   })
 
+  it.skipIf(!hasRg)('truncates results when exceeding headLimit', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-grep-limit-'))
+    const lines: string[] = []
+    for (let i = 0; i < 30; i++) {
+      lines.push(`match_target line ${i}`)
+    }
+    await fs.writeFile(path.join(tmpDir, 'big.txt'), lines.join('\n'))
+
+    const result = await grep.execute!(
+      { pattern: 'match_target', path: tmpDir, headLimit: 5 },
+      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
+    ) as string
+    expect(result).toContain('more lines not shown')
+    expect(result).toContain('capped at 5')
+    const matchLines = result.split('\n').filter((l) => l.includes('match_target') && !l.includes('...'))
+    expect(matchLines.length).toBeLessThanOrEqual(5)
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
 })

@@ -1,7 +1,7 @@
 // Tests for permission system
 import { describe, expect, it, vi } from 'vitest'
 
-import { checkPermission, getPermissionLevel } from '../src/permissions/index.js'
+import { checkPermission, getPermissionLevel, isPathWithinProject } from '../src/permissions/index.js'
 
 describe('getPermissionLevel', () => {
   it('returns always-allow for read-only tools', () => {
@@ -89,5 +89,83 @@ describe('checkPermission', () => {
     const result = await checkPermission({ toolCallId: '5', toolName: 'edit', input: {} }, false, askFn)
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()
+  })
+
+  it('acceptEdits auto-approves writes inside project dir', async () => {
+    const askFn = vi.fn()
+    const cwd = process.cwd()
+    const result = await checkPermission(
+      { toolCallId: '10', toolName: 'writeFile', input: { filePath: `${cwd}/src/foo.ts` } },
+      false, askFn, 'acceptEdits', cwd,
+    )
+    expect(result).toBe(true)
+    expect(askFn).not.toHaveBeenCalled()
+  })
+
+  it('acceptEdits blocks writes outside project dir — falls to ask', async () => {
+    const askFn = vi.fn().mockResolvedValue('no')
+    const cwd = process.cwd()
+    const result = await checkPermission(
+      { toolCallId: '11', toolName: 'writeFile', input: { filePath: '/etc/passwd' } },
+      false, askFn, 'acceptEdits', cwd,
+    )
+    expect(result).toBe(false)
+    expect(askFn).toHaveBeenCalled()
+  })
+
+  it('acceptEdits blocks writes to sensitive dotfiles — falls to ask', async () => {
+    const askFn = vi.fn().mockResolvedValue('no')
+    const cwd = process.cwd()
+    const result = await checkPermission(
+      { toolCallId: '12', toolName: 'edit', input: { filePath: `${cwd}/.env` } },
+      false, askFn, 'acceptEdits', cwd,
+    )
+    expect(result).toBe(false)
+    expect(askFn).toHaveBeenCalled()
+  })
+
+  it('acceptEdits blocks writes to .git directory — falls to ask', async () => {
+    const askFn = vi.fn().mockResolvedValue('no')
+    const cwd = process.cwd()
+    const result = await checkPermission(
+      { toolCallId: '13', toolName: 'writeFile', input: { filePath: `${cwd}/.git/config` } },
+      false, askFn, 'acceptEdits', cwd,
+    )
+    expect(result).toBe(false)
+    expect(askFn).toHaveBeenCalled()
+  })
+
+  it('acceptEdits blocks path traversal via ../ — falls to ask', async () => {
+    const askFn = vi.fn().mockResolvedValue('no')
+    const cwd = process.cwd()
+    const result = await checkPermission(
+      { toolCallId: '14', toolName: 'writeFile', input: { filePath: `${cwd}/../../etc/passwd` } },
+      false, askFn, 'acceptEdits', cwd,
+    )
+    expect(result).toBe(false)
+    expect(askFn).toHaveBeenCalled()
+  })
+})
+
+describe('isPathWithinProject', () => {
+  const cwd = process.cwd()
+
+  it('returns true for paths inside the project', () => {
+    expect(isPathWithinProject(`${cwd}/src/index.ts`, cwd)).toBe(true)
+    expect(isPathWithinProject(`${cwd}/deep/nested/file.ts`, cwd)).toBe(true)
+  })
+
+  it('returns true when file path equals project dir', () => {
+    expect(isPathWithinProject(cwd, cwd)).toBe(true)
+  })
+
+  it('returns false for paths outside the project', () => {
+    expect(isPathWithinProject('/etc/passwd', cwd)).toBe(false)
+    expect(isPathWithinProject('/tmp/evil.ts', cwd)).toBe(false)
+  })
+
+  it('returns false for traversal attacks', () => {
+    expect(isPathWithinProject(`${cwd}/../../etc/passwd`, cwd)).toBe(false)
+    expect(isPathWithinProject(`${cwd}/../secret`, cwd)).toBe(false)
   })
 })
