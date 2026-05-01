@@ -592,6 +592,7 @@ async function handleToolCall(
       options.trustMode,
       callbacks.onAskPermission,
       state.permissionMode,
+      process.cwd(),
     )
     if (options.abortSignal?.aborted) {
       pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)

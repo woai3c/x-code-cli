@@ -28,7 +28,7 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } fro
 
 import { useStdout } from 'ink'
 
-import { debugLog, getPermissionLevel } from '@x-code-cli/core'
+import { debugLog, getPermissionLevel, suggestRuleLabel } from '@x-code-cli/core'
 import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
 
 import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank } from '../file-completion.js'
@@ -188,7 +188,7 @@ export interface SpinnerState {
 export interface PermissionRequest {
   toolName: string
   input: Record<string, unknown>
-  onResolve: (approved: boolean) => void
+  onResolve: (decision: 'yes' | 'always' | 'no') => void
 }
 
 export interface SelectRequest {
@@ -1034,11 +1034,11 @@ export function ChatInput({
       if (permission) {
         const ch = chunk.toLowerCase()
         if (ch === 'y') {
-          permission.onResolve(true)
+          permission.onResolve('yes')
           return
         }
         if (ch === 'n') {
-          permission.onResolve(false)
+          permission.onResolve('no')
           return
         }
         return
@@ -1091,12 +1091,21 @@ export function ChatInput({
     onKey: (key) => {
       // Permission dialog captures navigation + submit keys.
       if (permission) {
-        if (key === 'up' || key === 'down') {
-          setPermissionSelected((p) => (p === 0 ? 1 : 0))
+        const hasAlwaysOption = suggestRuleLabel(permission.toolName, permission.input) !== null
+        const maxIdx = hasAlwaysOption ? 2 : 1
+        if (key === 'up') {
+          setPermissionSelected((p) => (p > 0 ? p - 1 : maxIdx))
+          return
+        }
+        if (key === 'down') {
+          setPermissionSelected((p) => (p < maxIdx ? p + 1 : 0))
           return
         }
         if (key === 'return') {
-          permission.onResolve(permissionSelected === 0)
+          const decisions: ('yes' | 'always' | 'no')[] = hasAlwaysOption
+            ? ['yes', 'always', 'no']
+            : ['yes', 'no']
+          permission.onResolve(decisions[permissionSelected]!)
           return
         }
         return
@@ -1718,6 +1727,12 @@ export function ChatInput({
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth)
       if (contentCells) frame.push(contentCells)
 
+      const ruleLabel = suggestRuleLabel(permission.toolName, permission.input)
+      // When no rule can be suggested (e.g. powershell -Command "..."),
+      // only show Yes/No (2 options). When a prefix is available, show
+      // Yes / Yes don't ask again / No (3 options).
+      const noIndex = ruleLabel ? 2 : 1
+
       const yesCells: Cell[] = []
       if (permissionSelected === 0) {
         yesCells.push(...textToCells('    ', S_NONE))
@@ -1728,8 +1743,20 @@ export function ChatInput({
       }
       frame.push(yesCells)
 
+      if (ruleLabel) {
+        const alwaysCells: Cell[] = []
+        if (permissionSelected === 1) {
+          alwaysCells.push(...textToCells('    ', S_NONE))
+          alwaysCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes, don't ask again for: ${ruleLabel}`, S_SUCCESS))
+        } else {
+          alwaysCells.push(...textToCells('      ', S_NONE))
+          alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_ACCENT_DIM))
+        }
+        frame.push(alwaysCells)
+      }
+
       const noCells: Cell[] = []
-      if (permissionSelected === 1) {
+      if (permissionSelected === noIndex) {
         noCells.push(...textToCells('    ', S_NONE))
         noCells.push(...textToCells(`${GLYPH_SELECT_POINTER} No`, S_ERROR_BOLD))
       } else {

@@ -58,6 +58,10 @@ export type { ShellProvider, ShellType } from './tools/shell-provider.js'
 
 // Permissions
 export { checkPermission, getPermissionLevel } from './permissions/index.js'
+export { addSessionAllowRule, clearSessionRules, buildAllowRule } from './permissions/index.js'
+export { extractCommandPrefix, suggestRuleLabel } from './permissions/index.js'
+export { loadPersistedRules, persistRule } from './permissions/index.js'
+export type { AllowRule } from './permissions/session-store.js'
 
 // Utils
 export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog } from './utils.js'

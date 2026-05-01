@@ -58,35 +58,35 @@ describe('getPermissionLevel', () => {
 describe('checkPermission', () => {
   it('returns true for always-allow tools without asking', async () => {
     const askFn = vi.fn()
-    const result = await checkPermission({ toolName: 'readFile', input: {} }, false, askFn)
+    const result = await checkPermission({ toolCallId: '1', toolName: 'readFile', input: {} }, false, askFn)
     expect(result).toBe(true)
     expect(askFn).not.toHaveBeenCalled()
   })
 
   it('returns false for denied tools without asking', async () => {
     const askFn = vi.fn()
-    const result = await checkPermission({ toolName: 'shell', input: { command: 'rm -rf /' } }, false, askFn)
+    const result = await checkPermission({ toolCallId: '2', toolName: 'shell', input: { command: 'rm -rf /' } }, false, askFn)
     expect(result).toBe(false)
     expect(askFn).not.toHaveBeenCalled()
   })
 
   it('asks user for ask-level tools', async () => {
-    const askFn = vi.fn().mockResolvedValue(true)
-    const result = await checkPermission({ toolName: 'writeFile', input: {} }, false, askFn)
+    const askFn = vi.fn().mockResolvedValue('yes')
+    const result = await checkPermission({ toolCallId: '3', toolName: 'writeFile', input: {} }, false, askFn)
     expect(result).toBe(true)
     expect(askFn).toHaveBeenCalled()
   })
 
   it('auto-approves ask-level tools in trust mode', async () => {
     const askFn = vi.fn()
-    const result = await checkPermission({ toolName: 'writeFile', input: {} }, true, askFn)
+    const result = await checkPermission({ toolCallId: '4', toolName: 'writeFile', input: {} }, true, askFn)
     expect(result).toBe(true)
     expect(askFn).not.toHaveBeenCalled()
   })
 
   it('user can deny an ask-level tool', async () => {
-    const askFn = vi.fn().mockResolvedValue(false)
-    const result = await checkPermission({ toolName: 'edit', input: {} }, false, askFn)
+    const askFn = vi.fn().mockResolvedValue('no')
+    const result = await checkPermission({ toolCallId: '5', toolName: 'edit', input: {} }, false, askFn)
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()
   })

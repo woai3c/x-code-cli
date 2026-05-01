@@ -1,6 +1,13 @@
 // @x-code-cli/core — Permission system (3-level model)
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { PermissionLevel, PermissionMode } from '../types/index.js'
+import {
+  addSessionAllowRule,
+  buildAllowRule,
+  clearSessionRules,
+  persistRule,
+  sessionRulesMatch,
+} from './session-store.js'
 
 type PermissionInput = Record<string, unknown>
 
@@ -80,8 +87,9 @@ export function getPermissionLevel(toolName: string, input: PermissionInput): Pe
 export async function checkPermission(
   toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
   trustMode: boolean,
-  onAskPermission: (toolCall: { toolCallId: string; toolName: string; input: PermissionInput }) => Promise<boolean>,
+  onAskPermission: (toolCall: { toolCallId: string; toolName: string; input: PermissionInput }) => Promise<'yes' | 'always' | 'no'>,
   permissionMode: PermissionMode = 'default',
+  cwd?: string,
 ): Promise<boolean> {
   const level = getPermissionLevel(toolCall.toolName, toolCall.input)
   if (level === 'deny') return false
@@ -89,5 +97,20 @@ export async function checkPermission(
   if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
     return true
   }
-  return onAskPermission(toolCall)
+  if (sessionRulesMatch(toolCall.toolName, toolCall.input)) return true
+
+  const decision = await onAskPermission(toolCall)
+  if (decision === 'always') {
+    const result = buildAllowRule(toolCall.toolName, toolCall.input)
+    if (result) {
+      addSessionAllowRule(result.rule)
+      if (result.persist && cwd) persistRule(cwd, result.rule)
+    }
+    return true
+  }
+  return decision === 'yes'
 }
+
+export { addSessionAllowRule, clearSessionRules, buildAllowRule } from './session-store.js'
+export { extractCommandPrefix, suggestRuleLabel } from './session-store.js'
+export { loadPersistedRules, persistRule } from './session-store.js'

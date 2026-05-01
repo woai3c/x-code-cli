@@ -148,7 +148,7 @@ export interface AgentCallbacks {
     toolCallId: string
     toolName: string
     input: Record<string, unknown>
-  }) => Promise<boolean>
+  }) => Promise<'yes' | 'always' | 'no'>
   onAskUser: (question: string, options: { label: string; description: string }[]) => Promise<string>
   /** Triggered by `exitPlanMode`. Resolve `true` to leave plan mode and
    *  let the model start implementing; resolve `false` to reject the plan

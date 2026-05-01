@@ -11,6 +11,7 @@ import {
   flushPendingMessages,
   hydrateLoopState,
   initMemories,
+  loadPersistedRules,
   saveSession,
 } from '@x-code-cli/core'
 import type {
@@ -274,7 +275,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  Kept in a ref so `abort()` can deny every queued gate synchronously
    *  before `controller.abort()` — otherwise the core loop stays blocked
    *  on the first shell while the UI still shows stale Yes/No. */
-  const permissionResolversRef = useRef<Array<(approved: boolean) => void>>([])
+  const permissionResolversRef = useRef<Array<(decision: 'yes' | 'always' | 'no') => void>>([])
 
   /** Append a single message to `messages` (used by the stream buffer). */
   const appendMessage = useCallback((msg: DisplayMessage) => {
@@ -311,6 +312,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (initializedRef.current) return
     initializedRef.current = true
     await initMemories()
+    loadPersistedRules(process.cwd())
   }, [])
 
   /** Submit a user message */
@@ -408,7 +410,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           })
         },
         onAskPermission: (toolCall) => {
-          return new Promise<boolean>((resolve) => {
+          return new Promise<'yes' | 'always' | 'no'>((resolve) => {
             permissionResolversRef.current.push(resolve)
             const entry: PendingPermission = {
               toolCallId: toolCall.toolCallId,
@@ -620,7 +622,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   )
 
   /** Resolve the first pending permission request and pop it from the queue */
-  const resolvePermission = useCallback((approved: boolean) => {
+  const resolvePermission = useCallback((decision: 'yes' | 'always' | 'no') => {
     setState((prev) => {
       const [head, ...tail] = prev.permissionQueue
       if (head) {
@@ -628,7 +630,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         queueMicrotask(() => {
           if (r !== undefined && permissionResolversRef.current[0] === r) {
             permissionResolversRef.current.shift()
-            r(approved)
+            r(decision)
           }
         })
       }
@@ -728,7 +730,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     // shell often sits here while the user thinks the UI is "frozen").
     const permResolvers = permissionResolversRef.current
     permissionResolversRef.current = []
-    for (const r of permResolvers) r(false)
+    for (const r of permResolvers) r('no')
 
     // Unblock askUser / plan approval / slash pickers waiting on `pendingQuestion`.
     const pendingAbortRef: {
