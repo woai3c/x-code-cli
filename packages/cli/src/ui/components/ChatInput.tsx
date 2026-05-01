@@ -577,14 +577,33 @@ const PERMISSION_LEVEL_STYLE: Record<string, { label: string; style: string }> =
   deny: { label: 'dangerous', style: S_ERROR_BOLD },
 }
 
-function permissionContentCells(toolName: string, input: Record<string, unknown>): Cell[] | null {
+function permissionContentCells(
+  toolName: string,
+  input: Record<string, unknown>,
+  termWidth: number,
+): Cell[] | null {
+  // Frame geometry assumes exactly ONE row per permission content line.
+  // When a string is longer than termWidth the terminal will auto-wrap it
+  // onto the next physical row, which breaks every downstream absolute
+  // cursor position (the Yes/No rows, the input separator, the prompt
+  // itself) — the dialog appears "half missing" with only the title
+  // visible. Truncate here so the cell matrix and the on-screen rows
+  // stay 1:1. Mirrors the tool-bubble preview truncation in the live
+  // tool-list rendering below.
+  const truncateToWidth = (text: string, reservedCols: number): string => {
+    const maxLen = Math.max(10, termWidth - reservedCols)
+    return text.length > maxLen ? text.slice(0, maxLen - 1) + GLYPH_ELLIPSIS : text
+  }
   if (toolName === 'shell') {
     const level = getPermissionLevel('shell', input)
     const info = PERMISSION_LEVEL_STYLE[level] ?? PERMISSION_LEVEL_STYLE.ask
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells('$ ' + String(input.command ?? ''), S_ACCENT))
+    const rawCommand = String(input.command ?? '')
+    const decoration = 2 + 2 + 1 + (info.label.length + 2) + 2
+    const command = truncateToWidth('$ ' + rawCommand, decoration)
+    cells.push(...textToCells(command, S_ACCENT))
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push(...textToCells(`[${info.label}]`, info.style))
     return cells
@@ -594,8 +613,10 @@ function permissionContentCells(toolName: string, input: Record<string, unknown>
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells(fp, S_ACCENT))
-    cells.push(...textToCells(' (new file)', S_ACCENT_DIM))
+    const suffix = ' (new file)'
+    const truncated = truncateToWidth(fp, 2 + suffix.length + 2)
+    cells.push(...textToCells(truncated, S_ACCENT))
+    cells.push(...textToCells(suffix, S_ACCENT_DIM))
     return cells
   }
   if (toolName === 'edit') {
@@ -603,7 +624,7 @@ function permissionContentCells(toolName: string, input: Record<string, unknown>
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells(fp, S_ACCENT))
+    cells.push(...textToCells(truncateToWidth(fp, 2 + 2), S_ACCENT))
     return cells
   }
   if (toolName === 'enterPlanMode') {
@@ -1694,7 +1715,7 @@ export function ChatInput({
       titleCells.push(...textToCells(titleText, S_WARNING_BOLD))
       frame.push(titleCells)
 
-      const contentCells = permissionContentCells(permission.toolName, permission.input)
+      const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth)
       if (contentCells) frame.push(contentCells)
 
       const yesCells: Cell[] = []
@@ -2699,22 +2720,27 @@ export function ChatInput({
         // bottom of the old frame no longer hold frame content and must
         // be erased so old cells don't linger.
         //
-        // When shrinking INTO a permission dialog, skip erasing —
-        // leaves the prior tool-progress lines visible above the dialog
-        // instead of flashing blanks during the approval window.
+        // An earlier version skipped the erase when `permission` was true
+        // so the tool-progress rows would stay visible above the newly
+        // appearing dialog (to avoid a brief flash of blanks during the
+        // approval window). That optimisation was unsafe: the BOTTOM of
+        // the old frame is always `[top separator, input row, bottom
+        // separator, footer]` — never the tool progress rows, which sit
+        // at the top. Keeping those bottom rows guaranteed a ghost input
+        // box appearing below the permission dialog (the "two input
+        // boxes" bug). Always erase; the next per-row diff loop repaints
+        // the dialog + input + separators immediately after this preBuf,
+        // so no empty-row flash is actually visible in practice.
         pendingFreeBlanks = freeBlanksAboveFrameRef.current + deltaH
         const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
         frameTop = computeFrameTop(pendingFreeBlanks)
         debugLog(
           'chatinput.geom.shrink',
           `delta=${deltaH} blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
-            `oldTop=${oldTop} newTop=${frameTop} ` +
-            `eraseSkipped=${permission ? '1' : '0'}`,
+            `oldTop=${oldTop} newTop=${frameTop}`,
         )
-        if (!permission) {
-          for (let i = 0; i < deltaH; i++) {
-            preBuf += `\x1b[${oldTop + nextH + i};1H\x1b[K`
-          }
+        for (let i = 0; i < deltaH; i++) {
+          preBuf += `\x1b[${oldTop + nextH + i};1H\x1b[K`
         }
         // pendingFreeBlanks (already set above) remembers the now-blank
         // rows so the next commit can write INTO them instead of

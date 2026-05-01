@@ -345,6 +345,17 @@ async function handleToolCall(
     // session. The same dialog component the write-tool path uses
     // renders a "X-Code wants to enter plan mode" prompt with Yes/No.
     const approved = await callbacks.onAskPermission({ toolCallId, toolName, input })
+    if (options.abortSignal?.aborted) {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        '[Tool execution interrupted by user]',
+        true,
+      )
+      return
+    }
     if (!approved) {
       pushToolResult(
         state,
@@ -582,6 +593,10 @@ async function handleToolCall(
       callbacks.onAskPermission,
       state.permissionMode,
     )
+    if (options.abortSignal?.aborted) {
+      pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+      return
+    }
     if (!approved) {
       pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
       return

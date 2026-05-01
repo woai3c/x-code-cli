@@ -33,13 +33,16 @@ export interface PendingPermission {
   toolCallId: string
   toolName: string
   input: Record<string, unknown>
-  resolve: (approved: boolean) => void
 }
 
 interface PendingQuestion {
   question: string
   options: { label: string; description: string; freeform?: boolean; preview?: string[] }[]
   resolve: (answer: string) => void
+  /** Value passed to `resolve` when the user aborts the turn (Ctrl+C / Esc)
+   *  so the agent loop unblocks — `'No'` for plan approval, `''` for
+   *  dismissible pickers, interrupt text for `askUser`. */
+  abortAnswer: string
   /** True when Esc should dismiss the dialog (resolves with empty string).
    *  User-initiated pickers (`/syntax`, `/model`, …) set this — the user
    *  may have opened the menu just to look. AI-initiated questions
@@ -267,6 +270,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  every tool produces a diff and we don't want a default empty
    *  field bloating the pending record. */
   const pendingEditDiffsRef = useRef<Map<string, import('@x-code-cli/core').EditDiffPayload>>(new Map())
+  /** Parallel to `permissionQueue`: resolvers for `onAskPermission` promises.
+   *  Kept in a ref so `abort()` can deny every queued gate synchronously
+   *  before `controller.abort()` — otherwise the core loop stays blocked
+   *  on the first shell while the UI still shows stale Yes/No. */
+  const permissionResolversRef = useRef<Array<(approved: boolean) => void>>([])
 
   /** Append a single message to `messages` (used by the stream buffer). */
   const appendMessage = useCallback((msg: DisplayMessage) => {
@@ -401,11 +409,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         },
         onAskPermission: (toolCall) => {
           return new Promise<boolean>((resolve) => {
+            permissionResolversRef.current.push(resolve)
             const entry: PendingPermission = {
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
               input: toolCall.input,
-              resolve,
             }
             setState((prev) => ({ ...prev, permissionQueue: [...prev.permissionQueue, entry] }))
           })
@@ -435,7 +443,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
                 ]
               : []
             const augmented = [...opts, ...planMeta, OTHER_OPTION]
-            setState((prev) => ({ ...prev, pendingQuestion: { question, options: augmented, resolve, layout: 'compact-vertical' } }))
+            setState((prev) => ({
+              ...prev,
+              pendingQuestion: {
+                question,
+                options: augmented,
+                resolve,
+                abortAnswer: '[Request interrupted by user]',
+                layout: 'compact-vertical',
+              },
+            }))
           })
         },
         onPlanApprovalRequest: (planText) => {
@@ -464,6 +481,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
                   { label: 'No', description: 'Stay in plan mode and let the model revise.' },
                 ],
                 resolve: (answer) => resolve(answer === 'Yes'),
+                abortAnswer: 'No',
               },
             }))
           })
@@ -606,9 +624,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setState((prev) => {
       const [head, ...tail] = prev.permissionQueue
       if (head) {
-        // Defer the side-effect outside the setState updater to avoid
-        // double-invocation under React 18 Strict Mode.
-        queueMicrotask(() => head.resolve(approved))
+        const r = permissionResolversRef.current[0]
+        queueMicrotask(() => {
+          if (r !== undefined && permissionResolversRef.current[0] === r) {
+            permissionResolversRef.current.shift()
+            r(approved)
+          }
+        })
       }
       return { ...prev, permissionQueue: tail }
     })
@@ -634,7 +656,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         const augmented = opts?.noOther ? options : [...options, OTHER_OPTION]
         setState((prev) => ({
           ...prev,
-          pendingQuestion: { question, options: augmented, resolve, dismissible: true, layout: opts?.layout },
+          pendingQuestion: {
+            question,
+            options: augmented,
+            resolve,
+            abortAnswer: '',
+            dismissible: true,
+            layout: opts?.layout,
+          },
         }))
       })
     },
@@ -652,7 +681,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *
    *  No-op when nothing is in flight (no controller or already aborted).
    *  React state cleanup (isLoading=false, activeToolCalls=[]) happens in
-   *  submit()'s success path once agentLoop returns the 'aborted' outcome. */
+   *  submit()'s success path once agentLoop returns the 'aborted' outcome.
+   *
+   *  Queued permission prompts and pending SelectOptions dialogs are
+   *  resolved synchronously so `processToolCalls` cannot stay blocked on
+   *  `await onAskPermission` / `onAskUser` after the user cancels. */
   const abort = useCallback(() => {
     const controller = abortControllerRef.current
     if (!controller || controller.signal.aborted) return
@@ -690,6 +723,25 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       void flushPendingMessages(loopStateRef.current)
     }
 
+    // Unblock any `await onAskPermission` in the core loop (parallel tool
+    // calls queue extra UI rows, but execution is sequential — the first
+    // shell often sits here while the user thinks the UI is "frozen").
+    const permResolvers = permissionResolversRef.current
+    permissionResolversRef.current = []
+    for (const r of permResolvers) r(false)
+
+    // Unblock askUser / plan approval / slash pickers waiting on `pendingQuestion`.
+    const pendingAbortRef: {
+      current: { resolve: (answer: string) => void; abortAnswer: string } | null
+    } = { current: null }
+    setState((prev) => {
+      const pq = prev.pendingQuestion
+      pendingAbortRef.current = pq ? { resolve: pq.resolve, abortAnswer: pq.abortAnswer } : null
+      return { ...prev, permissionQueue: [], pendingQuestion: null }
+    })
+    const pa = pendingAbortRef.current
+    if (pa) pa.resolve(pa.abortAnswer)
+
     controller.abort()
   }, [flushBuffer, appendMessage])
 
@@ -716,6 +768,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const clear = useCallback(() => {
     loopStateRef.current = null
     pendingToolsRef.current.clear()
+    permissionResolversRef.current = []
     resetBuffer()
     // Preserve the current live model id and approval mode when clearing
     // — user expects the model they just picked AND the plan-mode toggle

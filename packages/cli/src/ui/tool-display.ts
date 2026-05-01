@@ -8,6 +8,14 @@
 // Tool name matching is case-insensitive to handle model/provider
 // variations (e.g. "listDir" vs "ListDir", "readFile" vs "Read").
 
+import { getShellProvider } from '@x-code-cli/core'
+
+const SHELL_LABELS: Record<string, string> = {
+  bash: 'Bash',
+  zsh: 'Zsh',
+  powershell: 'PowerShell',
+}
+
 /** Normalize tool name to lowercase for matching */
 function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[_-]/g, '')
@@ -16,7 +24,7 @@ function normalizeName(name: string): string {
 /** Map tool name → human-readable label for display */
 export function getToolLabel(toolName: string): string {
   const n = normalizeName(toolName)
-  if (n === 'shell' || n === 'bash') return 'Bash'
+  if (n === 'shell' || n === 'bash') return SHELL_LABELS[getShellProvider().type] ?? 'Shell'
   if (n === 'readfile' || n === 'read') return 'Read'
   if (n === 'writefile' || n === 'write') return 'Write'
   if (n === 'edit' || n === 'update') return 'Update'

@@ -939,7 +939,7 @@ export function App({
 
       const back = await askQuestion(
         'Press Enter to return, or Esc to exit.',
-        [{ label: BACK_LABEL }],
+        [{ label: BACK_LABEL, description: 'Go back to the session list.' }],
         { noOther: true },
       )
 
@@ -978,8 +978,13 @@ export function App({
       // Suppress the spinner's "Thinking" line while a select dialog is up,
       // but keep ChatInput itself visible — the dialog is rendered INSIDE
       // its cell buffer now, not in Ink's top subtree.
+      //
+      // Permission dialogs must NOT suppress the spinner: the active-tool
+      // list is rendered inside the `if (spinner)` block in ChatInput, so
+      // nulling spinner hides those Running indicators — the user sees a
+      // frozen screen with no visible permission prompt.
       spinner={
-        state.isLoading && !selectActive && !permissionRequest
+        state.isLoading && !selectActive
           ? {
               label: 'Thinking',
               mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
