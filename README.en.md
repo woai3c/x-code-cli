@@ -208,6 +208,8 @@ The 8 supported providers exhibit different default behaviors for thinking / rea
 
 The setting is persisted to `~/.x-code/config.json` and survives restarts. Toggles take effect immediately on the next message; no model rebuild is required.
 
+> **Windows path note**: all `~/.x-code` paths in this document map to `%USERPROFILE%\.x-code` on Windows (typically `C:\Users\<username>\.x-code`).
+
 ## File Attachments
 
 Reference a file path in the prompt and the CLI attaches its contents to the request automatically:
@@ -284,11 +286,11 @@ set DEBUG_STDOUT=1 && xc
 
 The log is written under the user directory:
 
-- **Path**: `~/.x-code/logs/debug.log` (with rotated `debug.log.1`)
+- **Path**: `~/.x-code/logs/debug.log` (with rotated `debug.log.1`; on Windows: `%USERPROFILE%\.x-code\logs\debug.log`)
 - **Size limit**: 10 MB per file, ~20 MB total including the rotated backup; the oldest data is overwritten automatically
 - **Capacity reference**: a typical 50-turn agent session produces ~5 MB of log, which fits entirely within the active file; rotation only occurs after ~100 turns
 - **Per-entry limit**: each entry is capped at 1 KB (truncated with a marker if longer), guaranteeing at least 20,000 entries per rotation cycle
-- **Inspection**: use `tail -f ~/.x-code/logs/debug.log`, or attach the file to a GitHub Issue
+- **Inspection**: `tail -f ~/.x-code/logs/debug.log` (Windows PowerShell: `Get-Content -Wait ~\.x-code\logs\debug.log`), or attach the file to a GitHub Issue
 
 The log file is written only when `DEBUG_STDOUT=1` is set; default runs incur zero overhead.
 

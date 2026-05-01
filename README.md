@@ -208,6 +208,8 @@ X-Code CLI 支持的 8 家厂商对思考 / 推理模式的默认行为存在差
 
 配置持久化保存至 `~/.x-code/config.json`，重启后仍然生效；切换立即生效，自下一条消息起使用新模式。
 
+> **Windows 路径说明**：文档中所有 `~/.x-code` 路径在 Windows 上对应 `%USERPROFILE%\.x-code`（通常为 `C:\Users\<用户名>\.x-code`）。
+
 ## 文件附件
 
 在提示词中引用文件路径，CLI 会自动将文件内容附加至请求中：
@@ -284,11 +286,11 @@ set DEBUG_STDOUT=1 && xc
 
 日志保存在用户目录下：
 
-- **路径**：`~/.x-code/logs/debug.log`（滚动备份为 `debug.log.1`）
+- **路径**：`~/.x-code/logs/debug.log`（滚动备份为 `debug.log.1`；Windows 上为 `%USERPROFILE%\.x-code\logs\debug.log`）
 - **大小限制**：单文件 10 MB，含滚动备份合计约 20 MB，超出后自动覆盖最早的备份
 - **容量参考**：约 50 轮对话产生 5 MB 日志，单个活动文件即可完整保存；100 轮以上才会触发滚动
 - **写入限制**：单条记录上限 1 KB（超出部分截断并标注），单个滚动周期至少容纳 20,000 条
-- **查看方式**：使用 `tail -f ~/.x-code/logs/debug.log`，或附加至 Issue 中
+- **查看方式**：`tail -f ~/.x-code/logs/debug.log`（Windows PowerShell：`Get-Content -Wait ~\.x-code\logs\debug.log`），或附加至 Issue 中
 
 日志文件仅在 `DEBUG_STDOUT=1` 启用时写入，默认状态下零开销。
 
