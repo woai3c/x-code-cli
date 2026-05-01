@@ -4,19 +4,24 @@
 
 **X-Code CLI** is an AI Agent CLI — runs in the terminal, enabling natural-language interaction with the codebase to read, modify, debug, and build projects without leaving the command line.
 
-X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 11 built-in tools (file I/O, shell execution, code search, etc.), and provides capabilities such as a permission model, context compression, file attachments, and a knowledge system.
+X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 15 built-in tools (file I/O, shell execution, code search, sub-agent delegation, task tracking, plan mode, etc.), and provides capabilities such as a permission model, context compression, file attachments, a knowledge system, and session resumption.
 
 ## Features
 
 - **Multi-model support** — 8 built-in providers and any OpenAI-compatible custom endpoint
-- **11 built-in tools** — covers file, shell, search, web fetch, and other common development tasks
+- **15 built-in tools** — covers file I/O, shell execution, code search, web fetch, sub-agent delegation, task tracking, plan mode, and other common development tasks
+- **Sub-agents (task tool)** — delegate research, code review, planning, and other sub-tasks to specialized sub-agents that run in isolated context and return only conclusions, keeping the main conversation lean. Ships with 4 built-in sub-agents (explore / general-purpose / plan / code-reviewer) and supports custom sub-agents
+- **Plan mode** — `--plan` or `/plan` enters a read-only exploration mode where the agent designs a plan first and only executes code changes after user approval
+- **Todo tracking** — the agent automatically breaks complex tasks into a todo list and tracks progress
 - **3-level permission model** — safe by default, prompts before write operations; `--trust` bypasses prompts
 - **Streaming output** — results render as they are generated
 - **Context compression** — long conversations are auto-compressed; loop-guard detects repeated tool invocations; prompt caching reuses prefixes to reduce input cost
+- **Session resumption** — `--continue` resumes the most recent session; `--resume` opens a session picker or jumps directly by ID
 - **Knowledge system** — layered context loading (global / project AGENTS.md chain / auto-memory / local preferences / session summary)
 - **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/usage`, `/usage history`
+- **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Cross-platform** — runs on Windows, macOS, and Linux
 - **Non-interactive mode** — `--print` with pipes for scripts and CI
@@ -141,6 +146,15 @@ xc -m sonnet "Refactor the formatDate function in src/utils.ts"
 # Trust mode: skip write-operation confirmations
 xc -t
 
+# Plan mode: design a plan first, execute only after approval
+xc --plan "Refactor the database connection layer"
+
+# Resume the most recent session
+xc -c
+
+# Pick a past session to resume
+xc --resume
+
 # Non-interactive mode: print the result and exit, suitable for scripting
 xc -p "Generate a CHANGELOG for this repository"
 ```
@@ -153,6 +167,9 @@ xc [options] [prompt]
 --model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-4.1)
 --trust, -t           Trust mode: skip write-operation confirmations
 --print, -p           Non-interactive mode: print result and exit
+--plan                Start in plan mode (read-only exploration; user must approve before code edits)
+--continue, -c        Resume the most recent session in this project (no picker)
+--resume, -r [id]     Resume a session: no argument opens the picker; with an ID jumps directly
 --max-turns <n>       Maximum agent loop turns (default: 100)
 --version, -v         Show version
 --help, -h            Show help
@@ -165,9 +182,12 @@ xc [options] [prompt]
 | `/help`               | Show available commands                                                                                  |
 | `/model [alias]`      | Switch model or list available models                                                                    |
 | `/thinking [on\|off]` | Enable / disable thinking mode (no argument opens the picker)                                            |
+| `/theme [name]`       | Switch UI theme (no argument opens the picker); controls diff colors and syntax-highlight palette         |
+| `/plan [on\|off]`     | Enable / disable plan mode (no argument toggles the current state)                                       |
 | `/usage`              | Show current-session token usage (including cache hit rate); `/usage history` lists past project sessions |
 | `/clear`              | Clear the current conversation                                                                           |
 | `/compact`            | Manually compress context                                                                                |
+| `/resume`             | Pick a past session in this project to resume                                                            |
 | `/init`               | Initialize the project knowledge base                                                                    |
 | `/session save`       | Save the current session without exiting                                                                 |
 | `/exit`               | Save the session and exit                                                                                |
@@ -280,11 +300,12 @@ x-code-cli/
 │   ├── core/        @x-code-cli/core    AI engine (no UI deps)
 │   │   └── src/
 │   │       ├── agent/        Agent loop, system prompt, file ingest, vision fallback, loop guard
+│   │       │   └── sub-agents/  Sub-agent registry, built-in definitions, loader, runner
 │   │       ├── config/       Model config, API key management
 │   │       ├── knowledge/    Knowledge loader, auto-memory, session summary and usage
 │   │       ├── permissions/  3-level permission system
 │   │       ├── providers/    AI SDK provider registry, thinking switch, cache control
-│   │       ├── tools/        11 tool implementations
+│   │       ├── tools/        15 tool implementations (task tool injected dynamically)
 │   │       └── types/        Public TypeScript interfaces
 │   │
 │   └── cli/         @x-code-cli/cli     Terminal UI
@@ -295,6 +316,7 @@ x-code-cli/
 │
 └── .x-code/         Project knowledge directory (created on first /init)
     ├── memory/      AI-written auto memory (auto.md)
+    ├── agents/      Custom sub-agent definitions (Markdown + YAML frontmatter)
     ├── sessions/    Session summaries and token usage
     └── local/       Personal preferences (gitignored)
 ```

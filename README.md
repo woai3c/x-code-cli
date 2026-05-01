@@ -4,19 +4,24 @@
 
 **X-Code CLI** 是一个 AI Agent CLI——运行于终端中，通过自然语言与代码库交互，完成阅读、修改、调试和构建等开发任务，无需离开命令行。
 
-X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 11 个常用工具（文件读写、Shell 执行、代码搜索等），并提供权限控制、上下文压缩、文件附件、知识库等能力。
+X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 15 个工具（文件读写、Shell 执行、代码搜索、子 Agent 委派、任务追踪、计划模式等），并提供权限控制、上下文压缩、文件附件、知识库、会话恢复等能力。
 
 ## 功能特性
 
 - **多模型支持**：内置 8 家主流厂商，并支持任意 OpenAI 兼容接口
-- **11 个内置工具**：覆盖文件、Shell、搜索、网页抓取等常见开发场景
+- **15 个内置工具**：覆盖文件读写、Shell 执行、代码搜索、网页抓取、子 Agent 委派、任务追踪、计划模式等常见开发场景
+- **子 Agent（task 工具）**：将研究、代码审查、规划等子任务委派给专用子 Agent，独立上下文运行后仅返回结论，保持主对话简洁。内置 4 个子 Agent（explore / general-purpose / plan / code-reviewer），支持自定义子 Agent
+- **Plan 模式**：`--plan` 或 `/plan` 进入只读探索模式，Agent 先制定方案、经用户批准后再执行代码修改
+- **Todo 追踪**：Agent 自动将复杂任务分解为 todo 列表并追踪执行进度
 - **三级权限模型**：默认安全，写操作前请求确认；`--trust` 可跳过确认
 - **流式输出**：边生成边显示，无需等待完整响应
 - **上下文压缩**：长对话自动压缩历史；loop-guard 检测循环调用；prompt cache 复用前缀降低重复输入成本
+- **会话恢复**：`--continue` 恢复最近一次会话；`--resume` 打开历史会话选择器或按 ID 直达
 - **知识库系统**：分层加载（全局 / 项目 AGENTS.md chain / 自动记忆 / 本地偏好 / 会话总结）
 - **文件附件**：在提示词中以 `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/usage`、`/usage history` 等
+- **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **跨平台**：支持 Windows、macOS、Linux
 - **非交互模式**：`--print` 配合管道输入，可嵌入脚本与 CI
@@ -141,6 +146,15 @@ xc -m sonnet "重构 src/utils.ts 中的 formatDate 函数"
 # 信任模式：跳过写操作确认
 xc -t
 
+# Plan 模式：先制定方案，经批准后再修改代码
+xc --plan "重构数据库连接层"
+
+# 恢复最近一次会话
+xc -c
+
+# 从历史会话中选择恢复
+xc --resume
+
 # 非交互模式：输出结果后退出，适用于脚本调用
 xc -p "为该仓库生成 CHANGELOG"
 ```
@@ -153,6 +167,9 @@ xc [options] [prompt]
 --model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-4.1）
 --trust, -t           信任模式：跳过写操作确认
 --print, -p           非交互模式：输出结果后退出
+--plan                以 Plan 模式启动（只读探索，用户批准后才执行修改）
+--continue, -c        恢复当前项目最近一次会话（无选择器）
+--resume, -r [id]     恢复会话：无参数打开选择器，指定 ID 直达
 --max-turns <n>       Agent 循环最大轮次（默认 100）
 --version, -v         显示版本号
 --help, -h            显示帮助信息
@@ -165,9 +182,12 @@ xc [options] [prompt]
 | `/help`               | 查看所有可用命令                                                              |
 | `/model [alias]`      | 切换模型或查看可用模型列表                                                    |
 | `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                                     |
+| `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                   |
+| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                 |
 | `/usage`              | 查看本次会话 Token 用量（含缓存命中率）；`/usage history` 列出当前项目历史会话 |
 | `/clear`              | 清空当前会话                                                                  |
 | `/compact`            | 手动压缩上下文                                                                |
+| `/resume`             | 从当前项目的历史会话中选择一个恢复                                            |
 | `/init`               | 初始化项目知识库                                                              |
 | `/session save`       | 保存当前会话（不退出）                                                        |
 | `/exit`               | 保存会话并退出                                                                |
@@ -280,11 +300,12 @@ x-code-cli/
 │   ├── core/        @x-code-cli/core    AI 引擎（无 UI 依赖）
 │   │   └── src/
 │   │       ├── agent/        Agent 循环、系统提示词、文件附件、视觉子 agent、loop guard
+│   │       │   └── sub-agents/  子 Agent 注册表、内置 Agent 定义、加载器、运行器
 │   │       ├── config/       模型配置、API Key 管理
 │   │       ├── knowledge/    知识加载器、自动记忆、会话摘要与 token 用量
 │   │       ├── permissions/  三级权限系统
 │   │       ├── providers/    AI SDK 厂商注册、thinking 开关、cache control
-│   │       ├── tools/        11 个工具实现
+│   │       ├── tools/        15 个工具实现（含 task 动态注入）
 │   │       └── types/        公开 TypeScript 接口
 │   │
 │   └── cli/         @x-code-cli/cli     终端界面
@@ -295,6 +316,7 @@ x-code-cli/
 │
 └── .x-code/         项目知识库目录（首次执行 /init 时创建）
     ├── memory/      AI 自动写入的记忆（auto.md）
+    ├── agents/      自定义子 Agent 定义（Markdown + YAML frontmatter）
     ├── sessions/    会话摘要与 token 用量
     └── local/       个人偏好（gitignored）
 ```
