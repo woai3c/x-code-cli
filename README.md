@@ -294,35 +294,6 @@ set DEBUG_STDOUT=1 && xc
 
 日志文件仅在 `DEBUG_STDOUT=1` 启用时写入，默认状态下零开销。
 
-## 项目结构
-
-```text
-x-code-cli/
-├── packages/
-│   ├── core/        @x-code-cli/core    AI 引擎（无 UI 依赖）
-│   │   └── src/
-│   │       ├── agent/        Agent 循环、系统提示词、文件附件、视觉子 agent、loop guard
-│   │       │   └── sub-agents/  子 Agent 注册表、内置 Agent 定义、加载器、运行器
-│   │       ├── config/       模型配置、API Key 管理
-│   │       ├── knowledge/    知识加载器、自动记忆、会话摘要与 token 用量
-│   │       ├── permissions/  三级权限系统
-│   │       ├── providers/    AI SDK 厂商注册、thinking 开关、cache control
-│   │       ├── tools/        15 个工具实现（含 task 动态注入）
-│   │       └── types/        公开 TypeScript 接口
-│   │
-│   └── cli/         @x-code-cli/cli     终端界面
-│       └── src/
-│           ├── index.ts        CLI 入口
-│           ├── app.tsx         Ink 应用根
-│           └── ui/             React 组件、Hook、主题
-│
-└── .x-code/         项目知识库目录（首次执行 /init 时创建）
-    ├── memory/      AI 自动写入的记忆（auto.md）
-    ├── agents/      自定义子 Agent 定义（Markdown + YAML frontmatter）
-    ├── sessions/    会话摘要与 token 用量
-    └── local/       个人偏好（gitignored）
-```
-
 ## 从源码运行
 
 ```bash

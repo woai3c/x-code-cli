@@ -294,35 +294,6 @@ The log is written under the user directory:
 
 The log file is written only when `DEBUG_STDOUT=1` is set; default runs incur zero overhead.
 
-## Project Structure
-
-```text
-x-code-cli/
-├── packages/
-│   ├── core/        @x-code-cli/core    AI engine (no UI deps)
-│   │   └── src/
-│   │       ├── agent/        Agent loop, system prompt, file ingest, vision fallback, loop guard
-│   │       │   └── sub-agents/  Sub-agent registry, built-in definitions, loader, runner
-│   │       ├── config/       Model config, API key management
-│   │       ├── knowledge/    Knowledge loader, auto-memory, session summary and usage
-│   │       ├── permissions/  3-level permission system
-│   │       ├── providers/    AI SDK provider registry, thinking switch, cache control
-│   │       ├── tools/        15 tool implementations (task tool injected dynamically)
-│   │       └── types/        Public TypeScript interfaces
-│   │
-│   └── cli/         @x-code-cli/cli     Terminal UI
-│       └── src/
-│           ├── index.ts        CLI entry point
-│           ├── app.tsx         Ink app root
-│           └── ui/             React components, hooks, theme
-│
-└── .x-code/         Project knowledge directory (created on first /init)
-    ├── memory/      AI-written auto memory (auto.md)
-    ├── agents/      Custom sub-agent definitions (Markdown + YAML frontmatter)
-    ├── sessions/    Session summaries and token usage
-    └── local/       Personal preferences (gitignored)
-```
-
 ## Build From Source
 
 ```bash
