@@ -1,3 +1,37 @@
+## v0.2.0 (2026-05-01)
+
+### Features
+
+- enhance /usage-history, fix ghost cursor, remove /session-save (2ee4d47)
+- add multi-layout select and align askUser/picker styling with CC (19d67e3)
+- implement sub-agent system with task tool and live progress UI (e9a5e23)
+- @-mention file completion menu (9190186)
+- show context-window occupancy in footer (410fc15)
+- structured edit diff + syntax highlighting + theme picker (2a8967d)
+- per-session jsonl transcript with resume support (910a582)
+- double-tap Esc to clear input in idle mode (3e47aa3)
+- LLM-generated slug for non-ASCII session/plan filenames (ba3455c)
+- wire askUser "Other" freeform input (e34900d)
+- tighter scrollback rhythm + truncation + render diagnostics (c8aa40c)
+- align todo panel with Claude Code, drop noise (ceba707)
+- TodoWrite tool with live in-frame checklist (ff10c6d)
+- plan mode aligned with Claude Code (interactive interview + acceptEdits) (2117291)
+- Esc to cancel in-flight turn; Ctrl+C double-press to exit (ede95cd)
+
+### Bug Fixes
+
+- add platform-aware Unicode glyph fallbacks for legacy ConHost (44872c5)
+- include output in currentContextTokens to match provider semantics (83f2d13)
+- move "Press Ctrl+C again to exit" hint below input box (5efb0b9)
+- eliminate flicker (d6218ba)
+- replace orange accent with blue-purple in select dialogs (15cd584)
+- smooth spinner animation during streaming, eliminate flicker (e1d1da0)
+- align live tool-block spacing with committed scrollback (55d5f54)
+- make weak-terminal rendering coherent during streaming (f12463d)
+- reduce streaming flicker via timer-aware defer + shell-progress throttle (9807060)
+- cap pre-scroll rows so large commits don't leak blank lines (ddc5128)
+- repair orphan tool_calls so malformed model output doesn't poison the session (566f544)
+
 ## v0.1.11 (2026-04-27)
 
 ### Features
