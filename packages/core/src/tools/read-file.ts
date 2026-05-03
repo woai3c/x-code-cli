@@ -59,7 +59,15 @@ async function readTextResult(filePath: string, offset?: number, limit?: number)
 }
 
 export const readFile = tool({
-  description: 'Read the contents of a file at the given path. Returns line-numbered text for code/docs, and inline media for images/PDFs so the model can inspect them directly.',
+  description: `Read a file from the local filesystem. Assume this tool can read all files on the machine.
+
+Usage:
+- The filePath parameter must be an absolute path, not a relative path.
+- You can optionally specify offset and limit (especially handy for long files), but it's recommended to read the whole file first.
+- Results are returned with line numbers starting at 1.
+- This tool can read images (PNG, JPG, etc.) and PDFs — their content is presented inline.
+- This tool can only read files, not directories. To list a directory, use listDir or shell with ls.
+- If a file path is provided by the user, assume it is valid.`,
   inputSchema: z.object({
     filePath: z.string().describe('Absolute path to the file'),
     offset: z.number().optional().describe('Start line (1-based, text files only)'),

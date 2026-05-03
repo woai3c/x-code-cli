@@ -33,9 +33,14 @@ function getRipgrepPath(): string {
 
 export const grep = tool({
   description:
-    `Search file contents by regex pattern using ripgrep. Returns matching lines with file paths and line numbers. ` +
-    `Results are capped at headLimit lines (default ${DEFAULT_HEAD_LIMIT}). ` +
-    `Long lines are truncated at ${MAX_COLUMNS} chars.`,
+    `A powerful search tool built on ripgrep.
+
+Usage:
+- ALWAYS use this grep tool for content search tasks. NEVER invoke grep or rg as a shell command — this tool has been optimized for correct permissions and access.
+- Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+").
+- Filter files with glob parameter (e.g., "*.ts", "*.{ts,tsx}").
+- Pattern syntax: Uses ripgrep — literal braces need escaping (use interface\\{\\} to find interface{} in Go code).
+- Results are capped at headLimit lines (default ${DEFAULT_HEAD_LIMIT}). Long lines are truncated at ${MAX_COLUMNS} chars.`,
   inputSchema: z.object({
     pattern: z.string().describe('Regex pattern to search for'),
     path: z.string().optional().describe('File or directory to search in (defaults to working directory)'),
