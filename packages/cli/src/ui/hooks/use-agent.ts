@@ -368,18 +368,23 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             timestamp: Date.now(),
           })
           return new Promise<boolean>((resolve) => {
-            setState((prev) => ({
-              ...prev,
-              pendingQuestion: {
-                question: 'Approve the plan above?',
-                options: [
-                  { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
-                  { label: 'No', description: 'Stay in plan mode and let the model revise.' },
-                ],
-                resolve: (answer) => resolve(answer === 'Yes'),
-                abortAnswer: 'No',
-              },
-            }))
+            // Delay opening the dialog so the plan-text commit
+            // paints first — avoids a simultaneous commit+grow
+            // that confuses the geometry engine.
+            setTimeout(() => {
+              setState((prev) => ({
+                ...prev,
+                pendingQuestion: {
+                  question: 'Approve the plan above?',
+                  options: [
+                    { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
+                    { label: 'No', description: 'Stay in plan mode and let the model revise.' },
+                  ],
+                  resolve: (answer) => resolve(answer === 'Yes'),
+                  abortAnswer: 'No',
+                },
+              }))
+            }, 0)
           })
         },
         onPlanModeChange: (mode) => {

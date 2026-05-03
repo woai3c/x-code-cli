@@ -75,11 +75,21 @@ export function getToolInputPreview(toolName: string, input: Record<string, unkn
     return (input.query as string) || (input.url as string) || ''
   }
 
-  // Task (sub-agent)
+  // Task (sub-agent) — only show the description; subagent_type
+  // (explore, shell, etc.) is internal detail and redundant with
+  // the description the model already chose.
   if (n === 'task') {
-    const desc = (input.description as string) || ''
-    const agent = (input.subagent_type as string) || ''
-    return agent ? `${desc} (${agent})` : desc
+    return (input.description as string) || ''
+  }
+
+  // AskUser — show only the first line of the question in the
+  // preview (the title row). Full question text can be very long
+  // multi-paragraph markdown; collapsing it into one line makes
+  // it overflow the terminal width and become unreadable.
+  if (n === 'askuser') {
+    const q = (input.question as string) || ''
+    const firstLine = q.split(/\r?\n/)[0]?.trim() || ''
+    return firstLine
   }
 
   // Generic: try common parameter names before falling back

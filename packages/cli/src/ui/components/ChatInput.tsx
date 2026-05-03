@@ -36,6 +36,7 @@ import type { ActiveToolCall } from '../hooks/use-agent.js'
 import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
+import { renderInlineMarkdown } from '../render-markdown.js'
 import { lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
 import {
   GLYPH_ACCEPT_EDITS,
@@ -48,7 +49,6 @@ import {
   GLYPH_TODO_CHECK,
   GLYPH_TODO_IN_PROGRESS,
   GLYPH_TODO_PENDING,
-  RIGHT_MARGIN_SAFETY,
   SPINNER_FRAMES,
 } from '../terminal-glyphs.js'
 import { getToolInputPreview, getToolLabel } from '../tool-display.js'
@@ -577,11 +577,7 @@ const PERMISSION_LEVEL_STYLE: Record<string, { label: string; style: string }> =
   deny: { label: 'dangerous', style: S_ERROR_BOLD },
 }
 
-function permissionContentCells(
-  toolName: string,
-  input: Record<string, unknown>,
-  termWidth: number,
-): Cell[] | null {
+function permissionContentCells(toolName: string, input: Record<string, unknown>, termWidth: number): Cell[] | null {
   // Frame geometry assumes exactly ONE row per permission content line.
   // When a string is longer than termWidth the terminal will auto-wrap it
   // onto the next physical row, which breaks every downstream absolute
@@ -931,8 +927,7 @@ export function ChatInput({
   const atMenuVisible = atTrigger.active && atDismissed !== atDismissedKey
   // Slash menu wins when both could fire (`/` only triggers at line start so
   // they rarely collide — only via paste). Hard mutex prevents double-render.
-  const activeMenu: 'slash' | 'at' | null =
-    matches.length > 0 ? 'slash' : atMenuVisible ? 'at' : null
+  const activeMenu: 'slash' | 'at' | null = matches.length > 0 ? 'slash' : atMenuVisible ? 'at' : null
 
   // Reset the @-menu cursor whenever the trigger token shifts so the
   // highlight always starts at the top entry of the new result set.
@@ -1102,9 +1097,7 @@ export function ChatInput({
           return
         }
         if (key === 'return') {
-          const decisions: ('yes' | 'always' | 'no')[] = hasAlwaysOption
-            ? ['yes', 'always', 'no']
-            : ['yes', 'no']
+          const decisions: ('yes' | 'always' | 'no')[] = hasAlwaysOption ? ['yes', 'always', 'no'] : ['yes', 'no']
           permission.onResolve(decisions[permissionSelected]!)
           return
         }
@@ -1520,7 +1513,8 @@ export function ChatInput({
         if (cursorLine === 0) cursorLine = -1
       }
       if (start + MAX_VISIBLE_LINES < visualLines.length) {
-        displayLines[displayLines.length - 1] = `${GLYPH_ELLIPSIS} (+${visualLines.length - start - MAX_VISIBLE_LINES} below)`
+        displayLines[displayLines.length - 1] =
+          `${GLYPH_ELLIPSIS} (+${visualLines.length - start - MAX_VISIBLE_LINES} below)`
         if (cursorLine === displayLines.length - 1) cursorLine = -1
       }
     }
@@ -1647,7 +1641,8 @@ export function ChatInput({
             const decoration = label.length + 5
             const safetyMargin = 4
             const maxPreviewLen = Math.max(40, termWidth - decoration - safetyMargin)
-            const trimmed = preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + GLYPH_ELLIPSIS : preview
+            const trimmed =
+              preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + GLYPH_ELLIPSIS : preview
             row1.push(...textToCells(`(${trimmed})`, S_BLUE_PURPLE))
           }
           frame.push(row1)
@@ -1728,9 +1723,9 @@ export function ChatInput({
       if (contentCells) frame.push(contentCells)
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input)
-      // When no rule can be suggested (e.g. powershell -Command "..."),
-      // only show Yes/No (2 options). When a prefix is available, show
-      // Yes / Yes don't ask again / No (3 options).
+      // When no rule can be suggested (e.g. powershell -Command "...",
+      // enterPlanMode), only show Yes/No (2 options). When a prefix is
+      // available, show Yes / Yes don't ask again / No (3 options).
       const noIndex = ruleLabel ? 2 : 1
 
       const yesCells: Cell[] = []
@@ -1773,52 +1768,66 @@ export function ChatInput({
     // scrollback rows behind when it closes (mirrors Claude Code's
     // log-update.ts fullResetSequence_CAUSES_FLICKER approach).
     if (selectRequest) {
-      // Cap the in-dialog question rendering so a model that puts a
-      // 200-line plan body into the question field (it shouldn't, but
-      // happens with weaker models) doesn't blow out the frame and
-      // push the option list off-screen. Long questions get truncated
-      // with a "(N more lines — see scrollback above)" footer; the
-      // full body is rendered as a normal scrollback message before
-      // the dialog opens (see use-agent.ts onAskUser / onPlanApprovalRequest).
-
       // Blank line above the question title for visual separation from
       // scrollback content above (mirrors CC's PermissionRequestTitle
       // sitting inside a padded container).
       frame.push([{ char: ' ', style: S_NONE, width: 1 }])
 
-      const MAX_QUESTION_LINES = 6
-      const allLines = selectRequest.question.split('\n')
-      const truncated = allLines.length > MAX_QUESTION_LINES
-      const visibleLines = truncated ? allLines.slice(0, MAX_QUESTION_LINES) : allLines
+      const questionText = selectRequest.question
       const maxRowW = Math.max(20, termWidth - 1)
-      for (const q of visibleLines) {
-        const cells: Cell[] = []
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(q, S_BOLD))
-        frame.push(truncateCellRow(cells, maxRowW))
+      // Wrap question text across multiple lines instead of truncating.
+      // The 1-cell left padding is added to each wrapped line.
+      const rawCells = ansiTextToCells(renderInlineMarkdown(questionText))
+      const contentW = maxRowW - 1
+      let ci = 0
+      while (ci < rawCells.length) {
+        const row: Cell[] = [{ char: ' ', style: S_NONE, width: 1 }]
+        let w = 0
+        while (ci < rawCells.length && w + rawCells[ci]!.width <= contentW) {
+          w += rawCells[ci]!.width
+          row.push(rawCells[ci]!)
+          ci++
+        }
+        frame.push(row)
       }
-      if (truncated) {
-        const cells: Cell[] = []
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push(...textToCells(`${GLYPH_ELLIPSIS} (${allLines.length - MAX_QUESTION_LINES} more lines)`, S_DIM))
-        frame.push(cells)
+      if (rawCells.length === 0) {
+        frame.push([{ char: ' ', style: S_NONE, width: 1 }])
       }
 
-      // Viewport-scroll the options list when there are too many to fit
-      // on screen. Reserve rows for the question header, hint line, and
-      // a small safety margin. The visible window follows the active
-      // selection index so the highlighted row is always in view. When
-      // scrolled, dim "... N more above/below" indicators are shown.
-      const termRows = stdout?.rows ?? 25
-      const questionRows = (truncated ? visibleLines.length + 1 : visibleLines.length)
-      const hintRows = 1
-      const separatorRow = 1
-      const blankLines = 3
-      const chromeRows = questionRows + separatorRow + hintRows + blankLines + 1
       const opts = selectRequest.options
-      const hasDescriptions = opts.some((o: { description?: string; freeform?: boolean }) => o.description && !o.freeform)
+      const hasDescriptions = opts.some(
+        (o: { description?: string; freeform?: boolean }) => o.description && !o.freeform,
+      )
       const isVertical = (selectRequest.layout ?? 'compact') === 'compact-vertical'
-      const rowsPerOption = (hasDescriptions && isVertical) ? 2 : 1
+      const rowsPerOption = hasDescriptions && isVertical ? 2 : 1
+      const termRows = stdout?.rows ?? 25
+
+      // Viewport-scroll the options list when there are too many to fit
+      // on screen. The visible window follows the active selection index
+      // so the highlighted row is always in view.
+      const questionRows = Math.max(1, Math.ceil(rawCells.reduce((s, c) => s + c.width, 0) / contentW))
+      const hintRows = 1
+      const selectBlanks = 2
+      const separatorsAndInput = 3
+      const footerRow = 1
+      const spinnerRows = spinner ? 1 : 0
+      const todoRows = todos && todos.length > 0 ? todos.length : 0
+      const tools = activeToolCalls ?? []
+      const activeToolRows =
+        tools.length > 0
+          ? tools.reduce((sum, tc, idx) => {
+              const histLen =
+                tc.toolName.toLowerCase().replace(/[_-]/g, '') === 'task' &&
+                tc.subToolHistory &&
+                tc.subToolHistory.length > 1
+                  ? Math.min(tc.subToolHistory.length, 4)
+                  : 1
+              return sum + 1 + histLen + (idx > 0 ? 1 : 0)
+            }, 1)
+          : 0
+      const fixedChrome =
+        selectBlanks + hintRows + separatorsAndInput + footerRow + spinnerRows + todoRows + activeToolRows
+      const chromeRows = questionRows + fixedChrome
       const maxVisibleOptions = Math.max(3, Math.floor((termRows - chromeRows) / rowsPerOption))
       const totalOpts = opts.length
       const needsScroll = totalOpts > maxVisibleOptions
@@ -2123,25 +2132,27 @@ export function ChatInput({
     // Bottom separator
     frame.push(textToCells(sepText, S_GRAY))
 
-    // Footer slot below the input box. Left side: notice / mode indicator
-    // (mutually exclusive — at most one). Right side: context-window
-    // occupancy (`6.6k / 200k · 3%`), shown whenever a usage snapshot is
-    // available. The two halves are independent — context indicator can
-    // stand alone with default mode, and the mode indicator still appears
-    // on its own when no usage has landed yet.
+    // Footer row — same layout pattern Claude Code / Codex / Gemini CLI
+    // use: left text and right text on a SINGLE row, with the right
+    // text right-aligned at the row's bottom-right corner. Built as one
+    // cell sequence (left + padding spaces + right) inside the cell
+    // buffer's frame, so the cell-diff loop owns the entire row's
+    // contents — no out-of-band overlay writes.
     //
-    // Left-side priority order:
-    //   1. notice  — transient hint like "Press Ctrl+C again to exit". Wins
-    //      because it's time-sensitive (parent clears it on a 2s timer).
-    //   2. plan-mode indicator.
-    //   3. accept-edits indicator.
+    // Width is capped at `termWidth - 1` cells (same width the bottom
+    // separator above uses) so this row's geometry never lands on the
+    // terminal's auto-wrap column boundary.
     //
-    // The row is omitted entirely when neither half has content, so default
-    // mode with a fresh session keeps a zero-row visual footprint. Mode
-    // switching is driven by slash commands only (/plan toggles plan mode);
-    // the Shift+Tab keybinding was removed because Windows needs Node ≥22.17
-    // VT input mode, and the Alt+M fallback is too easily clobbered by IDE
-    // menu shortcuts to be a reliable contract.
+    // Left side  — notice / mode indicator (mutually exclusive). Priority:
+    //              notice > plan > acceptEdits. Mode switching via slash
+    //              commands only (/plan); the Shift+Tab keybinding was
+    //              removed because Windows needs Node ≥22.17 VT input mode
+    //              and Alt+M is too easily clobbered by IDE menus.
+    // Right side — context-window occupancy (`6.6k / 200k · 3%`), shown
+    //              whenever a usage snapshot is available.
+    //
+    // The row is omitted entirely when neither side has content, so a
+    // fresh session in default mode keeps a zero-row footer footprint.
     let leftCells: Cell[] | null = null
     if (notice) {
       const cells: Cell[] = []
@@ -2167,19 +2178,33 @@ export function ChatInput({
     }
 
     if (leftCells || rightText) {
+      // Footer row built as a NARROW cell sequence — left + ` · ` + right —
+      // never padded out to termWidth-1.
+      //
+      // Why narrow: an earlier revision right-justified `rightText` by
+      // padding with spaces to termWidth-1 cells. That made the LAST row
+      // of the frame land its final cell on the terminal's auto-wrap
+      // column. Under BSU/ESU sync mode on xterm.js (VS Code's terminal),
+      // a frame whose bottom row is that wide leaks residual cells into
+      // native scrollback every time a tool-result commit fires its LF
+      // auto-scroll — manifesting as ghost "Thinking…" rows piling up
+      // above the live frame. Keeping the row narrow stops the cursor
+      // ever reaching the wrap column and the regression doesn't fire.
+      //
+      // Competitor CLIs (Codex, Gemini) right-justify because their
+      // committed scrollback isn't pushed via LF auto-scroll — Codex
+      // uses ratatui's full-screen buffer, Gemini uses Ink `<Static>`.
+      // We can't right-justify cheaply without re-architecting the
+      // commit path.
       const cells: Cell[] = []
-      const leftWidth = leftCells ? leftCells.reduce((s, c) => s + (c.width ?? 1), 0) : 0
+      const leftWidth = leftCells ? leftCells.reduce((sum, c) => sum + c.width, 0) : 0
       if (leftCells) cells.push(...leftCells)
       if (rightText) {
-        const rightWidth = visualWidth(rightText)
-        // Right-justify against the bottom-separator's right edge (separator
-        // width = termWidth - 1, so the text ends at column termWidth - 1).
-        // Force a 2-space gap from any left content so a long notice can't
-        // run straight into the right-side number on a narrow terminal.
-        const minGap = leftCells ? 2 : 0
-        const targetStart = Math.max(leftWidth + minGap, termWidth - 1 - RIGHT_MARGIN_SAFETY - rightWidth)
-        const padCount = Math.max(0, targetStart - leftWidth)
-        for (let i = 0; i < padCount; i++) cells.push({ char: ' ', style: S_NONE, width: 1 })
+        if (leftWidth > 0) {
+          cells.push(...textToCells('  ·  ', S_DIM))
+        } else {
+          cells.push({ char: ' ', style: S_NONE, width: 1 })
+        }
         cells.push(...textToCells(rightText, S_DIM))
       }
       frame.push(cells)
@@ -2422,6 +2447,7 @@ export function ChatInput({
     let pendingFreeBlanks = freeBlanksAboveFrameRef.current
     const scrollRows = didCommitMessages ? countContentRows(scrollbackContent, termWidth) : 0
     let handledCommitWithFrame = false
+    let forceFullRedraw = false
     if (didCommitMessages && scrollRows > 0 && nextH > 0 && nextH < termRows) {
       // Available rows we already "own" above the current frame: the old
       // frame itself (about to be overwritten) plus any blank rows left
@@ -2467,7 +2493,18 @@ export function ChatInput({
       // render's freeBlanks — either kept BELOW the frame (frame keeps
       // floating up) or implicitly consumed when the frame reaches the
       // bottom (freeBlanks = 0).
-      const leftoverBlanks = Math.max(0, availSpace + preScrollRows - scrollRows - nextH)
+      const rawLeftover = Math.max(0, availSpace + preScrollRows - scrollRows - nextH)
+      // When the frame shrank significantly (e.g. select/askUser dialog
+      // closed), the old availSpace reflects the large dialog. Without
+      // capping, leftoverBlanks can be 12+ rows, leaving the frame
+      // floating at the top of the viewport with a huge blank gap below.
+      // For large shrinks (> 3 rows), snap blanks to 0 so the frame
+      // immediately anchors to the bottom. Small shrinks (≤ 3) use the
+      // natural floor to let the floating-frame model consume blanks
+      // gradually.
+      const frameShrunk = oldFrameH - nextH
+      const maxBlanks = frameShrunk > 3 ? 0 : termRows - nextH
+      const leftoverBlanks = Math.min(rawLeftover, maxBlanks)
       pendingFreeBlanks = leftoverBlanks
       // Recompute frameTop now that pendingFreeBlanks reflects the
       // post-commit free-row budget. In the floating-frame model the
@@ -2523,7 +2560,21 @@ export function ChatInput({
       const frameMoved = freeBlanksAboveFrameRef.current > 0
       if (preScrollRows > 0 || frameSizeChanged || frameMoved) {
         // FULL-REDRAW PATH.
+        const oldFrameTopForClear =
+          lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
+        const oldFrameBottomForClear = Math.min(oldFrameTopForClear + oldFrameH - 1, termRows)
         if (preScrollRows > 0) {
+          // Erase old frame BEFORE the pre-scroll LFs. After the LFs push
+          // N viewport rows into the terminal's real scrollback history,
+          // those rows become permanent — no ANSI escape can clear them.
+          // If the old frame (with its Thinking/spinner line) sits at rows
+          // that will be pushed above startRow by the scroll, the post-
+          // scroll erase loop can't reach them and they persist as ghost
+          // "Thinking..." lines in the user's scrollback. Erasing the
+          // old frame here ensures only blank rows enter scrollback history.
+          for (let r = oldFrameTopForClear; r <= oldFrameBottomForClear; r++) {
+            preBuf += `\x1b[${r};1H\x1b[K`
+          }
           // Push `preScrollRows` rows into the terminal's real scrollback
           // by emitting N LFs at the bottom row. This is the ONLY portable
           // mechanism that preserves displaced rows in scrollback history:
@@ -2538,51 +2589,36 @@ export function ChatInput({
           // Auto-scroll triggered by LF at termRows is universally honored.
           preBuf += `\x1b[${termRows};1H` + '\n'.repeat(preScrollRows)
         }
-        // Erase ONLY the rows that previously held OLD frame cells —
-        // not the entire `[startRow, termRows]` range. The screen-wide
-        // `\x1b[J` we used here before manifests on weak terminals
-        // (cmd.exe / Windows PowerShell host / GNOME Terminal pre-VTE
-        // 0.68 / Ubuntu console) as a visible "blank flash" of the
-        // bottom 30+ rows before the rewrite catches up. Per-row
-        // `\x1b[K` clears each old-frame row in turn, then the
-        // subsequent scrollback + frame writes immediately overwrite
-        // them — so the user sees writes happening instead of "screen
-        // blanked then redrawn." Symptom this cures: streaming replies
-        // produced a strobe-like flicker at the COMMIT_BATCH_MS cadence
-        // (~7Hz) that users described as "辣眼睛 / eye-straining".
-        //
-        // Why this is safe:
-        //   - scrollbackContent overwrites rows [startRow, startRow+scrollRows).
-        //   - The frame write below overwrites rows [frameTop, frameTop+nextH).
-        //   - Rows past oldFrameBottom were ALREADY blank pre-render
-        //     (blanks below the old frame), so they don't need clearing.
-        //   - The only rows with stale cells outside the new write
-        //     coverage are OLD frame rows past the new frame's bottom
-        //     — handled by the explicit tail-clear after the frame loop.
-        //   - When preScrollRows > 0, the LF auto-scroll above shifts
-        //     OLD frame rows ABOVE startRow into history; rows in
-        //     [startRow, termRows] post-scroll are blanks created by
-        //     the scroll, no remnants to clear.
-        const oldFrameTopForClear =
-          lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
-        const oldFrameBottomForClear = oldFrameTopForClear + oldFrameH - 1
-        // Only clear rows in [startRow, oldFrameBottom] — never extend
-        // past oldFrameBottom because below that was already blank.
-        const clearEnd = Math.min(oldFrameBottomForClear, termRows)
+        // After pre-scroll (or when no scroll needed), erase the viewport
+        // rows that will hold new content. When preScroll happened, old
+        // frame rows have already been blanked above; the post-scroll
+        // viewport rows [startRow, termRows] are blank lines created by
+        // the scroll. We still clear [startRow, clearEnd] to handle the
+        // non-scroll cases (frameSizeChanged / frameMoved) where old frame
+        // cells sit at their original positions.
+        const clearEnd = preScrollRows > 0 ? termRows : oldFrameBottomForClear
         for (let r = startRow; r <= clearEnd; r++) {
           preBuf += `\x1b[${r};1H\x1b[K`
         }
         preBuf += `\x1b[${startRow};1H`
         preBuf += scrollbackContent
-        // scrollbackContent lands the cursor at col 1 of the row
-        // immediately below its last row. That matches the new frame top
-        // only when leftoverBlanks === 0; otherwise we must jump to the
-        // frame top so the renderRowToAnsi loop below draws frame rows
-        // pinned to the bottom with the blank gap sitting above them
-        // (where the next commit will consume it).
-        if (leftoverBlanks > 0) {
-          preBuf += `\x1b[${frameTop};1H`
+        // When the frame shrank significantly (e.g. askUser dialog closed),
+        // scrollback content only fills a fraction of the space the old frame
+        // occupied. Instead of anchoring the frame at the terminal bottom and
+        // leaving a visible blank gap between scrollback and frame, place the
+        // frame directly below the scrollback content. The remaining blank
+        // rows below the frame are recorded in pendingFreeBlanks so
+        // subsequent commits can consume them naturally (frame floats down
+        // toward the bottom as new content arrives).
+        if (preScrollRows === 0 && frameShrunk > 3 && leftoverBlanks === 0) {
+          const scrollEndRow = startRow + scrollRows
+          if (scrollEndRow < frameTop) {
+            frameTop = scrollEndRow
+            const belowFrame = Math.max(0, termRows - frameTop - nextH + 1)
+            pendingFreeBlanks = belowFrame
+          }
         }
+        preBuf += `\x1b[${frameTop};1H`
         for (let i = 0; i < nextH; i++) {
           preBuf += renderRowToAnsi(frame[i]) + '\x1b[K'
           if (i < nextH - 1) preBuf += '\r\n'
@@ -2599,13 +2635,11 @@ export function ChatInput({
           preBuf += `\x1b[${r};1H\x1b[K`
         }
         preBuf += `\x1b[${startRow};1H` + scrollbackContent
-        // If scrollbackContent ended above frameTop (leftoverBlanks > 0),
-        // park the cursor at frameTop so the cell-diff loop's
-        // `\x1b[frameTop;1H` at the start of buf is a no-op rather than
-        // an upward jump that would briefly show the cursor mid-screen.
-        if (leftoverBlanks > 0) {
-          preBuf += `\x1b[${frameTop};1H`
-        }
+        // Always park cursor at frameTop after scrollback write.
+        // The cell-diff loop uses absolute positioning per row, but
+        // an explicit jump prevents any cursor-position mismatch
+        // from causing visual artifacts.
+        preBuf += `\x1b[${frameTop};1H`
         // DON'T set prevFrameRef.current = frame here — the on-screen
         // frame is still the previous render's frame (we didn't repaint
         // it), and the cell-diff loop below needs to compare against
@@ -2646,7 +2680,7 @@ export function ChatInput({
             `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
             `frameTop=${frameTop}`,
         )
-        prevFrameRef.current = []
+        forceFullRedraw = true
         handledCommitWithFrame = true
       }
       // Account for streamed-content rows so freeBlanks tracks reality.
@@ -2743,42 +2777,56 @@ export function ChatInput({
         }
       } else {
         const deltaH = oldFrameH - nextH
-        // Shrink: top stays, bottom moves up. The rows that were the
-        // bottom of the old frame no longer hold frame content and must
-        // be erased so old cells don't linger.
+        // Shrink: the frame got shorter (e.g. a select dialog closed).
+        // Erase the ENTIRE old frame area so no ghost content remains
+        // (old spinner rows, dialog options, etc.) and reposition the
+        // frame near the bottom.
         //
-        // An earlier version skipped the erase when `permission` was true
-        // so the tool-progress rows would stay visible above the newly
-        // appearing dialog (to avoid a brief flash of blanks during the
-        // approval window). That optimisation was unsafe: the BOTTOM of
-        // the old frame is always `[top separator, input row, bottom
-        // separator, footer]` — never the tool progress rows, which sit
-        // at the top. Keeping those bottom rows guaranteed a ghost input
-        // box appearing below the permission dialog (the "two input
-        // boxes" bug). Always erase; the next per-row diff loop repaints
-        // the dialog + input + separators immediately after this preBuf,
-        // so no empty-row flash is actually visible in practice.
-        pendingFreeBlanks = freeBlanksAboveFrameRef.current + deltaH
+        // Large shrinks (e.g. askUser dialog closing: 37→7) would
+        // otherwise leave 26+ blank rows. The frame floats at row 1
+        // and takes many commits to drift back down, leaving the user
+        // staring at a mostly-blank screen. Cap blanks to 0 so the
+        // frame snaps to the bottom immediately after a big shrink.
+        // Small shrinks (≤3 rows, e.g. permission dialog closing) can
+        // keep their blanks for the floating-frame model to consume
+        // naturally — the gap is barely visible.
+        const rawBlanks = freeBlanksAboveFrameRef.current + deltaH
+        const MAX_SHRINK_BLANKS = deltaH > 3 ? 0 : termRows - nextH
+        pendingFreeBlanks = Math.min(rawBlanks, MAX_SHRINK_BLANKS)
         const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
         frameTop = computeFrameTop(pendingFreeBlanks)
         debugLog(
           'chatinput.geom.shrink',
           `delta=${deltaH} blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
+            `(raw=${rawBlanks}) ` +
             `oldTop=${oldTop} newTop=${frameTop}`,
         )
-        for (let i = 0; i < deltaH; i++) {
-          preBuf += `\x1b[${oldTop + nextH + i};1H\x1b[K`
+        // Erase the entire old frame area — not just the bottom delta
+        // rows. When the frame moves from a high position (oldTop=3)
+        // to near the bottom (frameTop=28), rows at the old position
+        // must be cleared to prevent ghost spinners / stale content.
+        for (let i = 0; i < oldFrameH; i++) {
+          preBuf += `\x1b[${oldTop + i};1H\x1b[K`
         }
-        // pendingFreeBlanks (already set above) remembers the now-blank
-        // rows so the next commit can write INTO them instead of
-        // pre-scrolling the viewport.
       }
       // Frame moved — prev cell matrix is at the wrong rows now; force
       // full redraw at the new position.
-      prevFrameRef.current = []
+      // NOTE: do NOT mutate prevFrameRef.current here. This code runs
+      // during payload construction, but for non-commit (deferred)
+      // renders the doFlush that writes this payload to stdout may be
+      // CANCELLED by a commit arriving 1-2 ms later. If we cleared
+      // prevFrameRef now and the deferred is cancelled, the ref stays
+      // [] while the on-screen frame is still the OLD frame — causing
+      // the next render's cell-diff to treat every row as "fresh",
+      // writing the full Thinking line at the NEW frameTop while the
+      // OLD Thinking remains on screen at the OLD position → two
+      // visible "Thinking…" lines.
+      // Instead, use a local flag; doFlush (line below) sets
+      // prevFrameRef = frame unconditionally after a successful write.
+      forceFullRedraw = true
     }
 
-    const prevFrame = prevFrameRef.current
+    const prevFrame = forceFullRedraw ? [] : prevFrameRef.current
     const prevH = prevFrame.length
     const maxH = Math.max(prevH, nextH)
 
@@ -3027,8 +3075,16 @@ export function ChatInput({
       const MIN_COMMIT_GAP_MS = 50
       if (lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
         const delay = MIN_COMMIT_GAP_MS - dt
+        const capturedGen = flushGenRef.current
         commitThrottleRef.current = setTimeout(() => {
           commitThrottleRef.current = null
+          if (flushGenRef.current !== capturedGen) {
+            debugLog(
+              'chatinput.flush.commit-throttled-stale',
+              `gen ${capturedGen}->${flushGenRef.current}, skipping stale flush`,
+            )
+            return
+          }
           doFlush()
           debugLog('chatinput.flush.commit-throttled-fired', `delay=${delay}ms`)
         }, delay)
@@ -3037,17 +3093,23 @@ export function ChatInput({
         doFlush()
       }
     } else {
-      // A throttled commit is in flight and will paint within MIN_COMMIT_GAP_MS.
-      // Its captured payload already contains the latest scrollback + frame
-      // diff (incl. current spinner glyph). Firing a non-commit write here
-      // would land 0–50ms before the throttled commit and reintroduce the
-      // exact two-writes-per-vsync flicker the throttle exists to prevent.
-      // Trade-off: typing edits that arrive during the wait are not displayed
-      // until the throttle fires + the next render — bounded by ~50ms +
-      // next spinner tick. Acceptable for streaming; rare otherwise.
+      // A throttled commit is in flight. If this non-commit frame has a
+      // DIFFERENT height (dialog opening/closing, error row, etc.) it
+      // supersedes the throttled commit — cancel the stale throttle and
+      // let this frame through immediately. Height-preserving frames
+      // (spinner ticks) can safely wait.
       if (commitThrottleRef.current !== null) {
-        debugLog('chatinput.flush.deferred-skipped', 'commit throttle pending')
-        return
+        const heightChanged = nextH !== lastFrameHRef.current
+        if (!heightChanged) {
+          debugLog('chatinput.flush.deferred-skipped', 'commit throttle pending')
+          return
+        }
+        clearTimeout(commitThrottleRef.current)
+        commitThrottleRef.current = null
+        debugLog(
+          'chatinput.flush.commit-throttle-superseded-by-height',
+          `nextH=${nextH} lastH=${lastFrameHRef.current}`,
+        )
       }
       const now = Date.now()
       // Only coalesce identical-height frames (spinner ticks, single-cell
@@ -3116,10 +3178,7 @@ export function ChatInput({
         deferredFlushRef.current = null
         setImmediate(() => {
           if (flushId !== flushGenRef.current) {
-            debugLog(
-              'chatinput.flush.deferred-stale',
-              `flushId=${flushId} gen=${flushGenRef.current}`,
-            )
+            debugLog('chatinput.flush.deferred-stale', `flushId=${flushId} gen=${flushGenRef.current}`)
             return
           }
           doFlush()

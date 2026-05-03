@@ -43,7 +43,7 @@ function configureMarked(): void {
 
 // Fast path: skip full lexer when the text contains no Markdown markers.
 // Covers short plain-sentence assistant replies (the common case).
-const MD_SYNTAX_RE = /[#*`|[>\-_~]|\n\n|^\d+\. |\n\d+\. /
+const MD_SYNTAX_RE = /[#*`|[>_~\-]|\n\n|^\d+\. |\n\d+\. /
 function hasMarkdownSyntax(s: string): boolean {
   return MD_SYNTAX_RE.test(s.length > 500 ? s.slice(0, 500) : s)
 }
@@ -369,6 +369,29 @@ function formatToken(
       return ''
   }
   return ''
+}
+
+/**
+ * Lightweight inline-only markdown-to-ANSI pass.
+ *
+ * Handles **bold**, *italic*, and `code` — nothing block-level.
+ * Returns a string containing ANSI escape sequences suitable for
+ * consumption by ansiTextToCells().
+ */
+export function renderInlineMarkdown(text: string): string {
+  if (!text) return ''
+
+  return (
+    text
+      // bold: **text** or __text__
+      .replace(/(\*\*|__)(.+?)\1/g, (_m, _d, inner) => c.bold(inner as string))
+      // italic: *text* or _text_ (but not inside a word for _)
+      .replace(/(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1(?!\w)/g, (_m, _d, inner) =>
+        c.italic(inner as string),
+      )
+      // inline code: `code`
+      .replace(/`([^`]+)`/g, (_m, inner) => c.hex(CODE_INLINE)(inner as string))
+  )
 }
 
 /**

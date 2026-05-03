@@ -228,19 +228,18 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       // writes that already ended with `\n\n` the flag is true and we
       // skip the leading newline so we don't double-blank.
       const lead = prevWriteEndedWithBlankRow ? '' : '\n'
-      // Trailing `\n\n` keeps a blank row below the tool block so the
-      // next entity (another tool, an assistant text continuation, the
-      // next user prompt) sits one row away. Matches Claude Code's
-      // scrollback rhythm and avoids the dense "wall of bullets" that
-      // piles up when the model fires many tools in a single turn.
-      write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n\n'))
-      prevWriteEndedWithBlankRow = true
+      write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n'))
+      prevWriteEndedWithBlankRow = false
     }
   }
 
   if (msg.content) {
     const content = normalizeLineEndings(msg.content)
     debugLog(msg.streamingChunk ? 'stdout.assistant-chunk' : 'stdout.assistant-full', content)
+    if (!prevWriteEndedWithBlankRow) {
+      write(toCRLF('\n'))
+      prevWriteEndedWithBlankRow = true
+    }
 
     // Special-case pure-whitespace streaming chunks (e.g. a bare "\n"
     // = paragraph break marker between two lines of prose). Markdown
