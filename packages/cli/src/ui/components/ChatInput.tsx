@@ -1206,7 +1206,27 @@ export function ChatInput({
           handleSubmit(currentMatch.name)
           return
         }
+        // Backslash continuation: `\` immediately before the cursor + Enter
+        // converts to a literal newline instead of submitting. Universal
+        // fallback for terminals that can't distinguish Ctrl+Enter from
+        // Enter (which is most of them — see use-prompt-input.ts).
+        const cur = cursorRef.current
+        if (cur > 0 && text[cur - 1] === '\\') {
+          const next = text.slice(0, cur - 1) + '\n' + text.slice(cur)
+          dispatch({ type: 'SET_TEXT', text: next, cursor: cur })
+          setCompletionIndex(0)
+          return
+        }
         handleSubmit()
+        return
+      }
+      if (key === 'newline') {
+        // Alt/Option+Enter (or modifyOtherKeys / kitty Ctrl+Enter) — insert
+        // a literal newline at the cursor without submitting. Bypasses the
+        // @-menu and slash-completion intercepts on purpose: the user has
+        // explicitly asked for a line break.
+        dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: '\n' })
+        setCompletionIndex(0)
         return
       }
       if (key === 'escape') {

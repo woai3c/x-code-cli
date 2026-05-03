@@ -62,10 +62,25 @@ export function renderHeader(modelId: string): string {
   const [provider, ...modelParts] = modelId.split(':')
   const modelName = modelParts.join(':') || modelId
 
+  // Newline-shortcut hint:
+  //   - Trailing `\` + Enter is the universal fallback (works in every
+  //     terminal — ConHost, Terminal.app, all of xterm-family).
+  //   - Alt/Option+Enter works on most modern terminals (Windows Terminal,
+  //     iTerm2 with Esc+ Option, GNOME Terminal, kitty, WezTerm). On
+  //     macOS Terminal.app the user must enable "Use Option as Meta key"
+  //     in profile settings — otherwise only the `\` form works.
+  // Why no Ctrl/Cmd+Enter: stock terminals send the same byte for plain
+  // Enter and Ctrl+Enter, so we cannot distinguish them. modifyOtherKeys
+  // / kitty CSI-u forms ARE accepted (see use-prompt-input.ts) but they
+  // require terminal-specific opt-in, which we don't surface here.
+  const isMac = process.platform === 'darwin'
+  const abortKey = isMac ? '⌃C' : 'Ctrl+C'
+  const newlineHint = isMac ? '⌥⏎ or \\⏎ for newline' : 'Alt+Enter or \\+Enter for newline'
+
   const lines = [
     c.hex(LOGO_COLOR).bold(logo),
     ` ${c.dim(`v${VERSION}`)} ${c.dim(GLYPH_HEADER_PIPE)} ${c.hex(LOGO_COLOR)(provider)} ${c.dim('/')} ${c.hex(LOGO_COLOR).bold(modelName)}`,
-    ` ${c.dim(`Type /help for commands, ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} to abort`)}`,
+    ` ${c.dim(`Type /help for commands, ${abortKey} to abort, ${newlineHint}`)}`,
     '', // blank line after header
   ]
 

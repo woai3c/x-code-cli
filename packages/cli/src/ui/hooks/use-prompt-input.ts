@@ -58,6 +58,7 @@ const PASTE_SIZE_THRESHOLD = 32
 
 export type PromptKey =
   | 'return'
+  | 'newline'
   | 'backspace'
   | 'delete'
   | 'tab'
@@ -223,6 +224,23 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         return
       }
       if (data === '\t') return dispatchKey('tab')
+
+      // Alt/Option+Enter → insert a literal newline. Most terminals that
+      // distinguish Alt-modified keys send the prefix-ESC form: `\x1b\r`
+      // (Alt+Enter on Windows Terminal / Linux xterm / iTerm2 with
+      // "Esc+" Option mapping) or `\x1b\n` on a few. The CSI forms below
+      // come from modifyOtherKeys / kitty keyboard protocol — not
+      // enabled by default anywhere we target, but if a power user has
+      // turned them on we honor them too.
+      //   xterm modifyOtherKeys: ESC [27;3;13~ (Alt+Enter), ESC [27;5;13~ (Ctrl+Enter)
+      //   kitty CSI-u:           ESC [13;3u   (Alt+Enter), ESC [13;5u   (Ctrl+Enter)
+      // Plain Ctrl+Enter is indistinguishable from Enter on stock
+      // terminals; the kitty/modifyOtherKeys CSI forms are the only way
+      // it can reach us, so they're treated identically to Alt+Enter.
+      if (data === '\x1b\r' || data === '\x1b\n') return dispatchKey('newline')
+      if (data === '\x1b[27;3;13~' || data === '\x1b[27;5;13~') return dispatchKey('newline')
+      if (data === '\x1b[13;3u' || data === '\x1b[13;5u') return dispatchKey('newline')
+
       if (data === '\x1b' || data === '\x1b\x1b') return dispatchKey('escape')
 
       // Ctrl+C — flush and call the interrupt handler (which triggers Ink's
