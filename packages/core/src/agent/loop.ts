@@ -56,8 +56,15 @@ const KEEP_RECENT = 6
 
 /** Compress old messages into a summary. */
 export async function compressMessages(messages: ModelMessage[], model: LanguageModel): Promise<ModelMessage[]> {
-  const recent = messages.slice(-KEEP_RECENT)
-  const old = messages.slice(0, -KEEP_RECENT)
+  // Ensure the "recent" slice doesn't start with an orphaned tool
+  // result — providers reject tool messages that lack a preceding
+  // assistant message with the matching tool_calls.
+  let keepCount = KEEP_RECENT
+  while (keepCount < messages.length && messages[messages.length - keepCount]?.role === 'tool') {
+    keepCount++
+  }
+  const recent = messages.slice(-keepCount)
+  const old = messages.slice(0, -keepCount)
 
   if (old.length === 0) return messages
 
