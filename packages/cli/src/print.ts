@@ -35,7 +35,7 @@ export async function runPrintMode(
       process.stderr.write(
         `\n[permission denied: ${toolCall.toolName} — pass --trust to auto-approve in -p mode]\n`,
       )
-      return false
+      return 'no'
     },
     onAskUser: async (question) => {
       process.stderr.write(`\n[cannot ask question in -p mode: ${question}]\n`)

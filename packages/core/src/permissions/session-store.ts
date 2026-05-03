@@ -75,6 +75,7 @@ export function extractCommandPrefix(command: string): string | null {
  * Write tools (writeFile, edit): `all edits this session` (session-only)
  */
 export function suggestRuleLabel(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName === 'enterPlanMode') return null
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''
     const prefix = extractCommandPrefix(cmd)

@@ -92,12 +92,12 @@ export async function handleEnterPlanMode(
     )
     return
   }
-  const approved = await callbacks.onAskPermission({ toolCallId, toolName: 'enterPlanMode', input })
+  const decision = await callbacks.onAskPermission({ toolCallId, toolName: 'enterPlanMode', input })
   if (options.abortSignal?.aborted) {
     pushToolResult(state, callbacks, toolCallId, 'enterPlanMode', '[Tool execution interrupted by user]', true)
     return
   }
-  if (!approved) {
+  if (decision === 'no') {
     pushToolResult(
       state,
       callbacks,
