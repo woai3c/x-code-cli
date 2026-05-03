@@ -19,6 +19,7 @@ import { Chalk } from 'chalk'
 import type { EditDiffHunk, EditDiffPayload } from '@x-code-cli/core'
 
 import { highlightLine, detectLanguage, type SyntaxThemeName } from './syntax-highlight.js'
+import { sliceByWidth, visualWidth } from './text-width.js'
 import { getThemeColors, type ThemeName } from './theme.js'
 
 const c = new Chalk({ level: 3 })
@@ -146,11 +147,18 @@ function numberLines(h: EditDiffHunk): { sigil: ' ' | '+' | '-'; code: string; l
 
 /** Truncate a single code line so the rendered row fits the column. The
  *  width budget is the terminal width minus the indent and the gutter. We
- *  use a UTF ellipsis to mark the cut, matching the tool-input preview. */
+ *  use a UTF ellipsis to mark the cut, matching the tool-input preview.
+ *
+ *  Both the fits-check and the slice operate on VISUAL columns, not JS
+ *  string units. CJK / fullwidth chars take 2 cells but `length === 1`,
+ *  so a length-based check would let a 50-char Chinese line slip past a
+ *  100-cell budget while actually overshooting by 50 cells — the terminal
+ *  would then wrap mid-row and produce a spurious blank below every diff
+ *  line. */
 function fitCode(code: string, width: number): string {
-  if (code.length <= width) return code
+  if (visualWidth(code) <= width) return code
   if (width < 1) return ''
-  return code.slice(0, Math.max(0, width - 1)) + '…'
+  return sliceByWidth(code, Math.max(0, width - 1)) + '…'
 }
 
 /**
@@ -212,8 +220,11 @@ function renderHunks(
       const fitted = fitCode(code, codeWidth)
       // Pad against the RAW (pre-highlight) text so the colored bg fills
       // exactly to the right edge. Highlighting only adds escape codes —
-      // it doesn't change the visible character count.
-      const padding = ' '.repeat(Math.max(0, codeWidth - fitted.length))
+      // it doesn't change the visible character count. Use visual width
+      // (CJK chars are 2 cells wide despite `length === 1`); a length-
+      // based padding would over-pad by `visualWidth - length` and make
+      // the row wrap into a blank visual line below every CJK diff row.
+      const padding = ' '.repeat(Math.max(0, codeWidth - visualWidth(fitted)))
       const gutter = ` ${numStr} ${sigil} `
       // Syntax highlighting is applied to CONTEXT rows only. On +/- rows
       // we render plain text on top of the diff bg — multi-color
