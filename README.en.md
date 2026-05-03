@@ -23,6 +23,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
 - **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
+- **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
 - **Cross-platform** — runs on Windows, macOS, and Linux
 - **Non-interactive mode** — `--print` with pipes for scripts and CI
 

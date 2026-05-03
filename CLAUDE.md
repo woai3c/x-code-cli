@@ -68,6 +68,17 @@ agentLoop()
 
 **`systemPromptCache` must remain byte-stable for the entire session.** OpenAI-compatible providers (DeepSeek / Moonshot / Alibaba / Zhipu / xAI) auto-cache stable prefixes, and `buildSystemPrompt` is called only on the first turn. Any change that interpolates per-turn data (timestamps, frame-shifting context) into the system prompt silently disables prompt caching for those providers.
 
+### Sub-agents
+
+The `task` tool delegates a sub-task to a specialized sub-agent that runs in isolated context — only the sub-agent's final assistant message is returned to the parent. Implementation lives in `core/src/agent/sub-agents/`:
+
+- `built-in.ts` — four hardcoded definitions (`explore`, `general-purpose`, `plan`, `code-reviewer`) with their tool whitelists and system prompts.
+- `loader.ts` — scans `~/.x-code/agents/*.md` and `<repo-root>/.x-code/agents/*.md` for custom agents (YAML frontmatter + markdown body = system prompt). Project-level wins on name conflicts.
+- `registry.ts` — built at CLI startup, frozen for the session. **Adding or editing an agent file requires a CLI restart**: the `task` tool description embeds the agent list, and that string lives in `systemPromptCache` which must stay byte-stable.
+- `runner.ts:runSubAgent` — recursively calls `agentLoop` with a fresh `LoopState` (no parent message history), the agent's `toolFilter` (always denies `task` itself — recursion is forbidden), and the **same `abortSignal`** as the parent so Esc cascades cleanly. Token usage flows back into `parentState.tokenUsage`; nothing else does.
+
+When the parent session is in `permissionMode === 'plan'`, sub-agents still launch in `'default'` mode but their tool filter additionally denies write tools, preserving plan-mode's read-only invariant.
+
 ### Cancellation flow (Esc / Ctrl+C)
 
 A user's Esc cancels the in-flight turn without exiting; Ctrl+C double-press exits. The wiring:
@@ -114,7 +125,7 @@ When adding a provider, also update `packages/core/tests/config.test.ts:PROVIDER
 
 - **Imports**: ESM only (`"type": "module"`), `.js` extensions on relative imports even in `.ts` files (TS NodeNext).
 - **Comments**: heavy comments are reserved for *why* (especially terminal-protocol workarounds in `ChatInput.tsx` and `use-prompt-input.ts`). The codebase reads as a series of "we tried X first, then Y broke, so we do Z" notes — keep that style when adding new edge-case handling.
-- **Per-user state**: `.x-code/` at repo root is **gitignored** and holds session summaries / auto-memory / local prefs. Tests redirect this via `process.env.X_CODE_HOME = <tmpdir>`.
+- **Per-user state**: `.x-code/` at repo root is **gitignored** and holds session summaries / auto-memory / local prefs / custom sub-agent definitions (`.x-code/agents/*.md`). Tests redirect this via `process.env.X_CODE_HOME = <tmpdir>`.
 - **Logging**: `DEBUG_STDOUT=1 xc` writes to `~/.x-code/logs/debug.log` (10 MB rolling). `debugLog()` calls in core are no-ops without that env var.
 - **Don't auto-commit.** Typecheck / build / tests passing is **not** authorization to commit — the user verifies UI and runtime behavior in the live CLI before anything lands in history. After making changes, stop, summarize what changed, and wait for an explicit go-ahead.
   - Phrases that DO authorize: `提交`, `commit`, `commit it`, `提交一下`, `ok ship it`.

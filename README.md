@@ -23,6 +23,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
 - **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
+- **多行输入**：`Alt+Enter`（macOS 为 `Option+Enter`）或行尾 `\` 后 Enter 插入换行；普通 Enter 直接发送
 - **跨平台**：支持 Windows、macOS、Linux
 - **非交互模式**：`--print` 配合管道输入，可嵌入脚本与 CI
 
