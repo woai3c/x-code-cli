@@ -24,3 +24,21 @@ export function toolResultMessage(toolCallId: string, toolName: string, result: 
     ],
   }
 }
+
+/** Standard error string returned to the model from a tool. The "Error: "
+ *  prefix is load-bearing — handleToolCall checks for it via
+ *  isToolErrorString to flip the scrollback line to red, and the model
+ *  itself learns to read it as a failure marker. */
+export function toolErrorString(message: string): string {
+  return `Error: ${message}`
+}
+
+/** Wrap a thrown / unknown value into the standard tool-error string. */
+export function toolErrorFromUnknown(err: unknown): string {
+  return toolErrorString(err instanceof Error ? err.message : String(err))
+}
+
+/** Match the result-string prefix produced by toolErrorString. */
+export function isToolErrorString(value: string): boolean {
+  return value.startsWith('Error:')
+}

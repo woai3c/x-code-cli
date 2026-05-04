@@ -11,7 +11,7 @@ import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
-import { toolResultMessage } from './messages.js'
+import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
 
@@ -78,9 +78,11 @@ async function executeWriteTool(
     const content = await fs.readFile(filePath, 'utf-8')
     if (!replaceAll) {
       const count = countOccurrences(content, oldString)
-      if (count === 0) return `Error: old_string not found in ${filePath}`
+      if (count === 0) return toolErrorString(`old_string not found in ${filePath}`)
       if (count > 1)
-        return `Error: old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`
+        return toolErrorString(
+          `old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`,
+        )
     }
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
@@ -92,7 +94,7 @@ async function executeWriteTool(
     return `File edited: ${filePath}`
   }
 
-  return 'Error: unknown write tool'
+  return toolErrorString('unknown write tool')
 }
 
 /** Execute a shell command with streaming. */
@@ -344,7 +346,7 @@ async function handleToolCall(
       // executeWriteTool returns "Error: ..." strings for in-band failures
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.
-      if (output.startsWith('Error:')) isError = true
+      if (isToolErrorString(output)) isError = true
       else state.filesModified.add(input.filePath as string)
     } else if (toolName === 'shell') {
       const timeout = (input.timeout as number) ?? 30000
@@ -362,7 +364,7 @@ async function handleToolCall(
       return
     }
   } catch (err) {
-    output = `Error: ${err instanceof Error ? err.message : String(err)}`
+    output = toolErrorFromUnknown(err)
     isError = true
   }
 
