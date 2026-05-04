@@ -24,16 +24,8 @@ import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
 import { buildThemePreview } from '../render-diff.js'
 import { setSyntaxTheme } from '../syntax-highlight.js'
-import {
-  DEFAULT_THEME,
-  THEMES,
-  getTheme,
-  getThemeColors,
-  parseThemeName,
-  setTheme,
-  type ThemeName,
-} from '../theme.js'
 import { GLYPH_BULLET } from '../terminal-glyphs.js'
+import { DEFAULT_THEME, THEMES, type ThemeName, getTheme, getThemeColors, parseThemeName, setTheme } from '../theme.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 
@@ -55,9 +47,7 @@ interface AppProps {
    *  index.ts's gracefulShutdown after the terminal is reset, so the
    *  hint lands in the user's shell prompt area where they can copy
    *  the `xc --resume <id>` command. */
-  onSessionInfoReady?: (
-    getter: () => { sessionId: string; taskSlug: string; messageCount: number } | null,
-  ) => void
+  onSessionInfoReady?: (getter: () => { sessionId: string; taskSlug: string; messageCount: number } | null) => void
 }
 
 /** Slash commands — used for both help text and tab completion */
@@ -86,8 +76,7 @@ function formatUsageReport(
   sessionName?: string,
 ): string {
   const fmt = (n: number) => n.toLocaleString('en-US')
-  const hitRatio =
-    usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
+  const hitRatio = usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
   const headerMap = {
     live: '**Usage** (current session)',
     snapshot: '**Usage** (last session — no turns yet)',
@@ -119,11 +108,7 @@ function formatUsageReport(
  *  intentionally lower than the auto-compaction trigger (80%) so the
  *  user has a chance to /compact manually before the next turn either
  *  succeeds noisily or fires the auto path. */
-function compactionHintForResume(
-  tokens: number | null,
-  estimatedTokens: number,
-  modelId: string,
-): string | null {
+function compactionHintForResume(tokens: number | null, estimatedTokens: number, modelId: string): string | null {
   const window = getContextWindow(modelId)
   const used = Math.max(tokens ?? 0, estimatedTokens)
   if (used === 0) return null
@@ -375,9 +360,7 @@ export function App({
     if (picked || parsedFree !== null) {
       addInfoMessage(`Theme set to **${themeLabel(resolved)}**. Type a message to get started.`)
     } else {
-      addInfoMessage(
-        `Using default theme **${themeLabel(resolved)}**. Run \`/theme\` any time to switch.`,
-      )
+      addInfoMessage(`Using default theme **${themeLabel(resolved)}**. Run \`/theme\` any time to switch.`)
     }
   }
 
@@ -611,10 +594,7 @@ export function App({
   function commitThinkingChange(commandText: string, next: boolean) {
     setThinking(next)
     saveUserConfig({ thinking: next })
-    addCommandMessage(
-      commandText,
-      `Extended thinking → **${next ? 'on' : 'off'}**. Takes effect on the next message.`,
-    )
+    addCommandMessage(commandText, `Extended thinking → **${next ? 'on' : 'off'}**. Takes effect on the next message.`)
   }
 
   /**
@@ -657,7 +637,10 @@ export function App({
       ) {
         next = false
       } else {
-        addCommandMessage(commandText, `Unknown value: \`${arg}\`. Use \`/thinking\`, \`/thinking on\`, or \`/thinking off\`.`)
+        addCommandMessage(
+          commandText,
+          `Unknown value: \`${arg}\`. Use \`/thinking\`, \`/thinking on\`, or \`/thinking off\`.`,
+        )
         return
       }
 
@@ -793,10 +776,7 @@ export function App({
     if (!picked) {
       const free = parseThemeName(answer ?? '')
       if (free === null) {
-        addCommandMessage(
-          commandText,
-          `Cancelled — theme stays **${themeLabel(current)}**.`,
-        )
+        addCommandMessage(commandText, `Cancelled — theme stays **${themeLabel(current)}**.`)
         return
       }
       if (free === current) {
@@ -827,7 +807,13 @@ export function App({
     let next: boolean
     if (!trimmed) {
       next = !current
-    } else if (trimmed === 'on' || trimmed === 'true' || trimmed === '1' || trimmed === 'enable' || trimmed === 'enabled') {
+    } else if (
+      trimmed === 'on' ||
+      trimmed === 'true' ||
+      trimmed === '1' ||
+      trimmed === 'enable' ||
+      trimmed === 'enabled'
+    ) {
       next = true
     } else if (
       trimmed === 'off' ||
@@ -930,7 +916,9 @@ export function App({
       const s = picked.session
       const usage = s.tokenUsage
       if (!usage) {
-        addInfoMessage(`**${(s.firstPrompt || '(empty)').slice(0, 60)}**\n\nNo usage data recorded (interrupted before first turn).`)
+        addInfoMessage(
+          `**${(s.firstPrompt || '(empty)').slice(0, 60)}**\n\nNo usage data recorded (interrupted before first turn).`,
+        )
       } else {
         addInfoMessage(formatUsageReport(usage, s.modelId, 'history', s.firstPrompt.slice(0, 80) || undefined))
       }

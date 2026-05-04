@@ -6,7 +6,14 @@
 import type { DisplayMessage, DisplayToolCall, ModelMessage } from '@x-code-cli/core'
 import { extractText } from '@x-code-cli/core'
 
-type ContentPartLike = { type?: string; text?: string; toolCallId?: string; toolName?: string; input?: unknown; output?: unknown }
+type ContentPartLike = {
+  type?: string
+  text?: string
+  toolCallId?: string
+  toolName?: string
+  input?: unknown
+  output?: unknown
+}
 
 /** Pull a string output out of a tool-result part. AI SDK normalises
  *  tool outputs to `{ type: 'text' | 'error-text' | ..., value: string }`,

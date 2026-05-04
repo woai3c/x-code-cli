@@ -60,10 +60,10 @@ describe('glob tool', () => {
       await fs.writeFile(path.join(tmpDir, `file-${String(i).padStart(4, '0')}.ts`), '')
     }
 
-    const result = await glob.execute!(
+    const result = (await glob.execute!(
       { pattern: '*.ts', cwd: tmpDir },
       { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    ) as string
+    )) as string
     expect(result).toContain('more files not shown')
     expect(result).toContain('capped at 200')
     const lines = result.split('\n').filter((l) => l.includes('.ts') && !l.includes('...'))

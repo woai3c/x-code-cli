@@ -7,14 +7,14 @@ import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
+import { debugLog } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
-import { toolResultMessage } from './messages.js'
+import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
-
 
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
@@ -39,6 +39,7 @@ async function executeWriteTool(
   input: Record<string, unknown>,
   toolCallId: string,
   callbacks: AgentCallbacks,
+  signal: AbortSignal | undefined,
 ): Promise<string> {
   if (toolName === 'writeFile') {
     const filePath = input.filePath as string
@@ -50,11 +51,11 @@ async function executeWriteTool(
     // plus permission / EISDIR edge cases (we'd error on write anyway).
     let oldContent: string | null = null
     try {
-      oldContent = await fs.readFile(filePath, 'utf-8')
+      oldContent = await fs.readFile(filePath, { encoding: 'utf-8', signal })
     } catch {
       oldContent = null
     }
-    await fs.writeFile(filePath, content, 'utf-8')
+    await fs.writeFile(filePath, content, { encoding: 'utf-8', signal })
     const isNew = oldContent === null
     const parts = content.split('\n')
     const lineCount = content.endsWith('\n') ? parts.length - 1 : parts.length
@@ -75,16 +76,18 @@ async function executeWriteTool(
     const replaceAll = (input.replaceAll as boolean) ?? false
 
     reportProgress(toolCallId, `Editing ${filePath}`)
-    const content = await fs.readFile(filePath, 'utf-8')
+    const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
     if (!replaceAll) {
       const count = countOccurrences(content, oldString)
-      if (count === 0) return `Error: old_string not found in ${filePath}`
+      if (count === 0) return toolErrorString(`old_string not found in ${filePath}`)
       if (count > 1)
-        return `Error: old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`
+        return toolErrorString(
+          `old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`,
+        )
     }
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
-    await fs.writeFile(filePath, newContent, 'utf-8')
+    await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
 
     const payload = computeEditDiff(filePath, content, newContent)
     if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
@@ -92,7 +95,7 @@ async function executeWriteTool(
     return `File edited: ${filePath}`
   }
 
-  return 'Error: unknown write tool'
+  return toolErrorString('unknown write tool')
 }
 
 /** Execute a shell command with streaming. */
@@ -161,8 +164,10 @@ async function executeShell(
   const isMaxBuffer = result.isMaxBuffer ?? false
   if (isMaxBuffer) {
     const INLINE_CAP = 30_000
-    if (stdout.length > INLINE_CAP) stdout = stdout.slice(0, INLINE_CAP) + '\n... [stdout truncated — exceeded buffer limit]'
-    if (stderr.length > INLINE_CAP) stderr = stderr.slice(0, INLINE_CAP) + '\n... [stderr truncated — exceeded buffer limit]'
+    if (stdout.length > INLINE_CAP)
+      stdout = stdout.slice(0, INLINE_CAP) + '\n... [stdout truncated — exceeded buffer limit]'
+    if (stderr.length > INLINE_CAP)
+      stderr = stderr.slice(0, INLINE_CAP) + '\n... [stderr truncated — exceeded buffer limit]'
   }
 
   const output = [stdout, stderr].filter(Boolean).join('\n').trim()
@@ -200,6 +205,180 @@ type ToolCall = { toolName: string; toolCallId: string; input: Record<string, un
  *  can't pre-block these — only record for loop detection and annotate. */
 const AUTO_EXECUTED_TOOLS = new Set(['readFile', 'glob', 'grep', 'listDir', 'webFetch', 'webSearch', 'saveKnowledge'])
 
+/** Context passed to every per-tool handler — saves us from re-listing
+ *  five identical positional params at each call site. */
+interface HandlerCtx {
+  toolName: string
+  input: Record<string, unknown>
+  toolCallId: string
+  state: LoopState
+  options: AgentOptions
+  callbacks: AgentCallbacks
+  parentModel: LanguageModel
+}
+
+type ToolHandler = (ctx: HandlerCtx) => Promise<void>
+
+/** ── askUser ──
+ *  Bypasses the loop guard intentionally. The model asking the user the same
+ *  clarifying question twice is almost always deliberate (e.g. the user
+ *  answered ambiguously); blocking it would silently break the UX. */
+async function handleAskUser(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, callbacks } = ctx
+  const question = input.question as string
+  const optionsList = input.options as { label: string; description: string }[]
+  const answer = await callbacks.onAskUser(question, optionsList)
+  pushToolResult(state, callbacks, toolCallId, toolName, `User answered: ${answer}`)
+}
+
+/** ── task (sub-agent dispatch) ── */
+async function handleTask(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, options, callbacks, parentModel } = ctx
+  const agentName = input.subagent_type as string
+  const description = input.description as string
+  const taskPrompt = input.prompt as string
+
+  reportProgress(toolCallId, `Task: ${description} (${agentName})`)
+
+  const result = await runSubAgent(
+    {
+      parentState: state,
+      parentOptions: options,
+      callbacks,
+      toolCallId,
+      agentName,
+      description,
+      prompt: taskPrompt,
+      knowledgeContext: state.knowledgeContext ?? '',
+      isGitRepo: state.isGitRepo ?? false,
+    },
+    parentModel,
+  )
+
+  const statsLine = `<task_stats tool_calls="${result.toolCallCount}" tokens="${result.tokenUsage.totalTokens}" duration_ms="${result.durationMs}" />`
+  pushToolResult(state, callbacks, toolCallId, toolName, `${result.resultText}\n${statsLine}`)
+}
+
+/** Manual tools that bypass the loop guard and the writeFile/edit/shell
+ *  permission + execution pipeline below. Each handler owns its own
+ *  pushToolResult call. Adding a new bypass tool is a one-line entry here. */
+const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
+  askUser: handleAskUser,
+  task: handleTask,
+  todoWrite: ({ input, toolCallId, state, callbacks }) =>
+    handleTodoWrite(input, toolCallId, state, callbacks, pushToolResult),
+  enterPlanMode: ({ input, toolCallId, state, options, callbacks }) =>
+    handleEnterPlanMode(input, toolCallId, state, options, callbacks, pushToolResult),
+  exitPlanMode: ({ input, toolCallId, state, callbacks }) =>
+    handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult),
+}
+
+/** Run the loop-guard machinery for a non-bypass tool. Returns true if the
+ *  tool was blocked (caller should stop dispatching). */
+async function applyLoopGuard(ctx: HandlerCtx): Promise<boolean> {
+  const { toolName, input, toolCallId, state, callbacks } = ctx
+  const isAutoExecuted = AUTO_EXECUTED_TOOLS.has(toolName)
+  const loopCheck = checkForLoop(state, toolName, input, toolCallId)
+
+  if (loopCheck.kind === 'ok') {
+    recordToolCall(state, toolName, input, loopCheck.hash)
+    return false
+  }
+
+  recordToolCall(state, toolName, input, loopCheck.hash)
+  const guardMessage = `[loop-guard] ${loopCheck.message}`
+
+  if (isAutoExecuted) {
+    // The tool result already exists in state.messages. Append a follow-up
+    // user-role notice so the model's next step has explicit context that
+    // this path is spinning — without this nudge, some models keep trying.
+    state.messages.push({ role: 'user', content: guardMessage })
+    callbacks.onToolResult(toolCallId, guardMessage, true)
+  } else {
+    // Manual tool — short-circuit by synthesising the result. The tool body
+    // never runs; no side effects, no permission prompt.
+    pushToolResult(state, callbacks, toolCallId, toolName, guardMessage, true)
+  }
+
+  if (loopCheck.kind === 'hard-block') {
+    const answer = await callbacks
+      .onAskUser(`The model keeps calling ${toolName} with identical arguments. How do you want to proceed?`, [
+        { label: 'Pause', description: 'Pause the turn — you can type a new instruction.' },
+        { label: 'Continue', description: 'Let the model keep trying; the loop guard stays armed.' },
+      ])
+      .catch(() => 'Pause')
+    if (answer.toLowerCase().startsWith('pause')) {
+      // Clear the recent-calls window so the guard doesn't immediately
+      // re-trigger on the next turn if the model legitimately retries
+      // once with the same args under the user's guidance.
+      state.recentToolCalls = []
+      state.messages.push({
+        role: 'user',
+        content: '[loop-guard] User paused the loop. Wait for further instructions rather than calling more tools.',
+      })
+    }
+  }
+  return true
+}
+
+/** Permission gate for writeFile/edit/shell. Returns true if execution
+ *  should continue, false if it was blocked / denied / aborted. */
+async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
+  const { toolName, input, toolCallId, state, options, callbacks } = ctx
+  if (toolName !== 'writeFile' && toolName !== 'edit' && toolName !== 'shell') return true
+
+  const approved = await checkPermission(
+    { toolCallId, toolName, input },
+    options.trustMode,
+    callbacks.onAskPermission,
+    state.permissionMode,
+    process.cwd(),
+  )
+  if (options.abortSignal?.aborted) {
+    pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+    return false
+  }
+  if (!approved) {
+    pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
+    return false
+  }
+  return true
+}
+
+/** Run the underlying side-effecting tool body for writeFile/edit/shell.
+ *  Auto-executed tools return early because the AI SDK has already produced
+ *  their result. Returns the post-execution { output, isError } pair, or
+ *  null when there's nothing to push (auto-executed). */
+async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; isError: boolean } | null> {
+  const { toolName, input, toolCallId, state, options, callbacks } = ctx
+  try {
+    if (toolName === 'writeFile' || toolName === 'edit') {
+      const output = await executeWriteTool(toolName, input, toolCallId, callbacks, options.abortSignal)
+      // executeWriteTool returns "Error: ..." strings for in-band failures
+      // (missing match, non-unique match) rather than throwing — surface
+      // those as errored results so the scrollback line flips to red.
+      const isError = isToolErrorString(output)
+      if (!isError) state.filesModified.add(input.filePath as string)
+      return { output, isError }
+    }
+    if (toolName === 'shell') {
+      const timeout = (input.timeout as number) ?? 30000
+      const shellResult = await executeShell(
+        input.command as string,
+        timeout,
+        options.abortSignal,
+        callbacks,
+        toolCallId,
+      )
+      return { output: shellResult.output, isError: shellResult.isError }
+    }
+    // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
+    return null
+  } catch (err) {
+    return { output: toolErrorFromUnknown(err), isError: true }
+  }
+}
+
 /** Handle a single tool call. Returns when the call has been fully dispatched.
  *  `parentModel` is the LanguageModel instance for the current loop — needed
  *  by the task tool to pass as fallback when the sub-agent doesn't override. */
@@ -210,163 +389,67 @@ async function handleToolCall(
   callbacks: AgentCallbacks,
   parentModel: LanguageModel,
 ): Promise<void> {
-  const { toolName, input, toolCallId } = tc
+  const ctx: HandlerCtx = {
+    toolName: tc.toolName,
+    input: tc.input,
+    toolCallId: tc.toolCallId,
+    state,
+    options,
+    callbacks,
+    parentModel,
+  }
 
-  // ── askUser tool ──
-  // Skip the loop guard for askUser — the model asking the user the same
-  // clarifying question twice is almost always intentional (e.g. the user
-  // answered ambiguously) and blocking it would silently break the UX.
-  if (toolName === 'askUser') {
-    const question = input.question as string
-    const optionsList = input.options as { label: string; description: string }[]
-    const answer = await callbacks.onAskUser(question, optionsList)
-    pushToolResult(state, callbacks, toolCallId, toolName, `User answered: ${answer}`)
+  const bypassHandler = BYPASS_LOOP_GUARD_HANDLERS[ctx.toolName]
+  if (bypassHandler) {
+    await bypassHandler(ctx)
     return
   }
 
-  if (toolName === 'todoWrite') {
-    await handleTodoWrite(input, toolCallId, state, callbacks, pushToolResult)
-    return
-  }
+  if (await applyLoopGuard(ctx)) return
+  if (!(await checkWriteOrShellPermission(ctx))) return
 
-  // ── task tool (sub-agent dispatch) ──
-  if (toolName === 'task') {
-    const agentName = input.subagent_type as string
-    const description = input.description as string
-    const taskPrompt = input.prompt as string
+  const result = await executeWriteOrShell(ctx)
+  if (result == null) return
 
-    reportProgress(toolCallId, `Task: ${description} (${agentName})`)
+  pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, truncateToolResult(result.output), result.isError)
+}
 
-    const result = await runSubAgent(
-      {
-        parentState: state,
-        parentOptions: options,
-        callbacks,
-        toolCallId,
-        agentName,
-        description,
-        prompt: taskPrompt,
-        knowledgeContext: state.knowledgeContext ?? '',
-        isGitRepo: state.isGitRepo ?? false,
-      },
-      parentModel,
-    )
-
-    const statsLine = `<task_stats tool_calls="${result.toolCallCount}" tokens="${result.tokenUsage.totalTokens}" duration_ms="${result.durationMs}" />`
-    pushToolResult(state, callbacks, toolCallId, toolName, `${result.resultText}\n${statsLine}`)
-    return
-  }
-
-  if (toolName === 'enterPlanMode') {
-    await handleEnterPlanMode(input, toolCallId, state, options, callbacks, pushToolResult)
-    return
-  }
-
-  if (toolName === 'exitPlanMode') {
-    await handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult)
-    return
-  }
-
-  // ── Doom-loop detection ──
-  // For manual tools we pre-block. For auto-executed tools the call has
-  // already run (result landed in state.messages via collectTurnResponse);
-  // we still record the hash and, on soft-block, push a supplemental notice
-  // so the next turn sees a clear stop signal. On hard-block, we additionally
-  // prompt the user before returning.
-  const isAutoExecuted = AUTO_EXECUTED_TOOLS.has(toolName)
-  const loopCheck = checkForLoop(state, toolName, input, toolCallId)
-  if (loopCheck.kind !== 'ok') {
-    recordToolCall(state, toolName, input, loopCheck.hash)
-
-    if (isAutoExecuted) {
-      // The tool result already exists in state.messages. Append a follow-up
-      // user-role notice so the model's next step has explicit context that
-      // this path is spinning — without this nudge, some models keep trying.
-      state.messages.push({
-        role: 'user',
-        content: `[loop-guard] ${loopCheck.message}`,
-      })
-      callbacks.onToolResult(toolCallId, `[loop-guard] ${loopCheck.message}`, true)
-    } else {
-      // Manual tool — short-circuit by synthesising the result. The tool body
-      // never runs; no side effects, no permission prompt.
-      pushToolResult(state, callbacks, toolCallId, toolName, `[loop-guard] ${loopCheck.message}`, true)
-    }
-
-    if (loopCheck.kind === 'hard-block') {
-      const answer = await callbacks
-        .onAskUser(`The model keeps calling ${toolName} with identical arguments. How do you want to proceed?`, [
-          { label: 'Pause', description: 'Pause the turn — you can type a new instruction.' },
-          { label: 'Continue', description: 'Let the model keep trying; the loop guard stays armed.' },
-        ])
-        .catch(() => 'Pause')
-      if (answer.toLowerCase().startsWith('pause')) {
-        // Clear the recent-calls window so the guard doesn't immediately
-        // re-trigger on the next turn if the model legitimately retries
-        // once with the same args under the user's guidance.
-        state.recentToolCalls = []
-        state.messages.push({
-          role: 'user',
-          content: '[loop-guard] User paused the loop. Wait for further instructions rather than calling more tools.',
-        })
+/** Collect every toolCallId the AI SDK actually committed to the
+ *  assistant message in this turn. The SDK's `result.toolCalls` promise
+ *  is independent of `response.messages` — when zod validation rejects
+ *  a malformed tool input mid-stream the SDK emits a `tool-error` chunk
+ *  and excludes that tool_call from response.messages, but it can still
+ *  surface in `toolCalls`. Running such a "ghost" call would have two
+ *  bad outcomes:
+ *    1. write/edit/shell would fire a real side effect for a call the
+ *       model never officially committed to.
+ *    2. The pushed tool_result would be an orphan in state.messages
+ *       (no preceding assistant tool_call with that id) and the next
+ *       API request would 400 with "tool must be a response to a
+ *       preceding message with tool_calls".
+ *  Returning the set lets `processToolCalls` filter the SDK's list
+ *  before any handler runs.
+ *
+ *  Walks from the END of state.messages backwards, collecting tool-call
+ *  ids from EVERY assistant message we encounter until we hit a
+ *  non-assistant/tool boundary — covers multi-assistant turn structures
+ *  some providers produce while still cutting off at the previous user
+ *  message so old turns' ids don't bleed in. */
+function collectActiveAssistantToolCallIds(state: LoopState): Set<string> {
+  const ids = new Set<string>()
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const msg = state.messages[i]
+    if (!msg) continue
+    if (msg.role === 'user') break
+    if (msg.role !== 'assistant') continue
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content as Array<{ type?: string; toolCallId?: string }>) {
+      if (part?.type === 'tool-call' && typeof part.toolCallId === 'string') {
+        ids.add(part.toolCallId)
       }
     }
-    return
   }
-
-  recordToolCall(state, toolName, input, loopCheck.hash)
-
-  // ── Permission check for write tools and shell ──
-  if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'shell') {
-    const approved = await checkPermission(
-      { toolCallId, toolName, input },
-      options.trustMode,
-      callbacks.onAskPermission,
-      state.permissionMode,
-      process.cwd(),
-    )
-    if (options.abortSignal?.aborted) {
-      pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
-      return
-    }
-    if (!approved) {
-      pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
-      return
-    }
-  }
-
-  // ── Execute tool ──
-  let output: string
-  let isError = false
-  try {
-    if (toolName === 'writeFile' || toolName === 'edit') {
-      output = await executeWriteTool(toolName, input, toolCallId, callbacks)
-      // executeWriteTool returns "Error: ..." strings for in-band failures
-      // (missing match, non-unique match) rather than throwing — surface
-      // those as errored results so the scrollback line flips to red.
-      if (output.startsWith('Error:')) isError = true
-      else state.filesModified.add(input.filePath as string)
-    } else if (toolName === 'shell') {
-      const timeout = (input.timeout as number) ?? 30000
-      const shellResult = await executeShell(
-        input.command as string,
-        timeout,
-        options.abortSignal,
-        callbacks,
-        toolCallId,
-      )
-      output = shellResult.output
-      isError = shellResult.isError
-    } else {
-      // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
-      return
-    }
-  } catch (err) {
-    output = `Error: ${err instanceof Error ? err.message : String(err)}`
-    isError = true
-  }
-
-  pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(output), isError)
+  return ids
 }
 
 /** Handle all tool calls from a single model turn, sequentially.
@@ -378,6 +461,8 @@ export async function processToolCalls(
   callbacks: AgentCallbacks,
   parentModel: LanguageModel,
 ): Promise<void> {
+  const activeIds = collectActiveAssistantToolCallIds(state)
+
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!
     // User pressed Esc / Ctrl+C. The currently running tool (if any) has
@@ -400,6 +485,22 @@ export async function processToolCalls(
       }
       return
     }
+
+    // Skip ghost calls the SDK rejected mid-stream — see
+    // collectActiveAssistantToolCallIds for the full rationale. Don't
+    // pushToolResult either: the assistant message has no matching
+    // tool_call, so any result we emit would be an orphan that the
+    // sanitizer drops next turn anyway. Belt-and-suspenders: the
+    // sanitizer's reverse-orphan branch would still clean up if this
+    // check ever lets one through.
+    if (activeIds.size > 0 && !activeIds.has(tc.toolCallId)) {
+      debugLog(
+        'tool-exec.skip-ghost',
+        `${tc.toolName} ${tc.toolCallId} — not in assistant tool_calls, likely SDK tool-error reject`,
+      )
+      continue
+    }
+
     await handleToolCall(tc, state, options, callbacks, parentModel)
   }
 }

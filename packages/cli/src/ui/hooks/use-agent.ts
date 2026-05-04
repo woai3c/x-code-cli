@@ -14,9 +14,7 @@ import {
   loadPersistedRules,
   saveSession,
 } from '@x-code-cli/core'
-import {
-  extractText,
-} from '@x-code-cli/core'
+import { extractText } from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,
@@ -120,12 +118,18 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   shellOutput: '',
   permissionQueue: [],
   pendingQuestion: null,
-  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, currentContextTokens: 0 },
+  usage: {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    currentContextTokens: 0,
+  },
   error: null,
   todos: [],
   bufferingReads: false,
 }
-
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
   // If we were launched with a pre-loaded session (--continue), seed the
@@ -167,9 +171,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  parallel tool calls in one turn — the SDK emits tool-call A, tool-call
    *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
    *  later results fall through to an 'unknown' label. */
-  const pendingToolsRef = useRef<
-    Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number }>
-  >(new Map())
+  const pendingToolsRef = useRef<Map<string, { toolName: string; input: Record<string, unknown>; startedAt: number }>>(
+    new Map(),
+  )
   /** Edit-tool diff payloads keyed by toolCallId. Filled by `onFileEdit`
    *  (which fires from tool-execution right before `onToolResult`) and
    *  drained by `onToolResult` to attach the diff to the new
@@ -353,18 +357,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             //
             // The trailing OTHER_OPTION is appended last so it's always
             // the final row regardless of plan-mode footer presence.
-            const planMeta = permissionModeRef.current === 'plan'
-              ? [
-                  {
-                    label: 'Chat about this',
-                    description: 'Reply in conversation without picking an option above.',
-                  },
-                  {
-                    label: 'Skip interview and plan immediately',
-                    description: 'Stop the questions — produce the final plan now with everything gathered so far.',
-                  },
-                ]
-              : []
+            const planMeta =
+              permissionModeRef.current === 'plan'
+                ? [
+                    {
+                      label: 'Chat about this',
+                      description: 'Reply in conversation without picking an option above.',
+                    },
+                    {
+                      label: 'Skip interview and plan immediately',
+                      description: 'Stop the questions — produce the final plan now with everything gathered so far.',
+                    },
+                  ]
+                : []
             const augmented = [...opts, ...planMeta, OTHER_OPTION]
             setState((prev) => ({
               ...prev,
@@ -433,7 +438,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               const idx = prev.activeToolCalls.findIndex((t) => t.id === event.toolCallId)
               if (idx < 0) return prev
               const tc = prev.activeToolCalls[idx]!
-              const label = `${event.subToolName}: ${previewSubInput(event.subInput as Record<string, unknown> ?? {})}`
+              const label = `${event.subToolName}: ${previewSubInput((event.subInput as Record<string, unknown>) ?? {})}`
               const history = [...(tc.subToolHistory ?? []), label]
               const next = prev.activeToolCalls.slice()
               next[idx] = { ...tc, progress: label, subToolHistory: history }
@@ -442,12 +447,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           }
           if (event.kind === 'end') {
             const turnInfo = `${event.turnCount}t`
-            const tokInfo = event.tokenUsage.totalTokens > 1000
-              ? `${(event.tokenUsage.totalTokens / 1000).toFixed(1)}k tok`
-              : `${event.tokenUsage.totalTokens} tok`
-            const durInfo = event.durationMs > 1000
-              ? `${(event.durationMs / 1000).toFixed(1)}s`
-              : `${event.durationMs}ms`
+            const tokInfo =
+              event.tokenUsage.totalTokens > 1000
+                ? `${(event.tokenUsage.totalTokens / 1000).toFixed(1)}k tok`
+                : `${event.tokenUsage.totalTokens} tok`
+            const durInfo =
+              event.durationMs > 1000 ? `${(event.durationMs / 1000).toFixed(1)}s` : `${event.durationMs}ms`
             callbacks.onToolProgress(event.toolCallId, `Done (${turnInfo}, ${tokInfo}, ${durInfo})`)
           }
         },
@@ -475,19 +480,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // vision sub-agent caption emitted) as `⎿`-prefixed gray lines so
         // the user can see when a non-vision model's image was forwarded
         // to a sub-agent (Gemini, GLM-4V, etc.) instead of being OCR'd.
-        const content = await buildUserContent(
-          text,
-          capabilitiesOf(modelIdRef.current),
-          (notice) => {
-            appendMessage({
-              id: `ingest-notice-${Date.now()}`,
-              role: 'assistant',
-              content: notice,
-              timestamp: Date.now(),
-              kind: 'command-result',
-            })
-          },
-        )
+        const content = await buildUserContent(text, capabilitiesOf(modelIdRef.current), (notice) => {
+          appendMessage({
+            id: `ingest-notice-${Date.now()}`,
+            role: 'assistant',
+            content: notice,
+            timestamp: Date.now(),
+            kind: 'command-result',
+          })
+        })
 
         loopStateRef.current = await agentLoop(
           content,
@@ -580,7 +581,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  an interactive picker. Returns a promise that resolves to the label
    *  the user chose (or the free-form "Other" text). */
   const askQuestion = useCallback(
-    (question: string, options: { label: string; description: string; preview?: string[] }[], opts?: { layout?: 'compact' | 'compact-vertical'; noOther?: boolean }) => {
+    (
+      question: string,
+      options: { label: string; description: string; preview?: string[] }[],
+      opts?: { layout?: 'compact' | 'compact-vertical'; noOther?: boolean },
+    ) => {
       return new Promise<string>((resolve) => {
         const augmented = opts?.noOther ? options : [...options, OTHER_OPTION]
         setState((prev) => ({
@@ -625,9 +630,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     flushBuffer()
 
     const forToolUse = activeToolCallsLenRef.current > 0
-    const noticeText = forToolUse
-      ? '[Request interrupted by user for tool use]'
-      : '[Request interrupted by user]'
+    const noticeText = forToolUse ? '[Request interrupted by user for tool use]' : '[Request interrupted by user]'
 
     appendMessage({
       id: `interrupt-${Date.now()}`,

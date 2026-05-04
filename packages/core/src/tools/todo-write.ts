@@ -108,13 +108,19 @@ You: <do not call todoWrite — pure Q&A, no work to track>`,
           activeForm: z
             .string()
             .optional()
-            .describe('Present-continuous phrasing ("Running tests"); shown in the live UI when this item is in_progress.'),
+            .describe(
+              'Present-continuous phrasing ("Running tests"); shown in the live UI when this item is in_progress.',
+            ),
           status: z
             .enum(['pending', 'in_progress', 'completed'])
             .optional()
-            .describe('Lifecycle state. Exactly one item should be in_progress at any time. Defaults to "pending" if omitted.'),
+            .describe(
+              'Lifecycle state. Exactly one item should be in_progress at any time. Defaults to "pending" if omitted.',
+            ),
         }),
       )
-      .describe('The complete updated todo list. Every call REPLACES the existing list — include all items even if unchanged.'),
+      .describe(
+        'The complete updated todo list. Every call REPLACES the existing list — include all items even if unchanged.',
+      ),
   }),
 })

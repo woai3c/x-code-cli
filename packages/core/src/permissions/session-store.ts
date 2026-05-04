@@ -4,7 +4,6 @@
 // is stored as an AllowRule both in-memory AND on disk at
 // `.x-code/local/permissions.json`. On next startup the persisted rules
 // are loaded so approvals survive across sessions.
-
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -97,7 +96,10 @@ export function suggestRuleLabel(toolName: string, input: Record<string, unknown
  * `persist` indicates whether the rule should be saved to disk.
  * Write tools return persist=false (session-only, matching Claude Code).
  */
-export function buildAllowRule(toolName: string, input: Record<string, unknown>): { rule: AllowRule; persist: boolean } | null {
+export function buildAllowRule(
+  toolName: string,
+  input: Record<string, unknown>,
+): { rule: AllowRule; persist: boolean } | null {
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''
     const prefix = extractCommandPrefix(cmd)
@@ -148,9 +150,7 @@ class SessionPermissionStore {
   private rules: AllowRule[] = []
 
   addRule(rule: AllowRule): void {
-    const exists = this.rules.some(
-      (r) => r.tool === rule.tool && r.pattern === rule.pattern && r.type === rule.type,
-    )
+    const exists = this.rules.some((r) => r.tool === rule.tool && r.pattern === rule.pattern && r.type === rule.type)
     if (!exists) this.rules.push(rule)
   }
 
@@ -233,7 +233,7 @@ export function persistRule(cwd: string, rule: AllowRule): void {
   const filePath = getPermissionsPath(cwd)
   const ruleStr = ruleToString(rule)
 
-  let data: { allow: string[] } = { allow: [] }
+  const data: { allow: string[] } = { allow: [] }
   try {
     const raw = fs.readFileSync(filePath, 'utf-8')
     const parsed = JSON.parse(raw) as { allow?: string[] }

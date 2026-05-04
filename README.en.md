@@ -178,20 +178,20 @@ xc [options] [prompt]
 
 ## Slash Commands
 
-| Command               | Description                                                                                              |
-| --------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/help`               | Show available commands                                                                                  |
-| `/model [alias]`      | Switch model or list available models                                                                    |
-| `/thinking [on\|off]` | Enable / disable thinking mode (no argument opens the picker)                                            |
-| `/theme [name]`       | Switch UI theme (no argument opens the picker); controls diff colors and syntax-highlight palette         |
-| `/plan [on\|off]`     | Enable / disable plan mode (no argument toggles the current state)                                       |
-| `/usage`              | Show current-session token usage (including cache hit rate)                                               |
-| `/usage-history`      | List past project sessions with interactive detail view                                                  |
-| `/clear`              | Clear the current conversation                                                                           |
-| `/compact`            | Manually compress context                                                                                |
-| `/resume`             | Pick a past session in this project to resume                                                            |
-| `/init`               | Initialize the project knowledge base                                                                    |
-| `/exit`               | Save the session and exit                                                                                |
+| Command               | Description                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `/help`               | Show available commands                                                                           |
+| `/model [alias]`      | Switch model or list available models                                                             |
+| `/thinking [on\|off]` | Enable / disable thinking mode (no argument opens the picker)                                     |
+| `/theme [name]`       | Switch UI theme (no argument opens the picker); controls diff colors and syntax-highlight palette |
+| `/plan [on\|off]`     | Enable / disable plan mode (no argument toggles the current state)                                |
+| `/usage`              | Show current-session token usage (including cache hit rate)                                       |
+| `/usage-history`      | List past project sessions with interactive detail view                                           |
+| `/clear`              | Clear the current conversation                                                                    |
+| `/compact`            | Manually compress context                                                                         |
+| `/resume`             | Pick a past session in this project to resume                                                     |
+| `/init`               | Initialize the project knowledge base                                                             |
+| `/exit`               | Save the session and exit                                                                         |
 
 ### Thinking-mode notes
 
@@ -228,13 +228,13 @@ Reference a file path in the prompt and the CLI attaches its contents to the req
 
 Per-provider support:
 
-| Type                 | Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM | DeepSeek                |
-| -------------------- | ------------------------------------------------ | ----------------------- |
-| Source / text files  | Inlined                                          | Inlined                 |
-| Text PDF             | Extracted locally (saves tokens)                 | Extracted locally       |
-| Scanned PDF          | Native PDF input                                 | Local raster + OCR      |
-| docx / xlsx / pptx   | Extracted locally                                | Extracted locally       |
-| Images (png/jpg/...) | Native vision                                    | Vision sub-agent / OCR  |
+| Type                 | Claude / GPT / Gemini / Grok / Kimi / Qwen / GLM | DeepSeek               |
+| -------------------- | ------------------------------------------------ | ---------------------- |
+| Source / text files  | Inlined                                          | Inlined                |
+| Text PDF             | Extracted locally (saves tokens)                 | Extracted locally      |
+| Scanned PDF          | Native PDF input                                 | Local raster + OCR     |
+| docx / xlsx / pptx   | Extracted locally                                | Extracted locally      |
+| Images (png/jpg/...) | Native vision                                    | Vision sub-agent / OCR |
 
 **DeepSeek image handling — vision sub-agent**: The DeepSeek API does not support multimodal vision input. When the user attaches an image, the CLI automatically delegates image understanding to another configured provider:
 

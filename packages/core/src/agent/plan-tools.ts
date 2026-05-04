@@ -6,6 +6,7 @@
 import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
 import { extractText } from '../utils/message-helpers.js'
 import type { LoopState } from './loop-state.js'
+import { toolErrorString } from './messages.js'
 import { makePlanFilePath, readPlan, writePlan } from './plan-storage.js'
 
 type PushToolResult = (
@@ -152,7 +153,7 @@ export async function handleExitPlanMode(
       callbacks,
       toolCallId,
       'exitPlanMode',
-      'Error: not in plan mode. exitPlanMode is only valid when the session is in plan mode.',
+      toolErrorString('not in plan mode. exitPlanMode is only valid when the session is in plan mode.'),
       true,
     )
     return
@@ -172,7 +173,9 @@ export async function handleExitPlanMode(
       callbacks,
       toolCallId,
       'exitPlanMode',
-      `Error: the plan file at ${planPath} is empty. Write your plan to that file using writeFile or edit, then call exitPlanMode again.`,
+      toolErrorString(
+        `the plan file at ${planPath} is empty. Write your plan to that file using writeFile or edit, then call exitPlanMode again.`,
+      ),
       true,
     )
     return

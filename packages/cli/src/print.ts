@@ -6,15 +6,10 @@
 // keeping the event loop alive until the user pressed a key or resized the
 // terminal — at which point the queued unmount finally ran. Keeping print
 // mode as a separate code path sidesteps every one of those landmines.
-
 import { agentLoop, saveSession } from '@x-code-cli/core'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '@x-code-cli/core'
 
-export async function runPrintMode(
-  model: LanguageModel,
-  options: AgentOptions,
-  prompt: string,
-): Promise<number> {
+export async function runPrintMode(model: LanguageModel, options: AgentOptions, prompt: string): Promise<number> {
   // Abort on Ctrl+C so a long-running -p invocation is interruptible.
   const controller = new AbortController()
   const onSigint = () => controller.abort()
@@ -32,9 +27,7 @@ export async function runPrintMode(
     onAskPermission: async (toolCall) => {
       // Non-interactive — we can't prompt. Deny and let the model adapt;
       // users who want tool writes in -p mode should pass -t / --trust.
-      process.stderr.write(
-        `\n[permission denied: ${toolCall.toolName} — pass --trust to auto-approve in -p mode]\n`,
-      )
+      process.stderr.write(`\n[permission denied: ${toolCall.toolName} — pass --trust to auto-approve in -p mode]\n`)
       return 'no'
     },
     onAskUser: async (question) => {
@@ -67,12 +60,7 @@ export async function runPrintMode(
   }
 
   try {
-    const state = await agentLoop(
-      prompt,
-      model,
-      { ...options, abortSignal: controller.signal },
-      callbacks,
-    )
+    const state = await agentLoop(prompt, model, { ...options, abortSignal: controller.signal }, callbacks)
 
     // End on a newline when stdout is a TTY so the shell prompt lands on
     // a fresh line. When piped, trust the model's output verbatim.

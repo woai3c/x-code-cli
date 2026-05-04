@@ -32,4 +32,3 @@ export function reportProgress(toolCallId: string | undefined, message: string):
   if (!toolCallId) return
   reporters.get(toolCallId)?.(message)
 }
-

@@ -51,6 +51,7 @@ import {
   GLYPH_TODO_PENDING,
   SPINNER_FRAMES,
 } from '../terminal-glyphs.js'
+import { charWidth, sliceByWidth, visualWidth } from '../text-width.js'
 import { getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../tool-display.js'
 
 const PASTE_REF_MIN_LINES = 3
@@ -59,45 +60,10 @@ const MAX_VISIBLE_LINES = 10
 const MAX_AT_COMPLETIONS = 8
 
 // ── CJK width helpers ───────────────────────────────────────────────────
-
-function isWide(cp: number): boolean {
-  return (
-    (cp >= 0x4e00 && cp <= 0x9fff) ||
-    (cp >= 0x3400 && cp <= 0x4dbf) ||
-    (cp >= 0xf900 && cp <= 0xfaff) ||
-    (cp >= 0xac00 && cp <= 0xd7af) ||
-    (cp >= 0xff01 && cp <= 0xff60) ||
-    (cp >= 0xffe0 && cp <= 0xffe6) ||
-    (cp >= 0x20000 && cp <= 0x2fa1f) ||
-    (cp >= 0x3000 && cp <= 0x303f) ||
-    (cp >= 0x3040 && cp <= 0x30ff) ||
-    (cp >= 0x3100 && cp <= 0x312f) ||
-    (cp >= 0x3200 && cp <= 0x32ff) ||
-    (cp >= 0x3300 && cp <= 0x33ff)
-  )
-}
-
-function charWidth(ch: string): number {
-  return isWide(ch.codePointAt(0)!) ? 2 : 1
-}
-
-function visualWidth(str: string): number {
-  let w = 0
-  for (const ch of str) w += charWidth(ch)
-  return w
-}
-
-function sliceByWidth(str: string, maxCols: number): string {
-  let w = 0,
-    i = 0
-  for (const ch of str) {
-    const cw = charWidth(ch)
-    if (w + cw > maxCols) break
-    w += cw
-    i += ch.length
-  }
-  return str.slice(0, i)
-}
+// `isWide` / `charWidth` / `visualWidth` / `sliceByWidth` live in
+// `../text-width.js` — the single source of truth for the chat-input
+// frame, scrollback diff, and markdown table layout. The local helpers
+// below build on top of those primitives.
 
 function truncateCellRow(cells: Cell[], maxWidth: number): Cell[] {
   let w = 0

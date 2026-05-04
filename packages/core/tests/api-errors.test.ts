@@ -95,7 +95,9 @@ describe('classifyApiError', () => {
   })
 
   it('classifies malformed tool history', () => {
-    const result = classifyApiError(new Error("Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"))
+    const result = classifyApiError(
+      new Error("Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"),
+    )
     expect(result.message).toContain('orphan tool call')
     expect(result.retryable).toBe(false)
   })

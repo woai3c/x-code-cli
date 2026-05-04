@@ -4,7 +4,8 @@
 // quoting/encoding quirks. Keeping those quirks behind a provider interface
 // means the tool-execution layer does not need platform branches and does not
 // hand-roll quote escapes for PowerShell.
-import { execa, type ResultPromise } from 'execa'
+import { type ResultPromise, execa } from 'execa'
+
 import os from 'node:os'
 
 export type ShellType = 'bash' | 'zsh' | 'powershell'
@@ -77,18 +78,14 @@ function createPowerShellProvider(executable: string): ShellProvider {
         '$__ec = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }',
         'exit $__ec',
       ].join('\n')
-      return execa(
-        executable,
-        ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(wrapped)],
-        {
-          timeout: opts.timeout,
-          maxBuffer: MAX_SHELL_BUFFER,
-          cwd: opts.cwd,
-          reject: false,
-          cancelSignal: opts.signal,
-          env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
-        },
-      )
+      return execa(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(wrapped)], {
+        timeout: opts.timeout,
+        maxBuffer: MAX_SHELL_BUFFER,
+        cwd: opts.cwd,
+        reject: false,
+        cancelSignal: opts.signal,
+        env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
+      })
     },
   }
 }

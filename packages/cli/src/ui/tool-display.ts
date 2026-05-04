@@ -7,7 +7,6 @@
 //
 // Tool name matching is case-insensitive to handle model/provider
 // variations (e.g. "listDir" vs "ListDir", "readFile" vs "Read").
-
 import { getShellProvider } from '@x-code-cli/core'
 import type { DisplayToolCall } from '@x-code-cli/core'
 
@@ -29,10 +28,13 @@ function normalizeName(name: string): string {
  *  read). Mirrors the categories Claude Code groups in its `collapseReadSearch`
  *  pipeline minus the model-tagged Bash branch. */
 const COLLAPSIBLE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  'readfile', 'read',
+  'readfile',
+  'read',
   'glob',
-  'grep', 'search',
-  'listdir', 'ls',
+  'grep',
+  'search',
+  'listdir',
+  'ls',
 ])
 
 export function isCollapsibleReadOnlyTool(toolName: string): boolean {
@@ -79,11 +81,7 @@ export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadG
     const n = normalizeName(tc.toolName)
     if (n === 'read' || n === 'readfile') {
       readCount++
-      const p =
-        (tc.input.filePath as string) ||
-        (tc.input.file_path as string) ||
-        (tc.input.path as string) ||
-        ''
+      const p = (tc.input.filePath as string) || (tc.input.file_path as string) || (tc.input.path as string) || ''
       if (p) readPaths.push(basename(p))
     } else if (n === 'grep' || n === 'search') {
       grepCount++
@@ -259,7 +257,10 @@ export function getToolResultSummary(toolName: string, output: string | undefine
     const statsMatch = output.match(/<task_stats\s+tool_calls="(\d+)"\s+tokens="(\d+)"\s+duration_ms="(\d+)"\s*\/>/)
     const resultMatch = output.match(/<task_result>\n?([\s\S]*?)\n?<\/task_result>/)
     const body = resultMatch ? resultMatch[1]! : output.replace(/<task_stats[^/]*\/>/, '').trim()
-    const lines = body.trim().split('\n').filter((l) => l.trim())
+    const lines = body
+      .trim()
+      .split('\n')
+      .filter((l) => l.trim())
 
     if (statsMatch) {
       const toolCalls = parseInt(statsMatch[1]!, 10)

@@ -100,7 +100,13 @@ export function computeEditDiff(
   return { filePath, hunks, additions, removals, isCreate: false }
 }
 
-function toHunk(h: { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }): EditDiffHunk {
+function toHunk(h: {
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: string[]
+}): EditDiffHunk {
   return {
     oldStart: h.oldStart,
     oldLines: h.oldLines,

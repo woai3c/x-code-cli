@@ -19,10 +19,10 @@
 // so far; the user sees suggestions for the BFS-frontier portion of the
 // tree, which is by definition the shallow part — closer to what they
 // actually want to type.
-import { useEffect, useState } from 'react'
-
 import fs from 'node:fs/promises'
 import path from 'node:path'
+
+import { useEffect, useState } from 'react'
 
 import type { FileEntry } from '../file-completion.js'
 

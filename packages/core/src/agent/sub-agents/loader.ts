@@ -69,10 +69,7 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   return { data, body }
 }
 
-async function loadAgentsFromDir(
-  dir: string,
-  source: SubAgentDefinition['source'],
-): Promise<SubAgentDefinition[]> {
+async function loadAgentsFromDir(dir: string, source: SubAgentDefinition['source']): Promise<SubAgentDefinition[]> {
   const agents: SubAgentDefinition[] = []
 
   let entries: string[]

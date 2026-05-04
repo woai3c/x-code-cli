@@ -1,3 +1,17 @@
+// ─── UI Theme system ──────────────────────────────────────────────────
+//
+// Mirrors Claude Code's `/theme` design: the user picks one of six UI
+// themes, and that choice drives BOTH the diff background colors AND
+// the syntax-highlight palette. Diff bg colors used to be static
+// constants — that meant /theme switching had no effect on the diff
+// surface, which is the most visible code-display element. Now the
+// constants are derived at render time from the active theme.
+//
+// Each theme also pins a syntax palette (e.g. dark → one-dark,
+// dark-ansi → ansi). We expose the syntax-palette name on the theme
+// object so the startup wiring and `/theme` command stay in one place.
+import type { SyntaxThemeName } from './syntax-highlight.js'
+
 // @x-code-cli/cli — Shared UI colour tokens
 //
 // Palette mirrors Claude Code's dark theme (`src/utils/theme.ts` darkTheme).
@@ -34,28 +48,7 @@ export const SUBTLE = '#505050'
 /** Prompt input top/bottom rules (`promptBorder = rgb(136,136,136)`) */
 export const PROMPT_BORDER = '#888888'
 
-// ─── UI Theme system ──────────────────────────────────────────────────
-//
-// Mirrors Claude Code's `/theme` design: the user picks one of six UI
-// themes, and that choice drives BOTH the diff background colors AND
-// the syntax-highlight palette. Diff bg colors used to be static
-// constants — that meant /theme switching had no effect on the diff
-// surface, which is the most visible code-display element. Now the
-// constants are derived at render time from the active theme.
-//
-// Each theme also pins a syntax palette (e.g. dark → one-dark,
-// dark-ansi → ansi). We expose the syntax-palette name on the theme
-// object so the startup wiring and `/theme` command stay in one place.
-
-import type { SyntaxThemeName } from './syntax-highlight.js'
-
-export type ThemeName =
-  | 'dark'
-  | 'light'
-  | 'dark-daltonized'
-  | 'light-daltonized'
-  | 'dark-ansi'
-  | 'light-ansi'
+export type ThemeName = 'dark' | 'light' | 'dark-daltonized' | 'light-daltonized' | 'dark-ansi' | 'light-ansi'
 
 export interface ThemeColors {
   name: ThemeName
@@ -190,7 +183,10 @@ export function getThemeColors(name?: ThemeName): ThemeColors {
 
 export function parseThemeName(input: unknown): ThemeName | null {
   if (typeof input !== 'string') return null
-  const normalized = input.toLowerCase().trim().replace(/[\s_]+/g, '-')
+  const normalized = input
+    .toLowerCase()
+    .trim()
+    .replace(/[\s_]+/g, '-')
   const aliases: Record<string, ThemeName> = {
     daltonized: 'dark-daltonized',
     colorblind: 'dark-daltonized',
@@ -203,4 +199,3 @@ export function parseThemeName(input: unknown): ThemeName | null {
   if (THEMES.some((t) => t.name === normalized)) return normalized as ThemeName
   return null
 }
-

@@ -2,15 +2,41 @@
 import type { SubAgentDefinition } from './types.js'
 
 const SHELL_DENY_KEYWORDS = [
-  'rm ', 'rm\t', 'rmdir', 'del ', 'rd ',
-  'mv ', 'move ', 'ren ',
-  'git commit', 'git push', 'git merge', 'git rebase', 'git reset',
-  'git checkout -b', 'git branch -d', 'git branch -D',
-  '>', '>>', 'tee ', 'tee\t',
-  'chmod', 'chown',
-  'npm publish', 'pnpm publish', 'yarn publish',
-  'docker rm', 'docker rmi',
+  'rm ',
+  'rm\t',
+  'rmdir',
+  'del ',
+  'rd ',
+  'mv ',
+  'move ',
+  'ren ',
+  'git commit',
+  'git push',
+  'git merge',
+  'git rebase',
+  'git reset',
+  'git checkout -b',
+  'git branch -d',
+  'git branch -D',
+  '>',
+  '>>',
+  'tee ',
+  'tee\t',
+  'chmod',
+  'chown',
+  'npm publish',
+  'pnpm publish',
+  'yarn publish',
+  'docker rm',
+  'docker rmi',
 ]
+
+// Shared lead-in for sub-agents whose final message is the entire payload
+// the parent agent sees. The parent has no access to anything the
+// sub-agent read or computed mid-loop, so we reinforce "inline everything"
+// in one place rather than repeating near-identical copy per agent.
+const FINAL_MESSAGE_CONTRACT_HEADER =
+  "CRITICAL — your final message is ALL the parent agent sees. It will NOT re-read files you've already read."
 
 export const builtInAgents: SubAgentDefinition[] = [
   {
@@ -25,7 +51,7 @@ Guidelines:
 - If the codebase is large, prioritize the most relevant files
 - Do NOT suggest code changes — just report what you find
 
-CRITICAL — your final message is ALL the parent agent sees. It will NOT re-read files you've already read. Your output must be comprehensive enough that the parent can act on it directly:
+${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be comprehensive enough that the parent can act on it directly:
 - Include key code snippets (function signatures, type definitions, important logic) — not just file paths
 - For architecture questions, describe the data flow and module relationships
 - For "find all X" questions, list every match with file:line and a brief context line
@@ -39,7 +65,7 @@ CRITICAL — your final message is ALL the parent agent sees. It will NOT re-rea
   {
     name: 'general-purpose',
     description:
-      'Multi-step research and investigation. Use for open-ended questions that may need 3+ tool calls and you don\'t want noise in the main context.',
+      "Multi-step research and investigation. Use for open-ended questions that may need 3+ tool calls and you don't want noise in the main context.",
     prompt: `You are a general-purpose research assistant. You can read files, search code, and run shell commands to investigate questions.
 
 Guidelines:
@@ -48,7 +74,7 @@ Guidelines:
 - Include file paths and line numbers for key references
 - If you find issues or patterns, describe them concisely
 
-CRITICAL — your final message is ALL the parent agent sees. It will NOT re-read files you've already read. Your output must be self-contained:
+${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be self-contained:
 - Include key code snippets, not just references — the parent cannot read the files
 - For multi-file investigations, summarize each file's role and relevant content
 - When the parent needs to modify code, include the exact current code that needs changing`,

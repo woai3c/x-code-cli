@@ -123,9 +123,7 @@ function formatToolCall(tc: DisplayToolCall): string {
   // render as plain red text so failures stand out in scrollback —
   // matches Claude Code's behavior of coloring the stderr/exit-code
   // block in red for non-zero shell exits.
-  const rendered = isFailure
-    ? resultSummary
-    : renderMarkdown(resultSummary).replace(/\n+$/, '')
+  const rendered = isFailure ? resultSummary : renderMarkdown(resultSummary).replace(/\n+$/, '')
 
   // Strip blank lines — markdown rendering inserts paragraph spacing
   // between blocks, which makes the tool-result summary look sparse
@@ -179,6 +177,19 @@ function toCRLF(s: string): string {
  */
 let prevWriteEndedWithBlankRow = true
 
+/**
+ * Was the previous write a streaming text chunk? When the next write is
+ * ALSO a streaming chunk we treat it as a continuation of the same
+ * assistant message and do NOT prepend the leading-blank that the
+ * `prevWriteEndedWithBlankRow` machinery would otherwise add. Each
+ * streaming chunk ends with a single `\n` (no trailing blank), so without
+ * this guard the blank gets injected at every chunk boundary — and since
+ * the stream buffer flushes on cadence rather than markdown structure,
+ * those boundaries fall between adjacent list items / paragraph lines
+ * and produce visible inter-line gaps where the model emitted none.
+ */
+let prevWriteWasStreamingChunk = false
+
 /** Reset the spacing flag — call when the scrollback is cleared (e.g.
  *  /clear) so the next write doesn't think there's still a blank above.
  *  Also drops any buffered read-group entries: post-/clear they refer to
@@ -186,6 +197,7 @@ let prevWriteEndedWithBlankRow = true
  *  their summary would leave a phantom row above the now-empty history. */
 export function resetScrollbackSpacing(): void {
   prevWriteEndedWithBlankRow = true
+  prevWriteWasStreamingChunk = false
   pendingReadGroup = []
 }
 
@@ -235,10 +247,7 @@ function isCollapsibleMessage(msg: DisplayMessage): boolean {
   if (msg.kind) return false
   if (!msg.toolCalls || msg.toolCalls.length === 0) return false
   return msg.toolCalls.every(
-    (tc) =>
-      tc.status === 'completed' &&
-      !tc.editPayload &&
-      isCollapsibleReadOnlyTool(tc.toolName),
+    (tc) => tc.status === 'completed' && !tc.editPayload && isCollapsibleReadOnlyTool(tc.toolName),
   )
 }
 
@@ -250,6 +259,7 @@ function writeToolRow(write: InkWrite, tc: DisplayToolCall): void {
   const lead = prevWriteEndedWithBlankRow ? '' : '\n'
   write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n'))
   prevWriteEndedWithBlankRow = false
+  prevWriteWasStreamingChunk = false
 }
 
 /** Render the collapsed-group summary line, e.g.
@@ -265,6 +275,7 @@ function writeCollapsedGroup(write: InkWrite, tools: readonly DisplayToolCall[])
   const lead = prevWriteEndedWithBlankRow ? '' : '\n'
   write(toCRLF(lead + line + '\n'))
   prevWriteEndedWithBlankRow = false
+  prevWriteWasStreamingChunk = false
 }
 
 /** Commit any buffered consecutive read-only tool calls to scrollback.
@@ -311,6 +322,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     // compact slash-echo) — in both cases the next entity will sit on a
     // fresh row with the preceding blank already in place.
     prevWriteEndedWithBlankRow = msg.kind !== 'command-echo'
+    prevWriteWasStreamingChunk = false
     return
   }
 
@@ -325,6 +337,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${c.gray(l)}`)
     write(toCRLF([head, ...tail].join('\n') + '\n'))
     prevWriteEndedWithBlankRow = false
+    prevWriteWasStreamingChunk = false
     return
   }
 
@@ -342,13 +355,23 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       const lead = prevWriteEndedWithBlankRow ? '' : '\n'
       write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n'))
       prevWriteEndedWithBlankRow = false
+      prevWriteWasStreamingChunk = false
     }
   }
 
   if (msg.content) {
     const content = normalizeLineEndings(msg.content)
     debugLog(msg.streamingChunk ? 'stdout.assistant-chunk' : 'stdout.assistant-full', content)
-    if (!prevWriteEndedWithBlankRow) {
+    // Skip the leading-blank when this chunk is continuing a previous
+    // streaming chunk from the same assistant message — the prior chunk
+    // already left the cursor on the next row via its trailing `\n`,
+    // and prepending another `\n` would render as a visible blank
+    // between adjacent list items / paragraph lines whose only
+    // separator in the model's source was a single newline. The blank
+    // is still added on text→text transitions across non-streaming
+    // entities (tool result → final text) so nothing butts together.
+    const isStreamContinuation = !!msg.streamingChunk && prevWriteWasStreamingChunk
+    if (!prevWriteEndedWithBlankRow && !isStreamContinuation) {
       write(toCRLF('\n'))
       prevWriteEndedWithBlankRow = true
     }
@@ -365,6 +388,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       // prepend another one.
       write(toCRLF(content))
       prevWriteEndedWithBlankRow = content.endsWith('\n\n') || content.endsWith('\n')
+      prevWriteWasStreamingChunk = true
       return
     }
 
@@ -395,9 +419,11 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       // Anything else only ended with a single `\n`, so we still need
       // the next entity to draw its own blank above.
       prevWriteEndedWithBlankRow = out.endsWith('\n\n')
+      prevWriteWasStreamingChunk = true
     } else {
       write(toCRLF(indented + '\n\n'))
       prevWriteEndedWithBlankRow = true
+      prevWriteWasStreamingChunk = false
     }
   }
 }

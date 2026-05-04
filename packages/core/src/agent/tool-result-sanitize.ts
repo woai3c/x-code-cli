@@ -17,7 +17,6 @@
 //     but the meaningful content is usually the middle. head-tail still beats
 //     head-only because it preserves the final anchors)
 //   - default: head-tail
-
 import type { ModelMessage } from 'ai'
 
 import { truncateToolResult } from '../tools/truncate.js'
@@ -71,13 +70,27 @@ function synthesizeToolErrorResult(toolCallId: string, toolName: string, errorMe
 }
 
 /**
- * Walk `messages` and append synthetic tool-result entries for any
- * assistant tool_call that lacks a matching tool result. Models can emit
- * malformed tool inputs (e.g. todoWrite with missing required fields) —
- * the SDK validates, fails, and emits a tool-error event but in some
- * cases doesn't push a paired tool-result into response.messages. The
- * orphan tool_call would then poison every subsequent API request
- * because providers strictly require tool_call ↔ tool_result pairing.
+ * Walk `messages` and reconcile tool_call ↔ tool_result pairing in BOTH
+ * directions. Providers strictly require:
+ *   - every assistant tool_call to have a paired tool_result
+ *   - every tool_result to be preceded by an assistant tool_call with
+ *     the matching toolCallId
+ * Either kind of orphan will poison the next API request with a
+ * "tool must be a response to a preceding message with tool_calls"
+ * (or the converse) error.
+ *
+ * How the orphans arise:
+ *   - Forward (tool_call without result): models occasionally emit
+ *     malformed tool input (e.g. todoWrite with required fields
+ *     missing). The SDK validates, fails, emits a tool-error event,
+ *     and in some cases doesn't push a paired tool-result into
+ *     response.messages. We synthesise an error result.
+ *   - Reverse (tool_result without preceding tool_call): when the SDK
+ *     emits `tool-error` mid-stream because the model's tool input
+ *     failed validation, the SDK may exclude the tool_call from
+ *     response.messages — but our `processToolCalls` still drains the
+ *     `result.toolCalls` promise and runs the tool, pushing a
+ *     tool_result into state.messages. We drop that orphan.
  *
  * Mutates `messages` in place. Idempotent (running twice is a no-op).
  */
@@ -96,7 +109,32 @@ export function repairOrphanToolCalls(messages: ModelMessage[]): void {
     }
   }
 
-  // Collect every tool_call_id that's already covered by a tool-result.
+  // Drop tool-result parts whose toolCallId never appeared in an
+  // assistant tool_call (reverse-orphan). When all parts of a tool
+  // message are orphans, drop the whole message; when only some are,
+  // filter the parts in place.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (!msg || msg.role !== 'tool') continue
+    if (!Array.isArray(msg.content)) continue
+    const parts = msg.content as Array<{ type?: string; toolCallId?: string }>
+    const kept = parts.filter((part) => {
+      if (part?.type !== 'tool-result') return true
+      if (typeof part.toolCallId !== 'string') return true
+      return expected.has(part.toolCallId)
+    })
+    if (kept.length === 0) {
+      messages.splice(i, 1)
+    } else if (kept.length !== parts.length) {
+      // AI SDK's narrow union typings forbid the partial part shape we
+      // operate on at the type level — we already narrowed at runtime
+      // above, so a structural cast is safe here.
+      ;(msg as { content: unknown }).content = kept
+    }
+  }
+
+  // Collect every tool_call_id that's already covered by a tool-result
+  // (after the reverse-orphan pass above).
   const fulfilled = new Set<string>()
   for (const msg of messages) {
     if (msg.role !== 'tool') continue
@@ -108,9 +146,10 @@ export function repairOrphanToolCalls(messages: ModelMessage[]): void {
     }
   }
 
-  // Append synthetic results for orphans, preserving overall ordering
-  // (orphans always go at the end — they never had a real result, so
-  // their position is purely a placeholder for the next API request).
+  // Append synthetic results for forward-orphans, preserving overall
+  // ordering (forward-orphans always go at the end — they never had a
+  // real result, so their position is purely a placeholder for the
+  // next API request).
   for (const id of expected) {
     if (fulfilled.has(id)) continue
     const name = toolNameById.get(id) ?? 'unknown'

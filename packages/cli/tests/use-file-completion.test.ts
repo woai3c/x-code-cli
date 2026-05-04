@@ -1,13 +1,10 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-
-import {
-  parseSimpleGitignore,
-  scanWorkspaceFiles,
-} from '../src/ui/hooks/use-file-completion.js'
+import { parseSimpleGitignore, scanWorkspaceFiles } from '../src/ui/hooks/use-file-completion.js'
 
 describe('parseSimpleGitignore', () => {
   it('extracts bare names', () => {

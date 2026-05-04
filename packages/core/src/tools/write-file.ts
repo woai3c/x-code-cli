@@ -4,8 +4,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 export const writeFile = tool({
-  description:
-    `Write a file to the local filesystem.
+  description: `Write a file to the local filesystem.
 
 Usage:
 - This tool will overwrite the existing file if there is one at the provided path.

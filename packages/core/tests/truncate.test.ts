@@ -1,11 +1,7 @@
 // Tests for tools/truncate.ts
 import { describe, expect, it } from 'vitest'
 
-import {
-  MAX_TOOL_RESULT_BYTES,
-  MAX_TOOL_RESULT_LINES,
-  truncateToolResult,
-} from '../src/tools/truncate.js'
+import { MAX_TOOL_RESULT_BYTES, MAX_TOOL_RESULT_LINES, truncateToolResult } from '../src/tools/truncate.js'
 
 describe('truncateToolResult', () => {
   describe('under-budget passthrough', () => {

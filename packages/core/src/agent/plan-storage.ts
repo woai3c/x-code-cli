@@ -19,7 +19,7 @@ import { generateText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { getThinkingProviderOptions } from '../providers/thinking.js'
-import { debugLog, XCODE_DIR } from '../utils.js'
+import { XCODE_DIR, debugLog } from '../utils.js'
 
 const PLANS_SUBDIR = 'plans'
 const SLUG_MAX_LEN = 40
@@ -67,10 +67,7 @@ function plansDir(): string {
  *  slug (e.g. agentLoop's session-wide LLM-generated `taskSlug`) to
  *  skip the local slugify pass — important for non-ASCII task text
  *  where slugify would return empty. */
-export function makePlanFilePath(
-  taskText: string,
-  opts?: { slug?: string; now?: Date },
-): string {
+export function makePlanFilePath(taskText: string, opts?: { slug?: string; now?: Date }): string {
   const slug = opts?.slug ?? slugify(taskText)
   const ts = formatTimestamp(opts?.now ?? new Date())
   const name = slug ? `${slug}-${ts}` : ts

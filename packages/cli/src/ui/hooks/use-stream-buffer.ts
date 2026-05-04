@@ -228,10 +228,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
         bufferRef.current = bufferRef.current.slice(boundary)
         debugLog('buffer.commit', `chars=${chunk.length}`)
         queueChunk(chunk)
-      } else if (
-        bufferRef.current.length > CODE_FENCE_COMMIT_THRESHOLD &&
-        hasOpenMarkdownBlock(bufferRef.current)
-      ) {
+      } else if (bufferRef.current.length > CODE_FENCE_COMMIT_THRESHOLD && hasOpenMarkdownBlock(bufferRef.current)) {
         // Large open code fence — force an intermediate commit at the last
         // newline so the terminal doesn't have to pre-scroll 100+ blank rows
         // in one shot. Find the last `\n` that is NOT part of a `\n\n` pair

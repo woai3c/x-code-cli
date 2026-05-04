@@ -7,7 +7,6 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { formatToolError } from '../utils/tool-errors.js'
-
 import { reportProgress } from './progress.js'
 
 const execFileAsync = promisify(execFile)
@@ -32,8 +31,7 @@ function getRipgrepPath(): string {
 }
 
 export const grep = tool({
-  description:
-    `A powerful search tool built on ripgrep.
+  description: `A powerful search tool built on ripgrep.
 
 Usage:
 - ALWAYS use this grep tool for content search tasks. NEVER invoke grep or rg as a shell command — this tool has been optimized for correct permissions and access.
@@ -54,8 +52,10 @@ Usage:
       const args = [
         '--no-heading',
         '--line-number',
-        '--color', 'never',
-        '--max-columns', String(MAX_COLUMNS),
+        '--color',
+        'never',
+        '--max-columns',
+        String(MAX_COLUMNS),
         '--max-columns-preview',
       ]
       if (globPattern) {

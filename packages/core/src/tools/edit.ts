@@ -4,8 +4,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 export const edit = tool({
-  description:
-    `Perform exact string replacements in files.
+  description: `Perform exact string replacements in files.
 
 Usage:
 - You must use readFile at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.

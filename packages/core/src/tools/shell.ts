@@ -4,8 +4,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 export const shell = tool({
-  description:
-    `Execute a shell command and return stdout/stderr. The working directory persists between commands.
+  description: `Execute a shell command and return stdout/stderr. The working directory persists between commands.
 
 IMPORTANT: Avoid using this tool to run grep, rg, cat, head, tail, sed, or awk commands. Instead, use the appropriate dedicated tool — they provide a better user experience:
 - File search: Use glob (NOT find or ls)

@@ -6,6 +6,7 @@
 // AgentOptions, and callbacks that aren't available in the tool's
 // execute context.
 import { tool } from 'ai'
+
 import { z } from 'zod'
 
 import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
@@ -16,9 +17,7 @@ import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
  *  the model knows what subagent_type values are valid. */
 export function buildTaskToolDescription(registry: SubAgentRegistry): string {
   const agents = registry.list()
-  const agentList = agents
-    .map((a) => `  - ${a.name}: ${a.description}`)
-    .join('\n')
+  const agentList = agents.map((a) => `  - ${a.name}: ${a.description}`).join('\n')
 
   return `Launch a sub-agent to handle a task in an isolated context. The sub-agent runs with its own message history and returns only its final conclusion — its intermediate tool calls never enter your context window, keeping the main conversation lean.
 
@@ -91,12 +90,12 @@ export function createTaskTool(registry: SubAgentRegistry) {
     description: buildTaskToolDescription(registry),
     inputSchema: z.object({
       description: z.string().describe('A short (3-5 words) description of the task'),
-      subagent_type: z.string().describe(
-        `Which sub-agent to use. Available: ${registry.names().join(', ')}`,
-      ),
-      prompt: z.string().describe(
-        'The complete task instruction sent to the sub-agent. Be specific — the sub-agent has no prior context.',
-      ),
+      subagent_type: z.string().describe(`Which sub-agent to use. Available: ${registry.names().join(', ')}`),
+      prompt: z
+        .string()
+        .describe(
+          'The complete task instruction sent to the sub-agent. Be specific — the sub-agent has no prior context.',
+        ),
     }),
     // No execute — handled manually in tool-execution.ts
   })

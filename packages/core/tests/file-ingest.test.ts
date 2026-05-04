@@ -1,15 +1,10 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import {
-  buildUserContent,
-  classifyFile,
-  extractFileReferences,
-  ingestFile,
-} from '../src/agent/file-ingest.js'
+import { buildUserContent, classifyFile, extractFileReferences, ingestFile } from '../src/agent/file-ingest.js'
 import { captionImage, pickVisionProvider } from '../src/agent/vision-fallback.js'
 
 // Mock vision-fallback so the image-path test can prove the onNotice plumbing
@@ -163,7 +158,6 @@ describe('buildUserContent', () => {
     expect(result[0]).toEqual({ type: 'text', text: input })
     expect(result.length).toBeGreaterThan(1)
   })
-
 })
 
 describe('ingestFile image path with mocked vision sub-agent', () => {
@@ -187,10 +181,8 @@ describe('ingestFile image path with mocked vision sub-agent', () => {
     vi.mocked(captionImage).mockResolvedValue('A red Submit button on a white card')
 
     const notices: string[] = []
-    const parts = await ingestFile(
-      { raw: `@${imageFile}`, absolutePath: imageFile },
-      textOnlyCaps,
-      (msg) => notices.push(msg),
+    const parts = await ingestFile({ raw: `@${imageFile}`, absolutePath: imageFile }, textOnlyCaps, (msg) =>
+      notices.push(msg),
     )
 
     expect(notices).toEqual(['Captioned image via google:gemini-2.5-flash'])
@@ -219,11 +211,7 @@ describe('ingestFile image path with mocked vision sub-agent', () => {
     vi.mocked(captionImage).mockRejectedValue(new Error('rate limit exceeded'))
 
     const notices: string[] = []
-    await ingestFile(
-      { raw: `@${imageFile}`, absolutePath: imageFile },
-      textOnlyCaps,
-      (msg) => notices.push(msg),
-    )
+    await ingestFile({ raw: `@${imageFile}`, absolutePath: imageFile }, textOnlyCaps, (msg) => notices.push(msg))
 
     expect(captionImage).toHaveBeenCalledTimes(1)
     // Two things must hold: the failure was reported AND it included the

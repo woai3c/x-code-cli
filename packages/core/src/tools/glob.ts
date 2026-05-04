@@ -6,7 +6,6 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { formatToolError } from '../utils/tool-errors.js'
-
 import { reportProgress } from './progress.js'
 
 const MAX_GLOB_RESULTS = 200

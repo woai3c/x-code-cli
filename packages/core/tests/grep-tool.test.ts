@@ -82,10 +82,10 @@ describe('grep tool', () => {
     }
     await fs.writeFile(path.join(tmpDir, 'big.txt'), lines.join('\n'))
 
-    const result = await grep.execute!(
+    const result = (await grep.execute!(
       { pattern: 'match_target', path: tmpDir, headLimit: 5 },
       { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    ) as string
+    )) as string
     expect(result).toContain('more lines not shown')
     expect(result).toContain('capped at 5')
     const matchLines = result.split('\n').filter((l) => l.includes('match_target') && !l.includes('...'))
@@ -93,5 +93,4 @@ describe('grep tool', () => {
 
     await fs.rm(tmpDir, { recursive: true })
   })
-
 })

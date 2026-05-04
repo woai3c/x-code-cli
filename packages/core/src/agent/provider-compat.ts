@@ -123,10 +123,7 @@ function imagePartToBuffer(part: { image: unknown; mediaType?: string }): Buffer
  * them. Replaces images with OCR'd text annotated as a fallback so the
  * model knows it's looking at text, not the image itself.
  */
-export async function downgradeBinaryPartsForProvider(
-  messages: ModelMessage[],
-  modelId: string,
-): Promise<void> {
+export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], modelId: string): Promise<void> {
   const caps = capabilitiesOf(modelId)
   if (caps.image && caps.pdf) return
 
@@ -165,7 +162,13 @@ export async function downgradeBinaryPartsForProvider(
         if (!output || output.type !== 'content' || !Array.isArray(output.value)) continue
 
         const rewritten: unknown[] = []
-        for (const entry of output.value as Array<{ type: string; data?: string; mediaType?: string; text?: string; filename?: string }>) {
+        for (const entry of output.value as Array<{
+          type: string
+          data?: string
+          mediaType?: string
+          text?: string
+          filename?: string
+        }>) {
           if (entry.type === 'image-data' && !caps.image) {
             const data = entry.data ?? ''
             let text = '[image omitted]'
