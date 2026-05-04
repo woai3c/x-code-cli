@@ -37,7 +37,12 @@ import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { renderInlineMarkdown } from '../render-markdown.js'
-import { flushPendingReadGroup, lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
+import {
+  flushPendingReadGroup,
+  lastWriteEndedWithBlankRow,
+  resetScrollbackSpacing,
+  writeMessageToStdout,
+} from '../stdout-writer.js'
 import {
   GLYPH_ACCEPT_EDITS,
   GLYPH_BULLET,
@@ -750,6 +755,11 @@ export function ChatInput({
    *  where the dialog started, which is exactly our frame's bottom row,
    *  so a normal eraseRegion-by-prevFrame works cleanly. */
   const wasHiddenRef = useRef(false)
+  /** Set by the shrink-detection path (a /clear emptied messages) so the
+   *  next first-paint seeds freeBlanks for an empty viewport instead of
+   *  reserving banner-sized space at the top — there is no banner left
+   *  on screen after the clear-screen ANSI write. Cleared once consumed. */
+  const justClearedRef = useRef(false)
   /** How many messages we've already committed to scrollback. */
   const writtenMessageCountRef = useRef(0)
   // Permission dialog: selection index (0 = Yes, 1 = No). Rendered inside
@@ -1366,9 +1376,32 @@ export function ChatInput({
     // pushing rows into real scrollback (DECSTBM-restricted region scrolls
     // are splice-discarded in xterm.js's InputHandler, confirmed in source).
     //
-    // A /clear command may shrink messages; detect and reset the counter.
+    // /clear shrinks the message list back to empty. Used to be a silent
+    // counter reset — meaning the in-memory history disappeared but the
+    // OLD scrollback stayed visible, so users reported "/clear does
+    // nothing". Now we erase the viewport + xterm scrollback and reset
+    // the frame-tracking refs so the next paint runs as a clean
+    // first-paint, anchored to the top of the empty terminal.
     if (messages.length < writtenMessageCountRef.current) {
+      // \x1b[2J: erase the visible screen.
+      // \x1b[3J: drop xterm-style scrollback history (Windows Terminal,
+      //   xterm.js, iTerm2, kitty, GNOME Terminal — all honor it; the
+      //   handful of legacy terminals that ignore it still get the
+      //   viewport cleared, which is already a strict improvement).
+      // \x1b[H : home the cursor so the (empty) frame paint below lands
+      //   at known coordinates instead of wherever Ink last parked it.
+      preBuf += '\x1b[2J\x1b[3J\x1b[H'
       writtenMessageCountRef.current = messages.length
+      prevFrameRef.current = []
+      lastFrameHRef.current = 0
+      lastFrameTopRef.current = 0
+      freeBlanksAboveFrameRef.current = 0
+      activeRef.current = false
+      justClearedRef.current = true
+      // Drops scrollback-spacing flags + buffered read-group entries
+      // (those summaries pointed at messages we just wiped — flushing
+      // them later would leave a phantom row above the empty history).
+      resetScrollbackSpacing()
     }
     const termRows = stdout?.rows ?? 25
     // `hasNewMessages` — we walked new entries this render (advanced
@@ -2371,7 +2404,19 @@ export function ChatInput({
     // else up to where the frame sits is blank. Subsequent grows can
     // consume those blanks without pre-scrolling, so the banner stays
     // in view during normal operation.
-    if (isFirstPaint && initialContentRows > 0) {
+    //
+    // Post-/clear is also a first-paint (we reset activeRef above) but
+    // the banner is gone — we just \x1b[2J'd the viewport — so reserving
+    // initialContentRows here would leave a phantom banner-sized empty
+    // strip at the top with the frame floating mid-screen. Treat the
+    // entire viewport as free blanks instead, so the frame anchors at
+    // row 1 with empty space below (the user's "fresh launch minus the
+    // banner" expectation).
+    if (justClearedRef.current) {
+      freeBlanksAboveFrameRef.current = Math.max(0, termRows - nextH)
+      frameTop = computeFrameTop(freeBlanksAboveFrameRef.current)
+      justClearedRef.current = false
+    } else if (isFirstPaint && initialContentRows > 0) {
       freeBlanksAboveFrameRef.current = Math.max(0, termRows - initialContentRows - nextH)
       // Re-seed frameTop now that freeBlanks is set so the very first
       // paint floats the frame up to sit immediately below the banner

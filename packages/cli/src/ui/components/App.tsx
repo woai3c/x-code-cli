@@ -453,8 +453,13 @@ export function App({
           return
 
         case 'clear':
+          // No echo / result message — ChatInput's shrink-detection path
+          // wipes the visible terminal + scrollback so the user sees an
+          // empty viewport with just the input box. Adding a "Conversation
+          // cleared." line would force the cleared screen to immediately
+          // start re-painting at row 1, defeating the "fresh launch" look
+          // the user asked for.
           clear()
-          addCommandMessage('/clear', 'Conversation cleared.')
           return
 
         case 'compact':
