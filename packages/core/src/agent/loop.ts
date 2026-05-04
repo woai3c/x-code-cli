@@ -1,12 +1,14 @@
-// @x-code-cli/core — Agent Loop (orchestration: streaming, tool calls, permission, context compression)
+// @x-code-cli/core — Agent Loop (orchestration: streaming, tool calls, permission)
+//
+// Context compression lives in `./compression.ts`; this file just
+// orchestrates the per-turn streaming + tool dispatch loop.
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { generateText, streamText } from 'ai'
-import type { LanguageModel, ModelMessage, UserContent } from 'ai'
+import { streamText } from 'ai'
+import type { LanguageModel, UserContent } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
-import { generateSessionSummary } from '../knowledge/session.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
@@ -15,16 +17,11 @@ import { createTaskTool } from '../tools/task.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
-import { estimateTokenCount, getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
-import { lightCompactMessages } from './light-compact.js'
+import { checkAndCompressContext, handleContextTooLong } from './compression.js'
+import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
-import {
-  appendHeader,
-  appendUsage,
-  flushPendingMessages,
-  markBoundaryAndReflush,
-} from './session-store.js'
+import { appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
 
 /** Pull plain text out of a UserContent payload for slugification.
  *  UserContent can be a string OR a multi-part array (text/image/file
@@ -50,110 +47,8 @@ import { processToolCalls } from './tool-execution.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 
 export type { LoopState } from './loop-state.js'
-
-/** Number of recent messages to keep verbatim when compressing. */
-const KEEP_RECENT = 6
-
-/** Compress old messages into a summary. */
-export async function compressMessages(messages: ModelMessage[], model: LanguageModel): Promise<ModelMessage[]> {
-  // Ensure the "recent" slice doesn't start with an orphaned tool
-  // result — providers reject tool messages that lack a preceding
-  // assistant message with the matching tool_calls.
-  let keepCount = KEEP_RECENT
-  while (keepCount < messages.length && messages[messages.length - keepCount]?.role === 'tool') {
-    keepCount++
-  }
-  const recent = messages.slice(-keepCount)
-  const old = messages.slice(0, -keepCount)
-
-  if (old.length === 0) return messages
-
-  const { text: summary } = await generateText({
-    model,
-    system:
-      'Summarize the following conversation concisely, preserving key decisions, file changes, and context needed to continue.',
-    messages: old,
-  })
-
-  return [{ role: 'user', content: `[Previous conversation summary]\n${summary}` }, ...recent]
-}
-
-/**
- * Proactive compression: compress when either the last real input-token count
- * or the character-based estimate has crossed the threshold.
- *
- * Runs a light O(n) compaction first (drops loop-guard pairs — no LLM call,
- * no network). If that brings us back under the threshold, we skip the
- * expensive LLM-summary path entirely. This is the difference between a
- * $0 10ms pass and a full summarisation round trip — for loop-induced
- * bloat (by far the common case), the light path is enough.
- */
-async function checkAndCompressContext(
-  state: LoopState,
-  model: LanguageModel,
-  threshold: number,
-  callbacks: AgentCallbacks,
-): Promise<void> {
-  const needsCompression = state.lastInputTokens > threshold || estimateTokenCount(state.messages) > threshold
-  if (!needsCompression || state.messages.length <= KEEP_RECENT) return
-
-  const light = lightCompactMessages(state.messages)
-  if (light.dropped > 0) {
-    state.messages = light.messages
-    const stillOver = estimateTokenCount(state.messages) > threshold
-    callbacks.onContextCompressed(
-      `Dropped ${light.dropped} looped tool-call message(s) to reclaim context${stillOver ? ' — still over threshold, summarising' : ''}.`,
-    )
-    if (!stillOver) {
-      // Light compaction succeeded — write a boundary so resume won't
-      // resurrect the dropped loop-guard pairs (they're still on disk
-      // pre-boundary, but the loader cuts at the latest boundary). The
-      // boundary carries no summary text since nothing was summarised.
-      void markBoundaryAndReflush(state)
-      return
-    }
-  }
-
-  let summaryText = ''
-  try {
-    const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
-      ...state.filesModified,
-    ])
-    summaryText = summary.summary
-  } catch {
-    // Summary generation failed — fall through with empty text. The
-    // compressMessages call below still runs its own LLM summarisation,
-    // so context still shrinks; we just lose the structured summary
-    // that would have ridden along on the boundary line for picker UX.
-  }
-  state.messages = await compressMessages(state.messages, model)
-  state.lastInputTokens = 0
-  // Write a compact-boundary line + re-flush the trimmed messages so
-  // the post-boundary jsonl content equals the new in-memory state.
-  void markBoundaryAndReflush(state, summaryText)
-  callbacks.onContextCompressed('Context compressed to fit context window.')
-}
-
-/**
- * Reactive compact: when a stream errors because the prompt was too long,
- * compress and signal the caller to retry. Mirrors Claude Code's reactiveCompact.
- * Returns true if compression happened (caller should retry this turn).
- */
-async function handleContextTooLong(
-  state: LoopState,
-  model: LanguageModel,
-  callbacks: AgentCallbacks,
-): Promise<boolean> {
-  if (state.messages.length <= KEEP_RECENT) return false
-  state.messages = await compressMessages(state.messages, model)
-  state.lastInputTokens = 0
-  // Same boundary discipline as the proactive path — reactive compact
-  // also shrinks state.messages in place, so the jsonl needs a
-  // compact-boundary marker to keep loader semantics consistent.
-  void markBoundaryAndReflush(state)
-  callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
-  return true
-}
+// Re-exported for the CLI's resume / manual-compact path (see use-agent.ts).
+export { compressMessages } from './compression.js'
 
 /** Consume streamText output, dispatching chunks to the UI via callbacks.
  *  Reasoning-delta chunks (thinking-mode models — DeepSeek-reasoner, o1,

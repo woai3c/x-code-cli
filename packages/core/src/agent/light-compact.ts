@@ -1,6 +1,6 @@
 // @x-code-cli/core — Light-weight message compaction (no LLM call)
 //
-// The main compression path (`compressMessages` in loop.ts) summarises old
+// The main compression path (`compressMessages` in compression.ts) summarises old
 // turns by making a separate `generateText` call — that's a network round
 // trip plus a full pass over the messages, which is wasteful when the bulk
 // of the context comes from a narrow, obvious source: repeated tool-call
