@@ -7,6 +7,7 @@ import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
+import { debugLog } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
@@ -413,6 +414,44 @@ async function handleToolCall(
   pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, truncateToolResult(result.output), result.isError)
 }
 
+/** Collect every toolCallId the AI SDK actually committed to the
+ *  assistant message in this turn. The SDK's `result.toolCalls` promise
+ *  is independent of `response.messages` — when zod validation rejects
+ *  a malformed tool input mid-stream the SDK emits a `tool-error` chunk
+ *  and excludes that tool_call from response.messages, but it can still
+ *  surface in `toolCalls`. Running such a "ghost" call would have two
+ *  bad outcomes:
+ *    1. write/edit/shell would fire a real side effect for a call the
+ *       model never officially committed to.
+ *    2. The pushed tool_result would be an orphan in state.messages
+ *       (no preceding assistant tool_call with that id) and the next
+ *       API request would 400 with "tool must be a response to a
+ *       preceding message with tool_calls".
+ *  Returning the set lets `processToolCalls` filter the SDK's list
+ *  before any handler runs.
+ *
+ *  Walks from the END of state.messages backwards, collecting tool-call
+ *  ids from EVERY assistant message we encounter until we hit a
+ *  non-assistant/tool boundary — covers multi-assistant turn structures
+ *  some providers produce while still cutting off at the previous user
+ *  message so old turns' ids don't bleed in. */
+function collectActiveAssistantToolCallIds(state: LoopState): Set<string> {
+  const ids = new Set<string>()
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const msg = state.messages[i]
+    if (!msg) continue
+    if (msg.role === 'user') break
+    if (msg.role !== 'assistant') continue
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content as Array<{ type?: string; toolCallId?: string }>) {
+      if (part?.type === 'tool-call' && typeof part.toolCallId === 'string') {
+        ids.add(part.toolCallId)
+      }
+    }
+  }
+  return ids
+}
+
 /** Handle all tool calls from a single model turn, sequentially.
  *  `parentModel` is threaded through so the task tool can pass it to runSubAgent. */
 export async function processToolCalls(
@@ -422,6 +461,8 @@ export async function processToolCalls(
   callbacks: AgentCallbacks,
   parentModel: LanguageModel,
 ): Promise<void> {
+  const activeIds = collectActiveAssistantToolCallIds(state)
+
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!
     // User pressed Esc / Ctrl+C. The currently running tool (if any) has
@@ -444,6 +485,22 @@ export async function processToolCalls(
       }
       return
     }
+
+    // Skip ghost calls the SDK rejected mid-stream — see
+    // collectActiveAssistantToolCallIds for the full rationale. Don't
+    // pushToolResult either: the assistant message has no matching
+    // tool_call, so any result we emit would be an orphan that the
+    // sanitizer drops next turn anyway. Belt-and-suspenders: the
+    // sanitizer's reverse-orphan branch would still clean up if this
+    // check ever lets one through.
+    if (activeIds.size > 0 && !activeIds.has(tc.toolCallId)) {
+      debugLog(
+        'tool-exec.skip-ghost',
+        `${tc.toolName} ${tc.toolCallId} — not in assistant tool_calls, likely SDK tool-error reject`,
+      )
+      continue
+    }
+
     await handleToolCall(tc, state, options, callbacks, parentModel)
   }
 }
