@@ -15,6 +15,7 @@ import { Chalk } from 'chalk'
 import { type Token, type Tokens, marked } from 'marked'
 
 import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
+import { visualWidth } from './text-width.js'
 import { BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
 
 const c = new Chalk({ level: 3 })
@@ -123,29 +124,11 @@ function padAligned(
   return content + ' '.repeat(padding)
 }
 
-// Display width in terminal columns: CJK / full-width code points count as 2.
-// Using `string.length` here would undercount headers like `运算` and the
-// table's right border would walk leftward on each subsequent row.
-function isWideChar(cp: number): boolean {
-  return (
-    (cp >= 0x1100 && cp <= 0x115f) ||
-    (cp >= 0x2e80 && cp <= 0x9fff) ||
-    (cp >= 0xa000 && cp <= 0xa4cf) ||
-    (cp >= 0xac00 && cp <= 0xd7a3) ||
-    (cp >= 0xf900 && cp <= 0xfaff) ||
-    (cp >= 0xfe30 && cp <= 0xfe4f) ||
-    (cp >= 0xff00 && cp <= 0xff60) ||
-    (cp >= 0xffe0 && cp <= 0xffe6)
-  )
-}
-
-function displayWidth(text: string): number {
-  let w = 0
-  for (const ch of text) {
-    w += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1
-  }
-  return w
-}
+// Table layout calls `visualWidth` from text-width.js — single source of
+// truth so headers like `运算` count consistently with the chat-input
+// frame and scrollback diff. Without that, the table's right border
+// walks leftward on each subsequent row whenever a CJK char on one
+// renderer's wide-list is missing from another's.
 
 function formatToken(
   token: Token,
@@ -270,7 +253,7 @@ function formatToken(
       const tb = token as Tokens.Table
 
       const displayWidthOf = (tokens?: Token[]): number =>
-        displayWidth(stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')))
+        visualWidth(stripAnsi((tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')))
 
       const colWidths = tb.header.map((header, index) => {
         let max = displayWidthOf(header.tokens)
