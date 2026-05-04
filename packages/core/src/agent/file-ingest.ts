@@ -18,6 +18,7 @@ import type { FilePart, ImagePart, TextPart } from 'ai'
 
 import type { ProviderCapabilities } from '../providers/capabilities.js'
 import { GLOBAL_XCODE_DIR } from '../utils.js'
+import { mediaTypeFor } from '../utils/media-type.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
 
 /** Where tesseract.js caches its language model weights (`eng.traineddata`,
@@ -50,14 +51,67 @@ export interface FileReference {
 /** Extensions we treat as inline text without inspection. Order doesn't
  *  matter; this is just a membership check. */
 const TEXT_EXTENSIONS = new Set([
-  '.txt', '.md', '.mdx', '.rst', '.log', '.csv', '.tsv', '.json', '.jsonc',
-  '.yaml', '.yml', '.toml', '.ini', '.env', '.cfg', '.conf',
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
-  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.swift', '.c', '.h',
-  '.cpp', '.cc', '.hpp', '.cs', '.php', '.pl', '.lua', '.sh', '.bash',
-  '.zsh', '.fish', '.ps1', '.sql', '.graphql', '.gql', '.proto',
-  '.html', '.htm', '.css', '.scss', '.sass', '.less', '.vue', '.svelte',
-  '.xml', '.svg', '.dockerfile', '.makefile', '.gitignore', '.editorconfig',
+  '.txt',
+  '.md',
+  '.mdx',
+  '.rst',
+  '.log',
+  '.csv',
+  '.tsv',
+  '.json',
+  '.jsonc',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.ini',
+  '.env',
+  '.cfg',
+  '.conf',
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.py',
+  '.rb',
+  '.go',
+  '.rs',
+  '.java',
+  '.kt',
+  '.swift',
+  '.c',
+  '.h',
+  '.cpp',
+  '.cc',
+  '.hpp',
+  '.cs',
+  '.php',
+  '.pl',
+  '.lua',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.fish',
+  '.ps1',
+  '.sql',
+  '.graphql',
+  '.gql',
+  '.proto',
+  '.html',
+  '.htm',
+  '.css',
+  '.scss',
+  '.sass',
+  '.less',
+  '.vue',
+  '.svelte',
+  '.xml',
+  '.svg',
+  '.dockerfile',
+  '.makefile',
+  '.gitignore',
+  '.editorconfig',
 ])
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
@@ -79,10 +133,7 @@ export async function classifyFile(filePath: string): Promise<FileKind> {
     if (!detected) return 'text' // Empty signature → assume plain text.
     if (detected.mime.startsWith('image/')) return 'image'
     if (detected.mime === 'application/pdf') return 'pdf'
-    if (
-      detected.mime.includes('officedocument') ||
-      detected.mime.includes('opendocument')
-    ) return 'office'
+    if (detected.mime.includes('officedocument') || detected.mime.includes('opendocument')) return 'office'
     if (detected.mime.startsWith('text/')) return 'text'
     return 'unknown'
   } catch {
@@ -251,8 +302,6 @@ async function ocrPdf(filePath: string): Promise<string> {
   }
 }
 
-import { mediaTypeFor } from '../utils/media-type.js'
-
 /**
  * Resolve a single file reference into one or more content parts, taking
  * the active provider's multi-modal capabilities into account.
@@ -301,17 +350,13 @@ export async function ingestFile(
     // Heuristic: a "real" text PDF yields at least a couple hundred chars.
     // Scanned PDFs typically yield empty strings or a few stray ligatures.
     if (extracted.trim().length > 200) {
-      return [
-        { type: 'text', text: `<<file path="${ref.absolutePath}" kind="pdf-text">>\n${extracted}\n<</file>>` },
-      ]
+      return [{ type: 'text', text: `<<file path="${ref.absolutePath}" kind="pdf-text">>\n${extracted}\n<</file>>` }]
     }
     // Scanned / image-based PDF.
     if (caps.pdf) {
       try {
         const buffer = await fs.readFile(ref.absolutePath)
-        return [
-          { type: 'file', data: buffer, mediaType: 'application/pdf', filename: path.basename(ref.absolutePath) },
-        ]
+        return [{ type: 'file', data: buffer, mediaType: 'application/pdf', filename: path.basename(ref.absolutePath) }]
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         return [{ type: 'text', text: `[Failed to attach PDF ${ref.raw}: ${msg}]` }]

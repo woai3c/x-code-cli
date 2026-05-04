@@ -8,9 +8,9 @@ import type { LanguageModel } from 'ai'
 import { resolveModelId } from '../../config/index.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog } from '../../utils.js'
-import { agentLoop } from '../loop.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
+import { agentLoop } from '../loop.js'
 import { buildSubAgentSystemPrompt } from '../system-prompt.js'
 import type { SubAgentRegistry } from './registry.js'
 import type { SubAgentDefinition } from './types.js'
@@ -89,11 +89,18 @@ function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: str
 
 /** Resolve the model to use for the sub-agent. Need the actual LanguageModel
  *  instance from the parent since we pass it to agentLoop. */
-export async function runSubAgent(
-  args: RunSubAgentArgs,
-  parentModel: LanguageModel,
-): Promise<RunSubAgentResult> {
-  const { parentState, parentOptions, callbacks, toolCallId, agentName, description, prompt, knowledgeContext, isGitRepo } = args
+export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageModel): Promise<RunSubAgentResult> {
+  const {
+    parentState,
+    parentOptions,
+    callbacks,
+    toolCallId,
+    agentName,
+    description,
+    prompt,
+    knowledgeContext,
+    isGitRepo,
+  } = args
   const startTime = Date.now()
 
   const registry = parentOptions.subAgentRegistry as SubAgentRegistry | undefined
@@ -202,13 +209,7 @@ export async function runSubAgent(
 
   let aborted = false
   try {
-    const finalSubState = await agentLoop(
-      prompt,
-      subModel,
-      subOptions,
-      subCallbacks,
-      subState,
-    )
+    const finalSubState = await agentLoop(prompt, subModel, subOptions, subCallbacks, subState)
 
     const finalText = extractFinalText(finalSubState.messages)
     const turnCount = finalSubState.turnCount

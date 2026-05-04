@@ -15,7 +15,6 @@ import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMes
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
 
-
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
   let count = 0
@@ -164,8 +163,10 @@ async function executeShell(
   const isMaxBuffer = result.isMaxBuffer ?? false
   if (isMaxBuffer) {
     const INLINE_CAP = 30_000
-    if (stdout.length > INLINE_CAP) stdout = stdout.slice(0, INLINE_CAP) + '\n... [stdout truncated — exceeded buffer limit]'
-    if (stderr.length > INLINE_CAP) stderr = stderr.slice(0, INLINE_CAP) + '\n... [stderr truncated — exceeded buffer limit]'
+    if (stdout.length > INLINE_CAP)
+      stdout = stdout.slice(0, INLINE_CAP) + '\n... [stdout truncated — exceeded buffer limit]'
+    if (stderr.length > INLINE_CAP)
+      stderr = stderr.slice(0, INLINE_CAP) + '\n... [stderr truncated — exceeded buffer limit]'
   }
 
   const output = [stdout, stderr].filter(Boolean).join('\n').trim()

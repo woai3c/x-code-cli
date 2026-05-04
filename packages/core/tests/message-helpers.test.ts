@@ -36,10 +36,7 @@ describe('extractText', () => {
   })
 
   it('handles parts with missing text field', () => {
-    const content = [
-      { type: 'text' },
-      { type: 'text', text: 'ok' },
-    ]
+    const content = [{ type: 'text' }, { type: 'text', text: 'ok' }]
     expect(extractText(content as any)).toBe('ok')
   })
 })

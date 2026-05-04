@@ -14,7 +14,12 @@ describe('toolResultMessage', () => {
     const msg = toolResultMessage('tc_1', 'shell', 'done')
     expect(msg.role).toBe('tool')
     expect(Array.isArray(msg.content)).toBe(true)
-    const parts = msg.content as Array<{ type: string; toolCallId: string; toolName: string; output: { type: string; value: string } }>
+    const parts = msg.content as Array<{
+      type: string
+      toolCallId: string
+      toolName: string
+      output: { type: string; value: string }
+    }>
     expect(parts).toHaveLength(1)
     expect(parts[0]).toEqual({
       type: 'tool-result',

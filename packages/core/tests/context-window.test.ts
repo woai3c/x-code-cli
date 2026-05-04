@@ -31,9 +31,7 @@ describe('getContextWindow', () => {
 describe('getCompressionThreshold', () => {
   it('is context window * COMPRESSION_TRIGGER_RATIO', () => {
     const window = getContextWindow('anthropic:claude-opus-4-7')
-    expect(getCompressionThreshold('anthropic:claude-opus-4-7')).toBe(
-      Math.floor(window * COMPRESSION_TRIGGER_RATIO),
-    )
+    expect(getCompressionThreshold('anthropic:claude-opus-4-7')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
   })
 
   it('changes with model', () => {

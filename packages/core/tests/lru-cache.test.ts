@@ -45,8 +45,12 @@ describe('LruCache', () => {
   })
 
   describe('TTL expiry', () => {
-    beforeEach(() => { vi.useFakeTimers() })
-    afterEach(() => { vi.useRealTimers() })
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
 
     it('returns null for expired entries', () => {
       const cache = new LruCache<string>({ maxEntries: 10, ttlMs: 1000 })

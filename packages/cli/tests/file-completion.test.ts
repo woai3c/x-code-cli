@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  applyCompletion,
-  detectAtToken,
-  scoreAndRank,
-  type FileEntry,
-} from '../src/ui/file-completion.js'
+import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank } from '../src/ui/file-completion.js'
 
 describe('detectAtToken', () => {
   it('activates immediately after a bare @ at line start', () => {
@@ -77,10 +72,7 @@ describe('scoreAndRank', () => {
   const E = (relPath: string, isDirectory = false): FileEntry => ({ relPath, isDirectory })
 
   it('ranks basename matches above nested-path matches', () => {
-    const entries = [
-      E('src/foo/chatter/util.ts'),
-      E('packages/cli/src/ui/components/ChatInput.tsx'),
-    ]
+    const entries = [E('src/foo/chatter/util.ts'), E('packages/cli/src/ui/components/ChatInput.tsx')]
     const ranked = scoreAndRank(entries, 'chat')
     expect(ranked[0]?.relPath).toBe('packages/cli/src/ui/components/ChatInput.tsx')
   })

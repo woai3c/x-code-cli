@@ -183,7 +183,7 @@ export function classifyApiError(err: unknown): ClassifiedError {
   if (isMaxTokensError(msg)) {
     return {
       message:
-        'The configured max_tokens exceeds this model\'s limit. Try switching to a different model with /model, or report this issue so we can add the correct ceiling.',
+        "The configured max_tokens exceeds this model's limit. Try switching to a different model with /model, or report this issue so we can add the correct ceiling.",
       retryable: false,
     }
   }

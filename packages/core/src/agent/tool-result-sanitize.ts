@@ -17,7 +17,6 @@
 //     but the meaningful content is usually the middle. head-tail still beats
 //     head-only because it preserves the final anchors)
 //   - default: head-tail
-
 import type { ModelMessage } from 'ai'
 
 import { truncateToolResult } from '../tools/truncate.js'

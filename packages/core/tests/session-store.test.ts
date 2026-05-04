@@ -16,12 +16,14 @@
 //                     can't observe an orphan.
 //   4. CJK fallback:  empty taskSlug falls back to timestamp-only
 //                     filenames (mirrors plan files).
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
 import { mkdtempSync, rmSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { createLoopState } from '../src/agent/loop-state.js'
 import {
   appendHeader,
   appendUsage,
@@ -33,7 +35,6 @@ import {
   markBoundaryAndReflush,
   pickLatestSession,
 } from '../src/agent/session-store.js'
-import { createLoopState } from '../src/agent/loop-state.js'
 
 let tempDir: string
 let originalCwd: string
@@ -193,9 +194,7 @@ describe('session-store: orphan tool-call sanitisation', () => {
       { role: 'user', content: 'work on something' },
       {
         role: 'assistant',
-        content: [
-          { type: 'tool-call', toolCallId: 'tc-resolved', toolName: 'shell', input: { command: 'ls' } },
-        ],
+        content: [{ type: 'tool-call', toolCallId: 'tc-resolved', toolName: 'shell', input: { command: 'ls' } }],
       },
       {
         role: 'tool',
@@ -329,7 +328,14 @@ describe('session-store: hydrateLoopState', () => {
       { role: 'user', content: 'q' },
       { role: 'assistant', content: 'a' },
     ]
-    s.tokenUsage = { inputTokens: 50, outputTokens: 5, totalTokens: 55, cacheReadTokens: 0, cacheCreationTokens: 0, currentContextTokens: 55 }
+    s.tokenUsage = {
+      inputTokens: 50,
+      outputTokens: 5,
+      totalTokens: 55,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      currentContextTokens: 55,
+    }
     s.turnCount = 1
     await appendHeader(s, 'anthropic:claude-sonnet-4-6', 'q')
     await flushPendingMessages(s)

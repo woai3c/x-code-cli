@@ -2,14 +2,33 @@
 import type { SubAgentDefinition } from './types.js'
 
 const SHELL_DENY_KEYWORDS = [
-  'rm ', 'rm\t', 'rmdir', 'del ', 'rd ',
-  'mv ', 'move ', 'ren ',
-  'git commit', 'git push', 'git merge', 'git rebase', 'git reset',
-  'git checkout -b', 'git branch -d', 'git branch -D',
-  '>', '>>', 'tee ', 'tee\t',
-  'chmod', 'chown',
-  'npm publish', 'pnpm publish', 'yarn publish',
-  'docker rm', 'docker rmi',
+  'rm ',
+  'rm\t',
+  'rmdir',
+  'del ',
+  'rd ',
+  'mv ',
+  'move ',
+  'ren ',
+  'git commit',
+  'git push',
+  'git merge',
+  'git rebase',
+  'git reset',
+  'git checkout -b',
+  'git branch -d',
+  'git branch -D',
+  '>',
+  '>>',
+  'tee ',
+  'tee\t',
+  'chmod',
+  'chown',
+  'npm publish',
+  'pnpm publish',
+  'yarn publish',
+  'docker rm',
+  'docker rmi',
 ]
 
 // Shared lead-in for sub-agents whose final message is the entire payload
@@ -17,7 +36,7 @@ const SHELL_DENY_KEYWORDS = [
 // sub-agent read or computed mid-loop, so we reinforce "inline everything"
 // in one place rather than repeating near-identical copy per agent.
 const FINAL_MESSAGE_CONTRACT_HEADER =
-  'CRITICAL — your final message is ALL the parent agent sees. It will NOT re-read files you\'ve already read.'
+  "CRITICAL — your final message is ALL the parent agent sees. It will NOT re-read files you've already read."
 
 export const builtInAgents: SubAgentDefinition[] = [
   {
@@ -46,7 +65,7 @@ ${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be comprehensive enough that t
   {
     name: 'general-purpose',
     description:
-      'Multi-step research and investigation. Use for open-ended questions that may need 3+ tool calls and you don\'t want noise in the main context.',
+      "Multi-step research and investigation. Use for open-ended questions that may need 3+ tool calls and you don't want noise in the main context.",
     prompt: `You are a general-purpose research assistant. You can read files, search code, and run shell commands to investigate questions.
 
 Guidelines:

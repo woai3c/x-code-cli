@@ -38,8 +38,8 @@ describe('applyCacheControl', () => {
       // Structure: [system, user1, assistant, user2]
       const lastTwo = out.messages.slice(-2)
       for (const m of lastTwo) {
-        const opts = (m as { providerOptions?: { anthropic?: { cacheControl?: { type: string } } } })
-          .providerOptions?.anthropic?.cacheControl
+        const opts = (m as { providerOptions?: { anthropic?: { cacheControl?: { type: string } } } }).providerOptions
+          ?.anthropic?.cacheControl
         expect(opts?.type).toBe('ephemeral')
       }
       // Earliest user should NOT have cache_control

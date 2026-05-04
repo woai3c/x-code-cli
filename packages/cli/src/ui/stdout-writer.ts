@@ -123,9 +123,7 @@ function formatToolCall(tc: DisplayToolCall): string {
   // render as plain red text so failures stand out in scrollback —
   // matches Claude Code's behavior of coloring the stderr/exit-code
   // block in red for non-zero shell exits.
-  const rendered = isFailure
-    ? resultSummary
-    : renderMarkdown(resultSummary).replace(/\n+$/, '')
+  const rendered = isFailure ? resultSummary : renderMarkdown(resultSummary).replace(/\n+$/, '')
 
   // Strip blank lines — markdown rendering inserts paragraph spacing
   // between blocks, which makes the tool-result summary look sparse
@@ -235,10 +233,7 @@ function isCollapsibleMessage(msg: DisplayMessage): boolean {
   if (msg.kind) return false
   if (!msg.toolCalls || msg.toolCalls.length === 0) return false
   return msg.toolCalls.every(
-    (tc) =>
-      tc.status === 'completed' &&
-      !tc.editPayload &&
-      isCollapsibleReadOnlyTool(tc.toolName),
+    (tc) => tc.status === 'completed' && !tc.editPayload && isCollapsibleReadOnlyTool(tc.toolName),
   )
 }
 

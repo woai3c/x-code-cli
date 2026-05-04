@@ -2,8 +2,8 @@
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import type { EditDiffPayload } from '../agent/diff.js'
-import type { SubAgentEvent } from '../agent/sub-agents/types.js'
 import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
+import type { SubAgentEvent } from '../agent/sub-agents/types.js'
 
 // ─── Permission ───
 

@@ -26,7 +26,6 @@
 // and stays well under the 1M context window budget. Users on Opus who want
 // a wider budget can edit this and rebuild — exposing a `budget` slash arg
 // is over-engineering for a feature most users will leave at "on" or "off".
-
 import { providerOf } from './capabilities.js'
 
 const ANTHROPIC_BUDGET_TOKENS = 8000
@@ -43,10 +42,7 @@ const ANTHROPIC_BUDGET_TOKENS = 8000
  *           e.g. Gemini 2.5 Pro can't go below 128 tokens — we still
  *           ask for the lowest the SDK accepts)
  */
-export function getThinkingProviderOptions(
-  modelId: string,
-  enabled: boolean,
-): Record<string, Record<string, unknown>> {
+export function getThinkingProviderOptions(modelId: string, enabled: boolean): Record<string, Record<string, unknown>> {
   const provider = providerOf(modelId)
   switch (provider) {
     case 'anthropic':
@@ -89,16 +85,12 @@ export function getThinkingProviderOptions(
       // and grok-4 ignore it. Sending the option is harmless on the
       // ignoring models — the SDK passes it through and the API silently
       // discards it.
-      return enabled
-        ? { xai: { reasoningEffort: 'high' } }
-        : { xai: { reasoningEffort: 'low' } }
+      return enabled ? { xai: { reasoningEffort: 'high' } } : { xai: { reasoningEffort: 'low' } }
 
     case 'openai':
       // Only o-series and gpt-5 reasoning models use `reasoningEffort`;
       // gpt-4.1 ignores it. Same harmless pass-through as xAI.
-      return enabled
-        ? { openai: { reasoningEffort: 'high' } }
-        : { openai: { reasoningEffort: 'minimal' } }
+      return enabled ? { openai: { reasoningEffort: 'high' } } : { openai: { reasoningEffort: 'minimal' } }
 
     case 'zhipu':
     case 'custom':

@@ -22,9 +22,9 @@ function toolMsg(toolName: string, value: string): ModelMessage {
 describe('truncateToolResultsInMessages', () => {
   it('is a no-op when all results fit the budget', () => {
     const messages: ModelMessage[] = [toolMsg('grep', 'short result')]
-    const originalValue = ((messages[0].content as unknown as Array<{ output: { value: string } }>)[0].output.value)
+    const originalValue = (messages[0].content as unknown as Array<{ output: { value: string } }>)[0].output.value
     truncateToolResultsInMessages(messages)
-    const after = ((messages[0].content as unknown as Array<{ output: { value: string } }>)[0].output.value)
+    const after = (messages[0].content as unknown as Array<{ output: { value: string } }>)[0].output.value
     expect(after).toBe(originalValue)
   })
 
@@ -75,7 +75,8 @@ describe('truncateToolResultsInMessages', () => {
       } as ModelMessage,
     ]
     truncateToolResultsInMessages(messages)
-    const entry = (messages[0].content as unknown as Array<{ output: { value: Array<{ text: string }> } }>)[0].output.value[0]
+    const entry = (messages[0].content as unknown as Array<{ output: { value: Array<{ text: string }> } }>)[0].output
+      .value[0]
     expect(entry.text.length).toBeLessThan(huge.length)
   })
 })

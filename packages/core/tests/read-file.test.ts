@@ -15,7 +15,7 @@ describe('readFile tool', () => {
     const filePath = path.join(tmpDir, 'hello.ts')
     await fs.writeFile(filePath, 'const a = 1\nconst b = 2\nconst c = 3\n')
 
-    const result = await exec({ filePath }) as string
+    const result = (await exec({ filePath })) as string
     expect(result).toContain('1\tconst a = 1')
     expect(result).toContain('2\tconst b = 2')
     expect(result).toContain('3\tconst c = 3')
@@ -29,7 +29,7 @@ describe('readFile tool', () => {
     const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`)
     await fs.writeFile(filePath, lines.join('\n'))
 
-    const result = await exec({ filePath, offset: 3, limit: 2 }) as string
+    const result = (await exec({ filePath, offset: 3, limit: 2 })) as string
     expect(result).toContain('3\tline 3')
     expect(result).toContain('4\tline 4')
     expect(result).not.toContain('2\tline 2')
@@ -44,7 +44,7 @@ describe('readFile tool', () => {
     const lines = Array.from({ length: 600 }, (_, i) => `// line ${i + 1}`)
     await fs.writeFile(filePath, lines.join('\n'))
 
-    const result = await exec({ filePath }) as string
+    const result = (await exec({ filePath })) as string
     expect(result).toContain('showing first 500')
     expect(result).toContain('600')
     expect(result).not.toContain('501\t')
@@ -58,7 +58,7 @@ describe('readFile tool', () => {
     const lines = Array.from({ length: 600 }, (_, i) => `// line ${i + 1}`)
     await fs.writeFile(filePath, lines.join('\n'))
 
-    const result = await exec({ filePath, offset: 1, limit: 600 }) as string
+    const result = (await exec({ filePath, offset: 1, limit: 600 })) as string
     expect(result).not.toContain('showing first')
     expect(result).toContain('600\t')
 
@@ -66,7 +66,7 @@ describe('readFile tool', () => {
   })
 
   it('returns error for non-existent file', async () => {
-    const result = await exec({ filePath: '/tmp/nonexistent-xc-test-file.ts' }) as string
+    const result = (await exec({ filePath: '/tmp/nonexistent-xc-test-file.ts' })) as string
     expect(result).toContain('Error')
   })
 })

@@ -1,9 +1,9 @@
 // Tests for agent/plan-tools.ts (handleTodoWrite / handleEnterPlanMode / handleExitPlanMode)
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createLoopState } from '../src/agent/loop-state.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from '../src/agent/plan-tools.js'
@@ -192,7 +192,14 @@ describe('handleEnterPlanMode', () => {
         return 'yes'
       }),
     })
-    await handleEnterPlanMode({}, 'tc1', state, makeOptions({ abortSignal: ac.signal }), callbacks, recordPushToolResult)
+    await handleEnterPlanMode(
+      {},
+      'tc1',
+      state,
+      makeOptions({ abortSignal: ac.signal }),
+      callbacks,
+      recordPushToolResult,
+    )
     expect(state.permissionMode).toBe('default')
     expect(captured[0].output).toContain('interrupted')
     expect(captured[0].isError).toBe(true)

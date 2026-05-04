@@ -18,9 +18,9 @@ import { Chalk } from 'chalk'
 
 import type { EditDiffHunk, EditDiffPayload } from '@x-code-cli/core'
 
-import { highlightLine, detectLanguage, type SyntaxThemeName } from './syntax-highlight.js'
+import { type SyntaxThemeName, detectLanguage, highlightLine } from './syntax-highlight.js'
 import { sliceByWidth, visualWidth } from './text-width.js'
-import { getThemeColors, type ThemeName } from './theme.js'
+import { type ThemeName, getThemeColors } from './theme.js'
 
 const c = new Chalk({ level: 3 })
 
@@ -293,7 +293,12 @@ function renderHunks(
  * noise without communicating any information (there's nothing to
  * compare against). Truncated tail collapses to `… +N lines`.
  */
-function renderCreatePreview(filePath: string, content: string, terminalWidth: number, theme?: SyntaxThemeName): string[] {
+function renderCreatePreview(
+  filePath: string,
+  content: string,
+  terminalWidth: number,
+  theme?: SyntaxThemeName,
+): string[] {
   const cols = Math.max(40, terminalWidth)
   const allLines = content.split('\n')
   // Drop a single trailing empty line — most file content ends with `\n`,
@@ -359,12 +364,7 @@ export function buildThemePreview(themeName: ThemeName, terminalWidth: number): 
         oldLines: 3,
         newStart: 1,
         newLines: 3,
-        lines: [
-          ' function greet() {',
-          '-  console.log("Hello, World!");',
-          '+  console.log("Hello, X-Code!");',
-          ' }',
-        ],
+        lines: [' function greet() {', '-  console.log("Hello, World!");', '+  console.log("Hello, X-Code!");', ' }'],
       },
     ],
     additions: 1,
@@ -376,11 +376,7 @@ export function buildThemePreview(themeName: ThemeName, terminalWidth: number): 
   )
 }
 
-export function renderEditDiff(
-  payload: EditDiffPayload,
-  terminalWidth: number,
-  theme?: SyntaxThemeName,
-): string[] {
+export function renderEditDiff(payload: EditDiffPayload, terminalWidth: number, theme?: SyntaxThemeName): string[] {
   const header = formatCounts(payload)
   if (payload.isCreate) {
     if (!payload.content) return [header]

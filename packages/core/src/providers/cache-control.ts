@@ -27,7 +27,6 @@
 //
 //   Google      — Gemini uses implicit caching; no per-request flags we can
 //                 usefully set from the SDK. Left as a no-op.
-
 import type { ModelMessage } from 'ai'
 
 import { providerOf } from './capabilities.js'
@@ -63,11 +62,7 @@ export interface CacheControlResult {
 }
 
 /** Attach the given providerOptions entry to a message non-destructively. */
-function tagMessage(
-  msg: ModelMessage,
-  provider: string,
-  entry: Record<string, unknown>,
-): ModelMessage {
+function tagMessage(msg: ModelMessage, provider: string, entry: Record<string, unknown>): ModelMessage {
   const existing = (msg as { providerOptions?: Record<string, Record<string, unknown>> }).providerOptions ?? {}
   return {
     ...msg,

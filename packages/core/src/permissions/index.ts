@@ -3,13 +3,7 @@ import path from 'node:path'
 
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { PermissionLevel, PermissionMode } from '../types/index.js'
-import {
-  addSessionAllowRule,
-  buildAllowRule,
-  clearSessionRules,
-  persistRule,
-  sessionRulesMatch,
-} from './session-store.js'
+import { addSessionAllowRule, buildAllowRule, persistRule, sessionRulesMatch } from './session-store.js'
 
 type PermissionInput = Record<string, unknown>
 
@@ -121,7 +115,11 @@ function isSensitivePath(filePath: string): boolean {
 export async function checkPermission(
   toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
   trustMode: boolean,
-  onAskPermission: (toolCall: { toolCallId: string; toolName: string; input: PermissionInput }) => Promise<'yes' | 'always' | 'no'>,
+  onAskPermission: (toolCall: {
+    toolCallId: string
+    toolName: string
+    input: PermissionInput
+  }) => Promise<'yes' | 'always' | 'no'>,
   permissionMode: PermissionMode = 'default',
   cwd?: string,
 ): Promise<boolean> {

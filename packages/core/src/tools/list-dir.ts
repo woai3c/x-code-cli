@@ -6,7 +6,6 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { formatToolError } from '../utils/tool-errors.js'
-
 import { reportProgress } from './progress.js'
 
 export const listDir = tool({

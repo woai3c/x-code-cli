@@ -65,7 +65,11 @@ describe('checkPermission', () => {
 
   it('returns false for denied tools without asking', async () => {
     const askFn = vi.fn()
-    const result = await checkPermission({ toolCallId: '2', toolName: 'shell', input: { command: 'rm -rf /' } }, false, askFn)
+    const result = await checkPermission(
+      { toolCallId: '2', toolName: 'shell', input: { command: 'rm -rf /' } },
+      false,
+      askFn,
+    )
     expect(result).toBe(false)
     expect(askFn).not.toHaveBeenCalled()
   })
@@ -96,7 +100,10 @@ describe('checkPermission', () => {
     const cwd = process.cwd()
     const result = await checkPermission(
       { toolCallId: '10', toolName: 'writeFile', input: { filePath: `${cwd}/src/foo.ts` } },
-      false, askFn, 'acceptEdits', cwd,
+      false,
+      askFn,
+      'acceptEdits',
+      cwd,
     )
     expect(result).toBe(true)
     expect(askFn).not.toHaveBeenCalled()
@@ -107,7 +114,10 @@ describe('checkPermission', () => {
     const cwd = process.cwd()
     const result = await checkPermission(
       { toolCallId: '11', toolName: 'writeFile', input: { filePath: '/etc/passwd' } },
-      false, askFn, 'acceptEdits', cwd,
+      false,
+      askFn,
+      'acceptEdits',
+      cwd,
     )
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()
@@ -118,7 +128,10 @@ describe('checkPermission', () => {
     const cwd = process.cwd()
     const result = await checkPermission(
       { toolCallId: '12', toolName: 'edit', input: { filePath: `${cwd}/.env` } },
-      false, askFn, 'acceptEdits', cwd,
+      false,
+      askFn,
+      'acceptEdits',
+      cwd,
     )
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()
@@ -129,7 +142,10 @@ describe('checkPermission', () => {
     const cwd = process.cwd()
     const result = await checkPermission(
       { toolCallId: '13', toolName: 'writeFile', input: { filePath: `${cwd}/.git/config` } },
-      false, askFn, 'acceptEdits', cwd,
+      false,
+      askFn,
+      'acceptEdits',
+      cwd,
     )
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()
@@ -140,7 +156,10 @@ describe('checkPermission', () => {
     const cwd = process.cwd()
     const result = await checkPermission(
       { toolCallId: '14', toolName: 'writeFile', input: { filePath: `${cwd}/../../etc/passwd` } },
-      false, askFn, 'acceptEdits', cwd,
+      false,
+      askFn,
+      'acceptEdits',
+      cwd,
     )
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()

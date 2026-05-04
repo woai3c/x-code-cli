@@ -22,7 +22,6 @@
 // predicate — that misses the case where the model tries `foo`, then reads a
 // file in between, then tries `foo` again. We instead look at the last N
 // tool calls of the same toolName and check if K of them share the hash.
-
 import crypto from 'node:crypto'
 
 import type { LoopState } from './loop-state.js'

@@ -40,15 +40,15 @@ const YEAR = new Date().getFullYear()
 // and no IPs in private/link-local/loopback ranges.
 
 const PRIVATE_IP_PATTERNS = [
-  /^127\./,                   // loopback
-  /^10\./,                    // 10.0.0.0/8
+  /^127\./, // loopback
+  /^10\./, // 10.0.0.0/8
   /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
-  /^192\.168\./,              // 192.168.0.0/16
-  /^169\.254\./,              // link-local (AWS/GCP metadata)
-  /^0\./,                     // 0.0.0.0/8
-  /^::1$/,                    // IPv6 loopback
-  /^fd[0-9a-f]{2}:/i,        // IPv6 ULA
-  /^fe80:/i,                  // IPv6 link-local
+  /^192\.168\./, // 192.168.0.0/16
+  /^169\.254\./, // link-local (AWS/GCP metadata)
+  /^0\./, // 0.0.0.0/8
+  /^::1$/, // IPv6 loopback
+  /^fd[0-9a-f]{2}:/i, // IPv6 ULA
+  /^fe80:/i, // IPv6 link-local
 ]
 
 function isPrivateHost(hostname: string): boolean {

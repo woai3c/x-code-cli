@@ -25,9 +25,7 @@
  *  Unicode beyond CP437 / Latin-1 Supplement (U+0000–U+00FF) and the
  *  Box Drawing block (U+2500–U+257F). */
 export const IS_LEGACY_TERMINAL =
-  process.platform === 'win32' &&
-  !process.env.WT_SESSION &&
-  process.env.TERM_PROGRAM !== 'vscode'
+  process.platform === 'win32' && !process.env.WT_SESSION && process.env.TERM_PROGRAM !== 'vscode'
 
 /** Extra columns to reserve on the right edge when right-aligning text.
  *  ConHost's vertical scrollbar overlaps the rightmost column(s) of the

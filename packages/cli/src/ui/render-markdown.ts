@@ -155,15 +155,11 @@ function formatToken(
 ): string {
   switch (token.type) {
     case 'blockquote': {
-      const inner = (token.tokens ?? [])
-        .map((t) => formatToken(t, 0, null, null))
-        .join('')
+      const inner = (token.tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')
       const bar = c.dim(BLOCKQUOTE_BAR)
       return inner
         .split(EOL)
-        .map((line) =>
-          stripAnsi(line).trim() ? `${bar} ${c.italic(line)}` : line,
-        )
+        .map((line) => (stripAnsi(line).trim() ? `${bar} ${c.italic(line)}` : line))
         .join(EOL)
     }
 
@@ -177,24 +173,14 @@ function formatToken(
       return c.hex(CODE_INLINE)((token as Tokens.Codespan).text ?? '')
 
     case 'em':
-      return c.italic(
-        (token.tokens ?? [])
-          .map((t) => formatToken(t, 0, null, parent))
-          .join(''),
-      )
+      return c.italic((token.tokens ?? []).map((t) => formatToken(t, 0, null, parent)).join(''))
 
     case 'strong':
-      return c.bold(
-        (token.tokens ?? [])
-          .map((t) => formatToken(t, 0, null, parent))
-          .join(''),
-      )
+      return c.bold((token.tokens ?? []).map((t) => formatToken(t, 0, null, parent)).join(''))
 
     case 'heading': {
       const h = token as Tokens.Heading
-      const content = (h.tokens ?? [])
-        .map((t) => formatToken(t, 0, null, null))
-        .join('')
+      const content = (h.tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')
       // Single trailing EOL; blank row (if any) after the heading is
       // supplied by the adjacent `space` token, not by us doubling up.
       if (h.depth === 1) {
@@ -217,9 +203,7 @@ function formatToken(
       if (l.href?.startsWith('mailto:')) {
         return l.href.replace(/^mailto:/, '')
       }
-      const linkText = (l.tokens ?? [])
-        .map((t) => formatToken(t, 0, null, l as Token))
-        .join('')
+      const linkText = (l.tokens ?? []).map((t) => formatToken(t, 0, null, l as Token)).join('')
       const href = l.href ?? ''
       const plain = stripAnsi(linkText)
       const styled = c.hex(LINK).underline(plain && plain !== href ? linkText : href)
@@ -236,30 +220,18 @@ function formatToken(
       const list = token as Tokens.List
       return list.items
         .map((item, index) =>
-          formatToken(
-            item as Token,
-            listDepth,
-            list.ordered ? Number(list.start ?? 1) + index : null,
-            list as Token,
-          ),
+          formatToken(item as Token, listDepth, list.ordered ? Number(list.start ?? 1) + index : null, list as Token),
         )
         .join('')
     }
 
     case 'list_item':
       return (token.tokens ?? [])
-        .map(
-          (t) =>
-            `${'  '.repeat(listDepth)}${formatToken(t, listDepth + 1, orderedListNumber, token)}`,
-        )
+        .map((t) => `${'  '.repeat(listDepth)}${formatToken(t, listDepth + 1, orderedListNumber, token)}`)
         .join('')
 
     case 'paragraph':
-      return (
-        (token.tokens ?? [])
-          .map((t) => formatToken(t, 0, null, null))
-          .join('') + EOL
-      )
+      return (token.tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('') + EOL
 
     case 'space':
       return EOL
@@ -287,9 +259,7 @@ function formatToken(
             ? c.hex(BLUE_PURPLE)(GLYPH_LIST_BULLET)
             : c.hex(BLUE_PURPLE)(`${getListNumber(listDepth, orderedListNumber)}.`)
         const content = tx.tokens
-          ? tx.tokens
-              .map((t) => formatToken(t, listDepth, orderedListNumber, token))
-              .join('')
+          ? tx.tokens.map((t) => formatToken(t, listDepth, orderedListNumber, token)).join('')
           : tx.text
         return `${marker} ${content}${EOL}`
       }
@@ -312,10 +282,17 @@ function formatToken(
 
       // Box-drawing characters: a proper CLI table instead of echoing
       // the markdown pipes back to the user.
-      const TL = '\u250c', TR = '\u2510', TM = '\u252c'
-      const BL = '\u2514', BR = '\u2518', BM = '\u2534'
-      const ML = '\u251c', MR = '\u2524', MM = '\u253c'
-      const H = '\u2500', V = '\u2502'
+      const TL = '\u250c',
+        TR = '\u2510',
+        TM = '\u252c'
+      const BL = '\u2514',
+        BR = '\u2518',
+        BM = '\u2534'
+      const ML = '\u251c',
+        MR = '\u2524',
+        MM = '\u253c'
+      const H = '\u2500',
+        V = '\u2502'
 
       const makeDivider = (left: string, mid: string, right: string): string =>
         left + colWidths.map((w) => H.repeat(w + 2)).join(mid) + right + EOL
@@ -325,9 +302,7 @@ function formatToken(
         width: number,
         align: 'left' | 'center' | 'right' | null | undefined,
       ): string => {
-        const content = (cell.tokens ?? [])
-          .map((t) => formatToken(t, 0, null, null))
-          .join('')
+        const content = (cell.tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')
         const displayWidth = displayWidthOf(cell.tokens)
         return padAligned(content, displayWidth, width, align)
       }
@@ -386,9 +361,7 @@ export function renderInlineMarkdown(text: string): string {
       // bold: **text** or __text__
       .replace(/(\*\*|__)(.+?)\1/g, (_m, _d, inner) => c.bold(inner as string))
       // italic: *text* or _text_ (but not inside a word for _)
-      .replace(/(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1(?!\w)/g, (_m, _d, inner) =>
-        c.italic(inner as string),
-      )
+      .replace(/(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1(?!\w)/g, (_m, _d, inner) => c.italic(inner as string))
       // inline code: `code`
       .replace(/`([^`]+)`/g, (_m, inner) => c.hex(CODE_INLINE)(inner as string))
   )

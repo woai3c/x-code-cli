@@ -11,8 +11,8 @@ import type { LanguageModel, UserContent } from 'ai'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
-import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
+import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createTaskTool } from '../tools/task.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
@@ -20,8 +20,15 @@ import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
+import type { LoopState } from './loop-state.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
+import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
 import { appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
+import { drainStreamResult } from './stream-utils.js'
+import type { StreamResult } from './stream-utils.js'
+import { buildSystemPrompt } from './system-prompt.js'
+import { processToolCalls } from './tool-execution.js'
+import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 
 /** Pull plain text out of a UserContent payload for slugification.
  *  UserContent can be a string OR a multi-part array (text/image/file
@@ -32,19 +39,15 @@ function userContentToText(content: UserContent): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content
-      .filter((p): p is { type: 'text'; text: string } => p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+      .filter(
+        (p): p is { type: 'text'; text: string } =>
+          p?.type === 'text' && typeof (p as { text?: unknown }).text === 'string',
+      )
       .map((p) => p.text)
       .join(' ')
   }
   return ''
 }
-import type { LoopState } from './loop-state.js'
-import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
-import { drainStreamResult } from './stream-utils.js'
-import type { StreamResult } from './stream-utils.js'
-import { buildSystemPrompt } from './system-prompt.js'
-import { processToolCalls } from './tool-execution.js'
-import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 
 export type { LoopState } from './loop-state.js'
 // Re-exported for the CLI's resume / manual-compact path (see use-agent.ts).

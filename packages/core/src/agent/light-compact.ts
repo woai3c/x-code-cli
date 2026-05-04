@@ -17,7 +17,6 @@
 //
 // Callers should run this BEFORE invoking the LLM summariser so the
 // summariser operates on the signal-rich remainder.
-
 import type { ModelMessage } from 'ai'
 
 /** Content of a tool-result part that we should drop on sight. */
