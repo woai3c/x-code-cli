@@ -42,7 +42,13 @@ function assistantWithToolCalls(ids: string[]): ModelMessage {
       type: 'tool-call',
       toolCallId,
       toolName: 'askUser',
-      input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] },
+      input: {
+        question: 'q',
+        options: [
+          { label: 'a', description: 'a' },
+          { label: 'b', description: 'b' },
+        ],
+      },
     })),
   } as ModelMessage
 }
@@ -50,16 +56,33 @@ function assistantWithToolCalls(ids: string[]): ModelMessage {
 describe('processToolCalls ghost-call skip', () => {
   it('runs every tool when all ids appear in the assistant message', async () => {
     const state = createLoopState()
-    state.messages.push(
-      { role: 'user', content: 'hi' } as ModelMessage,
-      assistantWithToolCalls(['tc-A', 'tc-B']),
-    )
+    state.messages.push({ role: 'user', content: 'hi' } as ModelMessage, assistantWithToolCalls(['tc-A', 'tc-B']))
     const onAskUser = vi.fn().mockResolvedValue('a')
     const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
-        { toolName: 'askUser', toolCallId: 'tc-A', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
-        { toolName: 'askUser', toolCallId: 'tc-B', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-A',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-B',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
       ],
       state,
       options,
@@ -75,16 +98,33 @@ describe('processToolCalls ghost-call skip', () => {
     // surfaces it. We must NOT execute the ghost — for write/shell that
     // would be a real side effect for a call the model never committed.
     const state = createLoopState()
-    state.messages.push(
-      { role: 'user', content: 'hi' } as ModelMessage,
-      assistantWithToolCalls(['tc-real']),
-    )
+    state.messages.push({ role: 'user', content: 'hi' } as ModelMessage, assistantWithToolCalls(['tc-real']))
     const onAskUser = vi.fn().mockResolvedValue('a')
     const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
-        { toolName: 'askUser', toolCallId: 'tc-real', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
-        { toolName: 'askUser', toolCallId: 'tc-ghost', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-real',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-ghost',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
       ],
       state,
       options,
@@ -117,7 +157,17 @@ describe('processToolCalls ghost-call skip', () => {
     const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
-        { toolName: 'askUser', toolCallId: 'tc-X', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-X',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
       ],
       state,
       options,
@@ -150,8 +200,28 @@ describe('processToolCalls ghost-call skip', () => {
     const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
-        { toolName: 'askUser', toolCallId: 'new-id', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
-        { toolName: 'askUser', toolCallId: 'old-id', input: { question: 'q', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }] } },
+        {
+          toolName: 'askUser',
+          toolCallId: 'new-id',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
+        {
+          toolName: 'askUser',
+          toolCallId: 'old-id',
+          input: {
+            question: 'q',
+            options: [
+              { label: 'a', description: 'a' },
+              { label: 'b', description: 'b' },
+            ],
+          },
+        },
       ],
       state,
       options,
