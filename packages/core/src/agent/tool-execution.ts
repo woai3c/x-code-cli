@@ -39,6 +39,7 @@ async function executeWriteTool(
   input: Record<string, unknown>,
   toolCallId: string,
   callbacks: AgentCallbacks,
+  signal: AbortSignal | undefined,
 ): Promise<string> {
   if (toolName === 'writeFile') {
     const filePath = input.filePath as string
@@ -50,11 +51,11 @@ async function executeWriteTool(
     // plus permission / EISDIR edge cases (we'd error on write anyway).
     let oldContent: string | null = null
     try {
-      oldContent = await fs.readFile(filePath, 'utf-8')
+      oldContent = await fs.readFile(filePath, { encoding: 'utf-8', signal })
     } catch {
       oldContent = null
     }
-    await fs.writeFile(filePath, content, 'utf-8')
+    await fs.writeFile(filePath, content, { encoding: 'utf-8', signal })
     const isNew = oldContent === null
     const parts = content.split('\n')
     const lineCount = content.endsWith('\n') ? parts.length - 1 : parts.length
@@ -75,7 +76,7 @@ async function executeWriteTool(
     const replaceAll = (input.replaceAll as boolean) ?? false
 
     reportProgress(toolCallId, `Editing ${filePath}`)
-    const content = await fs.readFile(filePath, 'utf-8')
+    const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
     if (!replaceAll) {
       const count = countOccurrences(content, oldString)
       if (count === 0) return toolErrorString(`old_string not found in ${filePath}`)
@@ -86,7 +87,7 @@ async function executeWriteTool(
     }
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
-    await fs.writeFile(filePath, newContent, 'utf-8')
+    await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
 
     const payload = computeEditDiff(filePath, content, newContent)
     if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
@@ -342,7 +343,7 @@ async function handleToolCall(
   let isError = false
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
-      output = await executeWriteTool(toolName, input, toolCallId, callbacks)
+      output = await executeWriteTool(toolName, input, toolCallId, callbacks, options.abortSignal)
       // executeWriteTool returns "Error: ..." strings for in-band failures
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.
