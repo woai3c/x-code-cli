@@ -986,7 +986,16 @@ export function App({
       spinner={
         state.isLoading && !selectActive
           ? {
-              label: 'Thinking',
+              // While a chain of collapsible read tools is in flight the
+              // per-tool live indicator is suppressed (would flash
+              // "appear → vanish" on every fast read), and the generic
+              // "Thinking…" label leaves a multi-second read chain
+              // looking stuck. `bufferingReads` is sticky across the
+              // 50-200ms gaps between consecutive reads — without it
+              // the label would flicker Reading-Thinking-Reading on
+              // every tool. Updated by useAgent on tool-call /
+              // text-delta / loop-end / abort.
+              label: state.bufferingReads ? 'Reading' : 'Thinking',
               mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
             }
           : null

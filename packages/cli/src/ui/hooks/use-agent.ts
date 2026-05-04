@@ -30,6 +30,7 @@ import type {
   TokenUsage,
 } from '@x-code-cli/core'
 
+import { isCollapsibleReadOnlyTool } from '../tool-display.js'
 import { modelMessagesToDisplay, previewSubInput } from './use-agent-display.js'
 import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
 
@@ -100,6 +101,16 @@ export interface AgentState {
    *  have been auto-cleared after completion. Drives the in-frame
    *  todo panel rendered above the spinner in ChatInput. */
   todos: TodoItem[]
+  /** Sticky flag: true while we're inside a chain of consecutive
+   *  collapsible read-only tools (Read/Glob/Grep/ListDir). Drives the
+   *  spinner's "Reading…" label across the brief 50-200ms gaps between
+   *  one read finishing and the next starting — without it the label
+   *  flips back to "Thinking…" between every tool in the chain and
+   *  the visible state during a multi-second read flicker is
+   *  unreadable. Set true on collapsible read tool-call, false when
+   *  any non-read tool runs, the model emits text, the loop ends, or
+   *  the user aborts. */
+  bufferingReads: boolean
 }
 
 const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
@@ -112,6 +123,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, currentContextTokens: 0 },
   error: null,
   todos: [],
+  bufferingReads: false,
 }
 
 
@@ -231,7 +243,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
       const callbacks: AgentCallbacks = {
         onTextDelta: (delta) => {
-          if (delta) sawTextDelta = true
+          if (delta) {
+            sawTextDelta = true
+            // Text streaming breaks any in-flight read chain — flip the
+            // spinner back to "Thinking" so the user doesn't see
+            // "Reading…" while the model is actually generating prose.
+            // Wrapped in a freshness check so we don't burn a setState
+            // on every chunk; only the FIRST text delta after a read
+            // chain causes a flip.
+            setState((prev) => (prev.bufferingReads ? { ...prev, bufferingReads: false } : prev))
+          }
           appendTextDelta(delta)
         },
         onToolCall: (toolCallId, toolName, input) => {
@@ -249,9 +270,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // and the flash is shorter (~1 frame) than the previous flicker.
           flushBuffer()
           pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
+          // Update sticky read-chain flag synchronously alongside the
+          // active-tool list. A collapsible tool extends the chain;
+          // anything else (Edit/Write/Shell/Task) breaks it so the
+          // spinner doesn't say "Reading…" while a write is happening.
+          const isReadOnly = isCollapsibleReadOnlyTool(toolName)
           setState((prev) => ({
             ...prev,
             activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
+            bufferingReads: isReadOnly ? true : false,
           }))
         },
         onToolProgress: (toolCallId, message) => {
@@ -498,7 +525,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           }
         }
         pendingToolsRef.current.clear()
-        setState((prev) => ({ ...prev, isLoading: false, activeToolCalls: [] }))
+        setState((prev) => ({ ...prev, isLoading: false, activeToolCalls: [], bufferingReads: false }))
       } catch (err) {
         pendingToolsRef.current.clear()
         // User-cancel path: agentLoop swallows AbortError into a clean
@@ -513,6 +540,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           ...prev,
           isLoading: false,
           activeToolCalls: [],
+          bufferingReads: false,
           error: wasAborted ? null : classifyApiError(err).message,
         }))
       }
@@ -638,7 +666,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setState((prev) => {
       const pq = prev.pendingQuestion
       pendingAbortRef.current = pq ? { resolve: pq.resolve, abortAnswer: pq.abortAnswer } : null
-      return { ...prev, permissionQueue: [], pendingQuestion: null }
+      return { ...prev, permissionQueue: [], pendingQuestion: null, bufferingReads: false }
     })
     const pa = pendingAbortRef.current
     if (pa) pa.resolve(pa.abortAnswer)

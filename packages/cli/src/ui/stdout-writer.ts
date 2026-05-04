@@ -28,7 +28,13 @@ import { renderEditDiff } from './render-diff.js'
 import { renderMarkdown } from './render-markdown.js'
 import { GLYPH_BULLET, GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET } from './terminal-glyphs.js'
 import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
-import { getToolInputPreview, getToolLabel, getToolResultSummary } from './tool-display.js'
+import {
+  formatReadGroupSummary,
+  getToolInputPreview,
+  getToolLabel,
+  getToolResultSummary,
+  isCollapsibleReadOnlyTool,
+} from './tool-display.js'
 
 const c = new Chalk({ level: 3 })
 
@@ -174,9 +180,13 @@ function toCRLF(s: string): string {
 let prevWriteEndedWithBlankRow = true
 
 /** Reset the spacing flag — call when the scrollback is cleared (e.g.
- *  /clear) so the next write doesn't think there's still a blank above. */
+ *  /clear) so the next write doesn't think there's still a blank above.
+ *  Also drops any buffered read-group entries: post-/clear they refer to
+ *  pre-clear messages that are no longer in scrollback, so committing
+ *  their summary would leave a phantom row above the now-empty history. */
 export function resetScrollbackSpacing(): void {
   prevWriteEndedWithBlankRow = true
+  pendingReadGroup = []
 }
 
 /** Did the most recent scrollback write leave a fully blank row below its
@@ -189,8 +199,110 @@ export function lastWriteEndedWithBlankRow(): boolean {
   return prevWriteEndedWithBlankRow
 }
 
+/** Pending buffer of consecutive completed read-only tool calls. Holds
+ *  Read / Glob / Grep / ListDir (`isCollapsibleReadOnlyTool`) rows that
+ *  arrived back-to-back so we can fold them into a single
+ *  `● Read 3 files (foo.ts, bar.ts, baz.ts)` summary line.
+ *
+ *  Why a module-level buffer rather than a render-time transform:
+ *  scrollback is append-only terminal history — once a row is written
+ *  via `process.stdout.write` it can't be rewritten. Claude Code does
+ *  this transform purely at render time because Ink owns its entire
+ *  transcript and re-renders on every state change; we don't have that
+ *  affordance, so the only way to "merge" is to delay committing the
+ *  individual rows until we know whether more will follow.
+ *
+ *  Flush is triggered when (a) any non-collapsible message hits
+ *  `writeMessageToStdout` (assistant text, write tool, user message —
+ *  these break the chain) or (b) `flushPendingReadGroup` is called
+ *  externally, e.g. ChatInput's commit pass at end-of-turn.
+ *
+ *  Consequence the user can perceive: a single isolated read tool
+ *  doesn't appear in scrollback until the assistant emits its closing
+ *  text (or the turn ends). The live tool indicator covers the gap
+ *  while the chain runs, so the delay is invisible during normal flow.
+ *  Tradeoff is acceptable for the win on multi-read chains, which are
+ *  the noisy case that motivated this. */
+let pendingReadGroup: DisplayToolCall[] = []
+
+/** True when `msg` is a single-message bundle of completed, non-edit,
+ *  read-only tool calls and nothing else (no assistant text, no command
+ *  kind). Such messages are buffer-eligible — anything else flushes the
+ *  buffer first and renders normally. */
+function isCollapsibleMessage(msg: DisplayMessage): boolean {
+  if (msg.role !== 'assistant') return false
+  if (msg.content) return false
+  if (msg.kind) return false
+  if (!msg.toolCalls || msg.toolCalls.length === 0) return false
+  return msg.toolCalls.every(
+    (tc) =>
+      tc.status === 'completed' &&
+      !tc.editPayload &&
+      isCollapsibleReadOnlyTool(tc.toolName),
+  )
+}
+
+/** Render one tool row (single-tool flush path) — same shape as
+ *  `formatToolCall` produces inside `writeMessageToStdout`'s tool loop.
+ *  Extracted so flush can reuse it without re-deriving the prepend-blank
+ *  rule. */
+function writeToolRow(write: InkWrite, tc: DisplayToolCall): void {
+  const lead = prevWriteEndedWithBlankRow ? '' : '\n'
+  write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n'))
+  prevWriteEndedWithBlankRow = false
+}
+
+/** Render the collapsed-group summary line, e.g.
+ *    ` ● Read 3 files (foo.ts, bar.ts, baz.ts)`
+ *  Format mirrors a regular tool row so the visual rhythm is preserved:
+ *  green bullet (all members are completed), bold label, BLUE_PURPLE
+ *  paren'd detail. No `⎿` result body — the whole point of collapsing
+ *  is to drop the per-call result rows. */
+function writeCollapsedGroup(write: InkWrite, tools: readonly DisplayToolCall[]): void {
+  const { label, detail } = formatReadGroupSummary(tools)
+  const detailSuffix = detail ? c.hex(BLUE_PURPLE)(`(${detail})`) : ''
+  const line = ` ${c.hex(SUCCESS)(GLYPH_BULLET)} ${c.bold(label)}${detailSuffix}`
+  const lead = prevWriteEndedWithBlankRow ? '' : '\n'
+  write(toCRLF(lead + line + '\n'))
+  prevWriteEndedWithBlankRow = false
+}
+
+/** Commit any buffered consecutive read-only tool calls to scrollback.
+ *  Single tool → renders as a normal tool row (with its result body, so
+ *  isolated reads don't lose their result blurb). Two or more → folds
+ *  into one summary line. Idempotent — safe to call when buffer empty.
+ *
+ *  Called automatically at the top of `writeMessageToStdout` for every
+ *  non-collapsible message, and externally by ChatInput's commit pass
+ *  when `isLoading` is false (so a chain that ends without a closing
+ *  text message — e.g. user abort — still gets its summary committed
+ *  rather than left dangling in the buffer). */
+export function flushPendingReadGroup(write: InkWrite): void {
+  if (pendingReadGroup.length === 0) return
+  const buffered = pendingReadGroup
+  pendingReadGroup = []
+  if (buffered.length === 1) {
+    writeToolRow(write, buffered[0]!)
+  } else {
+    writeCollapsedGroup(write, buffered)
+  }
+}
+
 /** Print a DisplayMessage to stdout. */
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
+  // Read-group buffering: a message that bundles only completed,
+  // non-edit, read-only tool calls is held in `pendingReadGroup` until
+  // the next non-collapsible message arrives or `flushPendingReadGroup`
+  // is called externally. The flush at the top of every other branch
+  // commits any accumulated reads BEFORE the current message renders,
+  // so chain summaries land in correct scrollback order
+  // (` ● Read 3 files` above ` …final assistant text`).
+  if (isCollapsibleMessage(msg)) {
+    for (const tc of msg.toolCalls!) pendingReadGroup.push(tc)
+    return
+  }
+  flushPendingReadGroup(write)
+
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
     debugLog('stdout.user', content)

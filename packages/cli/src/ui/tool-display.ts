@@ -9,6 +9,7 @@
 // variations (e.g. "listDir" vs "ListDir", "readFile" vs "Read").
 
 import { getShellProvider } from '@x-code-cli/core'
+import type { DisplayToolCall } from '@x-code-cli/core'
 
 const SHELL_LABELS: Record<string, string> = {
   bash: 'Bash',
@@ -19,6 +20,103 @@ const SHELL_LABELS: Record<string, string> = {
 /** Normalize tool name to lowercase for matching */
 function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[_-]/g, '')
+}
+
+/** Tools whose calls can be folded into a single "● Read 3 files" summary line
+ *  when 2+ of them appear consecutively in scrollback. Excludes WebSearch /
+ *  WebFetch (their result blurbs carry meaningful info — collapsing hides it),
+ *  Shell (no reliable read-only classification), and Task (sub-agent, not a
+ *  read). Mirrors the categories Claude Code groups in its `collapseReadSearch`
+ *  pipeline minus the model-tagged Bash branch. */
+const COLLAPSIBLE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'readfile', 'read',
+  'glob',
+  'grep', 'search',
+  'listdir', 'ls',
+])
+
+export function isCollapsibleReadOnlyTool(toolName: string): boolean {
+  return COLLAPSIBLE_READ_ONLY_TOOLS.has(normalizeName(toolName))
+}
+
+/** Strip directory prefix — used for the "(foo.ts, bar.ts)" detail suffix.
+ *  Handles both POSIX and Windows separators because tool inputs sometimes
+ *  carry mixed slashes on Windows (model outputs `/` while ListDir results
+ *  use `\`). */
+function basename(p: string): string {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i >= 0 ? p.slice(i + 1) : p
+}
+
+export interface ReadGroupSummary {
+  /** Bold-rendered label, e.g. "Read 3 files" or
+   *  "Searched for 2 patterns, read 1 file". Mirrors the single-tool
+   *  `Tool` portion of an existing tool row. */
+  label: string
+  /** Optional paren'd detail rendered in BLUE_PURPLE to match the
+   *  single-tool `(input)` suffix. Currently used to list the basename
+   *  of files Read'd so users still see WHAT was read at a glance —
+   *  losing that to a bare count makes the summary feel opaque. */
+  detail?: string
+}
+
+/** Build the label/detail pair for a collapsed read-group. Caller (the
+ *  stdout-writer flush path) wraps the label in `c.bold` and the detail
+ *  in `c.hex(BLUE_PURPLE)` to visually match a regular tool row.
+ *
+ *  Bucket strategy: count by category (read / search / glob / list).
+ *  Single-clause cases get pluralization right; mixed clauses join with
+ *  ", " and only the first clause is capitalized so the line reads as
+ *  one sentence ("Read 2 files, searched for 1 pattern"). */
+export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadGroupSummary {
+  let readCount = 0
+  let grepCount = 0
+  let globCount = 0
+  let lsCount = 0
+  const readPaths: string[] = []
+
+  for (const tc of tools) {
+    const n = normalizeName(tc.toolName)
+    if (n === 'read' || n === 'readfile') {
+      readCount++
+      const p =
+        (tc.input.filePath as string) ||
+        (tc.input.file_path as string) ||
+        (tc.input.path as string) ||
+        ''
+      if (p) readPaths.push(basename(p))
+    } else if (n === 'grep' || n === 'search') {
+      grepCount++
+    } else if (n === 'glob') {
+      globCount++
+    } else if (n === 'listdir' || n === 'ls') {
+      lsCount++
+    }
+  }
+
+  const clauses: string[] = []
+  if (readCount > 0) clauses.push(`read ${readCount} file${readCount === 1 ? '' : 's'}`)
+  if (grepCount > 0) clauses.push(`searched for ${grepCount} pattern${grepCount === 1 ? '' : 's'}`)
+  if (globCount > 0) clauses.push(`globbed ${globCount} pattern${globCount === 1 ? '' : 's'}`)
+  if (lsCount > 0) clauses.push(`listed ${lsCount} director${lsCount === 1 ? 'y' : 'ies'}`)
+
+  if (clauses.length > 0) {
+    const first = clauses[0]!
+    clauses[0] = first.charAt(0).toUpperCase() + first.slice(1)
+  }
+  const label = clauses.join(', ')
+
+  // Sample basenames for read calls so the summary still says WHAT was
+  // read. Cap at 3 names; anything beyond becomes "+N more" so very long
+  // chains don't wrap onto a second line.
+  let detail: string | undefined
+  if (readPaths.length > 0) {
+    const shown = readPaths.slice(0, 3).join(', ')
+    const rest = readPaths.length > 3 ? `, +${readPaths.length - 3} more` : ''
+    detail = shown + rest
+  }
+
+  return detail ? { label, detail } : { label }
 }
 
 /** Map tool name → human-readable label for display */

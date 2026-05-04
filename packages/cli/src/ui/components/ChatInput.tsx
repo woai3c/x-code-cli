@@ -37,7 +37,7 @@ import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { renderInlineMarkdown } from '../render-markdown.js'
-import { lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
+import { flushPendingReadGroup, lastWriteEndedWithBlankRow, writeMessageToStdout } from '../stdout-writer.js'
 import {
   GLYPH_ACCEPT_EDITS,
   GLYPH_BULLET,
@@ -51,7 +51,7 @@ import {
   GLYPH_TODO_PENDING,
   SPINNER_FRAMES,
 } from '../terminal-glyphs.js'
-import { getToolInputPreview, getToolLabel } from '../tool-display.js'
+import { getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../tool-display.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -1405,17 +1405,41 @@ export function ChatInput({
       writtenMessageCountRef.current = messages.length
     }
     const termRows = stdout?.rows ?? 25
-    const didCommitMessages = messages.length > writtenMessageCountRef.current
+    // `hasNewMessages` — we walked new entries this render (advanced
+    // `writtenMessageCountRef`). True even if every message got buffered
+    // by the read-group collapser and produced zero scrollback bytes.
+    // Used by the message-write loop and the permission-slot bookkeeping.
+    //
+    // `didCommitMessages` — actual scrollback bytes were produced. ONLY
+    // this gates the geometry/scroll branches below: `countContentRows`
+    // returns 1 for an empty string (a single empty line), so treating
+    // a buffered-only render as if it scrolled 1 row drifted the frame
+    // down on every consecutive Read/Glob/Grep tool, accumulating real
+    // blank rows in terminal scrollback (the "lots of blank lines"
+    // symptom on multi-read chains).
+    const hasNewMessages = messages.length > writtenMessageCountRef.current
     let scrollbackContent = ''
-    if (didCommitMessages) {
-      const collectWrite: (data: string) => void = (data) => {
-        scrollbackContent += data
-      }
+    const collectWrite: (data: string) => void = (data) => {
+      scrollbackContent += data
+    }
+    if (hasNewMessages) {
       for (let i = writtenMessageCountRef.current; i < messages.length; i++) {
         writeMessageToStdout(collectWrite, messages[i])
       }
       writtenMessageCountRef.current = messages.length
     }
+    // End-of-turn safety net: writeMessageToStdout buffers consecutive
+    // read-only tool messages (Read / Glob / Grep / ListDir) and flushes
+    // them inline when the next non-collapsible message arrives. If a
+    // chain ends without that closing message — user pressed Esc mid-chain,
+    // the model returned `finishReason='stop'` with no text, etc. — the
+    // buffer would otherwise sit until the user submits again. Flushing
+    // when isLoading drops to false commits the trailing summary so it
+    // lands on this same render's atomic write.
+    if (!isLoading) {
+      flushPendingReadGroup(collectWrite)
+    }
+    const didCommitMessages = scrollbackContent.length > 0
 
     // Capture "is this the first active paint?" BEFORE we flip activeRef.
     // The freeBlanks-seeding check below needs to know this, but the old
@@ -1443,7 +1467,7 @@ export function ChatInput({
     // gap around rather than eliminate it.
     const hadPermissionLastRender = prevHadPermissionRef.current
     const runningToolCount = activeToolCalls?.length ?? 0
-    if (didCommitMessages || permission) {
+    if (hasNewMessages || permission) {
       permissionSlotReserveRef.current = 0
     } else if (hadPermissionLastRender && !permission && runningToolCount === 1) {
       permissionSlotReserveRef.current = 2
@@ -1598,7 +1622,21 @@ export function ChatInput({
       // there, and adding another would make the gap look too large.
       if (permission) frame.push([])
 
-      const tools = activeToolCalls ?? []
+      // Collapsible read-only tools (Read/Glob/Grep/ListDir) don't get a
+      // live `● Read(file) / ⎿ Running…` indicator row — their results are
+      // buffered into a single summary line that flushes at chain end, and
+      // showing per-tool live indicators while buffering causes a visible
+      // "appears then vanishes" flash on every fast read: the tool-call
+      // render commits a 7-row frame with the live indicator, the result
+      // arrives 1-5ms later, the post-result commit gets throttled 50ms,
+      // and during that window the user sees the indicator land — then the
+      // throttle releases, the frame shrinks back to 5 rows, and because
+      // the read message was buffered (no scrollback row to take its
+      // place) the indicator simply disappears. CC's batched-read flow
+      // does the same: spinner during the chain, summary after. Slow reads
+      // lose per-file visibility this way, but they're the rare case in
+      // chains and the chain-end summary lists every file by basename.
+      const tools = (activeToolCalls ?? []).filter((tc) => !isCollapsibleReadOnlyTool(tc.toolName))
       if (tools.length > 0) {
         // IMPORTANT: the live tool bubble MUST use the same colour/weight
         // scheme as `stdout-writer.formatToolCall` emits for committed
@@ -1832,7 +1870,12 @@ export function ChatInput({
       const footerRow = 1
       const spinnerRows = spinner ? 1 : 0
       const todoRows = todos && todos.length > 0 ? todos.length : 0
-      const tools = activeToolCalls ?? []
+      // Match the live-tool-block filter above: collapsible read-only
+      // tools don't draw an indicator, so they don't consume rows here
+      // either. Without this filter the select-options dialog would
+      // reserve phantom rows for invisible tools and place itself too
+      // high (or scroll its own viewport unnecessarily).
+      const tools = (activeToolCalls ?? []).filter((tc) => !isCollapsibleReadOnlyTool(tc.toolName))
       const activeToolRows =
         tools.length > 0
           ? tools.reduce((sum, tc, idx) => {
@@ -3001,6 +3044,25 @@ export function ChatInput({
     // `hasDiff || targetMoved` early-return).
     if (preBuf === BSU && buf === '') {
       lastFlushTimeRef.current = Date.now()
+      // Empty diff means the current render's frame matches what's
+      // already on screen (prevFrameRef). If a deferred flush is
+      // pending, it was scheduled by an earlier render whose frame
+      // diverged from prevFrameRef — letting it fire now would draw
+      // that intermediate state on top of the (already correct)
+      // current frame. Concrete case: a fast read tool grew the frame
+      // to 7 rows (deferred 8ms), then the result arrived and the
+      // next render computed 5 rows — same as last actually-flushed,
+      // so this empty-diff branch ran. Without the cancel below, the
+      // 8ms deferred fired and painted the stale `● Read / ⎿ Running`
+      // live indicator after the read had already finished, leaving
+      // it stuck on screen until the next tool call's grow overwrote
+      // it. Symptom users reported as "read tool appears then
+      // disappears between consecutive reads".
+      if (deferredFlushRef.current !== null) {
+        clearTimeout(deferredFlushRef.current)
+        deferredFlushRef.current = null
+        debugLog('chatinput.flush.deferred-cancelled-empty', 'empty diff supersedes stale deferred')
+      }
       // Still need to apply the pending blank-rows update; the
       // shrink path may have computed a new value.
       if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
@@ -3070,7 +3132,19 @@ export function ChatInput({
       flushGenRef.current++
     }
 
-    if (didCommitMessages) {
+    // `hasNewMessages` (not `didCommitMessages`) drives the scheduler:
+    // a render that processed new messages — even if every one got
+    // buffered by the read-group collapser and produced zero scrollback
+    // bytes — is still "real" state change and must paint promptly.
+    // Without this, the post-result render of a buffered read tool
+    // takes the deferred path (160ms delay) and the previous render's
+    // grow-frame (the `● Read(file) / ⎿ Running…` live indicator) sits
+    // staged in the deferred timer. It fires later — long after the
+    // read actually finished — leaving a stale live indicator on screen
+    // until the next read's grow overwrites it. Visible symptom users
+    // reported: the `● Read` row "appears then disappears" between
+    // consecutive read tools.
+    if (didCommitMessages || hasNewMessages) {
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
