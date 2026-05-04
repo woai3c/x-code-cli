@@ -14,6 +14,7 @@
 import { Chalk } from 'chalk'
 import { type Token, type Tokens, marked } from 'marked'
 
+import { detectFenceLanguage, highlightLine } from './syntax-highlight.js'
 import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
 import { visualWidth } from './text-width.js'
 import { BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
@@ -147,9 +148,22 @@ function formatToken(
     }
 
     case 'code': {
-      // No syntax highlighter wired up — plain text with trailing EOL,
-      // same as Claude Code's highlight=null fallback path.
-      return ((token as Tokens.Code).text ?? '') + EOL
+      const code = token as Tokens.Code
+      const text = code.text ?? ''
+      // Map the fence language hint (` ```typescript`, ` ```bash`, etc.)
+      // to one of our supported tokenisers. Unknown / missing langs fall
+      // through to plain text — same as the prior behavior, just no
+      // longer the universal default.
+      const lang = detectFenceLanguage(code.lang)
+      if (!lang) return text + EOL
+      // Highlight per-line so embedded \n in `text` don't get fed into
+      // the tokeniser as if they were source content (the tokenisers'
+      // regexes are line-oriented).
+      const highlighted = text
+        .split('\n')
+        .map((line) => highlightLine(line, lang))
+        .join('\n')
+      return highlighted + EOL
     }
 
     case 'codespan':

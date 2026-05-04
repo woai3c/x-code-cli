@@ -292,6 +292,59 @@ export function detectLanguage(filePath: string): Lang | null {
   return EXT_TO_LANG[ext] ?? null
 }
 
+/** Map a markdown fence-language identifier (the bit after the opening
+ *  ``` on a fenced code block) to one of our supported `Lang` values.
+ *  Returns null when the fence had no language hint or the language
+ *  isn't covered — caller falls back to plain (un-highlighted) text. */
+const FENCE_LANG_TO_LANG: Record<string, Lang> = {
+  // JS / TS family
+  js: 'js',
+  javascript: 'js',
+  jsx: 'js',
+  ts: 'js',
+  typescript: 'js',
+  tsx: 'js',
+  mjs: 'js',
+  cjs: 'js',
+  vue: 'js',
+  svelte: 'js',
+  // Data
+  json: 'json',
+  jsonc: 'json',
+  json5: 'json',
+  // Web
+  html: 'html',
+  htm: 'html',
+  xml: 'html',
+  css: 'css',
+  scss: 'css',
+  sass: 'css',
+  less: 'css',
+  // Config
+  yml: 'yaml',
+  yaml: 'yaml',
+  toml: 'yaml',
+  // Shell
+  sh: 'shell',
+  bash: 'shell',
+  zsh: 'shell',
+  shell: 'shell',
+  // Other
+  py: 'python',
+  python: 'python',
+  go: 'go',
+  golang: 'go',
+  rs: 'rust',
+  rust: 'rust',
+  md: 'md',
+  markdown: 'md',
+}
+
+export function detectFenceLanguage(fenceLang: string | undefined): Lang | null {
+  if (!fenceLang) return null
+  return FENCE_LANG_TO_LANG[fenceLang.trim().toLowerCase()] ?? null
+}
+
 // ─── Tokenization ───
 
 interface Rule {
