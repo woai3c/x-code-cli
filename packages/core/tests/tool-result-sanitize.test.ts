@@ -173,9 +173,8 @@ describe('repairOrphanToolCalls', () => {
     repairOrphanToolCalls(messages)
     expect(messages.length).toBe(first)
     // Forward-orphan synthetic result for tc1 must still be present.
-    const ids = (messages.flatMap((m) =>
-      Array.isArray(m.content) ? (m.content as unknown as Array<{ toolCallId?: string }>) : [],
-    ))
+    const ids = messages
+      .flatMap((m) => (Array.isArray(m.content) ? (m.content as unknown as Array<{ toolCallId?: string }>) : []))
       .map((p) => p.toolCallId)
       .filter(Boolean)
     expect(ids).toContain('tc1')
