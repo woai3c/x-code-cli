@@ -248,6 +248,39 @@ describe('executeWriteTool read-first gate', () => {
     expect(captured[0]).toContain('  c')
   })
 
+  // Regression for M3: when oldString doesn't literally match but a
+  // quote-normalized form does, the error tells the model the file uses
+  // fancy punctuation. Saves a re-read round-trip.
+  it('detects quote/dash mismatches and tells the model in the error', async () => {
+    const filePath = path.join(tmpDir, 'fancy.ts')
+    // File uses curly double quotes — model would naturally type ASCII.
+    await fs.writeFile(filePath, 'const greeting = “hello”\n')
+
+    const state = createLoopState()
+    const stat = await fs.stat(filePath)
+    state.readFiles.set(filePath, { timestamp: Math.floor(stat.mtimeMs), isPartialView: false })
+
+    const captured: string[] = []
+    const callbacks = makeCallbacks({
+      onToolResult: (_id: string, output: string) => captured.push(output),
+    })
+
+    await processToolCalls(
+      [
+        {
+          toolName: 'edit',
+          toolCallId: 'tc1',
+          input: { filePath, oldString: 'const greeting = "hello"', newString: 'const greeting = "hi"' },
+        },
+      ],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+    expect(captured[0]).toMatch(/quote-normalized match exists|curly quotes/i)
+  })
+
   it('refreshes the read timestamp after a successful edit so a follow-up edit succeeds', async () => {
     const filePath = path.join(tmpDir, 'chain.ts')
     await fs.writeFile(filePath, 'a\nb\nc\n')

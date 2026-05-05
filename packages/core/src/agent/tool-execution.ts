@@ -36,6 +36,70 @@ function countOccurrences(content: string, search: string): number {
   return count
 }
 
+/** Replace common Unicode "fancy" punctuation with their ASCII equivalents.
+ *  Models routinely paste straight quotes / regular hyphens when the actual
+ *  file uses curly quotes, en/em dashes, or NBSPs — string-equality fails
+ *  silently. CC normalizes both sides through the same map (DESANITIZATIONS
+ *  in their FileEditTool/utils.ts) and finds the match anyway. We do the
+ *  same as a FALLBACK only — if the literal match worked, never normalize. */
+const QUOTE_NORMALIZE_MAP: Array<[RegExp, string]> = [
+  [/[‘’‚‛]/g, "'"], // left/right single, low/high single
+  [/[“”„‟]/g, '"'], // left/right double, low/high double
+  [/[–—]/g, '-'], // en dash, em dash
+  [/ /g, ' '], // non-breaking space
+  [/​/g, ''], // zero-width space (silent killer)
+  [/…/g, '...'], // horizontal ellipsis
+]
+
+function normalizeQuotes(s: string): string {
+  let out = s
+  for (const [re, sub] of QUOTE_NORMALIZE_MAP) out = out.replace(re, sub)
+  return out
+}
+
+/** Build a model-friendly error message for a failed string match. Tries
+ *  three remediations in order:
+ *
+ *  1. Quote-normalized match: if the file's content normalized matches the
+ *     model's normalized oldString, tell the model the file uses fancy
+ *     punctuation it didn't include — cheap fix, no re-read needed.
+ *  2. First-line probe: if the model's oldString starts with a line that
+ *     DOES appear in the file, point at where it appears. Often the model
+ *     missed a trailing whitespace or copied a stale line continuation.
+ *  3. Fallback: just say "not found".
+ *
+ *  Mirrors CC's findActualString + DESANITIZATIONS approach — saves a
+ *  ~3-round round-trip when the model would otherwise re-read the file
+ *  to figure out what shape the content is actually in. */
+function buildOldStringNotFoundError(filePath: string, content: string, oldString: string): string {
+  const normalizedFile = normalizeQuotes(content)
+  const normalizedNeedle = normalizeQuotes(oldString)
+  // Hint applies whenever normalization made the difference — either the
+  // file had fancy chars and the needle didn't, or vice versa. The
+  // simple "needle changed" check misses the more common case (file
+  // contains curly quotes the model didn't include).
+  const normalizationHelped = normalizedFile !== content || normalizedNeedle !== oldString
+  if (normalizationHelped && normalizedFile.includes(normalizedNeedle)) {
+    return toolErrorString(
+      `old_string not found in ${filePath}, but a quote-normalized match exists. ` +
+        `The file likely uses curly quotes / en-dash / em-dash / NBSP / zero-width characters where you used the ASCII equivalent. ` +
+        `Re-read the file in the affected region and copy the exact bytes (including punctuation) into oldString.`,
+    )
+  }
+  // First-line probe — useful when the model copied a long block but the
+  // first line is intact. Empty oldString shouldn't reach here (handled
+  // earlier), but guard anyway.
+  const firstLine = oldString.split('\n')[0]?.trim()
+  if (firstLine && firstLine.length >= 6 && content.includes(firstLine)) {
+    return toolErrorString(
+      `old_string not found in ${filePath}. The first line ("${firstLine.slice(0, 80)}") DOES appear in the file, ` +
+        `so the mismatch is in the trailing lines — check trailing whitespace, line endings, or content drift between your assumption and the actual file. ` +
+        `Re-read the file in that region.`,
+    )
+  }
+  return toolErrorString(`old_string not found in ${filePath}`)
+}
+
 /** Verify the model has read this file (in full) recently and that the
  *  file's mtime hasn't changed since. Returns null on success, or an
  *  error string suitable for use as the tool result on failure.
@@ -177,7 +241,7 @@ async function executeWriteTool(
     const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
     if (!replaceAll) {
       const count = countOccurrences(content, oldString)
-      if (count === 0) return toolErrorString(`old_string not found in ${filePath}`)
+      if (count === 0) return buildOldStringNotFoundError(filePath, content, oldString)
       if (count > 1)
         return toolErrorString(
           `old_string is not unique in ${filePath} (found ${count} occurrences). Provide more context or set replaceAll: true.`,
