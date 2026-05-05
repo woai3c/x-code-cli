@@ -97,12 +97,16 @@ export function extractCommandPrefix(command: string): string | null {
 
 /**
  * Generate the display label for the "don't ask again" option.
- * Returns `null` when no meaningful rule can be suggested — the UI
- * should hide the "don't ask again" option entirely in that case.
+ * Returns `null` only for tools where a "don't ask again" affordance
+ * makes no sense (enterPlanMode toggles a mode, not a recurring action).
  *
- * Shell with prefix: `git commit:*`
- * Shell without prefix: null (no safe rule to suggest)
- * Write tools (writeFile, edit): `all edits this session` (session-only)
+ * Shell with derivable prefix:    `git commit:*`
+ * Shell without derivable prefix: `this exact command` (exact-match rule —
+ *   covers Windows-style commands like `findstr /n …`, `cmd /c …`,
+ *   `dir /b`, where the second token is a `/flag` or path that fails
+ *   the prefix regex; without this fallback the user gets only Yes/No
+ *   forever for repeated identical commands).
+ * Write tools (writeFile / edit): `all edits this session` (session-only)
  */
 export function suggestRuleLabel(toolName: string, input: Record<string, unknown>): string | null {
   if (toolName === 'enterPlanMode') return null
@@ -110,22 +114,29 @@ export function suggestRuleLabel(toolName: string, input: Record<string, unknown
     const cmd = (input.command as string) ?? ''
     const prefix = extractCommandPrefix(cmd)
     if (prefix) return `${prefix}:*`
-    return null
+    return 'this exact command'
   }
   return 'all edits this session'
 }
 
 /**
  * Build the AllowRule for a "don't ask again" approval.
- * Returns `null` when no meaningful rule can be built (shell command
- * without derivable prefix) — caller should not save a rule.
  *
- * - Shell with derivable prefix (e.g. `git commit`) → prefix rule
- * - Shell without prefix → null (UI should not offer this option)
- * - writeFile / edit → tool-wide allow (session-only, not persisted)
+ * - Shell with derivable prefix (e.g. `git commit`) → prefix rule, persisted
+ * - Shell without derivable prefix                  → exact-match rule,
+ *   persisted (mirrors Claude Code's `suggestionForExactCommand`
+ *   fallback in `bashPermissions.ts`). Less reusable than a prefix rule
+ *   (any arg change breaks the match) but at least suppresses repeated
+ *   identical invocations — better than "Yes/No forever". The matcher
+ *   compares against `stripEnvVars(cmd)` so leading `NODE_ENV=…` etc.
+ *   don't defeat the rule.
+ * - writeFile / edit                                → tool-wide allow,
+ *   session-only (matches Claude Code).
  *
- * `persist` indicates whether the rule should be saved to disk.
- * Write tools return persist=false (session-only, matching Claude Code).
+ * `persist` indicates whether the rule should be saved to disk. Write
+ * tools return persist=false; everything else returns persist=true.
+ * Returns `null` only for the very few cases where no rule shape applies
+ * (currently nothing — kept in the signature so callers stay defensive).
  */
 export function buildAllowRule(
   toolName: string,
@@ -137,7 +148,11 @@ export function buildAllowRule(
     if (prefix) {
       return { rule: { tool: toolName, pattern: prefix, type: 'prefix' }, persist: true }
     }
-    return null
+    // Strip env-var prefixes so a `NODE_ENV=prod foo …` approval works
+    // for plain `foo …` later — same key the matcher compares against.
+    const exact = stripEnvVars(cmd)
+    if (!exact) return null
+    return { rule: { tool: toolName, pattern: exact, type: 'exact' }, persist: true }
   }
   return { rule: { tool: toolName, pattern: '*', type: 'tool' }, persist: false }
 }

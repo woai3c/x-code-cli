@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { checkPermission, getPermissionLevel, isPathWithinProject } from '../src/permissions/index.js'
-import { extractCommandPrefix } from '../src/permissions/session-store.js'
+import { buildAllowRule, extractCommandPrefix, suggestRuleLabel } from '../src/permissions/session-store.js'
 
 describe('getPermissionLevel', () => {
   it('returns always-allow for read-only tools', () => {
@@ -249,5 +249,53 @@ describe('isPathWithinProject', () => {
   it('returns false for traversal attacks', () => {
     expect(isPathWithinProject(`${cwd}/../../etc/passwd`, cwd)).toBe(false)
     expect(isPathWithinProject(`${cwd}/../secret`, cwd)).toBe(false)
+  })
+})
+
+describe('suggestRuleLabel + buildAllowRule fallback for unrecognised shell commands', () => {
+  it('offers an exact-match label for Windows commands with /flag second token', () => {
+    // Real failure case: `findstr /n "any\b" "..." 2>nul` got Yes/No with
+    // no "don't ask again" because `/n` failed the prefix regex. The
+    // exact-match fallback gives the user a way out.
+    const input = { command: 'findstr /n "any\\b" "D:\\res\\file.ts" 2>nul' }
+    expect(suggestRuleLabel('shell', input)).toBe('this exact command')
+    const built = buildAllowRule('shell', input)
+    expect(built).not.toBeNull()
+    expect(built!.persist).toBe(true)
+    expect(built!.rule.type).toBe('exact')
+    expect(built!.rule.pattern).toBe(input.command)
+  })
+
+  it('still prefers the prefix rule when one is derivable', () => {
+    expect(suggestRuleLabel('shell', { command: 'git commit -m fix' })).toBe('git commit:*')
+    const built = buildAllowRule('shell', { command: 'git commit -m fix' })
+    expect(built!.rule.type).toBe('prefix')
+    expect(built!.rule.pattern).toBe('git commit')
+  })
+
+  it('strips env-var prefixes before storing the exact-match pattern', () => {
+    // `NODE_ENV=prod` is a SAFE env-var prefix; the matcher compares
+    // against `stripEnvVars(cmd)`, so we must store the same stripped
+    // shape in the rule pattern.
+    const built = buildAllowRule('shell', { command: 'NODE_ENV=prod findstr /v foo bar.txt' })
+    expect(built!.rule.type).toBe('exact')
+    expect(built!.rule.pattern).toBe('findstr /v foo bar.txt')
+  })
+
+  it('returns null label/rule for empty shell command', () => {
+    expect(suggestRuleLabel('shell', { command: '' })).toBe('this exact command')
+    // buildAllowRule still bails on a fully empty command after stripping.
+    expect(buildAllowRule('shell', { command: '' })).toBeNull()
+  })
+
+  it('keeps writeFile/edit on session-only tool-wide rules', () => {
+    expect(suggestRuleLabel('writeFile', {})).toBe('all edits this session')
+    const built = buildAllowRule('writeFile', {})
+    expect(built!.rule.type).toBe('tool')
+    expect(built!.persist).toBe(false)
+  })
+
+  it('returns null for enterPlanMode (no recurring action to remember)', () => {
+    expect(suggestRuleLabel('enterPlanMode', {})).toBeNull()
   })
 })
