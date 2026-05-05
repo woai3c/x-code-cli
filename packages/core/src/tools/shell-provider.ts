@@ -52,6 +52,39 @@ function newCwdFile(): string {
   return path.join(os.tmpdir(), `xc-shellcwd-${randomBytes(8).toString('hex')}`)
 }
 
+/** Compose the env passed to every shell child. The overrides here are
+ *  what makes "the model accidentally ran an interactive command"
+ *  recoverable instead of fatal — they intentionally win over the user's
+ *  personal env so a developer who has GIT_EDITOR=vim in their shell rc
+ *  doesn't get a hung agent:
+ *
+ *  - GIT_EDITOR=true / EDITOR=true: a `git commit` (no -m), `git rebase`
+ *    without -i, etc. would otherwise launch vim inside the child and
+ *    block until timeout. `true` is a real binary that exits 0
+ *    immediately, so git proceeds with an empty commit message and we
+ *    get a clear "aborted, empty message" rather than a 30-s hang.
+ *  - PAGER=cat / GIT_PAGER=cat: `git log`, `git diff`, `man` etc. open
+ *    less in a TTY. Our child has no TTY, so they'd buffer indefinitely
+ *    or hang. Forcing cat returns the full output immediately.
+ *  - PYTHONIOENCODING=utf-8: zh-CN Windows defaults Python stdout to
+ *    GBK; we decode as UTF-8.
+ *  - XC_CWD_FILE: the per-call cwd-capture file (see newCwdFile above).
+ *  - XCODE_CLI=1: a marker hint-protocol-aware tools can detect (parity
+ *    with CC's CLAUDECODE=1). */
+function makeChildEnv(userEnv: NodeJS.ProcessEnv | undefined, cwdFile: string): NodeJS.ProcessEnv {
+  const base = userEnv ?? process.env
+  return {
+    ...base,
+    GIT_EDITOR: 'true',
+    EDITOR: 'true',
+    PAGER: 'cat',
+    GIT_PAGER: 'cat',
+    PYTHONIOENCODING: 'utf-8',
+    XCODE_CLI: '1',
+    XC_CWD_FILE: cwdFile,
+  }
+}
+
 /** Read and unlink the cwd capture file. Returns null on any failure
  *  (missing file, parse error, the captured path no longer exists). */
 async function consumeCwdFile(filePath: string): Promise<string | null> {
@@ -92,7 +125,7 @@ function createPosixProvider(executable: string, type: 'bash' | 'zsh'): ShellPro
         cwd: opts.cwd,
         reject: false,
         cancelSignal: opts.signal,
-        env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8', XC_CWD_FILE: cwdFile },
+        env: makeChildEnv(opts.env, cwdFile),
       })
       return { proc, readCwd: () => consumeCwdFile(cwdFile) }
     },
@@ -147,7 +180,7 @@ function createPowerShellProvider(executable: string): ShellProvider {
           cwd: opts.cwd,
           reject: false,
           cancelSignal: opts.signal,
-          env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8', XC_CWD_FILE: cwdFile },
+          env: makeChildEnv(opts.env, cwdFile),
         },
       )
       return { proc, readCwd: () => consumeCwdFile(cwdFile) }
