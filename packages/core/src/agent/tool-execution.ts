@@ -492,8 +492,55 @@ function collectFulfilledToolCallIds(state: LoopState): Set<string> {
   return ids
 }
 
-/** Handle all tool calls from a single model turn, sequentially.
- *  `parentModel` is threaded through so the task tool can pass it to runSubAgent. */
+/** Group consecutive `task` tool-calls into a single batch so they can be
+ *  dispatched in parallel; everything else gets a singleton batch and
+ *  dispatches one-at-a-time. Sub-agents launched by the `task` tool are
+ *  the only manual tool we hand-execute in `processToolCalls` that's
+ *  truly isolated:
+ *    - each `runSubAgent` builds a fresh `LoopState` (own messages, own
+ *      `recentToolCalls`, own todos, own permission mode)
+ *    - `parentState.tokenUsage` is updated by additive accumulation only
+ *      after the sub-agent completes, so concurrent updates can't get
+ *      torn (single-threaded event loop + plain `+=` writes)
+ *    - permission dialogs from concurrent sub-agents queue naturally on
+ *      the parent UI's `permissionResolversRef`
+ *  Every other manual tool mutates shared state and must stay serial:
+ *    - `writeFile` / `edit` mutate the filesystem and `state.filesModified`
+ *    - `shell` streams stdout/stderr to the parent UI as it arrives —
+ *      interleaved bytes from concurrent shells would scramble the live
+ *      indicator
+ *    - `askUser` / permission dialogs hold the UI; running two at once
+ *      would race the dialog state machine
+ *    - `todoWrite` / `enterPlanMode` / `exitPlanMode` mutate `LoopState`
+ *      fields that the next turn reads
+ *  Auto-executed tools (readFile / glob / grep / listDir / webFetch /
+ *  webSearch) don't appear here — by the time `processToolCalls` runs,
+ *  the SDK has already executed them and the skip-fulfilled pre-pass
+ *  short-circuits them out. */
+export function partitionToolCalls(calls: ToolCall[]): ToolCall[][] {
+  const batches: ToolCall[][] = []
+  let i = 0
+  while (i < calls.length) {
+    let end = i + 1
+    if (calls[i]!.toolName === 'task') {
+      while (end < calls.length && calls[end]!.toolName === 'task') {
+        end++
+      }
+    }
+    batches.push(calls.slice(i, end))
+    i = end
+  }
+  return batches
+}
+
+/** Handle all tool calls from a single model turn.
+ *
+ *  Consecutive `task` tool-calls dispatch in parallel via Promise.all;
+ *  every other tool runs one at a time. See `partitionToolCalls` for the
+ *  full rationale on why only sub-agents are safe to fan out.
+ *
+ *  `parentModel` is threaded through so the task tool can pass it to
+ *  `runSubAgent`. */
 export async function processToolCalls(
   toolCalls: ToolCall[],
   state: LoopState,
@@ -509,32 +556,13 @@ export async function processToolCalls(
   // rejects — we collect them here and flush at the end of the loop.
   const deferred: ModelMessage[] = []
 
-  for (let i = 0; i < toolCalls.length; i++) {
-    const tc = toolCalls[i]!
-    // User pressed Esc / Ctrl+C. The currently running tool (if any) has
-    // already been SIGKILL'd via the shell provider's cancelSignal. For
-    // every remaining tool_call from this turn we still need to push a
-    // synthetic tool_result — orphan tool_calls without a matching result
-    // would make the next API request fail with "tool_use without
-    // tool_result" the moment the user types another prompt. Skip ids
-    // already fulfilled by the SDK so we don't double-up tool-results.
-    if (options.abortSignal?.aborted) {
-      for (let j = i; j < toolCalls.length; j++) {
-        const skipped = toolCalls[j]!
-        if (fulfilledIds.has(skipped.toolCallId)) continue
-        pushToolResult(
-          state,
-          callbacks,
-          skipped.toolCallId,
-          skipped.toolName,
-          '[Tool execution interrupted by user]',
-          true,
-        )
-      }
-      if (deferred.length > 0) state.messages.push(...deferred)
-      return
-    }
-
+  // Pre-pass: drop ghost calls and account for already-fulfilled calls.
+  // What survives goes into `liveCalls` which is what we actually
+  // dispatch. Doing this BEFORE partitioning keeps the parallel-batch
+  // dispatch simple — every entry in the batch is a real call we need
+  // to run.
+  const liveCalls: ToolCall[] = []
+  for (const tc of toolCalls) {
     // Skip ghost calls the SDK rejected mid-stream — see
     // collectActiveAssistantToolCallIds for the full rationale. Don't
     // pushToolResult either: the assistant message has no matching
@@ -568,7 +596,40 @@ export async function processToolCalls(
       continue
     }
 
-    await handleToolCall(tc, state, options, callbacks, parentModel, deferred)
+    liveCalls.push(tc)
+  }
+
+  // Dispatch in batches. A batch of size 1 is functionally identical to
+  // a plain `await handleToolCall(...)` — Promise.all over a single
+  // promise resolves the same way — so the parallel path uniformly
+  // handles both cases.
+  const batches = partitionToolCalls(liveCalls)
+  let dispatched = 0
+  for (const batch of batches) {
+    // User pressed Esc / Ctrl+C. The currently running tool (if any) has
+    // already been SIGKILL'd via the shell provider's cancelSignal. For
+    // every remaining tool_call we still need to push a synthetic
+    // tool_result — orphan tool_calls without a matching result would
+    // make the next API request fail with "tool_use without tool_result"
+    // the moment the user types another prompt.
+    if (options.abortSignal?.aborted) {
+      for (let j = dispatched; j < liveCalls.length; j++) {
+        pushToolResult(
+          state,
+          callbacks,
+          liveCalls[j]!.toolCallId,
+          liveCalls[j]!.toolName,
+          '[Tool execution interrupted by user]',
+          true,
+        )
+      }
+      break
+    }
+
+    await Promise.all(
+      batch.map((tc) => handleToolCall(tc, state, options, callbacks, parentModel, deferred)),
+    )
+    dispatched += batch.length
   }
 
   // Flush deferred messages AFTER all tool_results in this turn — they

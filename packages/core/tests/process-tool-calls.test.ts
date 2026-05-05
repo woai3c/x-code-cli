@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ModelMessage } from 'ai'
 
 import { createLoopState } from '../src/agent/loop-state.js'
-import { processToolCalls } from '../src/agent/tool-execution.js'
+import { partitionToolCalls, processToolCalls } from '../src/agent/tool-execution.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../src/types/index.js'
 
 function makeCallbacks(overrides: Partial<AgentCallbacks> = {}): AgentCallbacks {
@@ -365,6 +365,50 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
     expect(readResults).toHaveLength(1)
   })
 
+  it('runs consecutive task tool-calls in a single parallel batch', async () => {
+    // The whole point of partition + Promise.all: 3 task tool-calls
+    // emitted in one assistant turn must launch concurrently, not wait
+    // for each previous one to finish. We don't have a real
+    // subAgentRegistry in this test, so handleTask short-circuits to
+    // '[Sub-agent system not initialized]' and pushToolResult fires
+    // immediately for each. Track the order in which tool-results land
+    // — for a parallel batch the registry-missing branch is synchronous
+    // enough that all three fire before processToolCalls returns.
+    const state = createLoopState()
+    const ids = ['tc-task-1', 'tc-task-2', 'tc-task-3']
+    state.messages.push(
+      { role: 'user', content: 'hi' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: ids.map((toolCallId) => ({
+          type: 'tool-call',
+          toolCallId,
+          toolName: 'task',
+          input: { description: 'd', subagent_type: 'general-purpose', prompt: 'p' },
+        })),
+      } as ModelMessage,
+    )
+    const seen: string[] = []
+    const callbacks = makeCallbacks({
+      onToolResult: (id) => {
+        seen.push(id)
+      },
+    })
+    await processToolCalls(
+      ids.map((toolCallId) => ({
+        toolName: 'task',
+        toolCallId,
+        input: { description: 'd', subagent_type: 'general-purpose', prompt: 'p' },
+      })),
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+    expect(seen).toHaveLength(3)
+    expect(new Set(seen)).toEqual(new Set(ids))
+  })
+
   it('flushes deferred messages AFTER all tool-results — no user message between assistant and a tool result', async () => {
     // The bug we're guarding against: a user-role message inserted
     // between assistant.tool_calls and a later tool-result. DeepSeek
@@ -407,5 +451,48 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
         expect(lastAssistantWithToolCalls).toBeGreaterThan(lastUserMessage)
       }
     }
+  })
+})
+
+describe('partitionToolCalls', () => {
+  const tc = (toolName: string, toolCallId: string) => ({ toolName, toolCallId, input: {} })
+
+  it('returns no batches for an empty list', () => {
+    expect(partitionToolCalls([])).toEqual([])
+  })
+
+  it('puts every non-task tool in its own singleton batch', () => {
+    const calls = [tc('shell', '1'), tc('writeFile', '2'), tc('edit', '3')]
+    const batches = partitionToolCalls(calls)
+    expect(batches.map((b) => b.length)).toEqual([1, 1, 1])
+  })
+
+  it('groups consecutive task tool-calls into a single batch', () => {
+    const calls = [tc('task', '1'), tc('task', '2'), tc('task', '3')]
+    const batches = partitionToolCalls(calls)
+    expect(batches).toHaveLength(1)
+    expect(batches[0]!.map((c) => c.toolCallId)).toEqual(['1', '2', '3'])
+  })
+
+  it('breaks the parallel batch when a non-task slips between tasks', () => {
+    // [task, task, shell, task, task] →
+    //   [[task, task], [shell], [task, task]]
+    // The shell must run alone and serialize what comes before/after,
+    // because shell mutates parent UI state (stdout streaming).
+    const calls = [tc('task', '1'), tc('task', '2'), tc('shell', '3'), tc('task', '4'), tc('task', '5')]
+    const batches = partitionToolCalls(calls)
+    expect(batches.map((b) => b.map((c) => c.toolCallId))).toEqual([['1', '2'], ['3'], ['4', '5']])
+  })
+
+  it('handles a single task call as its own batch', () => {
+    const batches = partitionToolCalls([tc('task', '1')])
+    expect(batches).toEqual([[tc('task', '1')]])
+  })
+
+  it('keeps a trailing task batch separate from leading non-task work', () => {
+    const calls = [tc('shell', '1'), tc('task', '2'), tc('task', '3')]
+    const batches = partitionToolCalls(calls)
+    expect(batches.map((b) => b.length)).toEqual([1, 2])
+    expect(batches[1]!.map((c) => c.toolCallId)).toEqual(['2', '3'])
   })
 })
