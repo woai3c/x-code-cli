@@ -9,7 +9,7 @@ import { getShellProvider } from '../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
-import { computeEditDiff } from './diff.js'
+import { computeEditDiff, formatDiffForModel } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
@@ -151,10 +151,18 @@ async function executeWriteTool(
     const payload = computeEditDiff(filePath, oldContent, content)
     if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
 
+    // Append a brief diff snippet for the model so it doesn't need to
+    // re-read the file to know what actually changed (especially for
+    // multi-step refactors where it's about to edit the same file
+    // again). The UI gets the full structured payload via onFileEdit;
+    // this is only what enters state.messages.
+    const modelDiff = formatDiffForModel(payload)
+    const diffSuffix = modelDiff ? `\n${modelDiff}` : ''
+
     if (isNew) {
-      return `File created: ${filePath} (${lineCount} lines)`
+      return `File created: ${filePath} (${lineCount} lines)${diffSuffix}`
     }
-    return `File written: ${filePath} (${lineCount} lines)`
+    return `File written: ${filePath} (${lineCount} lines)${diffSuffix}`
   }
 
   if (toolName === 'edit') {
@@ -190,7 +198,8 @@ async function executeWriteTool(
     const payload = computeEditDiff(filePath, content, newContent)
     if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
 
-    return `File edited: ${filePath}`
+    const modelDiff = formatDiffForModel(payload)
+    return modelDiff ? `File edited: ${filePath}\n${modelDiff}` : `File edited: ${filePath}`
   }
 
   return toolErrorString('unknown write tool')

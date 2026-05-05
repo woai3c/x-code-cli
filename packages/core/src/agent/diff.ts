@@ -124,3 +124,47 @@ function countLines(s: string): number {
   const parts = s.split('\n')
   return s.endsWith('\n') ? parts.length - 1 : parts.length
 }
+
+const MODEL_DIFF_MAX_LINES = 30
+
+/** Format a diff payload as a short textual snippet for the MODEL'S
+ *  tool-result string. Distinct from the UI diff: this lands in
+ *  state.messages and rides along on every subsequent turn, so it must
+ *  be tight. We show a unified-style header per hunk and cap the total
+ *  at MODEL_DIFF_MAX_LINES — past that the model can re-read the file
+ *  if it needs more context. Returns '' when there's nothing useful
+ *  (no-op edit, payload was null upstream). */
+export function formatDiffForModel(payload: EditDiffPayload | null): string {
+  if (!payload) return ''
+  if (payload.isCreate) {
+    if (!payload.content) return `(${payload.additions} lines)`
+    const lines = payload.content.split('\n')
+    const preview = lines.slice(0, 10)
+    const truncated = lines.length > 10 ? `\n... (+${lines.length - 10} more)` : ''
+    return `Created with ${payload.additions} lines:\n${preview.map((l) => `  ${l}`).join('\n')}${truncated}`
+  }
+
+  const out: string[] = [`Diff (+${payload.additions} -${payload.removals}):`]
+  let usedLines = 0
+  let truncated = false
+  for (const hunk of payload.hunks) {
+    if (usedLines >= MODEL_DIFF_MAX_LINES) {
+      truncated = true
+      break
+    }
+    out.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`)
+    usedLines++
+    for (const line of hunk.lines) {
+      if (usedLines >= MODEL_DIFF_MAX_LINES) {
+        truncated = true
+        break
+      }
+      out.push(line)
+      usedLines++
+    }
+  }
+  if (truncated) {
+    out.push(`... (diff truncated at ${MODEL_DIFF_MAX_LINES} lines; readFile to see full result)`)
+  }
+  return out.join('\n')
+}

@@ -195,6 +195,59 @@ describe('executeWriteTool read-first gate', () => {
     expect(await fs.readFile(filePath, 'utf-8')).toBe('old content\n')
   })
 
+  // Regression for M4: edit/writeFile result string should include a
+  // brief diff snippet so the model knows what actually changed without
+  // needing to re-read the file. UI gets the full structured payload
+  // separately via callbacks.onFileEdit.
+  it('appends a diff snippet to the edit result for the model', async () => {
+    const filePath = path.join(tmpDir, 'diff-snippet.ts')
+    await fs.writeFile(filePath, 'line one\nline two\nline three\n')
+
+    const state = createLoopState()
+    const stat = await fs.stat(filePath)
+    state.readFiles.set(filePath, { timestamp: Math.floor(stat.mtimeMs), isPartialView: false })
+
+    const captured: string[] = []
+    const callbacks = makeCallbacks({
+      onToolResult: (_id: string, output: string) => captured.push(output),
+    })
+
+    await processToolCalls(
+      [{ toolName: 'edit', toolCallId: 'tc1', input: { filePath, oldString: 'line two', newString: 'LINE TWO' } }],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+    expect(captured[0]).toContain('File edited:')
+    expect(captured[0]).toContain('Diff (+1 -1)')
+    // The actual changed lines should appear in the diff snippet.
+    expect(captured[0]).toContain('-line two')
+    expect(captured[0]).toContain('+LINE TWO')
+  })
+
+  it('appends a content preview to the writeFile result when creating a new file', async () => {
+    const filePath = path.join(tmpDir, 'preview.ts')
+    const state = createLoopState()
+    const captured: string[] = []
+    const callbacks = makeCallbacks({
+      onToolResult: (_id: string, output: string) => captured.push(output),
+    })
+
+    await processToolCalls(
+      [{ toolName: 'writeFile', toolCallId: 'tc1', input: { filePath, content: 'a\nb\nc\n' } }],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+    expect(captured[0]).toContain('File created:')
+    expect(captured[0]).toContain('Created with 3 lines')
+    expect(captured[0]).toContain('  a')
+    expect(captured[0]).toContain('  b')
+    expect(captured[0]).toContain('  c')
+  })
+
   it('refreshes the read timestamp after a successful edit so a follow-up edit succeeds', async () => {
     const filePath = path.join(tmpDir, 'chain.ts')
     await fs.writeFile(filePath, 'a\nb\nc\n')
