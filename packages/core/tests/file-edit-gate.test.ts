@@ -61,7 +61,13 @@ describe('executeWriteTool read-first gate', () => {
     })
 
     await processToolCalls(
-      [{ toolName: 'edit', toolCallId: 'tc1', input: { filePath, oldString: 'const a = 1', newString: 'const a = 2' } }],
+      [
+        {
+          toolName: 'edit',
+          toolCallId: 'tc1',
+          input: { filePath, oldString: 'const a = 1', newString: 'const a = 2' },
+        },
+      ],
       state,
       options,
       callbacks,
@@ -87,7 +93,13 @@ describe('executeWriteTool read-first gate', () => {
     })
 
     await processToolCalls(
-      [{ toolName: 'edit', toolCallId: 'tc1', input: { filePath, oldString: 'const b = 1', newString: 'const b = 2' } }],
+      [
+        {
+          toolName: 'edit',
+          toolCallId: 'tc1',
+          input: { filePath, oldString: 'const b = 1', newString: 'const b = 2' },
+        },
+      ],
       state,
       options,
       callbacks,
@@ -112,7 +124,13 @@ describe('executeWriteTool read-first gate', () => {
     })
 
     await processToolCalls(
-      [{ toolName: 'edit', toolCallId: 'tc1', input: { filePath, oldString: 'const c = 1', newString: 'const c = 2' } }],
+      [
+        {
+          toolName: 'edit',
+          toolCallId: 'tc1',
+          input: { filePath, oldString: 'const c = 1', newString: 'const c = 2' },
+        },
+      ],
       state,
       options,
       callbacks,
@@ -139,7 +157,13 @@ describe('executeWriteTool read-first gate', () => {
     })
 
     await processToolCalls(
-      [{ toolName: 'edit', toolCallId: 'tc1', input: { filePath, oldString: 'const d = 1', newString: 'const d = 2' } }],
+      [
+        {
+          toolName: 'edit',
+          toolCallId: 'tc1',
+          input: { filePath, oldString: 'const d = 1', newString: 'const d = 2' },
+        },
+      ],
       state,
       options,
       callbacks,

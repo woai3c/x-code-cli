@@ -51,7 +51,9 @@ Usage:
     outputMode: z
       .enum(['files_with_matches', 'content', 'count'])
       .optional()
-      .describe('files_with_matches (default) returns file paths only; content returns matching lines; count returns per-file match counts'),
+      .describe(
+        'files_with_matches (default) returns file paths only; content returns matching lines; count returns per-file match counts',
+      ),
     contextBefore: z.number().optional().describe('Lines of context BEFORE each match (content mode only)'),
     contextAfter: z.number().optional().describe('Lines of context AFTER each match (content mode only)'),
     context: z.number().optional().describe('Lines of context BEFORE and AFTER each match (content mode only)'),
