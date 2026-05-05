@@ -727,6 +727,21 @@ export function ChatInput({
    *  history" — that arithmetic is identical regardless of where the
    *  frame is parked inside the empty zone. */
   const freeBlanksAboveFrameRef = useRef(0)
+  /** Number of blank rows currently sitting DIRECTLY ABOVE the frame, left
+   *  there by a large-shrink (deltaH > 3) that snapped the frame to the
+   *  bottom and erased the old frame area without committing it to
+   *  scrollback. Without this counter, a subsequent grow would emit LFs
+   *  at termRows to "make room" — pushing those blank rows into terminal
+   *  scrollback as permanent empty lines (visible as the big blank gap
+   *  under a Task() result when sub-agents open multiple permission
+   *  dialogs in a row).
+   *
+   *  Consumed by the grow path before deciding how many LFs to emit:
+   *  the frame extends UP into these blanks via cell-grid repositioning
+   *  (no scroll), so only the rows BEYOND the blank zone need to be
+   *  scrolled into history. Reset on commit (committed scrollback now
+   *  occupies the rows directly above the frame), resize, and /clear. */
+  const blankRowsAboveFrameRef = useRef(0)
   /** Last actual frameTop row written to the terminal. Stored separately
    *  because frameTop is no longer derivable from (termRows, frameH)
    *  alone — it now also depends on freeBlanksAboveFrameRef. Read by
@@ -1364,6 +1379,7 @@ export function ChatInput({
       lastFrameHRef.current = 0
       lastFrameTopRef.current = 0
       freeBlanksAboveFrameRef.current = 0
+      blankRowsAboveFrameRef.current = 0
       activeRef.current = false
     }
 
@@ -1396,6 +1412,7 @@ export function ChatInput({
       lastFrameHRef.current = 0
       lastFrameTopRef.current = 0
       freeBlanksAboveFrameRef.current = 0
+      blankRowsAboveFrameRef.current = 0
       activeRef.current = false
       justClearedRef.current = true
       // Drops scrollback-spacing flags + buffered read-group entries
@@ -2473,6 +2490,7 @@ export function ChatInput({
       // Resize invalidates the floating-frame state; the next render
       // re-seeds freeBlanks via the first-paint path or commit branch.
       freeBlanksAboveFrameRef.current = 0
+      blankRowsAboveFrameRef.current = 0
       frameTop = computeFrameTop(0)
     }
     lastTermRowsRef.current = termRows
@@ -2519,6 +2537,10 @@ export function ChatInput({
     // one whose payload actually writes applies it. Symptom it cured:
     // 3+ persistent blank lines appearing after every Bash approval.
     let pendingFreeBlanks = freeBlanksAboveFrameRef.current
+    // Same idempotency story as pendingFreeBlanks above, but for the
+    // blank-row-above-frame counter the shrink path may bump and the
+    // grow path may consume. See blankRowsAboveFrameRef for the why.
+    let pendingBlankRowsAbove = blankRowsAboveFrameRef.current
     const scrollRows = didCommitMessages ? countContentRows(scrollbackContent, termWidth) : 0
     let handledCommitWithFrame = false
     let forceFullRedraw = false
@@ -2535,7 +2557,16 @@ export function ChatInput({
       // the very first commit can write content right after the banner
       // and leave the residual blanks below the frame.
       const freeBlanks = freeBlanksAboveFrameRef.current
-      const availSpace = oldFrameH + freeBlanks
+      // Stranded blanks above the frame (left by a recent big shrink that
+      // bottom-anchored the frame, e.g. permission dialog closing). They
+      // are visible to the user as a blank gap between earlier scrollback
+      // and the frame. Including them in availSpace lets startRow shift
+      // upward so the committed content writes INTO those rows instead of
+      // skipping over them — eliminating the gap. Without this, the
+      // commit writes at termRows-oldFrameH-freeBlanks+1 and the rows
+      // between viewport-top and that startRow stay blank forever.
+      const blankAbove = blankRowsAboveFrameRef.current
+      const availSpace = oldFrameH + freeBlanks + blankAbove
       // Cap pre-scroll to the actual count of viewport rows holding old
       // content above the frame (`termRows - availSpace`). The naive
       // `scrollRows + nextH - availSpace` overshoots whenever new content
@@ -2556,7 +2587,7 @@ export function ChatInput({
         'chatinput.geom.commit',
         `scrollRows=${scrollRows} nextH=${nextH} oldFrameH=${oldFrameH} ` +
           `availSpace=${availSpace} preScroll=${preScrollRows} ` +
-          `freeBlanks=${freeBlanks}`,
+          `freeBlanks=${freeBlanks} blankAbove=${blankAbove}`,
       )
       // Write scrollbackContent DIRECTLY after the last row of real
       // scrollback — this consumes the free-blank region row-by-row
@@ -2684,7 +2715,17 @@ export function ChatInput({
         // rows below the frame are recorded in pendingFreeBlanks so
         // subsequent commits can consume them naturally (frame floats down
         // toward the bottom as new content arrives).
-        if (preScrollRows === 0 && frameShrunk > 3 && leftoverBlanks === 0) {
+        //
+        // Skip when blankAbove > 0: those stranded blanks were JUST consumed
+        // (startRow shifted up to fill them), and the leftover space is the
+        // budget the dialog grew into. Pulling the frame up to sit directly
+        // below content would leave that leftover BELOW the frame — the
+        // input bar floats in the middle of the viewport with empty rows
+        // beneath it. Keep the frame bottom-anchored instead so the gap
+        // stays where the dialog was, above the input bar (the familiar
+        // bottom position) — visually the input stays at the terminal edge
+        // and the gap is between the recent activity and the input row.
+        if (preScrollRows === 0 && frameShrunk > 3 && leftoverBlanks === 0 && blankAbove === 0) {
           const scrollEndRow = startRow + scrollRows
           if (scrollEndRow < frameTop) {
             frameTop = scrollEndRow
@@ -2720,6 +2761,16 @@ export function ChatInput({
         // that to find the cells that genuinely changed.
       }
       handledCommitWithFrame = true
+      // Commit just wrote `scrollRows` rows of scrollback content at
+      // `startRow`, then placed the frame at `frameTop`. Any rows in
+      // between are blank (the clear loop wiped them but no content
+      // landed there — typically zero, or one when the special-block
+      // path squashed the gap). Whatever it is, that's the new
+      // contiguous-blank count directly above the frame; older blanks
+      // farther up stop being "directly above" once committed content
+      // sits between them and the frame, so they no longer interact
+      // with the grow path's scroll-only-real-content logic.
+      pendingBlankRowsAbove = Math.max(0, frameTop - (startRow + scrollRows))
     } else if (didCommitMessages) {
       // Plan b weak-terminal path: nextH=0 (frame was cleared by the
       // streaming bail-out above) but oldFrameH may still be > 0 — the
@@ -2819,7 +2870,18 @@ export function ChatInput({
         // messages). Without this, typing `/` to open the completion menu
         // would wipe whatever scrollback sat right above the input.
         const absorbed = Math.min(deltaH, freeBlanksAboveFrameRef.current)
-        const needsScroll = deltaH - absorbed
+        // Then consume any blank rows DIRECTLY above the frame (left
+        // there by a prior large-shrink). The frame can extend up into
+        // these rows via the cell-grid repaint without any LF scroll —
+        // emitting LFs here would push the blanks into terminal
+        // scrollback as a permanent gap (the symptom: a big stretch
+        // of empty rows under a `Task()` line whenever sub-agents
+        // open multiple permission dialogs in a row). Only the rows
+        // BEYOND that blank zone are real content that genuinely needs
+        // to be scrolled into history.
+        const fromBlankAbove = Math.min(deltaH - absorbed, pendingBlankRowsAbove)
+        pendingBlankRowsAbove -= fromBlankAbove
+        const needsScroll = deltaH - absorbed - fromBlankAbove
         if (needsScroll > 0) {
           // Erase the old frame before scrolling so that blank rows — not
           // stale prompt/separator cells — get pushed into terminal scrollback.
@@ -2839,8 +2901,10 @@ export function ChatInput({
         frameTop = computeFrameTop(pendingFreeBlanks)
         debugLog(
           'chatinput.geom.grow',
-          `delta=${deltaH} absorbed=${absorbed} scrolled=${needsScroll} ` +
+          `delta=${deltaH} absorbed=${absorbed} fromBlankAbove=${fromBlankAbove} ` +
+            `scrolled=${needsScroll} ` +
             `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
+            `blankAbove ${blankRowsAboveFrameRef.current}->${pendingBlankRowsAbove} ` +
             `frameTop=${frameTop}`,
         )
         // Pre-erase the newly-occupied bottom-of-frame rows so any stale
@@ -2881,6 +2945,17 @@ export function ChatInput({
         // must be cleared to prevent ghost spinners / stale content.
         for (let i = 0; i < oldFrameH; i++) {
           preBuf += `\x1b[${oldTop + i};1H\x1b[K`
+        }
+        // Large-shrink (deltaH > 3) snaps the frame to the bottom; the
+        // rows between oldTop and the new frameTop are now blank but
+        // never went to terminal scrollback. Track them so the next
+        // grow can extend the frame back up via cell-grid repositioning
+        // instead of LF auto-scrolls (which would push these blanks
+        // into history). Small shrinks keep their freeBlanks below the
+        // frame so frameTop stays put — `frameTop - oldTop` is 0 or
+        // negative, yielding no contribution.
+        if (frameTop > oldTop) {
+          pendingBlankRowsAbove += frameTop - oldTop
         }
       }
       // Frame moved — prev cell matrix is at the wrong rows now; force
@@ -3080,6 +3155,13 @@ export function ChatInput({
         debugLog('chatinput.geom.persist-noop', `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks}`)
       }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
+      if (pendingBlankRowsAbove !== blankRowsAboveFrameRef.current) {
+        debugLog(
+          'chatinput.geom.persist-noop',
+          `blankAbove ${blankRowsAboveFrameRef.current}->${pendingBlankRowsAbove}`,
+        )
+      }
+      blankRowsAboveFrameRef.current = pendingBlankRowsAbove
       return
     }
 
@@ -3137,6 +3219,14 @@ export function ChatInput({
         )
       }
       freeBlanksAboveFrameRef.current = pendingFreeBlanks
+      if (pendingBlankRowsAbove !== blankRowsAboveFrameRef.current) {
+        debugLog(
+          'chatinput.geom.persist',
+          `blankAbove ${blankRowsAboveFrameRef.current}->${pendingBlankRowsAbove} ` +
+            `frameTop=${frameTop} nextH=${nextH}`,
+        )
+      }
+      blankRowsAboveFrameRef.current = pendingBlankRowsAbove
       // Bump the generation. Any pending deferred-flush macrotask whose
       // captured flushId now differs from this value will short-circuit
       // when it runs — see the schedule path below.
