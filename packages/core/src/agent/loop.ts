@@ -242,7 +242,14 @@ function buildTools(options: AgentOptions, state: LoopState) {
   return tools
 }
 
-/** Run one agent turn: stream to UI, collect response. Resilient to errors. */
+/** Run one agent turn: stream to UI, collect response. Resilient to errors.
+ *
+ *  `maxOutputOverride` lets the agent loop bump the per-turn output ceiling
+ *  past the per-model default. Used by the escalation path: when a turn
+ *  finishes with reason 'length' and the current ceiling is below
+ *  ESCALATED_MAX_OUTPUT_TOKENS, the loop sets the override to the higher
+ *  value for the very next turn so the model has room to finish without
+ *  needing 3 nudge rounds (and the wasted output tokens those imply). */
 async function runTurn(
   state: LoopState,
   model: LanguageModel,
@@ -251,6 +258,7 @@ async function runTurn(
   callbacks: AgentCallbacks,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   effectiveTools: Record<string, any>,
+  maxOutputOverride: number | undefined,
 ): Promise<TurnOutcome> {
   // Defensive sweep BEFORE every API call: if the previous turn left
   // an assistant tool_call without a paired tool_result anywhere in
@@ -305,7 +313,7 @@ async function runTurn(
       // replies. Most providers clamp a too-high value, but some reject it
       // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;
       // unknown models fall through to the module-level default.
-      maxOutputTokens: getMaxOutputTokens(options.modelId),
+      maxOutputTokens: maxOutputOverride ?? getMaxOutputTokens(options.modelId),
       // AI SDK types `providerOptions` as `SharedV3ProviderOptions` (nested
       // JSONObject). Our cache-control helper returns a looser
       // `Record<string, unknown>` shape because provider-specific field sets
@@ -450,6 +458,17 @@ export async function agentLoop(
   const MAX_CONTINUATIONS = 3
   let continuationAttempts = 0
 
+  // Output-token escalation: on the FIRST 'length' finish, retry with a
+  // higher max_output_tokens before falling into the continuation/nudge
+  // pipeline. Some OpenAI-compatible providers default to a small ceiling
+  // (4–8k) that wastes 3 nudge rounds + their tokens to do what one
+  // higher-budget call could do in one shot. Mirrors CC's
+  // ESCALATED_MAX_TOKENS path. Once set, the override sticks for the rest
+  // of the loop so subsequent turns also benefit from the higher ceiling.
+  const ESCALATED_MAX_OUTPUT_TOKENS = 64_000
+  let maxOutputOverride: number | undefined
+  let attemptedEscalation = false
+
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
 
@@ -487,7 +506,7 @@ export async function agentLoop(
     }
     const systemPrompt = state.systemPromptCache
 
-    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools)
+    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, maxOutputOverride)
 
     if (outcome.kind === 'error') break
     if (outcome.kind === 'aborted') break
@@ -517,6 +536,27 @@ export async function agentLoop(
     }
 
     if (outcome.finishReason === 'length') {
+      // Escalation first, BEFORE consuming a continuation slot. If the
+      // model's per-turn ceiling is below ESCALATED_MAX_OUTPUT_TOKENS and
+      // we haven't tried it this loop, raise the ceiling and re-issue
+      // the SAME turn (same nudge, same messages). On a small-default
+      // provider (4–8k) one escalation often finishes what would
+      // otherwise need three nudge rounds.
+      const currentMax = maxOutputOverride ?? getMaxOutputTokens(options.modelId)
+      if (!attemptedEscalation && currentMax < ESCALATED_MAX_OUTPUT_TOKENS) {
+        attemptedEscalation = true
+        maxOutputOverride = ESCALATED_MAX_OUTPUT_TOKENS
+        debugLog(
+          'turn.length-escalation',
+          `bumping maxOutputTokens ${currentMax} -> ${ESCALATED_MAX_OUTPUT_TOKENS} turn=${state.turnCount}`,
+        )
+        state.messages.push({
+          role: 'user',
+          content:
+            'Output token limit hit. Resume directly — no apology, no recap. Pick up mid-thought if that is where the cut happened.',
+        })
+        continue
+      }
       if (continuationAttempts < MAX_CONTINUATIONS) {
         continuationAttempts++
         debugLog(
