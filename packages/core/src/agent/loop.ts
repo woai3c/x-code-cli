@@ -350,6 +350,12 @@ async function runTurn(
       'turn.finish',
       `reason=${finishReason} turn=${state.turnCount} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
     )
+    // A turn that made it to a real finishReason cleared the
+    // context-overflow problem (the API didn't reject), so reset the
+    // reactive-compaction failure counter. If we DON'T reset, a project
+    // that legitimately hit two compactions early in a session would be
+    // one compaction away from giving up forever.
+    state.consecutiveAutoCompactFails = 0
     return { kind: 'done', finishReason, result }
   } catch (err) {
     drainStreamResult(result)

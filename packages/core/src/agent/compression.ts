@@ -103,10 +103,24 @@ export async function checkAndCompressContext(
   callbacks.onContextCompressed('Context compressed to fit context window.')
 }
 
+/** Hard cap on consecutive failed auto-compaction attempts. Beyond this,
+ *  handleContextTooLong gives up and surfaces the error to the user
+ *  instead of compressing-then-erroring forever. Without the cap, a
+ *  pathological prompt that compresses but still overflows loops
+ *  indefinitely until the user hits Esc, burning API quota every cycle.
+ *  Matches Claude Code's MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES. */
+export const MAX_CONSECUTIVE_AUTOCOMPACT_FAILS = 3
+
 /**
  * Reactive compact: when a stream errors because the prompt was too long,
  * compress and signal the caller to retry. Mirrors Claude Code's reactiveCompact.
  * Returns true if compression happened (caller should retry this turn).
+ *
+ * Circuit breaker: state.consecutiveAutoCompactFails counts compactions
+ * that ran but the very next turn ALSO threw context_length_exceeded.
+ * Past MAX_CONSECUTIVE_AUTOCOMPACT_FAILS, we stop and let the error
+ * propagate. The counter resets to 0 in runTurn on a successful turn
+ * (any finishReason that isn't a context-overflow error).
  */
 export async function handleContextTooLong(
   state: LoopState,
@@ -114,12 +128,21 @@ export async function handleContextTooLong(
   callbacks: AgentCallbacks,
 ): Promise<boolean> {
   if (state.messages.length <= KEEP_RECENT) return false
+  if (state.consecutiveAutoCompactFails >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILS) {
+    callbacks.onContextCompressed(
+      `Context still too long after ${MAX_CONSECUTIVE_AUTOCOMPACT_FAILS} compaction attempts — giving up to avoid an infinite retry loop. Try /clear, or split the request into smaller pieces.`,
+    )
+    return false
+  }
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
+  state.consecutiveAutoCompactFails += 1
   // Same boundary discipline as the proactive path — reactive compact
   // also shrinks state.messages in place, so the jsonl needs a
   // compact-boundary marker to keep loader semantics consistent.
   void markBoundaryAndReflush(state)
-  callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
+  callbacks.onContextCompressed(
+    `Context too long — automatically compressed (attempt ${state.consecutiveAutoCompactFails}/${MAX_CONSECUTIVE_AUTOCOMPACT_FAILS}). Retrying...`,
+  )
   return true
 }

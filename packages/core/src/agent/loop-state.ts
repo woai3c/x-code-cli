@@ -64,6 +64,16 @@ export interface LoopState {
    *  next call. Survives compaction and /clear (a session-long shell
    *  context, not turn-scoped). */
   shellCwd: string | null
+  /** Number of consecutive reactive auto-compactions that completed but
+   *  STILL didn't make the next turn fit (i.e., compressed and the very
+   *  next API call also returned context_length_exceeded). After
+   *  MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES we stop retrying — without the
+   *  cap, a pathological prompt that compresses but still overflows
+   *  loops indefinitely until the user hits Esc, burning API quota every
+   *  cycle. Counter resets to 0 on any successful turn (incremented in
+   *  compression.ts:handleContextTooLong, reset in runTurn after a
+   *  non-error finishReason). */
+  consecutiveAutoCompactFails: number
   /** Records of files the model has read this session, keyed by absolute
    *  path. The edit and writeFile tools require an entry here before they
    *  will run, and compare `timestamp` against the file's current mtime
@@ -142,6 +152,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     todos: [],
     readFiles: new Map(),
     shellCwd: null,
+    consecutiveAutoCompactFails: 0,
     persistedMessageCount: 0,
   }
 }
