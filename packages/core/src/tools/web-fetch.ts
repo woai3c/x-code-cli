@@ -22,6 +22,13 @@ const MAX_CONTENT_CHARS = 100_000
 // readResponseBody) so chunked responses are also bounded.
 const MAX_HTTP_BYTES = 10 * 1024 * 1024
 const MAX_URL_LENGTH = 2000
+// Redirect handling: same-host hops are followed transparently up to this
+// cap; cross-host hops STOP and ask the model to decide whether to re-fetch
+// the new host. Without the cross-host stop, validateFetchUrl's SSRF check
+// is trivially bypassed by a public site returning 302 → http://10.0.0.5,
+// and `redirect: 'follow'` would silently chase the redirect to the
+// internal address. 10 hops matches CC's MAX_REDIRECTS.
+const MAX_REDIRECTS = 10
 const CACHE_TTL_MS = 15 * 60 * 1000
 const CACHE_MAX_ENTRIES = 50
 
@@ -87,16 +94,91 @@ const turndown = new TurndownService({
   codeBlockStyle: 'fenced',
 }) as { turndown: (html: string) => string }
 
-async function doFetch(url: string, userAgent: string): Promise<Response> {
-  return fetch(url, {
-    headers: {
-      'User-Agent': userAgent,
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  })
+/** Treat www.example.com and example.com as the same host — they're the
+ *  same SSRF threat surface and the same operator. Anything else (a hop
+ *  to a tracking domain, an open-redirect to internal IP, an OAuth-style
+ *  redirect to a different vendor) counts as cross-host. */
+function isSameHost(a: URL, b: URL): boolean {
+  const stripWww = (h: string) => h.replace(/^www\./i, '')
+  return stripWww(a.hostname.toLowerCase()) === stripWww(b.hostname.toLowerCase())
+}
+
+/** @internal Exported for testing only. */
+export type FetchOutcome =
+  | { kind: 'response'; response: Response; finalUrl: string }
+  | { kind: 'cross-host-redirect'; from: string; to: string }
+  | { kind: 'too-many-redirects'; lastUrl: string; hops: number }
+  | { kind: 'invalid-redirect-target'; from: string; to: string; reason: string }
+
+/** Fetch with manual redirect handling. Same-host hops follow transparently
+ *  (up to MAX_REDIRECTS), cross-host hops stop and report back so the
+ *  caller can ask the model to decide. Each hop's URL is re-validated
+ *  through validateFetchUrl, so an open-redirect to a private IP is
+ *  caught even when the initial URL was clean.
+ *
+ *  Why not `redirect: 'follow'`? The platform fetch chases redirects
+ *  blindly. validateFetchUrl runs once on the initial URL, so a public
+ *  site returning 302 → http://10.0.0.1/admin completely bypasses the
+ *  SSRF guard. Manual redirect closes that hole. */
+async function fetchWithSafeRedirects(initialUrl: string, userAgent: string): Promise<FetchOutcome> {
+  let currentUrl = initialUrl
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetch(currentUrl, {
+      headers: {
+        'User-Agent': userAgent,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })
+
+    // Non-redirect (or 304) → done. 304 has no Location and isn't a hop.
+    const isRedirect = res.status >= 300 && res.status < 400 && res.status !== 304
+    if (!isRedirect) {
+      return { kind: 'response', response: res, finalUrl: currentUrl }
+    }
+
+    const location = res.headers.get('location')
+    if (!location) {
+      // Redirect status with no Location header — degenerate, return as-is.
+      return { kind: 'response', response: res, finalUrl: currentUrl }
+    }
+    // Drain the redirect's body so the socket can be reused. Body is
+    // null on synthetic responses (e.g. our test mocks for pure redirect
+    // status), so guard the optional chain explicitly — `.catch` on
+    // `undefined` would TypeError.
+    try {
+      const cancelP = res.body?.cancel()
+      if (cancelP) await cancelP
+    } catch {
+      // ignore — body drain is best-effort
+    }
+
+    let nextUrl: URL
+    try {
+      nextUrl = new URL(location, currentUrl)
+    } catch {
+      return { kind: 'invalid-redirect-target', from: currentUrl, to: location, reason: 'unparseable URL' }
+    }
+    const fromUrl = new URL(currentUrl)
+    if (!isSameHost(fromUrl, nextUrl)) {
+      return { kind: 'cross-host-redirect', from: currentUrl, to: nextUrl.toString() }
+    }
+    // Re-validate the new (same-host) URL through the SSRF check too —
+    // catches the rare case where an attacker controls a redirect to a
+    // hostname that resolves to a private IP via DNS rebinding etc.
+    const validateErr = validateFetchUrl(nextUrl.toString())
+    if (validateErr) {
+      return { kind: 'invalid-redirect-target', from: currentUrl, to: nextUrl.toString(), reason: validateErr }
+    }
+    currentUrl = nextUrl.toString()
+  }
+  return { kind: 'too-many-redirects', lastUrl: currentUrl, hops: MAX_REDIRECTS + 1 }
+}
+
+async function doFetch(url: string, userAgent: string): Promise<FetchOutcome> {
+  return fetchWithSafeRedirects(url, userAgent)
 }
 
 /** Stream-read response body with a hard byte cap. Prevents OOM on chunked
@@ -158,15 +240,37 @@ export const webFetch = tool({
       }
 
       reportProgress(toolCallId, `Fetching ${url}`)
-      let response = await doFetch(url, BROWSER_UA)
+      let outcome = await doFetch(url, BROWSER_UA)
 
       // Cloudflare bot-challenge fallback: on 403 + cf-mitigated header, retry with
       // an honest CLI UA. Many CF rules whitelist identified crawlers while blocking
       // anything that fails the browser TLS fingerprint check.
-      if (response.status === 403 && response.headers.get('cf-mitigated') !== null) {
-        response = await doFetch(url, FALLBACK_UA)
+      if (
+        outcome.kind === 'response' &&
+        outcome.response.status === 403 &&
+        outcome.response.headers.get('cf-mitigated') !== null
+      ) {
+        outcome = await doFetch(url, FALLBACK_UA)
       }
 
+      // Surface non-response outcomes as model-friendly messages. The
+      // "REDIRECT DETECTED" wording mirrors CC so the model recognizes
+      // the pattern and re-fetches the new URL only after evaluating it.
+      if (outcome.kind === 'cross-host-redirect') {
+        return (
+          `REDIRECT DETECTED: ${outcome.from} redirects to ${outcome.to}, which is on a different host. ` +
+          `webFetch only follows same-host redirects (security — open-redirects can target internal addresses). ` +
+          `If the new host is appropriate, call webFetch again with url: "${outcome.to}".`
+        )
+      }
+      if (outcome.kind === 'too-many-redirects') {
+        return `Error: too many redirects (>${MAX_REDIRECTS}) starting from ${url}`
+      }
+      if (outcome.kind === 'invalid-redirect-target') {
+        return `Error: refused redirect from ${outcome.from} to ${outcome.to} (${outcome.reason})`
+      }
+
+      const response = outcome.response
       if (!response.ok) {
         return `Error: HTTP ${response.status} ${response.statusText}`
       }
