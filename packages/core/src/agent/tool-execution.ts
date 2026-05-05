@@ -16,6 +16,15 @@ import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMes
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
 
+/** Parse a positive integer from an env var, falling back when unset,
+ *  empty, NaN, or non-positive. Used for XC_BASH_TIMEOUT_MS overrides. */
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback
+  const n = parseInt(raw, 10)
+  if (!Number.isFinite(n) || n <= 0) return fallback
+  return n
+}
+
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
   let count = 0
@@ -463,7 +472,16 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
       return { output, isError }
     }
     if (toolName === 'shell') {
-      const timeout = (input.timeout as number) ?? 30000
+      // Default 120 s (matches Claude Code's BASH_DEFAULT_TIMEOUT_MS), max
+      // 600 s. Env-overridable for users on slow networks / hardware. The
+      // previous 30 s default was too low for almost everything that
+      // actually matters: pnpm install, cargo build, tsc -b on a large
+      // repo, integration test suites — every one of those would SIGTERM
+      // out and trigger model-side retry guesswork.
+      const defaultTimeout = parsePositiveInt(process.env.XC_BASH_TIMEOUT_MS, 120_000)
+      const maxTimeout = parsePositiveInt(process.env.XC_BASH_MAX_TIMEOUT_MS, 600_000)
+      const requested = (input.timeout as number) ?? defaultTimeout
+      const timeout = Math.min(requested, maxTimeout)
       const shellResult = await executeShell(
         input.command as string,
         timeout,

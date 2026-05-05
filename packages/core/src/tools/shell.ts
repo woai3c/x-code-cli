@@ -21,7 +21,10 @@ Instructions:
 - Do not sleep between commands that can run immediately.`,
   inputSchema: z.object({
     command: z.string().describe('The command to execute'),
-    timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
+    timeout: z
+      .number()
+      .optional()
+      .describe('Timeout in milliseconds (default: 120000, max: 600000). Long builds and installs need >30s.'),
   }),
   // No execute — handled manually in agent loop for permission check + cross-platform shell + streaming
 })
