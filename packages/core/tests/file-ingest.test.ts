@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { buildUserContent, classifyFile, extractFileReferences, ingestFile } from '../src/agent/file-ingest.js'
+import { buildUserContent, classifyFile, extractFileReferences, ingestFile, MAX_INGEST_BYTES } from '../src/agent/file-ingest.js'
 import { captionImage, pickVisionProvider } from '../src/agent/vision-fallback.js'
 
 // Mock vision-fallback so the image-path test can prove the onNotice plumbing
@@ -132,6 +132,27 @@ describe('ingestFile', () => {
     expect(parts[0]?.type).toBe('text')
     if (parts[0]?.type === 'text') {
       expect(parts[0].text).toMatch(/Cannot read/i)
+    }
+  })
+
+  // Regression: a multi-MB @path attachment used to be inlined verbatim,
+  // pushing the user message past the model's context window before the
+  // first turn could even start. Now we substitute a short hint that
+  // points the model at the readFile tool with offset/limit.
+  it('replaces oversized text files with a hint to use readFile', async () => {
+    const big = path.join(tmpDir, 'big.txt')
+    await fs.writeFile(big, 'x'.repeat(MAX_INGEST_BYTES + 1))
+    try {
+      const parts = await ingestFile({ raw: `@${big}`, absolutePath: big }, multimodalCaps)
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.type).toBe('text')
+      if (parts[0]?.type === 'text') {
+        expect(parts[0].text).toMatch(/too large to inline/i)
+        expect(parts[0].text).toMatch(/readFile/)
+        expect(parts[0].text).not.toContain('xxxxxxxxxx')
+      }
+    } finally {
+      await fs.rm(big, { force: true })
     }
   })
 })

@@ -117,6 +117,45 @@ const TEXT_EXTENSIONS = new Set([
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
 const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp'])
 
+/** Max bytes a single inlined file can contribute to a user message before
+ *  we replace its content with a help message. Picked at 256 KB to mirror
+ *  Claude Code's Read-tool default — large enough for typical configs and
+ *  source files, small enough that even a multi-file paste can't blow past
+ *  a 1M context window.
+ *
+ *  Without this cap, `@really-large-file.txt` (or a bare absolute path like
+ *  `D:\novels\book.txt`) silently shoves the entire file into the user
+ *  message, since `buildUserContent` bypasses the readFile tool's per-call
+ *  line guard. The model never gets a chance to react — the request just
+ *  fails at the API with `context_length_exceeded`. With the cap, the model
+ *  sees a short hint instead and can call readFile with offset/limit or
+ *  grep to narrow down. */
+export const MAX_INGEST_BYTES = 256 * 1024
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+/** The human/model-facing message we substitute when an attachment is too
+ *  large to inline. Mirrors Claude Code's `MaxFileReadTokenExceededError`
+ *  message but adds the sub-agent escape hatch — for "summarize this whole
+ *  novel" / "review this entire log" requests, chunk-by-chunk readFile
+ *  iteration burns the parent context fast (each tool_result sticks around).
+ *  Delegating to a sub-agent keeps only the summary in the parent. */
+function tooLargeMessage(filePath: string, sizeBytes: number): string {
+  return (
+    `[File ${filePath} is too large to inline (${formatBytes(sizeBytes)}, ` +
+    `cap ${formatBytes(MAX_INGEST_BYTES)}). ` +
+    `Use the readFile tool with offset/limit to read specific portions, ` +
+    `or grep to search for specific content. ` +
+    `For whole-file analysis (summarization, full review), prefer delegating to ` +
+    `a sub-agent via the task tool — each sub-agent reads in isolated context ` +
+    `and returns only its conclusions, keeping the parent context lean.]`
+  )
+}
+
 /** Classify a file by extension first, falling back to magic-byte detection
  *  when the extension is missing or unrecognized. */
 export async function classifyFile(filePath: string): Promise<FileKind> {
@@ -322,8 +361,9 @@ export async function ingestFile(
   onNotice?: (msg: string) => void,
 ): Promise<IngestedPart[]> {
   let kind: FileKind
+  let stats: Awaited<ReturnType<typeof fs.stat>>
   try {
-    await fs.stat(ref.absolutePath)
+    stats = await fs.stat(ref.absolutePath)
     kind = await classifyFile(ref.absolutePath)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -331,6 +371,13 @@ export async function ingestFile(
   }
 
   if (kind === 'text' || kind === 'unknown') {
+    // For text files, on-disk byte size is a tight upper bound on the
+    // inlined text size (numbered-line wrapper adds <1% overhead). Check
+    // before reading so we don't pull a multi-MB file into memory just to
+    // discard it.
+    if (stats.size > MAX_INGEST_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size) }]
+    }
     try {
       const body = await readTextFile(ref.absolutePath)
       return [{ type: 'text', text: `<<file path="${ref.absolutePath}">>\n${body}\n<</file>>` }]
@@ -342,6 +389,13 @@ export async function ingestFile(
 
   if (kind === 'office') {
     const text = await extractOfficeText(ref.absolutePath)
+    // Office binaries are usually much larger than their extracted text
+    // (compression + media), so check post-extraction. A book-length .docx
+    // can still exceed the cap.
+    const textBytes = Buffer.byteLength(text, 'utf-8')
+    if (textBytes > MAX_INGEST_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, textBytes) }]
+    }
     return [{ type: 'text', text: `<<file path="${ref.absolutePath}" kind="office">>\n${text}\n<</file>>` }]
   }
 
@@ -350,6 +404,10 @@ export async function ingestFile(
     // Heuristic: a "real" text PDF yields at least a couple hundred chars.
     // Scanned PDFs typically yield empty strings or a few stray ligatures.
     if (extracted.trim().length > 200) {
+      const textBytes = Buffer.byteLength(extracted, 'utf-8')
+      if (textBytes > MAX_INGEST_BYTES) {
+        return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, textBytes) }]
+      }
       return [{ type: 'text', text: `<<file path="${ref.absolutePath}" kind="pdf-text">>\n${extracted}\n<</file>>` }]
     }
     // Scanned / image-based PDF.
@@ -364,6 +422,10 @@ export async function ingestFile(
     }
     // DeepSeek + scanned PDF: OCR locally.
     const ocr = await ocrPdf(ref.absolutePath)
+    const ocrBytes = Buffer.byteLength(ocr, 'utf-8')
+    if (ocrBytes > MAX_INGEST_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, ocrBytes) }]
+    }
     return [
       {
         type: 'text',

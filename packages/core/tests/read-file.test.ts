@@ -41,26 +41,50 @@ describe('readFile tool', () => {
   it('truncates large files and hints at ranges', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-'))
     const filePath = path.join(tmpDir, 'big.ts')
-    const lines = Array.from({ length: 600 }, (_, i) => `// line ${i + 1}`)
+    // Threshold is 2000 lines (bumped from 500 to align with Claude Code).
+    const lines = Array.from({ length: 2500 }, (_, i) => `// line ${i + 1}`)
     await fs.writeFile(filePath, lines.join('\n'))
 
     const result = (await exec({ filePath })) as string
-    expect(result).toContain('showing first 500')
-    expect(result).toContain('600')
-    expect(result).not.toContain('501\t')
+    expect(result).toContain('showing first 2000')
+    expect(result).toContain('2500')
+    expect(result).not.toContain('2001\t')
 
     await fs.rm(tmpDir, { recursive: true })
   })
 
-  it('does NOT truncate when offset/limit is specified', async () => {
+  it('does NOT head-truncate when offset/limit is specified', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-'))
     const filePath = path.join(tmpDir, 'big2.ts')
-    const lines = Array.from({ length: 600 }, (_, i) => `// line ${i + 1}`)
+    // 2500 lines × ~12 bytes/line ≈ 30 KB — well under the 256 KB byte cap,
+    // so the whole requested range comes back without further trimming.
+    const lines = Array.from({ length: 2500 }, (_, i) => `// line ${i + 1}`)
     await fs.writeFile(filePath, lines.join('\n'))
 
-    const result = (await exec({ filePath, offset: 1, limit: 600 })) as string
+    const result = (await exec({ filePath, offset: 1, limit: 2500 })) as string
     expect(result).not.toContain('showing first')
-    expect(result).toContain('600\t')
+    expect(result).toContain('2500\t')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  // Regression: a model that asked for a giant explicit range used to dump
+  // the entire slice into context and blow past the model's context window
+  // on the next turn. Now we hard-cap at MAX_READ_BYTES (256 KB) and tell
+  // the model exactly where to resume.
+  it('caps explicit-range reads at 256 KB and points at the next offset', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-'))
+    const filePath = path.join(tmpDir, 'huge.txt')
+    // 4000 lines × ~100 bytes/line ≈ 400 KB > 256 KB cap.
+    const lines = Array.from({ length: 4000 }, (_, i) => `${i + 1}: ${'x'.repeat(95)}`)
+    await fs.writeFile(filePath, lines.join('\n'))
+
+    const result = (await exec({ filePath, offset: 1, limit: 4000 })) as string
+    expect(result).toContain('output capped at 256 KB')
+    expect(result).toMatch(/Call readFile again with offset=\d+/)
+    // Sanity: byte cap actually enforced — output well under 300 KB even
+    // with the trailing hint.
+    expect(Buffer.byteLength(result, 'utf-8')).toBeLessThan(300 * 1024)
 
     await fs.rm(tmpDir, { recursive: true })
   })
