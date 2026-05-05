@@ -187,15 +187,20 @@ async function executeWriteTool(
   return toolErrorString('unknown write tool')
 }
 
-/** Execute a shell command with streaming. */
+/** Execute a shell command with streaming. Persists the post-command cwd
+ *  back into LoopState so the NEXT shell call honors any `cd` issued by
+ *  this one — without that the shell tool description's promise that
+ *  cwd persists would be a lie (every spawn would start at process.cwd()). */
 async function executeShell(
   command: string,
   timeout: number,
   signal: AbortSignal | undefined,
+  state: LoopState,
   callbacks: AgentCallbacks,
   toolCallId: string,
 ): Promise<{ output: string; isError: boolean }> {
-  const proc = getShellProvider().spawn(command, { timeout, signal })
+  const cwd = state.shellCwd ?? process.cwd()
+  const { proc, readCwd } = getShellProvider().spawn(command, { timeout, signal, cwd })
 
   reportProgress(toolCallId, 'Running command...')
 
@@ -237,6 +242,13 @@ async function executeShell(
   proc.stderr?.on('data', onChunk)
 
   const result = await proc
+
+  // Persist the post-command cwd. readCwd cleans up the temp file
+  // unconditionally; null means capture failed (child died before
+  // writing, captured path no longer exists, etc.) and we leave the
+  // previous cwd untouched.
+  const newCwd = await readCwd()
+  if (newCwd) state.shellCwd = newCwd
   // Fold PowerShell/cmd multi-line error blocks to a single line before they
   // reach the model. A misquoted command on Windows emits 5–10 lines per
   // attempt; across a loop of failed retries those stacks accumulate faster
@@ -456,6 +468,7 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
         input.command as string,
         timeout,
         options.abortSignal,
+        state,
         callbacks,
         toolCallId,
       )

@@ -55,6 +55,15 @@ export interface LoopState {
    *  Survives `/clear` (matches Claude Code) so a multi-feature
    *  checklist isn't wiped by an unrelated context reset. */
   todos: TodoItem[]
+  /** Working directory the next shell command should run in. Captured from
+   *  `pwd` after each shell command completes; null until the first
+   *  command runs (then we use Node's `process.cwd()` and let the
+   *  capture populate it). The shell tool description promises that
+   *  cwd persists between calls — without this state, every spawn used
+   *  Node's process.cwd() and `cd subdir && ...` had no effect on the
+   *  next call. Survives compaction and /clear (a session-long shell
+   *  context, not turn-scoped). */
+  shellCwd: string | null
   /** Records of files the model has read this session, keyed by absolute
    *  path. The edit and writeFile tools require an entry here before they
    *  will run, and compare `timestamp` against the file's current mtime
@@ -132,6 +141,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     taskSlug: '',
     todos: [],
     readFiles: new Map(),
+    shellCwd: null,
     persistedMessageCount: 0,
   }
 }
