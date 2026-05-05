@@ -3,7 +3,7 @@
 // Extracted from tool-execution.ts to keep handleToolCall at a manageable
 // size. Each handler has the same contract: mutate state + push result via
 // pushToolResult, and return void.
-import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
+import type { AgentCallbacks, AgentOptions, PermissionMode, TodoItem } from '../types/index.js'
 import { extractText } from '../utils/message-helpers.js'
 import type { LoopState } from './loop-state.js'
 import { toolErrorString } from './messages.js'
@@ -109,6 +109,13 @@ export async function handleEnterPlanMode(
     )
     return
   }
+  // Remember the pre-plan mode so exitPlanMode can restore it instead of
+  // unconditionally promoting to acceptEdits. Don't overwrite a previously
+  // captured value if we somehow re-enter plan from plan (shouldn't happen
+  // — guarded above — but defensive).
+  if (state.prePlanMode === undefined) {
+    state.prePlanMode = state.permissionMode
+  }
   state.permissionMode = 'plan'
   state.systemPromptCache = null
   if (!state.currentPlanPath) {
@@ -193,11 +200,19 @@ export async function handleExitPlanMode(
 
   const approved = await callbacks.onPlanApprovalRequest(planBody)
   if (approved) {
-    state.permissionMode = 'acceptEdits'
+    // Restore the mode the session was in before plan mode, NOT a hard
+    // 'acceptEdits'. A user who started in 'default' (every write asks)
+    // expects to keep being asked after the plan is approved; silently
+    // upgrading them to 'acceptEdits' is a surprise permission grant.
+    // Fall back to 'acceptEdits' only if we somehow never recorded the
+    // pre-plan mode (shouldn't happen given enterPlanMode sets it).
+    const restoreTo: PermissionMode = state.prePlanMode ?? 'acceptEdits'
+    state.permissionMode = restoreTo
+    state.prePlanMode = undefined
     state.systemPromptCache = null
     const persisted = savedPath ?? state.currentPlanPath
     state.currentPlanPath = null
-    callbacks.onPlanModeChange('acceptEdits')
+    callbacks.onPlanModeChange(restoreTo)
     pushToolResult(
       state,
       callbacks,
@@ -215,14 +230,17 @@ export async function handleExitPlanMode(
         .filter(Boolean)
         .join('\n'),
     )
+    const modeNote =
+      restoreTo === 'acceptEdits'
+        ? 'Write tools (writeFile, edit) are now auto-approved (acceptEdits mode); shell commands still go through normal permission classification.'
+        : `Permission mode restored to '${restoreTo}' — the same mode the session was in before entering plan mode.`
     state.messages.push({
       role: 'user',
       content: [
         '## Exited Plan Mode',
         '',
         'You have exited plan mode. You can now make edits, run tools, and take actions.',
-        'Write tools (writeFile, edit) are now auto-approved (acceptEdits mode); shell commands',
-        'still go through normal permission classification.',
+        modeNote,
         persisted ? `The plan file is located at ${persisted} if you need to reference it.` : '',
       ]
         .filter(Boolean)

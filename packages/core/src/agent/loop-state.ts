@@ -27,6 +27,14 @@ export interface LoopState {
    *  Read by tool-execution to decide which system prompt overlay
    *  applies and which tools are advertised. */
   permissionMode: PermissionMode
+  /** Permission mode the session was in BEFORE entering plan mode, so
+   *  exitPlanMode can restore it instead of unconditionally promoting to
+   *  'acceptEdits'. Without this, a user in 'default' (each write is
+   *  prompted) who entered plan mode and got their plan approved would
+   *  silently end up in 'acceptEdits' (writes auto-approved) — surprise
+   *  permission upgrade. Set on enterPlanMode, cleared back to undefined
+   *  on exit. Matches CC's `prePlanMode` semantics. */
+  prePlanMode?: PermissionMode
   /** Path to the plan file when in plan mode (`.x-code/plans/{sessionId}.md`),
    *  null otherwise. Created lazily the first time the model calls
    *  `enterPlanMode` and re-used for the remainder of that plan-mode

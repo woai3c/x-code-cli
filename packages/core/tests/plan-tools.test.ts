@@ -250,6 +250,41 @@ describe('handleExitPlanMode', () => {
     expect(lastMsg.role).toBe('user')
   })
 
+  // Regression: previously exitPlanMode unconditionally promoted to
+  // 'acceptEdits' regardless of the mode the session was in before plan
+  // mode. A user in 'default' (each write asks) entering plan mode and
+  // approving the plan would silently end up in 'acceptEdits' (writes
+  // auto-approved) — surprise permission grant. Now we restore the mode
+  // the session was actually in before enterPlanMode.
+  it('restores the pre-plan permission mode after approval (default → default)', async () => {
+    const state = createLoopState('default')
+    const options = makeOptions()
+    const callbacks = makeCallbacks({
+      onAskPermission: vi.fn().mockResolvedValue('yes'),
+      onPlanApprovalRequest: vi.fn().mockResolvedValue(true),
+    })
+    await handleEnterPlanMode({}, 'tc-enter', state, options, callbacks, recordPushToolResult)
+    expect(state.permissionMode).toBe('plan')
+    expect(state.prePlanMode).toBe('default')
+
+    await handleExitPlanMode({ plan: 'plan body' }, 'tc-exit', state, callbacks, recordPushToolResult)
+    expect(state.permissionMode).toBe('default')
+    expect(state.prePlanMode).toBeUndefined()
+    expect(callbacks.onPlanModeChange).toHaveBeenCalledWith('default')
+  })
+
+  it('still falls back to acceptEdits when prePlanMode is unknown (legacy path)', async () => {
+    // State synthesized directly in 'plan' (e.g. resumed session, or
+    // test fixtures) never went through enterPlanMode, so prePlanMode
+    // is undefined. Exit should fall back to acceptEdits to preserve
+    // the prior contract for that case.
+    const state = createLoopState('plan')
+    state.currentPlanPath = path.join(tmpHome, 'plan-legacy.md')
+    const callbacks = makeCallbacks({ onPlanApprovalRequest: vi.fn().mockResolvedValue(true) })
+    await handleExitPlanMode({ plan: 'plan' }, 'tc1', state, callbacks, recordPushToolResult)
+    expect(state.permissionMode).toBe('acceptEdits')
+  })
+
   it('stays in plan mode and pushes an errored result when user rejects', async () => {
     const state = createLoopState('plan')
     state.currentPlanPath = path.join(tmpHome, 'plan-rej.md')

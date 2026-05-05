@@ -76,9 +76,16 @@ function resolveSubModel(
 function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: string) {
   const deny = [...(agentDef.disallowedTools ?? []), 'task']
 
-  // In plan mode, deny write tools for general-purpose agent
-  if (parentPermissionMode === 'plan' && agentDef.name === 'general-purpose') {
-    deny.push('writeFile', 'edit')
+  // In plan mode, deny write tools for ALL sub-agents — not just
+  // general-purpose. Previously this gate only fired for one hard-coded
+  // agent name, so a custom agent (`.x-code/agents/foo.md`) whose tools
+  // list happened to include writeFile/edit could write files even while
+  // the parent session was in plan mode, silently breaking plan mode's
+  // read-only invariant. Matches CC, where plan mode is enforced via the
+  // permission context and is independent of agent identity.
+  if (parentPermissionMode === 'plan') {
+    if (!deny.includes('writeFile')) deny.push('writeFile')
+    if (!deny.includes('edit')) deny.push('edit')
   }
 
   return {
