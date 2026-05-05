@@ -53,6 +53,36 @@ describe('glob tool', () => {
     await fs.rm(tmpDir, { recursive: true })
   })
 
+  // Regression: tool description has always promised "sorted by
+  // modification time" but the implementation just returned globby's
+  // filesystem order. Now actually sorted, newest first.
+  it('returns results sorted by modification time, newest first', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-glob-mtime-'))
+    // Create three files with explicit, ordered mtimes so the test
+    // doesn't depend on filesystem-resolution-clock luck.
+    await fs.writeFile(path.join(tmpDir, 'oldest.ts'), '')
+    await fs.utimes(path.join(tmpDir, 'oldest.ts'), new Date(2020, 0, 1), new Date(2020, 0, 1))
+    await fs.writeFile(path.join(tmpDir, 'middle.ts'), '')
+    await fs.utimes(path.join(tmpDir, 'middle.ts'), new Date(2022, 0, 1), new Date(2022, 0, 1))
+    await fs.writeFile(path.join(tmpDir, 'newest.ts'), '')
+    await fs.utimes(path.join(tmpDir, 'newest.ts'), new Date(2024, 0, 1), new Date(2024, 0, 1))
+
+    const result = (await glob.execute!(
+      { pattern: '*.ts', cwd: tmpDir },
+      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
+    )) as string
+    const lines = result.split('\n').filter((l) => l.includes('.ts'))
+    // Newest must come first, oldest last.
+    const newestIdx = lines.findIndex((l) => l.includes('newest.ts'))
+    const middleIdx = lines.findIndex((l) => l.includes('middle.ts'))
+    const oldestIdx = lines.findIndex((l) => l.includes('oldest.ts'))
+    expect(newestIdx).toBe(0)
+    expect(middleIdx).toBe(1)
+    expect(oldestIdx).toBe(2)
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
   it('truncates results when exceeding the cap (200)', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-glob-cap-'))
     const count = 210
