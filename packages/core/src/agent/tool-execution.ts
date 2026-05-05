@@ -2,6 +2,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import type { ModelMessage } from 'ai'
+
 import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
@@ -199,12 +201,6 @@ function pushToolResult(
 
 type ToolCall = { toolName: string; toolCallId: string; input: Record<string, unknown> }
 
-/** Tools whose execution is driven by the AI SDK (they have an `execute` on
- *  the tool definition). By the time we see them in `processToolCalls`, the
- *  tool has already run and its result is already in `state.messages`. We
- *  can't pre-block these — only record for loop detection and annotate. */
-const AUTO_EXECUTED_TOOLS = new Set(['readFile', 'glob', 'grep', 'listDir', 'webFetch', 'webSearch', 'saveKnowledge'])
-
 /** Context passed to every per-tool handler — saves us from re-listing
  *  five identical positional params at each call site. */
 interface HandlerCtx {
@@ -274,10 +270,20 @@ const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
 }
 
 /** Run the loop-guard machinery for a non-bypass tool. Returns true if the
- *  tool was blocked (caller should stop dispatching). */
-async function applyLoopGuard(ctx: HandlerCtx): Promise<boolean> {
+ *  tool was blocked (caller should stop dispatching).
+ *
+ *  Auto-executed tools never reach this path — `processToolCalls` skips
+ *  them earlier because their result is already in `state.messages` from
+ *  the SDK's `response.messages`, and re-running the loop-guard here would
+ *  push the synthesized result on top of that or inject a mid-iteration
+ *  user message that breaks the assistant→tool ordering strict providers
+ *  require.
+ *
+ *  `deferred` collects messages that must land AFTER the iteration's tool
+ *  results — pushing them mid-loop creates the
+ *  `assistant → tool A → user → tool B` pattern that DeepSeek 400s on. */
+async function applyLoopGuard(ctx: HandlerCtx, deferred: ModelMessage[]): Promise<boolean> {
   const { toolName, input, toolCallId, state, callbacks } = ctx
-  const isAutoExecuted = AUTO_EXECUTED_TOOLS.has(toolName)
   const loopCheck = checkForLoop(state, toolName, input, toolCallId)
 
   if (loopCheck.kind === 'ok') {
@@ -287,18 +293,9 @@ async function applyLoopGuard(ctx: HandlerCtx): Promise<boolean> {
 
   recordToolCall(state, toolName, input, loopCheck.hash)
   const guardMessage = `[loop-guard] ${loopCheck.message}`
-
-  if (isAutoExecuted) {
-    // The tool result already exists in state.messages. Append a follow-up
-    // user-role notice so the model's next step has explicit context that
-    // this path is spinning — without this nudge, some models keep trying.
-    state.messages.push({ role: 'user', content: guardMessage })
-    callbacks.onToolResult(toolCallId, guardMessage, true)
-  } else {
-    // Manual tool — short-circuit by synthesising the result. The tool body
-    // never runs; no side effects, no permission prompt.
-    pushToolResult(state, callbacks, toolCallId, toolName, guardMessage, true)
-  }
+  // Manual tool — short-circuit by synthesising the result. The tool body
+  // never runs; no side effects, no permission prompt.
+  pushToolResult(state, callbacks, toolCallId, toolName, guardMessage, true)
 
   if (loopCheck.kind === 'hard-block') {
     const answer = await callbacks
@@ -312,7 +309,9 @@ async function applyLoopGuard(ctx: HandlerCtx): Promise<boolean> {
       // re-trigger on the next turn if the model legitimately retries
       // once with the same args under the user's guidance.
       state.recentToolCalls = []
-      state.messages.push({
+      // Defer until after the iteration so the user-role message lands at
+      // the END of this turn's messages, not between tool results.
+      deferred.push({
         role: 'user',
         content: '[loop-guard] User paused the loop. Wait for further instructions rather than calling more tools.',
       })
@@ -381,13 +380,17 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
 
 /** Handle a single tool call. Returns when the call has been fully dispatched.
  *  `parentModel` is the LanguageModel instance for the current loop — needed
- *  by the task tool to pass as fallback when the sub-agent doesn't override. */
+ *  by the task tool to pass as fallback when the sub-agent doesn't override.
+ *  `deferred` is the per-turn deferred-message queue threaded down to
+ *  `applyLoopGuard`; messages collected here are flushed after the entire
+ *  iteration in `processToolCalls`. */
 async function handleToolCall(
   tc: ToolCall,
   state: LoopState,
   options: AgentOptions,
   callbacks: AgentCallbacks,
   parentModel: LanguageModel,
+  deferred: ModelMessage[],
 ): Promise<void> {
   const ctx: HandlerCtx = {
     toolName: tc.toolName,
@@ -405,7 +408,7 @@ async function handleToolCall(
     return
   }
 
-  if (await applyLoopGuard(ctx)) return
+  if (await applyLoopGuard(ctx, deferred)) return
   if (!(await checkWriteOrShellPermission(ctx))) return
 
   const result = await executeWriteOrShell(ctx)
@@ -452,6 +455,43 @@ function collectActiveAssistantToolCallIds(state: LoopState): Set<string> {
   return ids
 }
 
+/** Collect tool_call_ids that ALREADY have a tool-result message in the
+ *  current turn's window of state.messages. Two distinct upstream paths
+ *  drop a result here before `processToolCalls` runs:
+ *    1. AI SDK auto-executed tools (readFile / glob / grep / listDir /
+ *       webFetch / webSearch) — their result is in `response.messages`
+ *       and gets pushed by `collectTurnResponse` before we iterate.
+ *    2. AI SDK auto-rejection of an unavailable tool — when a sub-agent's
+ *       toolFilter excludes a tool the model still emits a tool-call for
+ *       (e.g. `general-purpose` agent calling `writeFile`), the SDK
+ *       synthesizes an `error-text` tool-result so the assistant message
+ *       isn't left with an orphan tool-call.
+ *  In both cases re-running the tool here is wrong:
+ *    - For (1) the tool already executed; another run would duplicate
+ *      side effects (re-fetch a webpage, re-trigger a saveKnowledge).
+ *    - For (2) the tool isn't supposed to run at all in this agent's
+ *      filter, but `executeWriteTool` dispatches by name and would
+ *      happily fire writeFile, creating a real side effect AND pushing
+ *      a duplicate tool-result that DeepSeek 400s on next turn.
+ *  Same turn-boundary logic as collectActiveAssistantToolCallIds —
+ *  walk back from end-of-messages, stop at the first user message. */
+function collectFulfilledToolCallIds(state: LoopState): Set<string> {
+  const ids = new Set<string>()
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const msg = state.messages[i]
+    if (!msg) continue
+    if (msg.role === 'user') break
+    if (msg.role !== 'tool') continue
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content as Array<{ type?: string; toolCallId?: string }>) {
+      if (part?.type === 'tool-result' && typeof part.toolCallId === 'string') {
+        ids.add(part.toolCallId)
+      }
+    }
+  }
+  return ids
+}
+
 /** Handle all tool calls from a single model turn, sequentially.
  *  `parentModel` is threaded through so the task tool can pass it to runSubAgent. */
 export async function processToolCalls(
@@ -462,6 +502,12 @@ export async function processToolCalls(
   parentModel: LanguageModel,
 ): Promise<void> {
   const activeIds = collectActiveAssistantToolCallIds(state)
+  const fulfilledIds = collectFulfilledToolCallIds(state)
+  // Per-turn queue for messages that must land AFTER every tool-result
+  // we push in this loop. Pushing a `role: 'user'` message between two
+  // tool-results creates the shape that DeepSeek's strict ordering
+  // rejects — we collect them here and flush at the end of the loop.
+  const deferred: ModelMessage[] = []
 
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!
@@ -470,10 +516,12 @@ export async function processToolCalls(
     // every remaining tool_call from this turn we still need to push a
     // synthetic tool_result — orphan tool_calls without a matching result
     // would make the next API request fail with "tool_use without
-    // tool_result" the moment the user types another prompt.
+    // tool_result" the moment the user types another prompt. Skip ids
+    // already fulfilled by the SDK so we don't double-up tool-results.
     if (options.abortSignal?.aborted) {
       for (let j = i; j < toolCalls.length; j++) {
         const skipped = toolCalls[j]!
+        if (fulfilledIds.has(skipped.toolCallId)) continue
         pushToolResult(
           state,
           callbacks,
@@ -483,6 +531,7 @@ export async function processToolCalls(
           true,
         )
       }
+      if (deferred.length > 0) state.messages.push(...deferred)
       return
     }
 
@@ -501,6 +550,30 @@ export async function processToolCalls(
       continue
     }
 
-    await handleToolCall(tc, state, options, callbacks, parentModel)
+    // Skip already-fulfilled calls — see collectFulfilledToolCallIds.
+    // Still record the call in the loop-guard window so a runaway
+    // pattern on the same auto-executed tool can be circuit-broken on
+    // a future turn; if the guard fires, defer the user-role nudge
+    // until after iteration.
+    if (fulfilledIds.has(tc.toolCallId)) {
+      debugLog(
+        'tool-exec.skip-fulfilled',
+        `${tc.toolName} ${tc.toolCallId} — tool-result already in state.messages`,
+      )
+      const loopCheck = checkForLoop(state, tc.toolName, tc.input, tc.toolCallId)
+      recordToolCall(state, tc.toolName, tc.input, loopCheck.hash)
+      if (loopCheck.kind !== 'ok') {
+        deferred.push({ role: 'user', content: `[loop-guard] ${loopCheck.message}` })
+      }
+      continue
+    }
+
+    await handleToolCall(tc, state, options, callbacks, parentModel, deferred)
   }
+
+  // Flush deferred messages AFTER all tool_results in this turn — they
+  // sit at the very end of state.messages, where the next runTurn sees
+  // them as the most recent context but they don't break the
+  // assistant→tool ordering the SDK will replay to the provider.
+  if (deferred.length > 0) state.messages.push(...deferred)
 }

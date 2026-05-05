@@ -232,3 +232,180 @@ describe('processToolCalls ghost-call skip', () => {
     expect(onAskUser).toHaveBeenCalledTimes(1)
   })
 })
+
+function shellAssistant(ids: string[]): ModelMessage {
+  return {
+    role: 'assistant',
+    content: ids.map((toolCallId) => ({
+      type: 'tool-call',
+      toolCallId,
+      toolName: 'shell',
+      input: { command: 'echo hi' },
+    })),
+  } as ModelMessage
+}
+
+function toolResult(toolCallId: string, toolName: string, value: string, type: 'text' | 'error-text' = 'text'): ModelMessage {
+  return {
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId,
+        toolName,
+        output: { type, value },
+      },
+    ],
+  } as ModelMessage
+}
+
+describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)', () => {
+  it('skips writeFile when the SDK auto-rejected it as unavailable', async () => {
+    // Real failure case from the disk-info sub-agent in a.log: the
+    // general-purpose agent's tool filter excluded writeFile, but the
+    // model emitted a writeFile tool_call anyway. The SDK auto-emitted
+    // an `error-text` tool-result for the unavailable tool. Without the
+    // skip-fulfilled check we'd dispatch executeWriteTool by name (it
+    // doesn't consult the filter), creating a real file AND pushing a
+    // duplicate tool-result that DeepSeek then 400s on.
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'hi' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-write',
+            toolName: 'writeFile',
+            input: { filePath: '/tmp/should-not-exist.txt', content: 'x' },
+          },
+        ],
+      } as ModelMessage,
+      toolResult('tc-write', 'writeFile', "Model tried to call unavailable tool 'writeFile'.", 'error-text'),
+    )
+    const askPermission = vi.fn().mockResolvedValue('yes')
+    const callbacks = makeCallbacks({ onAskPermission: askPermission })
+    await processToolCalls(
+      [
+        {
+          toolName: 'writeFile',
+          toolCallId: 'tc-write',
+          input: { filePath: '/tmp/should-not-exist.txt', content: 'x' },
+        },
+      ],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+    // Permission must NOT have been asked — that would mean we were
+    // about to run the tool.
+    expect(askPermission).not.toHaveBeenCalled()
+    // No second tool-result for tc-write should have been appended.
+    const toolResults = state.messages.filter(
+      (m) =>
+        m.role === 'tool' &&
+        Array.isArray(m.content) &&
+        (m.content as Array<{ toolCallId?: string }>).some((p) => p?.toolCallId === 'tc-write'),
+    )
+    expect(toolResults).toHaveLength(1)
+  })
+
+  it('skips an auto-executed tool whose result already lives in state.messages', async () => {
+    // readFile/grep/listDir/etc. are auto-executed by the SDK and their
+    // result is in `response.messages` before processToolCalls runs.
+    // Re-running here would either no-op (executeWriteOrShell returns
+    // null for these names) or, in the worst case, trigger the
+    // loop-guard which used to push a user message mid-iteration.
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'hi' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-read',
+            toolName: 'readFile',
+            input: { filePath: '/x' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-shell',
+            toolName: 'shell',
+            input: { command: 'echo manual' },
+          },
+        ],
+      } as ModelMessage,
+      toolResult('tc-read', 'readFile', '/x contents'),
+    )
+    const askPermission = vi.fn().mockResolvedValue('yes')
+    const callbacks = makeCallbacks({ onAskPermission: askPermission })
+    // shell will fail to spawn in tests (no real shell provider); we
+    // only care that processToolCalls reaches it and does NOT try to
+    // execute readFile a second time.
+    await processToolCalls(
+      [
+        { toolName: 'readFile', toolCallId: 'tc-read', input: { filePath: '/x' } },
+        { toolName: 'shell', toolCallId: 'tc-shell', input: { command: 'echo manual' } },
+      ],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    ).catch(() => {})
+    // Only one tool-result for tc-read should exist (the original).
+    const readResults = state.messages.filter(
+      (m) =>
+        m.role === 'tool' &&
+        Array.isArray(m.content) &&
+        (m.content as Array<{ toolCallId?: string }>).some((p) => p?.toolCallId === 'tc-read'),
+    )
+    expect(readResults).toHaveLength(1)
+  })
+
+  it('flushes deferred messages AFTER all tool-results — no user message between assistant and a tool result', async () => {
+    // The bug we're guarding against: a user-role message inserted
+    // between assistant.tool_calls and a later tool-result. DeepSeek
+    // 400s with "Messages with role 'tool' must be a response to a
+    // preceding message with 'tool_calls'". We test the deferred-flush
+    // path indirectly by checking message-shape invariants after the
+    // call returns.
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'hi' } as ModelMessage,
+      shellAssistant(['tc-1', 'tc-2']),
+      toolResult('tc-1', 'shell', 'first result'),  // already fulfilled by SDK
+    )
+    const callbacks = makeCallbacks()
+    await processToolCalls(
+      [
+        { toolName: 'shell', toolCallId: 'tc-1', input: { command: 'echo hi' } },
+        { toolName: 'shell', toolCallId: 'tc-2', input: { command: 'echo bye' } },
+      ],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    ).catch(() => {})
+    // Walk the messages — every tool-role message must have an
+    // assistant-role message earlier in the array (no user message
+    // between an assistant.tool_calls and a tool result).
+    let lastAssistantWithToolCalls = -1
+    let lastUserMessage = -1
+    for (let i = 0; i < state.messages.length; i++) {
+      const m = state.messages[i]!
+      if (m.role === 'user') lastUserMessage = i
+      if (m.role === 'assistant' && Array.isArray(m.content)) {
+        const hasToolCall = (m.content as Array<{ type?: string }>).some((p) => p?.type === 'tool-call')
+        if (hasToolCall) lastAssistantWithToolCalls = i
+      }
+      if (m.role === 'tool') {
+        // The most-recent assistant.tool_calls must come AFTER the
+        // most-recent user message.
+        expect(lastAssistantWithToolCalls).toBeGreaterThan(lastUserMessage)
+      }
+    }
+  })
+})

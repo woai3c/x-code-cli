@@ -81,8 +81,15 @@ function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: str
     deny.push('writeFile', 'edit')
   }
 
+  // `'*'` is a wildcard meaning "every tool" — matches Claude Code's
+  // `tools: ['*']` semantics for built-in/general-purpose agents. Pass
+  // `undefined` so `buildTools` skips the allowlist filter and only the
+  // explicit deny list applies. Without this, `['*']` would be treated
+  // as a literal tool name and every real tool would be filtered out.
+  const allow = agentDef.tools?.includes('*') ? undefined : agentDef.tools
+
   return {
-    allow: agentDef.tools,
+    allow,
     deny,
   }
 }
