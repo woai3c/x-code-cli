@@ -18,25 +18,32 @@ export interface AllowRule {
 // Env-var assignment prefix: VAR=value (unquoted, safe chars only).
 const ENV_VAR_RE = /^[A-Za-z_]\w*=[A-Za-z0-9_./:@-]*\s+/
 
-// Matches `powershell -Command "..."` or `powershell -c "..."` (case-insensitive).
-const POWERSHELL_CMD_RE = /^powershell(?:\.exe)?\s+(?:-(?:Command|c)\s+)?["']/i
+// Detects the `powershell` / `powershell.exe` / `pwsh` invocation prefix.
+// We don't try to match the WHOLE shape here — agents use a lot of flag
+// variations (`-NoProfile`, `-ExecutionPolicy Bypass`, `-File foo.ps1`,
+// bare invocation without `-Command`). Just identify the launcher; the
+// extractor below scans past flags to find the inner command.
+const POWERSHELL_LAUNCHER_RE = /^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b/i
 
 // Extracts the first cmdlet or command name from inside quoted PowerShell.
 // Handles Verb-Noun cmdlets (Get-Process) and plain commands (git, npm).
-const PS_INNER_CMD_RE = /["']?\s*(?:&\s*)?([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[a-z][a-z0-9._-]*)/
+const PS_INNER_CMD_RE = /["']?\s*(?:&\s*\{?\s*)?([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[a-z][a-z0-9._-]*)/
 
 /**
  * Extract a command prefix suitable for prefix-match rules.
  * Returns `null` when no meaningful prefix can be derived.
  *
- *   'git commit -m "fix"'                          → 'git commit'
- *   'pnpm run build'                               → 'pnpm run'
- *   'npm install lodash'                           → 'npm install'
- *   'NODE_ENV=prod npm run dev'                    → 'npm run'
- *   'powershell -Command "Get-CimInstance ..."'    → 'Get-CimInstance'
- *   'powershell -Command "git status"'             → 'git'
- *   'ls -la'                                       → null
- *   ''                                             → null
+ *   'git commit -m "fix"'                                    → 'git commit'
+ *   'pnpm run build'                                         → 'pnpm run'
+ *   'npm install lodash'                                     → 'npm install'
+ *   'NODE_ENV=prod npm run dev'                              → 'npm run'
+ *   'powershell -Command "Get-CimInstance ..."'              → 'Get-CimInstance'
+ *   'powershell -NoProfile -Command "Get-CimInstance ..."'   → 'Get-CimInstance'
+ *   'powershell -ExecutionPolicy Bypass -c "git status"'     → 'git'
+ *   'pwsh -Command "& { Get-Process }"'                      → 'Get-Process'
+ *   'powershell -Command Get-Date'                           → 'Get-Date'
+ *   'ls -la'                                                 → null
+ *   ''                                                       → null
  */
 export function extractCommandPrefix(command: string): string | null {
   let cmd = command.trim()
@@ -44,14 +51,38 @@ export function extractCommandPrefix(command: string): string | null {
     cmd = cmd.replace(ENV_VAR_RE, '')
   }
 
-  // Handle `powershell -Command "..."`: extract the inner cmdlet/command.
-  if (POWERSHELL_CMD_RE.test(cmd)) {
-    const quoteStart = cmd.indexOf('"') !== -1 ? cmd.indexOf('"') : cmd.indexOf("'")
-    if (quoteStart !== -1) {
-      const inner = cmd.slice(quoteStart)
-      const m = PS_INNER_CMD_RE.exec(inner)
-      if (m?.[1]) return m[1]
+  // PowerShell: scan past launcher + flags to find the inner command.
+  // Agents emit varied flag combinations (`-NoProfile`, `-ExecutionPolicy
+  // Bypass`, `-c` vs `-Command`, etc.) — strip them all, then extract the
+  // first cmdlet/command from the remaining string. The earlier regex-based
+  // approach only matched a fixed flag layout and produced null for the
+  // common `-NoProfile` case, hiding the "don't ask again" option.
+  if (POWERSHELL_LAUNCHER_RE.test(cmd)) {
+    const tokens = cmd.split(/\s+/).filter(Boolean)
+    let i = 1 // skip launcher
+    while (i < tokens.length) {
+      const tok = tokens[i]!
+      if (!tok.startsWith('-')) break
+      const lower = tok.toLowerCase()
+      // -Command / -c ends the flag run — what follows is the actual command
+      if (lower === '-command' || lower === '-c') {
+        i++
+        break
+      }
+      // -File <path> — no useful prefix; bail.
+      if (lower === '-file') return null
+      // Flags that take an argument (consume next token too).
+      if (lower === '-executionpolicy' || lower === '-encodedcommand' || lower === '-inputformat' || lower === '-outputformat' || lower === '-version' || lower === '-windowstyle' || lower === '-configurationname' || lower === '-mta' || lower === '-sta') {
+        i += 2
+        continue
+      }
+      // Boolean flags (no argument): -NoProfile, -NoLogo, -NonInteractive, etc.
+      i++
     }
+    if (i >= tokens.length) return null
+    const inner = tokens.slice(i).join(' ')
+    const m = PS_INNER_CMD_RE.exec(inner)
+    if (m?.[1]) return m[1]
     return null
   }
 

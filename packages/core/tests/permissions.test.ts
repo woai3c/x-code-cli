@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { checkPermission, getPermissionLevel, isPathWithinProject } from '../src/permissions/index.js'
+import { extractCommandPrefix } from '../src/permissions/session-store.js'
 
 describe('getPermissionLevel', () => {
   it('returns always-allow for read-only tools', () => {
@@ -163,6 +164,68 @@ describe('checkPermission', () => {
     )
     expect(result).toBe(false)
     expect(askFn).toHaveBeenCalled()
+  })
+})
+
+describe('extractCommandPrefix', () => {
+  it('extracts two-token prefix for plain commands', () => {
+    expect(extractCommandPrefix('git commit -m "fix"')).toBe('git commit')
+    expect(extractCommandPrefix('pnpm run build')).toBe('pnpm run')
+    expect(extractCommandPrefix('npm install lodash')).toBe('npm install')
+  })
+
+  it('strips env-var prefixes', () => {
+    expect(extractCommandPrefix('NODE_ENV=prod npm run dev')).toBe('npm run')
+    expect(extractCommandPrefix('FOO=1 BAR=2 git status')).toBe('git status')
+  })
+
+  it('returns null for single-token or unprefixable commands', () => {
+    expect(extractCommandPrefix('')).toBeNull()
+    expect(extractCommandPrefix('ls')).toBeNull()
+    expect(extractCommandPrefix('ls -la')).toBeNull()
+  })
+
+  it('extracts cmdlet from quoted powershell -Command form', () => {
+    expect(extractCommandPrefix('powershell -Command "Get-CimInstance Win32_LogicalDisk"')).toBe('Get-CimInstance')
+    expect(extractCommandPrefix('powershell -c "Get-Process"')).toBe('Get-Process')
+    expect(extractCommandPrefix('powershell.exe -Command "Get-Date"')).toBe('Get-Date')
+  })
+
+  it('handles powershell with leading flags before -Command', () => {
+    // Real failure case from a.log: `-NoProfile` between launcher and `-Command`
+    // hid the "don't ask again" option for every sub-agent shell call.
+    expect(extractCommandPrefix('powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk"')).toBe('Get-CimInstance')
+    expect(extractCommandPrefix('powershell -ExecutionPolicy Bypass -Command "git status"')).toBe('git')
+    expect(extractCommandPrefix('powershell -NoLogo -NonInteractive -Command "Get-Process"')).toBe('Get-Process')
+    expect(extractCommandPrefix('powershell -NoProfile -ExecutionPolicy Bypass -c "Get-CimInstance"')).toBe(
+      'Get-CimInstance',
+    )
+  })
+
+  it('handles unquoted powershell command argument', () => {
+    expect(extractCommandPrefix('powershell -Command Get-Date')).toBe('Get-Date')
+    expect(extractCommandPrefix('powershell -NoProfile -Command Get-Process')).toBe('Get-Process')
+  })
+
+  it('handles powershell call-operator wrapping', () => {
+    expect(extractCommandPrefix('powershell -Command "& { Get-Process }"')).toBe('Get-Process')
+    expect(extractCommandPrefix('powershell -NoProfile -Command "& { Get-CimInstance Win32_LogicalDisk }"')).toBe(
+      'Get-CimInstance',
+    )
+  })
+
+  it('handles pwsh launcher', () => {
+    expect(extractCommandPrefix('pwsh -Command "Get-Process"')).toBe('Get-Process')
+    expect(extractCommandPrefix('pwsh.exe -NoProfile -Command "git status"')).toBe('git')
+  })
+
+  it('returns null for powershell -File (no derivable command name)', () => {
+    expect(extractCommandPrefix('powershell -File ./script.ps1')).toBeNull()
+    expect(extractCommandPrefix('powershell -NoProfile -File foo.ps1 arg1')).toBeNull()
+  })
+
+  it('returns null when powershell has only flags (no command)', () => {
+    expect(extractCommandPrefix('powershell -NoProfile -ExecutionPolicy Bypass')).toBeNull()
   })
 })
 
