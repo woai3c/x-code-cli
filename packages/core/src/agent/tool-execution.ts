@@ -27,6 +27,65 @@ function countOccurrences(content: string, search: string): number {
   return count
 }
 
+/** Verify the model has read this file (in full) recently and that the
+ *  file's mtime hasn't changed since. Returns null on success, or an
+ *  error string suitable for use as the tool result on failure.
+ *
+ *  Two gates:
+ *
+ *  1. **Must read first** (matches CC FileEditTool's `validateInput`).
+ *     The model must have called readFile on this exact path in this
+ *     session, with NO offset/limit (a partial view doesn't qualify —
+ *     the model could clobber content it never saw). Without the gate,
+ *     a model can blind-edit a file it never opened, acting on stale
+ *     assumptions from training data or another file.
+ *
+ *  2. **No external modification since read** (matches CC's
+ *     FILE_UNEXPECTEDLY_MODIFIED_ERROR). If the file's mtime changed
+ *     since the recorded read, refuse and ask the model to re-read.
+ *     Catches the common case of the user editing the same file in
+ *     their IDE while the agent is mid-task — without the check, the
+ *     agent's read-modify-write quietly overwrites the user's edits.
+ *
+ *  `isCreatingNew` short-circuits both checks for writeFile when the
+ *  target doesn't exist on disk (creating a fresh file — nothing to
+ *  read first, no mtime to compare). */
+async function checkFileReadGate(
+  toolName: string,
+  filePath: string,
+  state: LoopState,
+  isCreatingNew: boolean,
+): Promise<string | null> {
+  if (isCreatingNew) return null
+
+  const known = state.readFiles.get(filePath)
+  if (!known) {
+    return toolErrorString(
+      `Cannot ${toolName} ${filePath}: this file has not been read in the current session. Call readFile on it first so you're working from the actual current contents, not assumptions.`,
+    )
+  }
+  if (known.isPartialView) {
+    return toolErrorString(
+      `Cannot ${toolName} ${filePath}: only a partial view was read (offset/limit was used, or the file was head-truncated). Read the full file (or at least the surrounding region you intend to modify) before editing.`,
+    )
+  }
+  // Fresh stat — detect external modifications between read and write.
+  // If stat fails the file may have been deleted; let the actual write
+  // path produce the canonical error rather than fabricating one here.
+  try {
+    const stat = await fs.stat(filePath)
+    const currentMtime = Math.floor(stat.mtimeMs)
+    if (currentMtime !== known.timestamp) {
+      return toolErrorString(
+        `Cannot ${toolName} ${filePath}: the file was modified externally since you last read it (mtime changed from ${known.timestamp} to ${currentMtime}). Re-read it before editing so you don't overwrite the external changes.`,
+      )
+    }
+  } catch {
+    // stat failed — defer to write path's error
+  }
+  return null
+}
+
 /** Execute a write tool (writeFile / edit).
  *
  *  In addition to returning the model-facing result string, fires
@@ -38,6 +97,7 @@ async function executeWriteTool(
   toolName: string,
   input: Record<string, unknown>,
   toolCallId: string,
+  state: LoopState,
   callbacks: AgentCallbacks,
   signal: AbortSignal | undefined,
 ): Promise<string> {
@@ -46,6 +106,16 @@ async function executeWriteTool(
     const content = input.content as string
     reportProgress(toolCallId, `Writing ${filePath}`)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
+    // Probe existence before the gate so we know whether to enforce
+    // "must read first". A genuine create has nothing to read.
+    let exists = true
+    try {
+      await fs.stat(filePath)
+    } catch {
+      exists = false
+    }
+    const gateError = await checkFileReadGate('writeFile', filePath, state, !exists)
+    if (gateError) return gateError
     // Read old content BEFORE writing so we can diff. Treat any read
     // failure as "file did not exist" — covers the common ENOENT path
     // plus permission / EISDIR edge cases (we'd error on write anyway).
@@ -56,6 +126,15 @@ async function executeWriteTool(
       oldContent = null
     }
     await fs.writeFile(filePath, content, { encoding: 'utf-8', signal })
+    // Refresh the read state with the post-write mtime so the model can
+    // immediately edit the file again without tripping the mtime gate
+    // on its own write. Treat the write itself as a "full read".
+    try {
+      const newStat = await fs.stat(filePath)
+      state.readFiles.set(filePath, { timestamp: Math.floor(newStat.mtimeMs), isPartialView: false })
+    } catch {
+      // ignore — next read will repopulate
+    }
     const isNew = oldContent === null
     const parts = content.split('\n')
     const lineCount = content.endsWith('\n') ? parts.length - 1 : parts.length
@@ -76,6 +155,8 @@ async function executeWriteTool(
     const replaceAll = (input.replaceAll as boolean) ?? false
 
     reportProgress(toolCallId, `Editing ${filePath}`)
+    const gateError = await checkFileReadGate('edit', filePath, state, false)
+    if (gateError) return gateError
     const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
     if (!replaceAll) {
       const count = countOccurrences(content, oldString)
@@ -88,6 +169,14 @@ async function executeWriteTool(
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
     await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
+    // Refresh read state with the post-edit mtime so the model can chain
+    // a second edit on the same file without the mtime gate firing.
+    try {
+      const newStat = await fs.stat(filePath)
+      state.readFiles.set(filePath, { timestamp: Math.floor(newStat.mtimeMs), isPartialView: false })
+    } catch {
+      // ignore — next read will repopulate
+    }
 
     const payload = computeEditDiff(filePath, content, newContent)
     if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
@@ -353,7 +442,7 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
-      const output = await executeWriteTool(toolName, input, toolCallId, callbacks, options.abortSignal)
+      const output = await executeWriteTool(toolName, input, toolCallId, state, callbacks, options.abortSignal)
       // executeWriteTool returns "Error: ..." strings for in-band failures
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.

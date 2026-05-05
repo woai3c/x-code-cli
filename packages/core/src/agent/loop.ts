@@ -175,12 +175,53 @@ function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
  *
  *  Computed once per session and cached — the tool set is stable within
  *  a session (registry doesn't change, filter doesn't change). */
-function buildTools(options: AgentOptions) {
+function buildTools(options: AgentOptions, state: LoopState) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = { ...toolRegistry }
 
   if (options.subAgentRegistry) {
     tools.task = createTaskTool(options.subAgentRegistry)
+  }
+
+  // Wrap readFile to record each successful read into state.readFiles.
+  // The edit and writeFile tools then gate on this map: reject when the
+  // model has not read the file yet, or when the file's mtime has
+  // changed since the recorded read (external modification by the user
+  // in another editor). Without this wrapper the gates have nothing to
+  // check against and would always succeed — silent clobber risk.
+  // Sub-agents wrap their OWN state's map (each sub-agent gets a fresh
+  // LoopState in runner.ts) so a sub-agent's reads don't unlock the
+  // parent's edits and vice versa.
+  if (tools.readFile) {
+    const original = tools.readFile
+    tools.readFile = {
+      ...original,
+      execute: async (input: { filePath: string; offset?: number; limit?: number }, ctx: unknown) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = await (original.execute as (i: unknown, c: unknown) => Promise<any>)(input, ctx)
+        try {
+          const stat = await fs.stat(input.filePath)
+          const userSpecifiedRange = input.offset != null || input.limit != null
+          // Heuristic for "partial": explicit offset/limit, OR the file
+          // is large enough that read-file's head-truncation kicked in
+          // (its byte cap is 256 KB; line cap is 2000 lines but at any
+          // realistic line density ≥256 KB also exceeds the line cap).
+          // Files in the 2000–5000 line / <256 KB range get classified
+          // as full when the head was actually truncated, but edit's
+          // string-match contract makes that safe (mismatch → error).
+          const wasHeadTruncated = !userSpecifiedRange && stat.size > 256 * 1024
+          state.readFiles.set(input.filePath, {
+            timestamp: Math.floor(stat.mtimeMs),
+            isPartialView: userSpecifiedRange || wasHeadTruncated,
+          })
+        } catch {
+          // stat failed (deleted between read and stat, permission,
+          // etc.) — read may have errored too. Skip recording; the
+          // edit gate will treat it as never-read.
+        }
+        return result
+      },
+    }
   }
 
   const filter = options.toolFilter
@@ -393,7 +434,7 @@ export async function agentLoop(
   // Build the effective tool set once per session — includes the task
   // tool when a subAgentRegistry is available, and applies toolFilter
   // for sub-agent loops. Stable for the session lifetime.
-  const effectiveTools = buildTools(options)
+  const effectiveTools = buildTools(options, state)
 
   // Auto-continuation on `length` finish. Reasoning models can exhaust the
   // output token budget before the user-visible reply completes — the old

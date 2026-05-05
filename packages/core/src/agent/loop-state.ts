@@ -55,6 +55,21 @@ export interface LoopState {
    *  Survives `/clear` (matches Claude Code) so a multi-feature
    *  checklist isn't wiped by an unrelated context reset. */
   todos: TodoItem[]
+  /** Records of files the model has read this session, keyed by absolute
+   *  path. The edit and writeFile tools require an entry here before they
+   *  will run, and compare `timestamp` against the file's current mtime
+   *  to detect external modifications between read and write. Without
+   *  this, the model can blind-edit a file it never read (acting on stale
+   *  assumptions) or silently overwrite a user's in-flight IDE edits.
+   *
+   *  - `timestamp`: file mtime at the time of read, in milliseconds.
+   *  - `isPartialView`: true when the read was a partial slice (offset/
+   *    limit). Partial reads do NOT count as "read for edit" — the model
+   *    must do a full read first, otherwise it could clobber content
+   *    outside the slice it actually saw.
+   *
+   *  Cleared on `/clear` along with `messages`. Survives compaction. */
+  readFiles: Map<string, { timestamp: number; isPartialView: boolean }>
   /** Number of messages already persisted to the session jsonl file.
    *  The agent loop calls `flushPendingMessages` at turn boundaries,
    *  which appends `state.messages.slice(persistedMessageCount)` and
@@ -116,6 +131,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     currentPlanPath: null,
     taskSlug: '',
     todos: [],
+    readFiles: new Map(),
     persistedMessageCount: 0,
   }
 }
