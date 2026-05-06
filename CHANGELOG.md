@@ -1,3 +1,10 @@
+## v0.2.3 (2026-05-06)
+
+### Bug Fixes
+
+- bail to aborted state after reactive compaction if Esc fired (c59dbe0)
+- restore blank line after markdown heading (df50c88)
+
 ## v0.2.2 (2026-05-06)
 
 ### Features
