@@ -795,12 +795,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setState((prev) => ({ ...prev, permissionMode: next }))
   }, [])
 
-  /** Add a system/info message (for slash command output) */
-  const addInfoMessage = useCallback(
-    (content: string) => {
+  const addMessage = useCallback(
+    (role: 'user' | 'assistant', content: string) => {
       appendMessage({
         id: Date.now().toString(),
-        role: 'assistant',
+        role,
         content,
         timestamp: Date.now(),
       })
@@ -808,18 +807,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     [appendMessage],
   )
 
+  /** Add a system/info message (for slash command output) */
+  const addInfoMessage = useCallback((content: string) => addMessage('assistant', content), [addMessage])
+
   /** Add a user message to the history (for echoing slash commands) */
-  const addUserMessage = useCallback(
-    (content: string) => {
-      appendMessage({
-        id: Date.now().toString(),
-        role: 'user',
-        content,
-        timestamp: Date.now(),
-      })
-    },
-    [appendMessage],
-  )
+  const addUserMessage = useCallback((content: string) => addMessage('user', content), [addMessage])
 
   /** Render a slash command + its short result as a Claude-style 2-line block:
    *    > /cmd

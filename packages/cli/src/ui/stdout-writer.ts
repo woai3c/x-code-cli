@@ -29,6 +29,7 @@ import { renderMarkdown } from './render-markdown.js'
 import { GLYPH_BULLET, GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET } from './terminal-glyphs.js'
 import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
 import {
+  RESULT_INDENT,
   formatDuration,
   formatReadGroupSummary,
   getToolInputPreview,
@@ -42,8 +43,6 @@ const c = new Chalk({ level: 3 })
 
 /** Function that writes to stdout through Ink's log-update coordination. */
 export type InkWrite = (data: string) => void
-
-const RESULT_INDENT = '      '
 
 /**
  * Truncate `s` so it fits visually in `maxLen` printable cells. We use a

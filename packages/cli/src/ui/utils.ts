@@ -5,6 +5,13 @@
 import type { DisplayToolCall } from '@x-code-cli/core'
 import { getShellProvider } from '@x-code-cli/core'
 
+// ── Layout constants ───────────────────────────────────────────────────
+
+/** Indent for tool-result rows so the body aligns under the `   ⎿  `
+ *  bracket (3 spaces + bracket + 2 spaces = 6 cells). Used by both the
+ *  scrollback writer (stdout-writer) and the diff renderer (render-diff). */
+export const RESULT_INDENT = '      '
+
 // ── Line-ending normalization ──────────────────────────────────────────
 
 /** Normalize line endings to `\n`. Critical before any terminal write:
@@ -150,7 +157,7 @@ export function getToolInputPreview(toolName: string, input: Record<string, unkn
   return ''
 }
 
-function formatTokenCount(tokens: number): string {
+export function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
   return String(tokens)

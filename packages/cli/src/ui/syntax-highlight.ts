@@ -244,14 +244,23 @@ export function parseSyntaxThemeName(input: unknown): SyntaxThemeName | null {
  *  valid render — just less colorful. */
 type Lang = 'js' | 'json' | 'html' | 'css' | 'yaml' | 'shell' | 'python' | 'go' | 'rust' | 'md'
 
-const EXT_TO_LANG: Record<string, Lang> = {
+/** Single lookup table for both file extensions (used by detectLanguage)
+ *  and markdown fence-language identifiers (used by detectFenceLanguage).
+ *  Keys are lowercase. Most entries are valid in both contexts (e.g. `ts`,
+ *  `py`, `rs`); fence-only aliases like `typescript`, `python`, `golang`,
+ *  `rust`, `javascript`, `shell` simply produce no match for file paths
+ *  since extensions don't use those forms. Extension-only entries like
+ *  `mts` / `cts` similarly produce no match for fences in practice. */
+const LANG_LOOKUP: Record<string, Lang> = {
   // JS / TS family — share the same tokenizer (TS-isms like `interface`,
   // `type`, `enum` are treated as keywords; the tokenizer is permissive
   // by design, false positives in raw JS are not visually offensive).
   ts: 'js',
   tsx: 'js',
+  typescript: 'js',
   js: 'js',
   jsx: 'js',
+  javascript: 'js',
   mjs: 'js',
   cjs: 'js',
   mts: 'js',
@@ -270,60 +279,10 @@ const EXT_TO_LANG: Record<string, Lang> = {
   scss: 'css',
   sass: 'css',
   less: 'css',
-  // Config / shell
-  yml: 'yaml',
-  yaml: 'yaml',
-  toml: 'yaml', // close enough for diff coloring (key=value, strings, numbers)
-  sh: 'shell',
-  bash: 'shell',
-  zsh: 'shell',
-  // Other languages
-  py: 'python',
-  go: 'go',
-  rs: 'rust',
-  md: 'md',
-  markdown: 'md',
-}
-
-export function detectLanguage(filePath: string): Lang | null {
-  const m = /\.([a-zA-Z0-9]+)$/.exec(filePath)
-  if (!m) return null
-  const ext = m[1]!.toLowerCase()
-  return EXT_TO_LANG[ext] ?? null
-}
-
-/** Map a markdown fence-language identifier (the bit after the opening
- *  ``` on a fenced code block) to one of our supported `Lang` values.
- *  Returns null when the fence had no language hint or the language
- *  isn't covered — caller falls back to plain (un-highlighted) text. */
-const FENCE_LANG_TO_LANG: Record<string, Lang> = {
-  // JS / TS family
-  js: 'js',
-  javascript: 'js',
-  jsx: 'js',
-  ts: 'js',
-  typescript: 'js',
-  tsx: 'js',
-  mjs: 'js',
-  cjs: 'js',
-  vue: 'js',
-  svelte: 'js',
-  // Data
-  json: 'json',
-  jsonc: 'json',
-  json5: 'json',
-  // Web
-  html: 'html',
-  htm: 'html',
-  xml: 'html',
-  css: 'css',
-  scss: 'css',
-  sass: 'css',
-  less: 'css',
   // Config
   yml: 'yaml',
   yaml: 'yaml',
-  toml: 'yaml',
+  toml: 'yaml', // close enough for diff coloring (key=value, strings, numbers)
   // Shell
   sh: 'shell',
   bash: 'shell',
@@ -340,9 +299,19 @@ const FENCE_LANG_TO_LANG: Record<string, Lang> = {
   markdown: 'md',
 }
 
+export function detectLanguage(filePath: string): Lang | null {
+  const m = /\.([a-zA-Z0-9]+)$/.exec(filePath)
+  if (!m) return null
+  return LANG_LOOKUP[m[1]!.toLowerCase()] ?? null
+}
+
+/** Map a markdown fence-language identifier (the bit after the opening
+ *  ``` on a fenced code block) to one of our supported `Lang` values.
+ *  Returns null when the fence had no language hint or the language
+ *  isn't covered — caller falls back to plain (un-highlighted) text. */
 export function detectFenceLanguage(fenceLang: string | undefined): Lang | null {
   if (!fenceLang) return null
-  return FENCE_LANG_TO_LANG[fenceLang.trim().toLowerCase()] ?? null
+  return LANG_LOOKUP[fenceLang.trim().toLowerCase()] ?? null
 }
 
 // ─── Tokenization ───
@@ -660,6 +629,17 @@ const KEYWORDS_SHELL = new Set([
   'source',
 ])
 
+/** Keyword classification for the simple-grammar languages: look the word
+ *  up in the language's keyword set, optionally classify PascalCase as a
+ *  type. JS has its own richer logic (LITERALS / GLOBALS / PascalCase) so
+ *  it isn't in this table. */
+const KEYWORD_RULES: Partial<Record<Lang, { keywords: Set<string>; pascalAsType?: boolean }>> = {
+  python: { keywords: KEYWORDS_PYTHON, pascalAsType: true },
+  go: { keywords: KEYWORDS_GO, pascalAsType: true },
+  rust: { keywords: KEYWORDS_RUST, pascalAsType: true },
+  shell: { keywords: KEYWORDS_SHELL },
+}
+
 // ─── Per-language rule tables ───
 //
 // Each rule list is tried in order at every byte position. The first
@@ -879,23 +859,10 @@ function paint(text: string, token: Token, lang: Lang, palette: Palette, default
       if (/^[A-Z][a-zA-Z0-9_]*$/.test(word)) return applyColor(text, palette.type)
       return paintDefault(text, defaultFg)
     }
-    if (lang === 'python') {
-      if (KEYWORDS_PYTHON.has(word)) return applyColor(text, palette.keyword)
-      if (/^[A-Z][a-zA-Z0-9_]*$/.test(word)) return applyColor(text, palette.type)
-      return paintDefault(text, defaultFg)
-    }
-    if (lang === 'go') {
-      if (KEYWORDS_GO.has(word)) return applyColor(text, palette.keyword)
-      if (/^[A-Z][a-zA-Z0-9_]*$/.test(word)) return applyColor(text, palette.type)
-      return paintDefault(text, defaultFg)
-    }
-    if (lang === 'rust') {
-      if (KEYWORDS_RUST.has(word)) return applyColor(text, palette.keyword)
-      if (/^[A-Z][a-zA-Z0-9_]*$/.test(word)) return applyColor(text, palette.type)
-      return paintDefault(text, defaultFg)
-    }
-    if (lang === 'shell') {
-      if (KEYWORDS_SHELL.has(word)) return applyColor(text, palette.keyword)
+    const rule = KEYWORD_RULES[lang]
+    if (rule) {
+      if (rule.keywords.has(word)) return applyColor(text, palette.keyword)
+      if (rule.pascalAsType && /^[A-Z][a-zA-Z0-9_]*$/.test(word)) return applyColor(text, palette.type)
       return paintDefault(text, defaultFg)
     }
     return applyColor(text, palette.keyword)

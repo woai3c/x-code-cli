@@ -57,7 +57,7 @@ import {
   SPINNER_FRAMES,
 } from '../terminal-glyphs.js'
 import { charWidth, sliceByWidth, visualWidth } from '../text-width.js'
-import { getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
+import { formatTokenCount, getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -612,12 +612,6 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(seconds / 60)
   const secs = seconds % 60
   return `${minutes}m ${secs}s`
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
-  return `${tokens}`
 }
 
 // ── Component ───────────────────────────────────────────────────────────
@@ -2253,7 +2247,7 @@ export function ChatInput({
     let rightText: string | null = null
     if (contextUsage && contextUsage.used > 0 && contextUsage.window > 0) {
       const pct = Math.round((contextUsage.used / contextUsage.window) * 100)
-      rightText = `${formatTokens(contextUsage.used)} / ${formatTokens(contextUsage.window)} · ${pct}%`
+      rightText = `${formatTokenCount(contextUsage.used)} / ${formatTokenCount(contextUsage.window)} · ${pct}%`
     }
 
     if (leftCells || rightText) {

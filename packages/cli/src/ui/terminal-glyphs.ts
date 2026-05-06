@@ -16,22 +16,12 @@
 // in ChatInput.tsx: WT_SESSION → Windows Terminal (Cascadia Mono, full
 // Unicode); TERM_PROGRAM=vscode → VSCode integrated terminal; neither on
 // win32 → legacy ConHost. Non-Windows platforms always get rich glyphs.
-//
-// ConHost also has a scrollbar that eats ~1 column from the visible width
-// while process.stdout.columns still reports the full buffer width. The
-// RIGHT_MARGIN_SAFETY constant lets right-alignment calculations compensate.
 
 /** True when the terminal is a legacy ConHost that can't reliably render
  *  Unicode beyond CP437 / Latin-1 Supplement (U+0000–U+00FF) and the
  *  Box Drawing block (U+2500–U+257F). */
 export const IS_LEGACY_TERMINAL =
   process.platform === 'win32' && !process.env.WT_SESSION && process.env.TERM_PROGRAM !== 'vscode'
-
-/** Extra columns to reserve on the right edge when right-aligning text.
- *  ConHost's vertical scrollbar overlaps the rightmost column(s) of the
- *  buffer, clipping characters that sit at `columns - 1`. Modern terminals
- *  (Windows Terminal, VSCode, iTerm2, etc.) don't have this issue. */
-export const RIGHT_MARGIN_SAFETY = IS_LEGACY_TERMINAL ? 1 : 0
 
 // ── Glyph table ─────────────────────────────────────────────────────────
 //
