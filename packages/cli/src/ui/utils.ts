@@ -267,7 +267,7 @@ export function getToolResultSummary(toolName: string, output: string | undefine
       const durationMs = parseInt(statsMatch[3]!, 10)
       const toolStr = toolCalls === 1 ? '1 tool use' : `${toolCalls} tool uses`
       const tokenStr = formatTokenCount(tokens)
-      const durStr = formatDuration(durationMs, { compact: true })
+      const durStr = formatDuration(durationMs, { compact: true, precision: 0 })
       return `Done (${toolStr} · ${tokenStr} tokens · ${durStr})`
     }
 
