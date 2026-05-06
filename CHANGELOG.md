@@ -1,3 +1,24 @@
+## v0.2.2 (2026-05-06)
+
+### Features
+
+- dispatch consecutive task calls in parallel (e7b4a2f)
+- collapse consecutive read-only tool calls into a summary line (6adf404)
+- multiline input via Alt+Enter and trailing-backslash (a149873)
+
+### Bug Fixes
+
+- offer "don't ask again" for shell commands without a derivable prefix (fe86f50)
+- skip already-fulfilled tool-calls; align general-purpose with Claude Code (3e55652)
+- extract PowerShell command prefix when flags precede -Command (28316f7)
+- seal blank gap above floating frame after large shrink (7c5384c)
+- cap inlined file size and Read output to prevent context overflow (ce059a0)
+- /clear actually clears the visible terminal area (1becd24)
+- error in rendering the UI for diff text (f1c578d)
+- footer narrow row, askUser dialog wrap, frame-engine race fixes (65c39b4)
+- keep tool/assistant pairs intact during compaction (be70427)
+- security hardening, performance safeguards, and code refactoring (d6ff572)
+
 ## v0.2.1 (2026-05-01)
 
 ### Features
