@@ -6,8 +6,6 @@
 // cursor positioning — which together eliminate the CJK/IME jitter the
 // original Ink exhibits on long-running chat UIs. Nothing in our codebase
 // changes: the fork is API-compatible with `ink`.
-import React from 'react'
-
 import { render } from 'ink'
 
 import type { AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'

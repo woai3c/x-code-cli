@@ -349,7 +349,6 @@ function renderRowToAnsi(cells: Cell[]): string {
 // — keep these two tables in sync.
 const S_GRAY = '\x1b[38;2;136;136;136m' // promptBorder rgb(136,136,136) #888888
 const S_ACCENT = '\x1b[38;2;215;119;87m' // claude rgb(215,119,87) #d77757
-const S_ACCENT_BOLD = '\x1b[38;2;215;119;87;1m'
 const S_ACCENT_DIM = '\x1b[38;2;153;153;153m' // inactive rgb(153,153,153) #999999
 const S_SPINNER = '\x1b[38;2;147;165;255m' // claudeBlue rgb(147,165,255) #93a5ff
 const S_SUCCESS = '\x1b[38;2;78;186;101;1m' // success rgb(78,186,101) #4eba65
@@ -376,11 +375,9 @@ const S_BOLD = '\x1b[0m\x1b[1m'
 // (147,165,255) which is a DIFFERENT shade, producing a visible
 // color shift at the live→committed handoff.
 const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;177;185;249m'
-const S_BLUE_PURPLE_DIM = '\x1b[0m\x1b[38;2;177;185;249;2m'
 const S_BLUE_PURPLE_BOLD = '\x1b[0m\x1b[38;2;177;185;249;1m'
 const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
-const S_ERROR_FG = '\x1b[38;2;255;107;128m' // error rgb(255,107,128) #ff6b80
 const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'
 // NB: leading `\x1b[0m` matters. Plain `\x1b[2m` just adds the "dim"
 // attribute ON TOP of whatever foreground color is active — so meta
@@ -461,7 +458,6 @@ const S_CURSOR = '\x1b[7m'
  *  places it at the input column before ESU commits. When there is no
  *  active anchor (disabled / dialog) ESU_HIDE explicitly hides. */
 const BSU = '\x1b[?2026h'
-const ESU_SHOW = '\x1b[?2026l\x1b[?25h'
 const ESU_HIDE = '\x1b[?2026l\x1b[?25l'
 
 // NOTE: a DECSTBM-based `buildInsertHistoryAbove` existed briefly here
@@ -2147,14 +2143,10 @@ export function ChatInput({
     // Top separator
     frame.push(textToCells(sepText, S_GRAY))
 
-    // Input lines. `cursorAnchor` captures the frame-row index (0-based)
-    // and 1-based visual column where the terminal's real cursor should
-    // be parked at end of render. ESU is then chosen based on whether an
-    // anchor is set: ESU_SHOW (trailing `\x1b[?25h`) reveals the caret at
-    // that column so it is the one and only visible cursor; ESU_HIDE
-    // (trailing `\x1b[?25l`) keeps it hidden when the input is disabled
-    // or there is no active cursor line.
-    let cursorAnchor: { row: number; col: number } | null = null
+    // Input lines. The terminal's hardware cursor is hidden for the
+    // entire TUI lifetime; the visible "cursor" the user sees is just an
+    // inverse-video cell (S_CURSOR) drawn into the frame at the cursor
+    // position. So we don't compute or emit a cursor-park CSI here.
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
       const prompt = i === 0 ? '> ' : '  '
@@ -2176,10 +2168,6 @@ export function ChatInput({
 
         if (lw <= vpWidth) {
           cells.push(...textToCells(before, S_RESET))
-          // Visual col = prompt width (2) + width of chars before cursor,
-          // +1 to convert to 1-based. Captured BEFORE pushing cursor cell
-          // so it reflects the cursor cell's starting column.
-          cursorAnchor = { row: frame.length, col: 2 + visualWidth(before) + 1 }
           cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
           cells.push(...textToCells(after, S_RESET))
         } else {
@@ -2194,7 +2182,6 @@ export function ChatInput({
           const remaining = vpWidth - visualWidth(vb) - charWidth(cursorChar)
           const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
           cells.push(...textToCells(vb, S_RESET))
-          cursorAnchor = { row: frame.length, col: 2 + visualWidth(vb) + 1 }
           cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
           cells.push(...textToCells(va, S_RESET))
         }
@@ -3092,9 +3079,7 @@ export function ChatInput({
     // above. Skipping the park removes one cursor-position command per
     // flush — on weak terminals each such command kicks the renderer's
     // state machine even when the cursor itself is hidden, so dropping
-    // it visibly reduces residual flicker. cursorAnchor is still
-    // computed because lower paths (and future revival of the visible
-    // cursor) read it; it's just no longer emitted as a CSI H here.
+    // it visibly reduces residual flicker.
 
     // Flush everything as a single write: preBuf (BSU + DECSTBM scrollback
     // insertion + any frame-height-change scrolling) + frame diff + ESU.

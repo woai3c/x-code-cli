@@ -176,7 +176,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     onTextDelta: (delta) => {
       callbacks.onSubAgentEvent?.({ kind: 'text-delta', toolCallId, delta })
     },
-    onToolCall: (subToolCallId, subToolName, subInput) => {
+    onToolCall: (_subToolCallId, subToolName, subInput) => {
       callbacks.onSubAgentEvent?.({
         kind: 'tool-call',
         toolCallId,
@@ -184,7 +184,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
         subInput,
       })
       // Also forward to parent's onToolProgress so the live indicator updates
-      callbacks.onToolProgress(toolCallId, `${subToolName}: ${previewInput(subToolName, subInput)}`)
+      callbacks.onToolProgress(toolCallId, `${subToolName}: ${previewInput(subInput)}`)
     },
     onToolProgress: (_subToolCallId, message) => {
       callbacks.onToolProgress(toolCallId, message)
@@ -214,7 +214,6 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     },
   }
 
-  let aborted = false
   try {
     const finalSubState = await agentLoop(prompt, subModel, subOptions, subCallbacks, subState)
 
@@ -266,7 +265,6 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     const durationMs = Date.now() - startTime
 
     if (isAbortError(err, parentOptions.abortSignal)) {
-      aborted = true
       const partial = extractFinalText(subState.messages)
       const text = partial
         ? `[Sub-agent interrupted by user]\n\nPartial output:\n${partial}`
@@ -349,7 +347,7 @@ function countToolCalls(messages: LoopState['messages']): number {
   return count
 }
 
-function previewInput(toolName: string, input: Record<string, unknown>): string {
+function previewInput(input: Record<string, unknown>): string {
   const val =
     (input.filePath as string) ??
     (input.command as string) ??
