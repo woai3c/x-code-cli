@@ -18,7 +18,7 @@ import { Chalk } from 'chalk'
 
 import type { EditDiffHunk, EditDiffPayload } from '@x-code-cli/core'
 
-import { type SyntaxThemeName, detectLanguage, highlightLine } from './syntax-highlight.js'
+import { applyColor, type SyntaxThemeName, detectLanguage, highlightLine } from './syntax-highlight.js'
 import { sliceByWidth, visualWidth } from './text-width.js'
 import { type ThemeName, getThemeColors } from './theme.js'
 
@@ -58,18 +58,7 @@ function applyGutterFg(text: string, color: string): string {
   return text
 }
 
-/** Apply a fg color spec accepting EITHER a hex (`#rrggbb`) OR a chalk
- *  named color (`'white'`, `'gray'`, etc.). Used by the `-` row plain-
- *  text branch where ANSI themes pass `'white'` (chalk's \e[37m,
- *  matching CC's `ansiIdx(7)`) and 24-bit themes pass `#f8f8f2` /
- *  `#333333`. Without the named-color path, ANSI defaultFg silently
- *  no-ops because `'white'.startsWith('#')` is false. */
-function applyFg(text: string, color: string): string {
-  if (color.startsWith('#')) return c.hex(color)(text)
-  const named = (c as unknown as Record<string, (s: string) => string>)[color]
-  if (typeof named === 'function') return named(text)
-  return text
-}
+
 
 /** Indent for diff body — matches stdout-writer's RESULT_INDENT so the
  *  block aligns under `   ⎿  ` (3 + ⎿ + 2 = 6 cells). */
@@ -257,7 +246,7 @@ function renderHunks(
         // is going away" more cleanly. We DO apply defaultFg though —
         // it's how CC's `defaultStyle` makes the deleted text visibly
         // brighter than terminal default.
-        const plainCode = defaultFg ? applyFg(fitted, defaultFg) : fitted
+        const plainCode = defaultFg ? applyColor(fitted, defaultFg) : fitted
         const coloredGutter = applyGutterFg(gutter, themeColors.diffRemovedDecoration)
         let row = applyBg(coloredGutter + plainCode + padding, themeColors.diffRemoved)
         // ANSI mode has no bg to mark the remove row, so dim the whole

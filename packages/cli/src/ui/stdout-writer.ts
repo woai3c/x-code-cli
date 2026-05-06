@@ -29,12 +29,14 @@ import { renderMarkdown } from './render-markdown.js'
 import { GLYPH_BULLET, GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET } from './terminal-glyphs.js'
 import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
 import {
+  formatDuration,
   formatReadGroupSummary,
   getToolInputPreview,
   getToolLabel,
   getToolResultSummary,
   isCollapsibleReadOnlyTool,
-} from './tool-display.js'
+  normalizeLineEndings,
+} from './utils.js'
 
 const c = new Chalk({ level: 3 })
 
@@ -43,27 +45,7 @@ export type InkWrite = (data: string) => void
 
 const RESULT_INDENT = '      '
 
-/**
- * Normalize line endings to `\n`. Critical before any terminal write:
- * Windows pastes / clipboard content commonly arrive with `\r\n` or bare
- * `\r`, and a bare `\r` in the terminal means "move cursor to column 0
- * of the current row" — subsequent characters OVERWRITE whatever was
- * previously printed on that row. Multi-line content with `\r` separators
- * printed naively produces spliced/overwritten output (exactly the
- * "optimizationsClaude Managed Agents is currently in beta" pattern).
- */
-function normalizeLineEndings(s: string): string {
-  return s.replace(/\r\n?/g, '\n')
-}
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const secs = Math.round(seconds % 60)
-  return `${minutes}m ${secs}s`
-}
 
 /**
  * Truncate `s` so it fits visually in `maxLen` printable cells. We use a

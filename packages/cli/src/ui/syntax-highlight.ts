@@ -832,7 +832,7 @@ const RULES_BY_LANG: Record<Lang, () => Rule[]> = {
  *  null spec returns the text unchanged (used by `'off'` and by the
  *  identifier-classification fallthrough when a word doesn't match
  *  any known keyword/type pattern). */
-function applyColor(text: string, spec: ColorSpec): string {
+export function applyColor(text: string, spec: ColorSpec): string {
   if (spec === null) return text
   if (spec.startsWith('#')) return c.hex(spec)(text)
   // Named ANSI color — a small accessor lookup. Chalk types this as a

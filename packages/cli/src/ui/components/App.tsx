@@ -26,6 +26,7 @@ import { buildThemePreview } from '../render-diff.js'
 import { setSyntaxTheme } from '../syntax-highlight.js'
 import { GLYPH_BULLET } from '../terminal-glyphs.js'
 import { DEFAULT_THEME, THEMES, type ThemeName, getTheme, getThemeColors, parseThemeName, setTheme } from '../theme.js'
+import { parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 
@@ -630,18 +631,8 @@ export function App({
 
     // Direct-switch shortcut path.
     if (trimmed) {
-      let next: boolean
-      if (trimmed === 'on' || trimmed === 'true' || trimmed === '1' || trimmed === 'enable' || trimmed === 'enabled') {
-        next = true
-      } else if (
-        trimmed === 'off' ||
-        trimmed === 'false' ||
-        trimmed === '0' ||
-        trimmed === 'disable' ||
-        trimmed === 'disabled'
-      ) {
-        next = false
-      } else {
+      const next = parseBooleanArg(trimmed)
+      if (next === null) {
         addCommandMessage(
           commandText,
           `Unknown value: \`${arg}\`. Use \`/thinking\`, \`/thinking on\`, or \`/thinking off\`.`,
@@ -812,25 +803,13 @@ export function App({
     let next: boolean
     if (!trimmed) {
       next = !current
-    } else if (
-      trimmed === 'on' ||
-      trimmed === 'true' ||
-      trimmed === '1' ||
-      trimmed === 'enable' ||
-      trimmed === 'enabled'
-    ) {
-      next = true
-    } else if (
-      trimmed === 'off' ||
-      trimmed === 'false' ||
-      trimmed === '0' ||
-      trimmed === 'disable' ||
-      trimmed === 'disabled'
-    ) {
-      next = false
     } else {
-      addCommandMessage(commandText, `Unknown value: \`${arg}\`. Use \`/plan\`, \`/plan on\`, or \`/plan off\`.`)
-      return
+      const parsed = parseBooleanArg(trimmed)
+      if (parsed === null) {
+        addCommandMessage(commandText, `Unknown value: \`${arg}\`. Use \`/plan\`, \`/plan on\`, or \`/plan off\`.`)
+        return
+      }
+      next = parsed
     }
 
     if (next === current) {
