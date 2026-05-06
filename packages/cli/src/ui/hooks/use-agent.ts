@@ -468,6 +468,20 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         onError: (error) => {
           setState((prev) => ({ ...prev, error: error.message }))
         },
+        onMemoryWrite: ({ scope, category, key, fact }) => {
+          // Fire-and-forget extractor → may arrive after submit() resolved
+          // and even into the next turn. We append directly to scrollback;
+          // the cell-buffer renderer treats this like any other assistant
+          // message and inserts it above the (now possibly active) input
+          // box without disturbing whatever the user is typing.
+          appendMessage({
+            id: `mem-${Date.now()}-${key}`,
+            role: 'assistant',
+            content: `Remembered (${scope} · ${category}) \`${key}\`: ${fact}`,
+            timestamp: Date.now(),
+            kind: 'command-result',
+          })
+        },
       }
 
       try {

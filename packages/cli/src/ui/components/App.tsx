@@ -8,6 +8,7 @@ import {
   PROVIDER_MODELS,
   createModelRegistry,
   estimateTokenCount,
+  getAutoMemory,
   getAvailableProviders,
   getContextWindow,
   initProject,
@@ -18,7 +19,7 @@ import {
   resolveModelId,
   saveUserConfig,
 } from '@x-code-cli/core'
-import type { AgentOptions, LanguageModel, LoadedSession, TokenUsage } from '@x-code-cli/core'
+import type { AgentOptions, KnowledgeFact, LanguageModel, LoadedSession, TokenUsage } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
@@ -64,6 +65,7 @@ export const SLASH_COMMANDS = [
   { name: '/init', description: 'Initialize project knowledge' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
+  { name: '/memory', description: 'Show auto-memory entries (project + global)' },
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
@@ -486,6 +488,11 @@ export function App({
         case 'usage-history':
           echoCommand(text)
           await handleUsageHistory()
+          return
+
+        case 'memory':
+          echoCommand(text)
+          handleMemory()
           return
 
         case 'exit':
@@ -917,6 +924,39 @@ export function App({
 
       if (!back) break
     }
+  }
+
+  /** Format a memory fact list for display in scrollback. */
+  function formatMemoryList(scope: 'project' | 'global', facts: KnowledgeFact[]): string {
+    if (facts.length === 0) {
+      return `**Auto memory (${scope})** — empty.`
+    }
+    const byCategory = new Map<string, KnowledgeFact[]>()
+    for (const f of facts) {
+      const list = byCategory.get(f.category) ?? []
+      list.push(f)
+      byCategory.set(f.category, list)
+    }
+    const lines: string[] = [`**Auto memory (${scope})** — ${facts.length} fact${facts.length === 1 ? '' : 's'}.`, '']
+    for (const [category, items] of byCategory) {
+      lines.push(`### ${category}`)
+      for (const f of items) {
+        lines.push(`- \`${f.key}\` — ${f.fact} _(${f.date})_`)
+      }
+      lines.push('')
+    }
+    return lines.join('\n').trimEnd()
+  }
+
+  /** /memory — show all auto-memory entries (project + global). The
+   *  extractor writes the underlying files in the background; users who
+   *  want to delete or edit entries open `auto.md` directly. */
+  function handleMemory() {
+    const sections: string[] = []
+    sections.push(formatMemoryList('project', getAutoMemory('project').getAll()))
+    sections.push('')
+    sections.push(formatMemoryList('global', getAutoMemory('global').getAll()))
+    addInfoMessage(sections.join('\n'))
   }
 
   // RENDERING ARCHITECTURE

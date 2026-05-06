@@ -17,11 +17,12 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Streaming output** — results render as they are generated
 - **Context compression** — long conversations are auto-compressed; loop-guard detects repeated tool invocations; prompt caching reuses prefixes to reduce input cost
 - **Session resumption** — `--continue` resumes the most recent session; `--resume` opens a session picker or jumps directly by ID
-- **Knowledge system** — layered context loading (global / project AGENTS.md chain / auto-memory / local preferences / session summary)
+- **Knowledge system** — layered context loading (global AGENTS.md / global auto-memory / project AGENTS.md chain / project auto-memory / local preferences); subpackage AGENTS.md overrides the repo root. Each directory prefers `AGENTS.md` and falls back to `CLAUDE.md` when absent (Claude Code compat, read-only; `/init` always creates `AGENTS.md`)
+- **Auto-memory** — after each turn, durable facts from the conversation (user preferences, corrections, project state, external pointers) are automatically saved and loaded as context next session; `/memory` to inspect entries, edit `auto.md` directly to modify
 - **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, and more
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, `/memory`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
 - **Cross-platform** — runs on Windows, macOS, and Linux
@@ -190,7 +191,8 @@ xc [options] [prompt]
 | `/clear`              | Clear the current conversation                                                                    |
 | `/compact`            | Manually compress context                                                                         |
 | `/resume`             | Pick a past session in this project to resume                                                     |
-| `/init`               | Initialize the project knowledge base                                                             |
+| `/init`               | Initialize the project knowledge base (creates an `AGENTS.md` template)                           |
+| `/memory`             | List auto-memory entries (project + global, grouped by category)                                  |
 | `/exit`               | Save the session and exit                                                                         |
 
 ### Thinking-mode notes

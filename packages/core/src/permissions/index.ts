@@ -51,7 +51,6 @@ const rules: Record<string, (input: PermissionInput) => PermissionLevel> = {
   webSearch: () => 'always-allow',
   webFetch: () => 'always-allow',
   askUser: () => 'always-allow',
-  saveKnowledge: () => 'always-allow',
   edit: () => 'ask',
   writeFile: () => 'ask',
   shell: resolveShellPermission,

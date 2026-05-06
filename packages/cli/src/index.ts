@@ -11,6 +11,7 @@ import {
   PROVIDER_KEY_URLS,
   createModelRegistry,
   createSubAgentRegistry,
+  debugLog,
   getAvailableProviders,
   getEnvVarName,
   listSessions,
@@ -27,6 +28,28 @@ import type { ShellType } from './shell.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
 import { VERSION } from './version.js'
+
+// Route AI SDK warnings to debugLog instead of letting them blast straight
+// to stderr. The default `console.warn` path bypasses ChatInput's
+// cell-buffer rendering — every warning steals a row, knocks the input
+// box's separators out of place, and drags zombie text into scrollback.
+// Common offenders: `responseFormat JSON schema is used in a compatibility
+// mode` (DeepSeek + structured-output combo), provider-side capability
+// downgrades, etc. Captured to ~/.x-code/logs/debug.log when DEBUG_STDOUT
+// is on, silently dropped otherwise.
+//
+// Must run BEFORE any code path that constructs an AI SDK call. Done at
+// module top-level so it's set up before yargs even parses argv.
+
+;(globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS = (options: {
+  warnings: unknown[]
+  provider?: string
+  model?: string
+}) => {
+  for (const warning of options.warnings) {
+    debugLog('ai-sdk.warning', `${options.provider ?? '?'}/${options.model ?? '?'}: ${JSON.stringify(warning)}`)
+  }
+}
 
 const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
 

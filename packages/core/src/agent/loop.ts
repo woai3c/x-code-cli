@@ -21,6 +21,7 @@ import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
+import { runMemoryExtractor } from './memory-extractor.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
 import { appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
@@ -402,6 +403,9 @@ export async function agentLoop(
   // capped so a pathologically runaway reply still terminates eventually.
   const MAX_CONTINUATIONS = 3
   let continuationAttempts = 0
+  // Tracks whether we exited the loop on a clean `stop` finish reason —
+  // the only case where the post-turn memory extractor should run.
+  let completedNormally = false
 
   while (state.turnCount < options.maxTurns) {
     state.turnCount++
@@ -496,12 +500,22 @@ export async function agentLoop(
 
     if (outcome.finishReason === 'content-filter') {
       callbacks.onError(new Error('Response stopped by the provider content filter.'))
+    } else if (outcome.finishReason === 'stop') {
+      completedNormally = true
     }
 
     break
   }
 
-  if (state.turnCount >= options.maxTurns) {
+  // Only report "max turns reached" when the loop genuinely ran out of
+  // budget without a clean finish. The `&& !completedNormally` guard
+  // matters at the boundary where the model's final 'stop' lands on the
+  // exact turn that equals maxTurns: prior to this guard we'd both break
+  // out of the loop normally AND fire the error message, which is a lie.
+  // Most relevant to the memory-extractor sub-loop (maxTurns=3, often
+  // genuinely finishes on turn 2 or 3) but the same bug existed for any
+  // user who set --max-turns N and got a clean reply on turn N.
+  if (state.turnCount >= options.maxTurns && !completedNormally) {
     callbacks.onError(new Error(`Reached maximum turns (${options.maxTurns}). Stopping agent loop.`))
   }
 
@@ -511,6 +525,22 @@ export async function agentLoop(
   // `[Request interrupted by user]` notice AFTER agentLoop returns, so
   // it's responsible for its own flush — see use-agent.ts.
   void flushPendingMessages(state)
+
+  // Post-turn memory extractor: runs ONLY on a clean `stop` finish (no
+  // error, no abort, no content-filter, no length-cap give-up). Fire-and-
+  // forget — the user can type the next prompt immediately while a single
+  // generateText + Output.object call scans the transcript for durable
+  // knowledge to persist. Writes go directly to AutoMemory (silent path)
+  // so the ChatInput frame doesn't render a tool row after the user's
+  // reply is already complete.
+  if (completedNormally && !options.abortSignal?.aborted) {
+    void runMemoryExtractor({
+      parentState: state,
+      parentModel: model,
+      abortSignal: options.abortSignal,
+      onWrite: callbacks.onMemoryWrite,
+    })
+  }
 
   return state
 }

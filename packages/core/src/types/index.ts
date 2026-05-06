@@ -168,6 +168,13 @@ export interface AgentCallbacks {
   /** Fired by the sub-agent runner to stream progress from child agent loops.
    *  The CLI UI uses these events to build the collapsed/expanded task block. */
   onSubAgentEvent?: (event: SubAgentEvent) => void
+  /** Optional. Fired by the post-turn memory extractor for each fact it
+   *  commits to AutoMemory. Surfaces "Remembered: …" in scrollback so the
+   *  user can see what the silent extractor saved. The extractor is
+   *  fire-and-forget (runs after agentLoop returns), so this callback may
+   *  fire AFTER `submit()` resolved and even into the next turn — keep
+   *  the closure free of per-turn state. */
+  onMemoryWrite?: (notice: MemoryWriteNotice) => void
 }
 
 // ─── Agent options ───
@@ -224,6 +231,16 @@ export interface KnowledgeFact {
   fact: string
   category: KnowledgeCategory
   date: string
+}
+
+/** Surface event emitted by the post-turn memory extractor when it commits
+ *  a fact to AutoMemory. Lets the UI render a "Remembered: …" line in
+ *  scrollback so the user has visibility into otherwise-silent writes. */
+export interface MemoryWriteNotice {
+  scope: 'project' | 'global'
+  category: KnowledgeCategory
+  key: string
+  fact: string
 }
 
 export interface SessionSummary {
