@@ -15,7 +15,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -b",
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
