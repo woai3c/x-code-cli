@@ -298,6 +298,11 @@ async function runTurn(
     if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
     if (isContextTooLongError(err)) {
       const compressed = await handleContextTooLong(state, model, callbacks)
+      // Compression makes its own LLM round-trip (2–5s) and doesn't accept
+      // an abort signal. If the user Esc'd while it ran, the next runTurn
+      // would issue another streamText only to have the SDK reject it
+      // immediately on the now-aborted signal — wasted setup. Bail here.
+      if (options.abortSignal?.aborted) return { kind: 'aborted' }
       if (compressed) return { kind: 'retry' }
     }
     callbacks.onError(new Error(classifyApiError(err).message))
