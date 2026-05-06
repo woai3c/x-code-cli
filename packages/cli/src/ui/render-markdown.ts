@@ -178,12 +178,15 @@ function formatToken(
     case 'heading': {
       const h = token as Tokens.Heading
       const content = (h.tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')
-      // Single trailing EOL; blank row (if any) after the heading is
-      // supplied by the adjacent `space` token, not by us doubling up.
+      // Always emit a blank line after the heading. marked never produces a
+      // `space` token between a heading and the following block — even when
+      // the source has `# H\n\nbody`, the blank is folded into the heading's
+      // own `raw`. Without this second EOL, `# H\nbody` rendered as two
+      // adjacent rows with no separation. Matches Claude Code.
       if (h.depth === 1) {
-        return c.bold.italic.underline(content) + EOL
+        return c.bold.italic.underline(content) + EOL + EOL
       }
-      return c.bold(content) + EOL
+      return c.bold(content) + EOL + EOL
     }
 
     case 'hr':
