@@ -45,8 +45,6 @@ export type InkWrite = (data: string) => void
 
 const RESULT_INDENT = '      '
 
-
-
 /**
  * Truncate `s` so it fits visually in `maxLen` printable cells. We use a
  * UTF ellipsis (…) as the truncation marker — single cell, looks

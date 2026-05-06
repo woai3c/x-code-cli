@@ -584,10 +584,7 @@ export async function processToolCalls(
     // a future turn; if the guard fires, defer the user-role nudge
     // until after iteration.
     if (fulfilledIds.has(tc.toolCallId)) {
-      debugLog(
-        'tool-exec.skip-fulfilled',
-        `${tc.toolName} ${tc.toolCallId} — tool-result already in state.messages`,
-      )
+      debugLog('tool-exec.skip-fulfilled', `${tc.toolName} ${tc.toolCallId} — tool-result already in state.messages`)
       const loopCheck = checkForLoop(state, tc.toolName, tc.input, tc.toolCallId)
       recordToolCall(state, tc.toolName, tc.input, loopCheck.hash)
       if (loopCheck.kind !== 'ok') {
@@ -626,9 +623,7 @@ export async function processToolCalls(
       break
     }
 
-    await Promise.all(
-      batch.map((tc) => handleToolCall(tc, state, options, callbacks, parentModel, deferred)),
-    )
+    await Promise.all(batch.map((tc) => handleToolCall(tc, state, options, callbacks, parentModel, deferred)))
     dispatched += batch.length
   }
 

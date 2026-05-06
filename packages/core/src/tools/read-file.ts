@@ -86,10 +86,7 @@ async function readTextResult(filePath: string, offset?: number, limit?: number)
   // message: tells the model exactly which next call will work, so it can
   // self-recover instead of giving up or repeating the same call.
   if (isHeadTruncation) {
-    const note =
-      includedLines < sliced.length
-        ? ` (further capped at ${MAX_READ_BYTES / 1024} KB)`
-        : ''
+    const note = includedLines < sliced.length ? ` (further capped at ${MAX_READ_BYTES / 1024} KB)` : ''
     return (
       body +
       `\n\n[readFile: showing first ${includedLines}/${totalLines} lines${note}. ` +

@@ -2,7 +2,6 @@
 //
 // Small helpers used by multiple modules. Extracted here to avoid
 // copy-paste drift across files.
-
 import type { DisplayToolCall } from '@x-code-cli/core'
 import { getShellProvider } from '@x-code-cli/core'
 
@@ -25,8 +24,10 @@ export function normalizeLineEndings(s: string): string {
  *  everything else → null (caller can show an error). */
 export function parseBooleanArg(s: string): boolean | null {
   const trimmed = s.trim().toLowerCase()
-  if (trimmed === 'on' || trimmed === 'true' || trimmed === '1' || trimmed === 'enable' || trimmed === 'enabled') return true
-  if (trimmed === 'off' || trimmed === 'false' || trimmed === '0' || trimmed === 'disable' || trimmed === 'disabled') return false
+  if (trimmed === 'on' || trimmed === 'true' || trimmed === '1' || trimmed === 'enable' || trimmed === 'enabled')
+    return true
+  if (trimmed === 'off' || trimmed === 'false' || trimmed === '0' || trimmed === 'disable' || trimmed === 'disabled')
+    return false
   return null
 }
 

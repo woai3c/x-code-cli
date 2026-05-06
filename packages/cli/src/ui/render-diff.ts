@@ -18,7 +18,7 @@ import { Chalk } from 'chalk'
 
 import type { EditDiffHunk, EditDiffPayload } from '@x-code-cli/core'
 
-import { applyColor, type SyntaxThemeName, detectLanguage, highlightLine } from './syntax-highlight.js'
+import { type SyntaxThemeName, applyColor, detectLanguage, highlightLine } from './syntax-highlight.js'
 import { sliceByWidth, visualWidth } from './text-width.js'
 import { type ThemeName, getThemeColors } from './theme.js'
 
@@ -57,8 +57,6 @@ function applyGutterFg(text: string, color: string): string {
   if (color.startsWith('#')) return c.hex(color)(text)
   return text
 }
-
-
 
 /** Indent for diff body — matches stdout-writer's RESULT_INDENT so the
  *  block aligns under `   ⎿  ` (3 + ⎿ + 2 = 6 cells). */

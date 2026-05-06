@@ -245,7 +245,12 @@ function shellAssistant(ids: string[]): ModelMessage {
   } as ModelMessage
 }
 
-function toolResult(toolCallId: string, toolName: string, value: string, type: 'text' | 'error-text' = 'text'): ModelMessage {
+function toolResult(
+  toolCallId: string,
+  toolName: string,
+  value: string,
+  type: 'text' | 'error-text' = 'text',
+): ModelMessage {
   return {
     role: 'tool',
     content: [
@@ -420,7 +425,7 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
     state.messages.push(
       { role: 'user', content: 'hi' } as ModelMessage,
       shellAssistant(['tc-1', 'tc-2']),
-      toolResult('tc-1', 'shell', 'first result'),  // already fulfilled by SDK
+      toolResult('tc-1', 'shell', 'first result'), // already fulfilled by SDK
     )
     const callbacks = makeCallbacks()
     await processToolCalls(
