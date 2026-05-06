@@ -57,7 +57,7 @@ import {
   SPINNER_FRAMES,
 } from '../terminal-glyphs.js'
 import { charWidth, sliceByWidth, visualWidth } from '../text-width.js'
-import { getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../tool-display.js'
+import { getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400

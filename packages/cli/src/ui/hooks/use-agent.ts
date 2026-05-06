@@ -28,7 +28,7 @@ import type {
   TokenUsage,
 } from '@x-code-cli/core'
 
-import { isCollapsibleReadOnlyTool } from '../tool-display.js'
+import { isCollapsibleReadOnlyTool } from '../utils.js'
 import { modelMessagesToDisplay, previewSubInput } from './use-agent-display.js'
 import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
 
