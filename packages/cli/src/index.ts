@@ -22,6 +22,8 @@ import {
 import type { AgentOptions, LoadedSession } from '@x-code-cli/core'
 
 import { getCleanupFn, getSessionExitInfo, startApp } from './app.js'
+import { detectShell, formatPersistCommand } from './shell.js'
+import type { ShellType } from './shell.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
 import { VERSION } from './version.js'
@@ -396,28 +398,19 @@ function printNoApiKeyMessage() {
   )
 
   const shell = detectShell()
+  const restartHint: Record<ShellType, string> = {
+    powershell: '# restart PowerShell, then run:',
+    cmd: ':: restart CMD, then run:',
+    zsh: '',
+    bash: '',
+    fish: '',
+    sh: '',
+  }
   console.error(`\nDetected shell: ${chalk.bold(shell)}`)
   console.error('Persist it so you do not need to set it every session:\n')
-  switch (shell) {
-    case 'powershell':
-      console.error(`  ${code(`[Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY','sk-ant-...','User')`)}`)
-      console.error(`  ${comment('# restart PowerShell, then run:')}  ${code('xc')}`)
-      break
-    case 'cmd':
-      console.error(`  ${code('setx ANTHROPIC_API_KEY "sk-ant-..."')}`)
-      console.error(`  ${comment(':: restart CMD, then run:')}  ${code('xc')}`)
-      break
-    case 'zsh':
-      console.error(`  ${code(`echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc && source ~/.zshrc`)}`)
-      break
-    case 'fish':
-      console.error(`  ${code('set -Ux ANTHROPIC_API_KEY sk-ant-...')}`)
-      break
-    case 'bash':
-    default:
-      console.error(`  ${code(`echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc && source ~/.bashrc`)}`)
-      break
-  }
+  console.error(`  ${code(formatPersistCommand('ANTHROPIC_API_KEY', 'sk-ant-...', shell))}`)
+  const hint = restartHint[shell]
+  if (hint) console.error(`  ${comment(hint)}  ${code('xc')}`)
   console.error(`\nAlternatively, put keys in a project-local ${chalk.bold('.env')} file (loaded from cwd upward).`)
 }
 
@@ -434,40 +427,8 @@ function printNoWebSearchKeyHint(): void {
   console.error(`    ${bold('TAVILY_API_KEY')}  ${dim('1000/month — https://tavily.com')}`)
   console.error(`    ${bold('BRAVE_API_KEY')}   ${dim('2000/month — https://api.search.brave.com')}`)
 
-  let cmd: string
-  switch (shell) {
-    case 'powershell':
-      cmd = `[Environment]::SetEnvironmentVariable('TAVILY_API_KEY','tvly-...','User')`
-      break
-    case 'cmd':
-      cmd = `setx TAVILY_API_KEY "tvly-..."`
-      break
-    case 'zsh':
-      cmd = `echo 'export TAVILY_API_KEY=tvly-...' >> ~/.zshrc && source ~/.zshrc`
-      break
-    case 'fish':
-      cmd = `set -Ux TAVILY_API_KEY tvly-...`
-      break
-    case 'bash':
-    default:
-      cmd = `echo 'export TAVILY_API_KEY=tvly-...' >> ~/.bashrc && source ~/.bashrc`
-      break
-  }
+  const cmd = formatPersistCommand('TAVILY_API_KEY', 'tvly-...', shell)
   console.error(`  ${dim(`(${shell})`)}  ${code(cmd)}\n`)
-}
-
-function detectShell(): 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | 'sh' {
-  if (process.platform === 'win32') {
-    // PowerShell sets PSModulePath; CMD typically doesn't (and no PSHOME).
-    if (process.env.PSModulePath) return 'powershell'
-    return 'cmd'
-  }
-  const shellPath = process.env.SHELL ?? ''
-  const base = shellPath.split('/').pop() ?? ''
-  if (base === 'zsh' || base === 'bash' || base === 'fish' || base === 'sh') return base
-  // macOS defaults to zsh since Catalina
-  if (process.platform === 'darwin') return 'zsh'
-  return 'bash'
 }
 
 function readStdin(): Promise<string> {

@@ -4,7 +4,13 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { buildUserContent, classifyFile, extractFileReferences, ingestFile, MAX_INGEST_BYTES } from '../src/agent/file-ingest.js'
+import {
+  MAX_INGEST_BYTES,
+  buildUserContent,
+  classifyFile,
+  extractFileReferences,
+  ingestFile,
+} from '../src/agent/file-ingest.js'
 import { captionImage, pickVisionProvider } from '../src/agent/vision-fallback.js'
 
 // Mock vision-fallback so the image-path test can prove the onNotice plumbing

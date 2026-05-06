@@ -72,7 +72,17 @@ export function extractCommandPrefix(command: string): string | null {
       // -File <path> — no useful prefix; bail.
       if (lower === '-file') return null
       // Flags that take an argument (consume next token too).
-      if (lower === '-executionpolicy' || lower === '-encodedcommand' || lower === '-inputformat' || lower === '-outputformat' || lower === '-version' || lower === '-windowstyle' || lower === '-configurationname' || lower === '-mta' || lower === '-sta') {
+      if (
+        lower === '-executionpolicy' ||
+        lower === '-encodedcommand' ||
+        lower === '-inputformat' ||
+        lower === '-outputformat' ||
+        lower === '-version' ||
+        lower === '-windowstyle' ||
+        lower === '-configurationname' ||
+        lower === '-mta' ||
+        lower === '-sta'
+      ) {
         i += 2
         continue
       }

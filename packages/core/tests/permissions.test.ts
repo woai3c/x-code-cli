@@ -194,7 +194,9 @@ describe('extractCommandPrefix', () => {
   it('handles powershell with leading flags before -Command', () => {
     // Real failure case from a.log: `-NoProfile` between launcher and `-Command`
     // hid the "don't ask again" option for every sub-agent shell call.
-    expect(extractCommandPrefix('powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk"')).toBe('Get-CimInstance')
+    expect(extractCommandPrefix('powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk"')).toBe(
+      'Get-CimInstance',
+    )
     expect(extractCommandPrefix('powershell -ExecutionPolicy Bypass -Command "git status"')).toBe('git')
     expect(extractCommandPrefix('powershell -NoLogo -NonInteractive -Command "Get-Process"')).toBe('Get-Process')
     expect(extractCommandPrefix('powershell -NoProfile -ExecutionPolicy Bypass -c "Get-CimInstance"')).toBe(
