@@ -11,7 +11,6 @@ import {
   getAutoMemory,
   getAvailableProviders,
   getContextWindow,
-  initProject,
   listSessions,
   loadSession,
   loadUserConfig,
@@ -145,6 +144,47 @@ const HELP_TEXT =
   SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
   `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
   `\nKeyboard: Esc to interrupt the current turn · ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} (twice) to exit`
+
+// Prompt body for `/init`. Submitted as the user message so the agent runs
+// its full toolchain (Read/Glob/Grep/Edit/Write) over the codebase and
+// authors AGENTS.md from real evidence rather than a static template.
+//
+// Style choices vs Claude Code's OLD_INIT:
+//   - Targets AGENTS.md (our convention) rather than CLAUDE.md.
+//   - Mentions AGENTS.local.md as the personal layer so the model doesn't
+//     dump per-user preferences (sandbox URLs, role, tone) into the
+//     team-shared file.
+//   - Carries the NEW_INIT minimalism rule ("delete every line that, if
+//     removed, would NOT cause the agent to make a mistake") — cheap to
+//     port and the single biggest win against bloated AGENTS.md output.
+//   - Asks the model to Edit-merge an existing AGENTS.md instead of
+//     overwriting, so user-authored content survives a re-run of /init.
+const INIT_PROMPT = `Please analyze this codebase and create an AGENTS.md file at the project root. AGENTS.md is loaded into every X-Code CLI (\`xc\`) session, so future agents will read it as their primary project context.
+
+What to include:
+1. Common commands the agent should prefer: how to build, lint, run tests, run a single test. Only include what's non-obvious from manifest files.
+2. High-level architecture that requires reading multiple files to understand — module boundaries, key data flows, the "big picture" a new contributor needs.
+3. Important conventions that DIFFER from language defaults (e.g. "prefer type over interface", "errors live in errors.ts, never inline").
+4. Non-obvious gotchas, required env vars, repo etiquette (branch naming, commit style).
+
+Usage notes:
+- If AGENTS.md already exists, read it first and use the Edit tool to merge improvements rather than overwriting — preserve the user's hand-written content.
+- Apply the minimalism test to every line: "If I removed this line, would the agent make a mistake?" If no, cut it. AGENTS.md is read every turn — bloat costs tokens forever.
+- If a README.md exists, mine it for project overview / commands / setup steps. If \`.cursor/rules/\`, \`.cursorrules\`, \`.github/copilot-instructions.md\`, \`.windsurfrules\`, or \`.clinerules\` exist, fold the important parts in.
+- Do not list every file or component — those are discoverable via Glob/Grep. Focus on what's NOT discoverable.
+- Do not invent sections like "Common Development Tasks", "Tips for Development", or "Support and Documentation" — only write what's expressly grounded in files you've read.
+- Do not include generic engineering advice ("write clean code", "add tests"), standard language conventions, or obvious commands ("npm test", "cargo test").
+- Personal preferences (the user's role, sandbox URLs, communication style) belong in AGENTS.local.md — gitignored, loaded alongside AGENTS.md. Mention this only if the user has clearly personal context to record; otherwise leave AGENTS.local.md alone.
+
+Prefix the file with:
+
+\`\`\`
+# AGENTS.md
+
+This file is loaded into the agent's context at the start of every session. Keep it concise — the agent reads it every turn.
+\`\`\`
+
+When you finish, summarize what you wrote (or what you changed if updating an existing file) in a few bullets so the user can review.`
 
 export function App({
   model,
@@ -477,7 +517,7 @@ export function App({
 
         case 'init':
           echoCommand(text)
-          await handleInit()
+          await submit(INIT_PROMPT, { silent: true })
           return
 
         case 'usage':
@@ -835,20 +875,6 @@ export function App({
     addInfoMessage('Compressing context...')
     await compact()
     addInfoMessage('Context compressed.')
-  }
-
-  async function handleInit() {
-    addInfoMessage('Initializing project structure...')
-    try {
-      const result = await initProject()
-      const fileLines = result.createdFiles.map((f) => `  - ${f}`).join('\n')
-      const body = result.createdFiles.length
-        ? `**Project initialized**\n\nCreated:\n${fileLines}\n\nEdit \`AGENTS.md\` at the project root to describe your project — it is loaded into the agent's context every session.`
-        : '**Project already initialized** — no new files created.'
-      addInfoMessage(body)
-    } catch (err) {
-      addInfoMessage(`Init failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
   }
 
   async function handleUsage() {

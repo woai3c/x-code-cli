@@ -7,7 +7,7 @@
 //   2. Global auto memory (~/.x-code/memory/auto.md)   — AI-written via post-turn extractor
 //   3. Project AGENTS.md chain — fallback to CLAUDE.md per directory
 //   4. Project auto memory (.x-code/memory/auto.md)    — AI-written via post-turn extractor
-//   5. Local preferences (.x-code/local/preferences.md) — personal, gitignored
+//   5. AGENTS.local.md at project root                 — personal preferences, gitignored
 //
 // Later sections carry more weight for the model: monorepo sub-packages
 // (deepest in the chain) override shared context, and local personal
@@ -21,7 +21,7 @@
 // ignored. Writes (`/init`, future tooling) always target AGENTS.md.
 import path from 'node:path'
 
-import { GLOBAL_XCODE_DIR, XCODE_DIR, fileExists, readFileSafe } from '../utils.js'
+import { GLOBAL_XCODE_DIR, fileExists, readFileSafe } from '../utils.js'
 import { getAutoMemory } from './auto-memory.js'
 
 const GLOBAL_DIR = GLOBAL_XCODE_DIR
@@ -108,9 +108,9 @@ export async function buildKnowledgeContext(options?: { sessionContext?: string 
     sections.push('### Project Auto Memory\n' + projectMemoryContent)
   }
 
-  const localPrefs = await readFileSafe(path.join(cwd, XCODE_DIR, 'local', 'preferences.md'))
+  const localPrefs = await readFileSafe(path.join(cwd, 'AGENTS.local.md'))
   if (localPrefs) {
-    sections.push('### Local Preferences\n' + localPrefs)
+    sections.push('### Local Preferences (AGENTS.local.md)\n' + localPrefs)
   }
 
   if (options?.sessionContext) {

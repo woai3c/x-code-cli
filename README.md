@@ -17,7 +17,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **流式输出**：边生成边显示，无需等待完整响应
 - **上下文压缩**：长对话自动压缩历史；loop-guard 检测循环调用；prompt cache 复用前缀降低重复输入成本
 - **会话恢复**：`--continue` 恢复最近一次会话；`--resume` 打开历史会话选择器或按 ID 直达
-- **知识库系统**：分层加载（全局 AGENTS.md / 全局自动记忆 / 项目 AGENTS.md chain / 项目自动记忆 / 本地偏好），项目子包可覆盖根级约定；每个目录优先读 `AGENTS.md`，缺失时回退到 `CLAUDE.md`（Claude Code 兼容,只读不写,`/init` 始终创建 `AGENTS.md`）
+- **知识库系统**：分层加载（全局 AGENTS.md / 全局自动记忆 / 项目 AGENTS.md chain / 项目自动记忆 / 项目根 `AGENTS.local.md`），项目子包可覆盖根级约定；每个目录优先读 `AGENTS.md`，缺失时回退到 `CLAUDE.md`（Claude Code 兼容,只读不写,`/init` 只读写 `AGENTS.md`）
 - **自动记忆**：每轮对话结束后自动从最近转录里筛选值得长期记住的事实(用户偏好、纠正反馈、项目状态、外部资源指针),下次会话作为上下文加载;`/memory` 查看当前条目,直接编辑 `auto.md` 修改
 - **文件附件**：在提示词中以 `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
@@ -191,7 +191,7 @@ xc [options] [prompt]
 | `/clear`              | 清空当前会话                                                 |
 | `/compact`            | 手动压缩上下文                                               |
 | `/resume`             | 从当前项目的历史会话中选择一个恢复                           |
-| `/init`               | 初始化项目知识库（创建 `AGENTS.md` 模板）                    |
+| `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                   |
 | `/memory`             | 查看当前自动记忆条目（project + global,按类目分组）          |
 | `/exit`               | 保存会话并退出                                               |
 

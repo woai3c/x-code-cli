@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Overview
+
+X-Code CLI (`xc`) is a terminal AI coding assistant in the same shape as Claude Code / Gemini CLI: streaming agent loop, tool use, sub-agents, slash commands, plan mode, multi-provider support (Anthropic / OpenAI / DeepSeek / Google / Alibaba / xAI / Zhipu / Moonshot, plus an OpenAI-compatible escape hatch).
+
 ## Commands
 
 This is a pnpm workspace; Node ≥20.19 is required.
@@ -18,6 +22,7 @@ pnpm test <pattern>     # single test file or directory:
                         #   pnpm test packages/core/tests/agent-loop.test.ts
                         #   pnpm test packages/core/tests/agent
 pnpm ci                 # typecheck + lint + test + build (mirror CI)
+pnpm release            # bump version + tag + publish (scripts/release.mjs); maintainers only
 ```
 
 After editing **core** sources you must `pnpm build` (or run `tsc -b --watch` inside `packages/core` in another terminal); the CLI imports the compiled `dist/`, not the TS source. The `pnpm dev` script does a one-shot core build then runs CLI from source via tsx.
@@ -101,7 +106,7 @@ When changing tool execution code, **always thread `options.abortSignal` through
 ~/.x-code/memory/auto.md       global auto-memory  (AI-written)
 <repo-root>/AGENTS.md chain    walked from cwd up to .git root, root→leaf
 .x-code/memory/auto.md         project auto-memory (AI-written)
-.x-code/local/preferences.md   per-user, gitignored
+<repo-root>/AGENTS.local.md    per-user, gitignored (personal preferences)
 ```
 
 The AGENTS.md chain lets monorepo subpackages override repo-root guidance — leaf wins. `~/.x-code` is overridable via the `X_CODE_HOME` env var (used by tests).

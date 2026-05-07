@@ -73,7 +73,6 @@ export { extractText } from './utils/message-helpers.js'
 export { buildKnowledgeContext } from './knowledge/loader.js'
 export { getAutoMemory, initMemories } from './knowledge/auto-memory.js'
 export { generateSessionSummary } from './knowledge/session.js'
-export { initProject } from './knowledge/init.js'
 
 // Sub-agents
 export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from './agent/sub-agents/index.js'

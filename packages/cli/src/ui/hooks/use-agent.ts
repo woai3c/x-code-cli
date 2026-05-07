@@ -225,9 +225,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     loadPersistedRules(process.cwd())
   }, [])
 
-  /** Submit a user message */
+  /** Submit a user message.
+   *
+   *  `silent: true` skips appending the text to the UI scrollback while still
+   *  feeding it to the model (agentLoop pushes the user turn into
+   *  loopState.messages on its own). Used by slash commands like `/init` that
+   *  inject a long author-side prompt — the user already sees `/init` from
+   *  echoCommand, and dumping the full prompt body into scrollback would be
+   *  noise. The spinner / abort signal / session save still fire normally. */
   const submit = useCallback(
-    async (text: string) => {
+    async (text: string, submitOptions?: { silent?: boolean }) => {
       await initialize()
 
       setState((prev) => ({
@@ -235,7 +242,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         isLoading: true,
         shellOutput: '',
         error: null,
-        messages: [...prev.messages, { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }],
+        messages: submitOptions?.silent
+          ? prev.messages
+          : [...prev.messages, { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }],
       }))
 
       const controller = new AbortController()

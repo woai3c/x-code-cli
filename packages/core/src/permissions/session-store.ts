@@ -306,5 +306,14 @@ export function persistRule(cwd: string, rule: AllowRule): void {
 
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
+  // Self-protect .x-code/local/ — permissions.json records auto-approved
+  // shell-command patterns specific to this user's threat tolerance and
+  // shouldn't leak into git history. Drop a `*` .gitignore on first write
+  // so the directory is safe even when the user's project hasn't gitignored
+  // .x-code/ as a whole.
+  const gitignorePath = path.join(dir, '.gitignore')
+  if (!fs.existsSync(gitignorePath)) {
+    fs.writeFileSync(gitignorePath, '*\n', 'utf-8')
+  }
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
 }
