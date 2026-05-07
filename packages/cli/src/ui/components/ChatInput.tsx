@@ -767,6 +767,20 @@ export function ChatInput({
   const justClearedRef = useRef(false)
   /** How many messages we've already committed to scrollback. */
   const writtenMessageCountRef = useRef(0)
+  /** Scrollback bytes collected this render that haven't reached stdout yet.
+   *  Survives across renders so a cancelled commit-throttle doesn't drop
+   *  message bytes — `writtenMessageCountRef` is bumped synchronously when
+   *  we walk new messages, so a follow-up render won't re-collect them via
+   *  `writeMessageToStdout`. Without this ref, the only path that carried
+   *  the bytes was the local `scrollbackContent` of the render that
+   *  scheduled the throttle; if that throttle got superseded by a height
+   *  change 1ms later (`commit-throttle-superseded-by-height`), the bytes
+   *  vanished. Cleared inside `doFlush` once the write actually lands.
+   *  Symptom this cures: streamed multi-line replies whose final commit
+   *  shrinks the frame (end-of-turn spinner removal) silently lose the
+   *  last message — visible as a reply that stops mid-paragraph in the
+   *  scrollback even though the full text is in `state.messages`. */
+  const pendingScrollbackRef = useRef('')
   // Permission dialog: selection index (0 = Yes, 1 = No). Rendered inside
   // our cell buffer — not via Ink — so the dialog never fights our
   // cursor management. Reset to 0 whenever the prompt changes (new tool
@@ -1403,6 +1417,11 @@ export function ChatInput({
       lastFrameTopRef.current = 0
       freeBlanksAboveFrameRef.current = 0
       blankRowsAboveFrameRef.current = 0
+      // The clear wipes the scrollback we were about to write to. Any
+      // pending bytes from a prior cancelled throttle are now stale —
+      // they belong to messages that no longer exist (post-/clear,
+      // messages.length is 0).
+      pendingScrollbackRef.current = ''
       activeRef.current = false
       justClearedRef.current = true
       // Drops scrollback-spacing flags + buffered read-group entries
@@ -1424,9 +1443,8 @@ export function ChatInput({
     // blank rows in terminal scrollback (the "lots of blank lines"
     // symptom on multi-read chains).
     const hasNewMessages = messages.length > writtenMessageCountRef.current
-    let scrollbackContent = ''
     const collectWrite: (data: string) => void = (data) => {
-      scrollbackContent += data
+      pendingScrollbackRef.current += data
     }
     if (hasNewMessages) {
       for (let i = writtenMessageCountRef.current; i < messages.length; i++) {
@@ -1445,6 +1463,11 @@ export function ChatInput({
     if (!isLoading) {
       flushPendingReadGroup(collectWrite)
     }
+    // Snapshot the cross-render ref into a local. The geometry path reads
+    // `scrollbackContent` multiple times and the snapshot keeps a single
+    // render's view consistent. The bytes stay in the ref until doFlush
+    // confirms they made it to stdout — see pendingScrollbackRef's docs.
+    const scrollbackContent = pendingScrollbackRef.current
     const didCommitMessages = scrollbackContent.length > 0
 
     // Capture "is this the first active paint?" BEFORE we flip activeRef.
@@ -3191,6 +3214,14 @@ export function ChatInput({
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
       lastFrameTopRef.current = frameTop
+      // Bytes are now on stdout. Drop the ref so the next render doesn't
+      // re-emit them. Setting to '' (rather than slicing scrollbackContent
+      // off the front) is safe: any render that mutates the ref between
+      // scheduling and firing this throttled doFlush would have entered
+      // the commit branch (didCommitMessages || hasNewMessages) and
+      // cancelled this throttle in line 3235's `clearTimeout`, replacing
+      // it with a fresh throttle whose payload includes the new bytes.
+      pendingScrollbackRef.current = ''
       if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
         debugLog(
           'chatinput.geom.persist',
