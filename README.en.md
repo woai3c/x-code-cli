@@ -22,7 +22,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, `/memory`, and more
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, `/memory`, `/review`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
 - **Cross-platform** — runs on Windows, macOS, and Linux
@@ -192,6 +192,7 @@ xc [options] [prompt]
 | `/compact`            | Manually compress context                                                                         |
 | `/resume`             | Pick a past session in this project to resume                                                     |
 | `/init`               | Analyze the codebase and create or update `AGENTS.md` at the project root                         |
+| `/review [PR#]`       | Review a GitHub PR (no argument lists open PRs); requires `gh` to be installed locally            |
 | `/memory`             | List auto-memory entries (project + global, grouped by category)                                  |
 | `/exit`               | Save the session and exit                                                                         |
 

@@ -62,6 +62,7 @@ export const SLASH_COMMANDS = [
   { name: '/compact', description: 'Manually compress context' },
   { name: '/resume', description: 'Pick a past session in this project to resume' },
   { name: '/init', description: 'Initialize project knowledge' },
+  { name: '/review', description: 'Review a pull request (no-arg = list open PRs)' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
   { name: '/memory', description: 'Show auto-memory entries (project + global)' },
@@ -185,6 +186,38 @@ This file is loaded into the agent's context at the start of every session. Keep
 \`\`\`
 
 When you finish, summarize what you wrote (or what you changed if updating an existing file) in a few bullets so the user can review.`
+
+// Prompt body for `/review`. Mirrors Claude Code's local /review: a static
+// template that points the agent at `gh` and asks for a structured review.
+// `args` is the raw arg string after the command (PR number, or empty).
+//
+// The no-arg branch is intentionally locked down: empty `gh pr list` output =
+// no open PRs, full stop. We've seen the model otherwise spend 8+ tool calls
+// checking `gh auth`, branches, uncommitted diffs, etc. before pivoting to
+// review whatever it found — wasteful and unrequested. The "use `gh`
+// directly — no wrappers" line is there because models occasionally
+// hallucinate generic wrappers (rtk, gh-aux, …) on the first call.
+const REVIEW_PROMPT = (args: string) => `You are an expert code reviewer. Use \`gh\` directly — no wrappers.
+
+If no PR number is provided in the args:
+1. Run \`gh pr list\` to show open PRs.
+2. If the output is empty, reply with exactly: "No open PRs in this repository — re-run \`/review <number>\` to review a specific PR." and stop.
+3. Otherwise, list the open PRs and ask the user which to review. Stop and wait.
+4. Do NOT investigate further — no \`gh auth\`, no branch / diff / status checks, no reviewing uncommitted changes. The user will re-invoke /review.
+
+If a PR number is provided:
+1. Run \`gh pr view <number>\` to get PR details.
+2. Run \`gh pr diff <number>\` to get the diff.
+3. Write a concise but thorough review with clear sections and bullet points covering:
+   - Overview of what the PR does
+   - Code correctness
+   - Project conventions
+   - Performance implications
+   - Test coverage
+   - Security considerations
+   - Specific suggestions and risks
+
+PR number: ${args}`
 
 export function App({
   model,
@@ -518,6 +551,11 @@ export function App({
         case 'init':
           echoCommand(text)
           await submit(INIT_PROMPT, { silent: true })
+          return
+
+        case 'review':
+          echoCommand(text)
+          await submit(REVIEW_PROMPT(arg), { silent: true })
           return
 
         case 'usage':

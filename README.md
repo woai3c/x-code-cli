@@ -22,7 +22,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **文件附件**：在提示词中以 `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
 - **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history`、`/memory` 等
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history`、`/memory`、`/review` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **多行输入**：`Alt+Enter`（macOS 为 `Option+Enter`）或行尾 `\` 后 Enter 插入换行；普通 Enter 直接发送
 - **跨平台**：支持 Windows、macOS、Linux
@@ -192,6 +192,7 @@ xc [options] [prompt]
 | `/compact`            | 手动压缩上下文                                               |
 | `/resume`             | 从当前项目的历史会话中选择一个恢复                           |
 | `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                   |
+| `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）         |
 | `/memory`             | 查看当前自动记忆条目（project + global,按类目分组）          |
 | `/exit`               | 保存会话并退出                                               |
 
