@@ -1,3 +1,13 @@
+## v0.2.4 (2026-05-08)
+
+### Features
+
+- add /review slash command for PR review (#9) (0d23951)
+
+### Bug Fixes
+
+- preserve scrollback bytes across superseded commit-throttle (#10) (5eb978d)
+
 ## v0.2.3 (2026-05-06)
 
 ### Bug Fixes
