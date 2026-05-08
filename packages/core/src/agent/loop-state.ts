@@ -23,9 +23,9 @@ export interface LoopState {
    *  rebuilds it with / without the plan-mode overlay. */
   systemPromptCache: string | null
   /** Current approval mode — flips between 'default' and 'plan' via
-   *  Shift+Tab (user) or the enterPlanMode/exitPlanMode tools (model).
-   *  Read by tool-execution to decide which system prompt overlay
-   *  applies and which tools are advertised. */
+   *  the /plan slash command (user) or the enterPlanMode/exitPlanMode
+   *  tools (model). Read by tool-execution to decide which system
+   *  prompt overlay applies and which tools are advertised. */
   permissionMode: PermissionMode
   /** Path to the plan file when in plan mode (`.x-code/plans/{sessionId}.md`),
    *  null otherwise. Created lazily the first time the model calls

@@ -256,8 +256,8 @@ async function main() {
     thinking: loadUserConfig().thinking ?? false,
     // Plan mode is session-scoped (matches Claude Code) — only the
     // `--plan` CLI flag opts in at startup. Mid-session toggles via
-    // /plan or Shift+Tab don't persist, so each new launch starts in
-    // 'default' unless explicitly requested.
+    // /plan don't persist, so each new launch starts in 'default'
+    // unless explicitly requested.
     permissionMode: argv.plan ? 'plan' : 'default',
     modelRegistry: providerRegistry,
     subAgentRegistry,

@@ -26,10 +26,7 @@ export type PermissionLevel = 'always-allow' | 'ask' | 'deny'
  *                     the user already vetted the plan, having to click
  *                     "Yes" on every writeFile during implementation is
  *                     pure friction. exitPlanMode auto-switches into this
- *                     mode on approval; the user can also enter it
- *                     manually via Shift+Tab cycling.
- *
- *  Cycling order on Shift+Tab: default → acceptEdits → plan → default. */
+ *                     mode on approval. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
 
 // ─── Todo list (TodoWrite tool) ───

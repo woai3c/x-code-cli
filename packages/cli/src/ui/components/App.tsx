@@ -874,13 +874,11 @@ export function App({
     commitThemeChange(commandText, picked.name)
   }
 
-  /** Toggle plan mode via /plan. Direct enter/exit, no picker — the
-   *  Shift+Tab cycle (default → acceptEdits → plan → default) is
-   *  multi-step, but `/plan` is the user explicitly asking for plan
-   *  mode, so we go directly. `/plan` toggles plan ↔ whatever-was-
-   *  before; `/plan on` / `/plan off` are idempotent setters for
-   *  scripted flows. Matches Claude Code's `/plan` single-line
-   *  confirmation output. */
+  /** Toggle plan mode via /plan. Direct enter/exit, no picker —
+   *  `/plan` is the user explicitly asking for plan mode, so we go
+   *  directly. `/plan` toggles plan ↔ whatever-was-before; `/plan on`
+   *  / `/plan off` are idempotent setters for scripted flows. Matches
+   *  Claude Code's `/plan` single-line confirmation output. */
   function handlePlanToggle(commandText: string, arg: string) {
     const current = state.permissionMode === 'plan'
     const trimmed = arg.trim().toLowerCase()

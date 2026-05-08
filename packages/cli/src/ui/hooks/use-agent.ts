@@ -92,7 +92,7 @@ export interface AgentState {
   modelId: string
   /** Live approval mode for this session. Mirrors `LoopState.permissionMode`
    *  so the bottom UI indicator can re-render whenever the model or the
-   *  user (Shift+Tab) flips it. */
+   *  user (via /plan) flips it. */
   permissionMode: PermissionMode
   /** Live checklist maintained by the model via `todoWrite`. Empty
    *  when the model hasn't started a multi-step task or when all items
