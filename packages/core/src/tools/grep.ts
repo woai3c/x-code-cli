@@ -8,27 +8,13 @@ import { z } from 'zod'
 
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
+import { getRipgrepPath } from './utils.js'
 
 const execFileAsync = promisify(execFile)
 
 const DEFAULT_HEAD_LIMIT = 250
 const MAX_COLUMNS = 500
 const RG_MAX_BUFFER = 20 * 1024 * 1024
-
-let _rgPath: string | null = null
-
-function getRipgrepPath(): string {
-  if (_rgPath) return _rgPath
-  try {
-    // @vscode/ripgrep provides the binary path
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const rg = require('@vscode/ripgrep') as { rgPath: string }
-    _rgPath = rg.rgPath
-  } catch {
-    _rgPath = 'rg'
-  }
-  return _rgPath
-}
 
 export const grep = tool({
   description: `A powerful search tool built on ripgrep.
