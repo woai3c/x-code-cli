@@ -54,10 +54,5 @@ export {
   todoWrite,
 }
 
-export {
-  MAX_TOOL_RESULT_LINES,
-  MAX_TOOL_RESULT_BYTES,
-  MAX_AGGREGATE_TOOL_RESULT_BYTES,
-  truncateToolResult,
-} from './truncate.js'
+export { MAX_TOOL_RESULT_LINES, MAX_TOOL_RESULT_BYTES, truncateToolResult } from './truncate.js'
 export type { TruncateOptions } from './truncate.js'

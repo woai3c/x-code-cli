@@ -24,11 +24,6 @@ export const MAX_TOOL_RESULT_BYTES = 50 * 1024
 /** Head:tail ratio when slicing. 0.2 keeps the first 20% + last 80%. */
 export const DEFAULT_HEAD_RATIO = 0.2
 
-/** Per-turn aggregate cap across all tool results in one assistant message.
- *  Not enforced yet — tracked via agent loop state for future telemetry and
- *  eventual reactive compaction (mirrors claude-code's 200k-char ceiling). */
-export const MAX_AGGREGATE_TOOL_RESULT_BYTES = 200 * 1024
-
 export interface TruncateOptions {
   /** Max lines before truncation kicks in. Default {@link MAX_TOOL_RESULT_LINES}. */
   maxLines?: number
