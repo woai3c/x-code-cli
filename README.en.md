@@ -6,6 +6,8 @@
 
 X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 15 built-in tools (file I/O, shell execution, code search, sub-agent delegation, task tracking, plan mode, etc.), and provides capabilities such as a permission model, context compression, file attachments, a knowledge system, and session resumption.
 
+![](./assets/hello.en.png)
+
 ## Features
 
 - **Multi-model support** — 8 built-in providers and any OpenAI-compatible custom endpoint
