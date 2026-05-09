@@ -308,13 +308,7 @@ cd x-code-cli
 # Install dependencies
 pnpm install
 
-# Build
-pnpm build
-
-# Run the build output
-node packages/cli/dist/cli.js
-
-# Or run from source (builds core once, then runs the CLI through tsx; does not watch for changes)
+# Run
 pnpm dev
 ```
 

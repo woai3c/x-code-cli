@@ -308,13 +308,7 @@ cd x-code-cli
 # 安装依赖
 pnpm install
 
-# 构建
-pnpm build
-
-# 运行构建产物
-node packages/cli/dist/cli.js
-
-# 或从源码运行（先构建 core，再通过 tsx 直接执行 CLI 入口；不监听文件变更）
+# 运行
 pnpm dev
 ```
 
