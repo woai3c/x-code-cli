@@ -1,3 +1,9 @@
+## v0.2.5 (2026-05-10)
+
+### Bug Fixes
+
+- switch to ripgrep, fix mtime sort and ignore handling (605cba1)
+
 ## v0.2.4 (2026-05-08)
 
 ### Features
