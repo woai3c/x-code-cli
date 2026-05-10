@@ -271,9 +271,9 @@ export const MODEL_ALIASES: Record<string, string> = {
 // ─── Provider detection order (for smart defaults) ───
 
 export const PROVIDER_DETECTION_ORDER = [
+  { envKey: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek:deepseek-v4-flash' },
   { envKey: 'ANTHROPIC_API_KEY', defaultModel: 'anthropic:claude-sonnet-4-6' },
   { envKey: 'OPENAI_API_KEY', defaultModel: 'openai:gpt-4.1' },
-  { envKey: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek:deepseek-v4-flash' },
   { envKey: 'ALIBABA_API_KEY', defaultModel: 'alibaba:qwen-max' },
   { envKey: 'GOOGLE_GENERATIVE_AI_API_KEY', defaultModel: 'google:gemini-2.5-pro' },
   { envKey: 'XAI_API_KEY', defaultModel: 'xai:grok-3' },
