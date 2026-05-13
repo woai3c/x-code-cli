@@ -66,10 +66,13 @@ export async function runPrintMode(model: LanguageModel, options: AgentOptions, 
     // a fresh line. When piped, trust the model's output verbatim.
     if (process.stdout.isTTY) process.stdout.write('\n')
 
-    // Fire-and-forget session save: don't block exit on it, matching the
-    // Ink path's stance that users care more about exit latency than
-    // summaries landing on disk.
-    saveSession(state, model).catch(() => undefined)
+    // Await the session save: print mode is short-lived and the only thing
+    // standing between us and exit; an unawaited fire-and-forget loses the
+    // last turn's messages when process.exit races the jsonl flush. The few
+    // tens of ms cost here matters less than scripted callers / e2e tests
+    // reading a complete transcript. (Interactive Ink path can stay
+    // fire-and-forget because it exits via React unmount, not process.exit.)
+    await saveSession(state, model).catch(() => undefined)
 
     return sawError ? 1 : 0
   } catch (err) {
