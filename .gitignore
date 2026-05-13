@@ -144,5 +144,8 @@ vite.config.ts.timestamp-*
 # Each contributor's conversations/prefs differ; never share these.
 .x-code/
 
+# e2e suite runtime state (last-run.json + stashed failure jsonl).
+packages/cli/tests/e2e/.state/
+
 # Copied into packages at publish time by CI — not source
 tmp

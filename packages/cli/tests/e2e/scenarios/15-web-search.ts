@@ -1,0 +1,21 @@
+import type { Scenario } from '../framework/types.js'
+
+const scenario: Scenario = {
+  id: '15-web-search',
+  name: 'webSearch 工具：搜一个外部主题（需要 TAVILY_API_KEY 或 BRAVE_API_KEY）',
+  requires: (env) => Boolean(env.TAVILY_API_KEY || env.BRAVE_API_KEY),
+  requiresReason: 'set TAVILY_API_KEY or BRAVE_API_KEY to enable',
+  async run(ctx) {
+    const r = await ctx.runCli(
+      'Use the webSearch tool to find the official Anthropic documentation URL for prompt caching, then quote the URL in your final answer.',
+      { args: ['--max-turns', '6'] },
+    )
+    ctx.expect.exitCode(r, 0)
+    ctx.expect.toolCalled(r, 'webSearch')
+    // 答案里至少出现 anthropic.com 或 docs.anthropic.com
+    ctx.expect.assistantMentions(r, /anthropic\.com/i)
+    ctx.expect.noToolErrors(r)
+  },
+}
+
+export default scenario

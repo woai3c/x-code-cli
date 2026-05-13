@@ -10,6 +10,7 @@
     "dev": "pnpm -r run build && pnpm --filter @x-code-cli/cli run dev",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "tsx packages/cli/tests/e2e/runner.ts",
     "lint": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -19,6 +20,7 @@
     "prepare": "husky"
   },
   "devDependencies": {
+    "@clack/prompts": "^0.10.0",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
     "@trivago/prettier-plugin-sort-imports": "^6.0.0",
