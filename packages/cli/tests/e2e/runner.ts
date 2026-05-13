@@ -159,7 +159,9 @@ async function runOne(
     },
     runCli: (prompt, options?: RunCliOptions) =>
       runCliInDir(
-        tmpDir,
+        // Most scenarios run from tmpDir, but a few need a nested cwd to
+        // exercise the AGENTS.md monorepo-chain walker.
+        options?.cwd ?? tmpDir,
         prompt,
         {
           cliBin: CLI_BIN,

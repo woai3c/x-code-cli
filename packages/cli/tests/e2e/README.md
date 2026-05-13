@@ -37,9 +37,9 @@ pnpm test:e2e --max-turns 8        # cap agent loop turns
 
 ## Cost
 
-`deepseek-v4-flash` runs the whole suite (15 scenarios, ~50-100K tokens each)
-for roughly **$0.05–0.10 per full run**. Each scenario takes 5–30 seconds.
-Full suite: 2–5 minutes typically.
+`deepseek-v4-flash` runs the whole suite (23 scenarios, ~50-100K tokens each)
+for roughly **$0.10–0.18 per full run**. Each scenario takes 5–30 seconds.
+Full suite: 4–8 minutes typically.
 
 If you only want to verify changes near a specific area, use `--filter` and
 spend much less.
