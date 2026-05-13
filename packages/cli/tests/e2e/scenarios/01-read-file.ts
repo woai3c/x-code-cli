@@ -9,11 +9,13 @@ const scenario: Scenario = {
       JSON.stringify({ name: 'demo', version: '1.0.0', packageManager: 'pnpm@9.0.0' }, null, 2),
     )
     const r = await ctx.runCli(
-      'Read the package.json in the current directory and tell me which package manager this project uses. Answer in one short sentence.',
+      'Read the package.json in the current directory and tell me the exact value of the `packageManager` field. Quote it verbatim.',
     )
     ctx.expect.exitCode(r, 0)
     ctx.expect.toolCalled(r, 'readFile', { filePath: /package\.json$/ })
-    ctx.expect.assistantMentions(r, /pnpm/i)
+    // 旧断言 /pnpm/i 是 JS 项目常识默认，模型不读文件靠先验就能蒙混。
+    // 改成完整版本号 pnpm@9.0.0 — 不读 package.json 拼不出。
+    ctx.expect.assistantMentions(r, /pnpm@9\.0\.0/)
     ctx.expect.noToolErrors(r)
   },
 }

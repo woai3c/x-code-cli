@@ -19,9 +19,28 @@ const scenario: Scenario = {
       { args: ['--trust', '--max-turns', '15'] },
     )
     ctx.expect.exitCode(r, 0)
-    ctx.expect.toolCalled(r, 'todoWrite')
-    // 至少应该读到一个文件
-    ctx.expect.toolCalled(r, 'readFile')
+    // todoWrite 调用里 todos 必须含至少 3 项，且分别提到 a/b/c.txt。
+    // 旧版 toolCalled(todoWrite) 不查 input — 模型建一份只含 1 项的 todo
+    // 也能过；这里用 predicate 把"清单真的是 3 步"作为不变量验证。
+    ctx.expect.toolCalled(r, 'todoWrite', {
+      todos: (todos: unknown) => {
+        if (!Array.isArray(todos) || todos.length < 3) return false
+        const blob = todos
+          .map((t: unknown) => {
+            if (!t || typeof t !== 'object') return ''
+            const o = t as Record<string, unknown>
+            return [o.content, o.activeForm].filter((v) => typeof v === 'string').join(' ')
+          })
+          .join(' | ')
+          .toLowerCase()
+        return blob.includes('a.txt') && blob.includes('b.txt') && blob.includes('c.txt')
+      },
+    })
+    // 三个文件都必须被 readFile 读过 — "多步执行"才不是空话。
+    // 旧版只查 readFile 调用过一次，模型完全可以跳过 b/c。
+    ctx.expect.toolCalled(r, 'readFile', { filePath: /a\.txt$/ })
+    ctx.expect.toolCalled(r, 'readFile', { filePath: /b\.txt$/ })
+    ctx.expect.toolCalled(r, 'readFile', { filePath: /c\.txt$/ })
     ctx.expect.noToolErrors(r)
   },
 }
