@@ -77,7 +77,7 @@ function buildMissingKeyError(): string {
     '  1. Tavily — 1000 searches/month, recommended',
     '     Sign up: https://tavily.com → copy API key from dashboard',
     '',
-    '  2. Brave  — 2000 searches/month (requires credit card, no charge)',
+    '  2. Brave  — ~1000 searches/month via $5 free credit (requires credit card, over-usage billed)',
     '     Sign up: https://api.search.brave.com → create API key',
     '',
     `Setup (${type}):`,
