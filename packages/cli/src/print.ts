@@ -6,10 +6,15 @@
 // keeping the event loop alive until the user pressed a key or resized the
 // terminal — at which point the queued unmount finally ran. Keeping print
 // mode as a separate code path sidesteps every one of those landmines.
-import { agentLoop, saveSession } from '@x-code-cli/core'
-import type { AgentCallbacks, AgentOptions, LanguageModel } from '@x-code-cli/core'
+import { agentLoop, hydrateLoopState, saveSession } from '@x-code-cli/core'
+import type { AgentCallbacks, AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
 
-export async function runPrintMode(model: LanguageModel, options: AgentOptions, prompt: string): Promise<number> {
+export async function runPrintMode(
+  model: LanguageModel,
+  options: AgentOptions,
+  prompt: string,
+  initialSession?: LoadedSession | null,
+): Promise<number> {
   // Abort on Ctrl+C so a long-running -p invocation is interruptible.
   const controller = new AbortController()
   const onSigint = () => controller.abort()
@@ -60,7 +65,21 @@ export async function runPrintMode(model: LanguageModel, options: AgentOptions, 
   }
 
   try {
-    const state = await agentLoop(prompt, model, { ...options, abortSignal: controller.signal }, callbacks)
+    // Honor --continue / --resume in print mode by hydrating the loop state
+    // from the loaded session. Without this, main() loads the previous jsonl
+    // but the agent starts a brand-new conversation here, silently dropping
+    // the resume request. The Ink path threads this through useAgent →
+    // hydrateLoopState; print mode just needed the same wiring.
+    const existingState = initialSession
+      ? hydrateLoopState(initialSession, options.permissionMode ?? 'default')
+      : undefined
+    const state = await agentLoop(
+      prompt,
+      model,
+      { ...options, abortSignal: controller.signal },
+      callbacks,
+      existingState,
+    )
 
     // End on a newline when stdout is a TTY so the shell prompt lands on
     // a fresh line. When piped, trust the model's output verbatim.

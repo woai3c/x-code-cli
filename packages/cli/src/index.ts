@@ -207,7 +207,7 @@ async function main() {
   }
 
   // Resolve model
-  const modelId = resolveModelId(argv.model)
+  let modelId = resolveModelId(argv.model)
   if (!modelId) {
     // User specified a model whose provider has no key
     const requested = argv.model
@@ -220,6 +220,37 @@ async function main() {
       printNoApiKeyMessage()
       process.exit(0)
     }
+  }
+
+  // Guard against stale model ids whose provider isn't registered for this
+  // launch — common when the user removes an env key but config.json still
+  // points there, or when a provider was dropped from the build entirely
+  // (e.g. kimicode after a feature revert). The registry would otherwise
+  // throw NoSuchProviderError at `languageModel()` and fatal-exit before
+  // the UI even mounts. For explicit `--model` we still hard-fail (the
+  // user's intent is unambiguous); for persisted / smart-default ids we
+  // fall back to the first available provider so the CLI stays usable.
+  const requestedProvider = modelId.split(':')[0]
+  if (!availableProviders.includes(requestedProvider)) {
+    const envVar = getEnvVarName(requestedProvider) ?? `${requestedProvider.toUpperCase()}_API_KEY`
+    if (argv.model) {
+      console.error(`Error: ${envVar} is not set. Please set this environment variable to use ${argv.model}.`)
+      process.exit(1)
+    }
+    const fallback = PROVIDER_DETECTION_ORDER.find(({ envKey }) => process.env[envKey])
+    if (!fallback) {
+      // Defensive: availableProviders was non-empty above, so something
+      // configured got us here — surface and exit cleanly.
+      printNoApiKeyMessage()
+      process.exit(0)
+    }
+    console.error(
+      chalk.yellow(
+        `Note: saved model '${modelId}' needs ${envVar}, which is not set. ` +
+          `Falling back to '${fallback.defaultModel}'. Use /model to pick a different default.`,
+      ),
+    )
+    modelId = fallback.defaultModel
   }
 
   // Apply persisted UI theme. Done early (before startApp) so the very
@@ -314,7 +345,7 @@ async function main() {
       process.exit(1)
     }
     const { runPrintMode } = await import('./print.js')
-    const code = await runPrintMode(model, options, fullPrompt)
+    const code = await runPrintMode(model, options, fullPrompt, initialSession)
     resetTerminal()
     process.exit(code)
   }
