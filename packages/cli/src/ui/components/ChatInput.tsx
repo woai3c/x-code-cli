@@ -35,6 +35,8 @@ import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank } from '..
 import type { ActiveToolCall } from '../hooks/use-agent.js'
 import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
+import { HISTORY_MAX, appendInputHistory, loadInputHistory } from '../input-history.js'
+import type { InputHistoryEntry } from '../input-history.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { renderInlineMarkdown } from '../render-markdown.js'
 import {
@@ -979,6 +981,13 @@ export function ChatInput({
     // only Enter is suppressed, matching Claude Code's behavior.
     if (spinner) return
     const expanded = override ? raw : expandPasteRefs(raw, pastedContents)
+    // Record the pre-expansion form in input history (Up/Down recall) so
+    // that restoring an entry doesn't unfold the entire paste block back
+    // into the input box — `[#N +M lines]` refs stay compact, just like
+    // they were on submit. `override` is the slash-completion path
+    // (`handleSubmit('/help')` etc.) where there are no paste refs.
+    pushHistory(override ? raw : text, override ? {} : pastedContents)
+    resetHistoryNav()
     // Let the normal render useEffect handle the transition. The next
     // render sees `messages.length > writtenMessageCountRef` (user-echo
     // just got appended inside onSubmit) and emits a single atomic
@@ -992,7 +1001,11 @@ export function ChatInput({
     setCompletionIndex(0)
   }
 
-  const moveCursorVertically = (delta: number) => {
+  /** Move the cursor up/down by `delta` logical lines. Returns `true` if the
+   *  cursor actually moved, `false` if it was already at the top/bottom edge —
+   *  the falsy return is what lets the Up/Down handlers fall through to the
+   *  history-navigation path (same trick Claude Code's `upOrHistoryUp` uses). */
+  const moveCursorVertically = (delta: number): boolean => {
     const lines = text.split('\n')
     let line = 0,
       col = cursorRef.current,
@@ -1006,12 +1019,130 @@ export function ChatInput({
       charsSoFar += lines[i].length + 1
     }
     const targetLine = Math.max(0, Math.min(lines.length - 1, line + delta))
-    if (targetLine === line) return
+    if (targetLine === line) return false
     const targetCol = Math.min(col, lines[targetLine].length)
     let newPos = 0
     for (let i = 0; i < targetLine; i++) newPos += lines[i].length + 1
     newPos += targetCol
     dispatch({ type: 'SET_CURSOR', cursor: newPos })
+    return true
+  }
+
+  // ── Input history (Up/Down) ─────────────────────────────────────────────
+  //
+  // Persisted to `.x-code/history.jsonl` (project-local, append-only) and
+  // mirrored into `historyRef` for synchronous Up/Down access. On mount we
+  // load the most recent HISTORY_MAX entries from disk; on every successful
+  // submit we both push to the ref AND fire-and-forget append to disk. Up at
+  // the logical first line walks BACK through entries (newest first); Down at
+  // the logical last line walks forward and, past index 0, restores the
+  // draft captured on the first Up press. Mirrors Claude Code's
+  // useArrowKeyHistory + history.jsonl machinery — see `../input-history.ts`
+  // for the rationale on per-project vs. Claude Code's global-with-project-
+  // field design.
+  //
+  // Why store the pre-expansion text + pastedContents instead of the expanded
+  // string: the expanded string has the entire pasted block inlined, so
+  // restoring it would balloon the input box with the full paste content.
+  // Storing the `[#N +M lines]` reference keeps the visual compactness the
+  // user originally had at submit time.
+  const historyRef = useRef<InputHistoryEntry[]>([])
+  /** 0 = not navigating (draft on screen). 1 = most-recent submitted entry,
+   *  2 = the one before that, etc. Refs (not state) because navigation must
+   *  read its own monotonic counter synchronously — React state updates lag
+   *  by a render and rapid Up/Down presses see stale values. */
+  const historyIndexRef = useRef(0)
+  /** Snapshot of the user's in-progress input the moment they FIRST pressed
+   *  Up. Restored when Down brings them back to index 0 so a stray Up doesn't
+   *  destroy half-typed work. */
+  const historyDraftRef = useRef<{ text: string; cursor: number; pasted: PastedContents } | null>(null)
+
+  // Seed from disk once on mount. `process.cwd()` is captured here rather
+  // than at every appendInputHistory call so an interactive `cd` inside the
+  // agent doesn't end up reading from one project and writing to another.
+  // No setState — `historyRef` is a ref, the load just populates it for
+  // the next Up press. Failures are silent (loadInputHistory swallows).
+  const initialCwdRef = useRef(process.cwd())
+  useEffect(() => {
+    let cancelled = false
+    void loadInputHistory(initialCwdRef.current).then((entries) => {
+      if (cancelled) return
+      historyRef.current = entries
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const resetHistoryNav = () => {
+    historyIndexRef.current = 0
+    historyDraftRef.current = null
+  }
+
+  const pushHistory = (raw: string, pasted: PastedContents) => {
+    if (!raw.trim()) return
+    // Bash-style ignoredups: skip if identical to the most recent entry. The
+    // user pressing Up + Enter to re-run the previous command shouldn't fill
+    // history with the same line — and we don't want to duplicate it on disk
+    // either, so the dedupe gate guards BOTH the in-memory ref and the
+    // appendFile call below.
+    const last = historyRef.current[historyRef.current.length - 1]
+    if (last && last.text === raw) return
+    const entry: InputHistoryEntry = { text: raw, pasted: { ...pasted }, ts: Date.now() }
+    historyRef.current.push(entry)
+    if (historyRef.current.length > HISTORY_MAX) historyRef.current.shift()
+    // Fire-and-forget. Errors are swallowed inside appendInputHistory — a
+    // disk hiccup must not block the agent loop or surface to the user.
+    // Pin to startup cwd so a tool-driven `cd` mid-session doesn't split
+    // writes across two `.x-code/history.jsonl` files.
+    void appendInputHistory(entry, initialCwdRef.current)
+  }
+
+  /** Replace the current input with `entry`. `cursorAt` mirrors Claude Code's
+   *  `cursorToStart` flag: Up navigation lands at index 0 so the next Up press
+   *  immediately advances (cursor can't go further up); Down navigation lands
+   *  at the end so the next Down press immediately advances forward. */
+  const restoreHistoryEntry = (entry: { text: string; pasted: PastedContents }, cursorAt: 'start' | 'end') => {
+    dispatch({ type: 'SET_TEXT', text: entry.text, cursor: cursorAt === 'start' ? 0 : entry.text.length })
+    setPastedContents({ ...entry.pasted })
+    setCompletionIndex(0)
+    setAtCompletionIndex(0)
+  }
+
+  const navigateHistoryUp = () => {
+    if (historyRef.current.length === 0) return
+    if (historyIndexRef.current >= historyRef.current.length) return
+    if (historyIndexRef.current === 0) {
+      historyDraftRef.current = {
+        text,
+        cursor: cursorRef.current,
+        pasted: { ...pastedContents },
+      }
+    }
+    historyIndexRef.current += 1
+    const entry = historyRef.current[historyRef.current.length - historyIndexRef.current]
+    if (entry) restoreHistoryEntry(entry, 'start')
+  }
+
+  const navigateHistoryDown = () => {
+    if (historyIndexRef.current <= 0) return
+    historyIndexRef.current -= 1
+    if (historyIndexRef.current === 0) {
+      const draft = historyDraftRef.current
+      historyDraftRef.current = null
+      if (draft) {
+        dispatch({ type: 'SET_TEXT', text: draft.text, cursor: draft.cursor })
+        setPastedContents({ ...draft.pasted })
+      } else {
+        dispatch({ type: 'RESET' })
+        setPastedContents({})
+      }
+      setCompletionIndex(0)
+      setAtCompletionIndex(0)
+    } else {
+      const entry = historyRef.current[historyRef.current.length - historyIndexRef.current]
+      if (entry) restoreHistoryEntry(entry, 'end')
+    }
   }
 
   usePromptInput({
@@ -1251,6 +1382,7 @@ export function ChatInput({
           dispatch({ type: 'RESET' })
           setPastedContents({})
           setCompletionIndex(0)
+          resetHistoryNav()
           lastEscapeAtRef.current = 0
         } else {
           lastEscapeAtRef.current = now
@@ -1317,8 +1449,14 @@ export function ChatInput({
           if (atMatches.length > 0) setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
           return
         }
-        if (matches.length > 0) setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
-        else moveCursorVertically(-1)
+        if (matches.length > 0) {
+          setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
+          return
+        }
+        // Cursor first; fall through to history nav only when the cursor was
+        // already on the logical first line (so multi-line drafts and recalled
+        // entries can still be edited row-by-row).
+        if (!moveCursorVertically(-1)) navigateHistoryUp()
         return
       }
       if (key === 'down') {
@@ -1326,8 +1464,11 @@ export function ChatInput({
           if (atMatches.length > 0) setAtCompletionIndex((p) => (p + 1) % atMatches.length)
           return
         }
-        if (matches.length > 0) setCompletionIndex((p) => (p + 1) % matches.length)
-        else moveCursorVertically(1)
+        if (matches.length > 0) {
+          setCompletionIndex((p) => (p + 1) % matches.length)
+          return
+        }
+        if (!moveCursorVertically(1)) navigateHistoryDown()
         return
       }
       if (key === 'pageup') {
