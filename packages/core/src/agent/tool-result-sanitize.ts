@@ -49,26 +49,6 @@ type ToolResultLike = {
   }
 }
 
-/** Synthesize a tool-result message for a tool_call whose input failed
- *  Zod validation (or otherwise didn't execute). Without this, the
- *  assistant message ends up with an orphan tool_call — the next API
- *  request fails with provider errors like
- *  "tool must be a response to a preceding message with tool_calls".
- *  Wire-shape mirrors how the AI SDK normally emits tool results. */
-function synthesizeToolErrorResult(toolCallId: string, toolName: string, errorMessage: string): ModelMessage {
-  return {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId,
-        toolName,
-        output: { type: 'text', value: `Error: ${errorMessage}` },
-      } as never, // AI SDK's narrow union doesn't admit the partial we construct here; wire-shape is correct.
-    ],
-  } as ModelMessage
-}
-
 /**
  * Walk `messages` and reconcile tool_call ↔ tool_result pairing in BOTH
  * directions. Providers strictly require:
@@ -124,7 +104,31 @@ export function repairOrphanToolCalls(messages: ModelMessage[]): void {
       return expected.has(part.toolCallId)
     })
     if (kept.length === 0) {
-      messages.splice(i, 1)
+      // Splicing the whole tool message can leave assistant→assistant
+      // adjacent (the common shape is assistant tool_calls → tool
+      // results → assistant continuation). Anthropic strictly requires
+      // user/assistant alternation, and although the @ai-sdk/anthropic
+      // converter currently merges consecutive same-role messages for
+      // us, we don't want the sanitizer's correctness to depend on
+      // downstream SDK behavior. When both neighbors are assistant,
+      // replace with a user-text placeholder instead so the boundary
+      // stays. Otherwise (one or both neighbors are user/tool/absent),
+      // dropping is safe.
+      const prev = messages[i - 1]
+      const next = messages[i + 1]
+      if (prev?.role === 'assistant' && next?.role === 'assistant') {
+        messages[i] = {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '[Stale tool result discarded — no matching tool_call in history.]',
+            },
+          ],
+        } as ModelMessage
+      } else {
+        messages.splice(i, 1)
+      }
     } else if (kept.length !== parts.length) {
       // AI SDK's narrow union typings forbid the partial part shape we
       // operate on at the type level — we already narrowed at runtime
@@ -149,17 +153,46 @@ export function repairOrphanToolCalls(messages: ModelMessage[]): void {
   // Append synthetic results for forward-orphans, preserving overall
   // ordering (forward-orphans always go at the end — they never had a
   // real result, so their position is purely a placeholder for the
-  // next API request).
+  // next API request). Collect all orphan parts into ONE tool message
+  // rather than pushing one per id: the AI SDK's Anthropic converter
+  // happens to merge consecutive same-role messages today, but the
+  // Google converter does not, and OpenAI-compat splits per tool_call_id
+  // anyway — emitting a single tool ModelMessage is wire-equivalent for
+  // the splitters and strictly safer for the non-merging providers.
+  const orphanParts: Array<{
+    type: 'tool-result'
+    toolCallId: string
+    toolName: string
+    output: { type: 'text'; value: string }
+  }> = []
   for (const id of expected) {
     if (fulfilled.has(id)) continue
     const name = toolNameById.get(id) ?? 'unknown'
-    messages.push(
-      synthesizeToolErrorResult(
-        id,
-        name,
-        'Tool input failed validation (likely missing required fields). The assistant should retry with the correct schema.',
-      ),
-    )
+    orphanParts.push({
+      type: 'tool-result',
+      toolCallId: id,
+      toolName: name,
+      output: {
+        type: 'text',
+        value:
+          'Error: Tool input failed validation (likely missing required fields). The assistant should retry with the correct schema.',
+      },
+    })
+  }
+  if (orphanParts.length > 0) {
+    // Defense in depth: if some other code path already left a trailing
+    // tool message (e.g. processToolCalls pushed real results that we
+    // didn't touch above), merge orphan parts into it rather than
+    // emitting a second adjacent tool ModelMessage.
+    const tail = messages[messages.length - 1]
+    if (tail && tail.role === 'tool' && Array.isArray(tail.content)) {
+      ;(tail.content as unknown[]).push(...(orphanParts as unknown[]))
+    } else {
+      messages.push({
+        role: 'tool',
+        content: orphanParts as never,
+      } as ModelMessage)
+    }
   }
 }
 

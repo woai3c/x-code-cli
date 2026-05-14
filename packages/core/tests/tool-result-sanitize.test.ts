@@ -192,4 +192,96 @@ describe('repairOrphanToolCalls', () => {
     repairOrphanToolCalls(messages)
     expect(JSON.stringify(messages)).toBe(before)
   })
+
+  // Bug 1: tool message that's only orphan and sits between two
+  // assistants must NOT be spliced — that would leave assistant→assistant,
+  // which Anthropic 400s with "messages: roles must alternate". Replace
+  // with a user-text placeholder instead.
+  it('replaces empty-orphan tool message with user placeholder when between two assistants', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hi' } as ModelMessage,
+      { role: 'assistant', content: [{ type: 'text', text: 'doing it' }] } as ModelMessage,
+      toolResultMsg('orphan_1', 'shell', 'stale'),
+      { role: 'assistant', content: [{ type: 'text', text: 'continued' }] } as ModelMessage,
+    ]
+    repairOrphanToolCalls(messages)
+    expect(messages).toHaveLength(4)
+    expect(messages[2].role).toBe('user')
+    const blocks = messages[2].content as Array<{ type: string; text?: string }>
+    expect(blocks[0]?.type).toBe('text')
+    expect(blocks[0]?.text).toMatch(/stale tool result/i)
+    for (let i = 1; i < messages.length; i++) {
+      expect(messages[i].role).not.toBe(messages[i - 1].role)
+    }
+  })
+
+  // Bug 1 boundary: when at least one neighbor is not assistant,
+  // dropping the orphan tool message is still the right call (no
+  // assistant→assistant gap is created by the splice).
+  it('still splices the orphan tool message when neighbors are not both assistant', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hi' } as ModelMessage,
+      { role: 'assistant', content: [{ type: 'text', text: 'plain reply' }] } as ModelMessage,
+      toolResultMsg('orphan_x', 'shell', 'stale'),
+    ]
+    repairOrphanToolCalls(messages)
+    expect(messages).toHaveLength(2)
+    expect(messages[1].role).toBe('assistant')
+  })
+
+  // Bug 2: multiple forward-orphan tool_calls must collapse into ONE
+  // trailing tool message, not N adjacent tool messages. The Anthropic
+  // SDK happens to merge consecutive same-role messages today, but the
+  // Google converter does not — emitting one tool message is the
+  // provider-agnostic safe shape.
+  it('collapses multiple forward-orphan synthetics into a single tool message', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'do two things' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc_a', toolName: 'shell', input: {} },
+          { type: 'tool-call', toolCallId: 'tc_b', toolName: 'shell', input: {} },
+        ],
+      } as ModelMessage,
+    ]
+    repairOrphanToolCalls(messages)
+    const last = messages[messages.length - 1]
+    expect(last.role).toBe('tool')
+    const parts = last.content as unknown as Array<{ toolCallId: string }>
+    expect(parts).toHaveLength(2)
+    const ids = parts.map((p) => p.toolCallId).sort()
+    expect(ids).toEqual(['tc_a', 'tc_b'])
+    for (let i = 1; i < messages.length; i++) {
+      expect(messages[i].role).not.toBe(messages[i - 1].role)
+    }
+  })
+
+  // Bug 2 defense in depth: if a tool message already sits at the tail
+  // (e.g. processToolCalls pushed real results for the fulfilled
+  // tool_calls in the same turn), orphan synthetics merge into it
+  // instead of producing a new adjacent tool message.
+  it('merges synthetic results into an existing trailing tool message', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hi' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc_done', toolName: 'shell', input: {} },
+          { type: 'tool-call', toolCallId: 'tc_orphan', toolName: 'shell', input: {} },
+        ],
+      } as ModelMessage,
+      toolResultMsg('tc_done', 'shell', 'ok'),
+    ]
+    repairOrphanToolCalls(messages)
+    expect(messages).toHaveLength(3)
+    const last = messages[messages.length - 1]
+    expect(last.role).toBe('tool')
+    const parts = last.content as unknown as Array<{ toolCallId: string }>
+    const ids = parts.map((p) => p.toolCallId).sort()
+    expect(ids).toEqual(['tc_done', 'tc_orphan'])
+    for (let i = 1; i < messages.length; i++) {
+      expect(messages[i].role).not.toBe(messages[i - 1].role)
+    }
+  })
 })
