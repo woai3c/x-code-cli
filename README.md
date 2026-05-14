@@ -4,14 +4,14 @@
 
 **X-Code CLI** 是一个运行在终端的开源 AI 编程助手——通过自然语言与代码库交互，完成阅读、修改、调试和构建等开发任务，无需离开命令行。
 
-X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 15 个工具（文件读写、Shell 执行、代码搜索、子 Agent 委派、任务追踪、计划模式等），并提供权限控制、上下文压缩、文件附件、知识库、会话恢复等能力。
+X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Grok、GLM、Kimi 等），内置 14 个工具（文件读写、Shell 执行、代码搜索、子 Agent 委派、任务追踪、计划模式等），并提供权限控制、上下文压缩、文件附件、知识库、会话恢复等能力。
 
 ![](./assets/hello.png)
 
 ## 功能特性
 
 - **多模型支持**：内置 8 家主流厂商，并支持任意 OpenAI 兼容接口
-- **15 个内置工具**：覆盖文件读写、Shell 执行、代码搜索、网页抓取、子 Agent 委派、任务追踪、计划模式等常见开发场景
+- **14 个内置工具**：覆盖文件读写、Shell 执行、代码搜索、网页抓取、子 Agent 委派、任务追踪、计划模式等常见开发场景
 - **子 Agent（task 工具）**：将研究、代码审查、规划等子任务委派给专用子 Agent，独立上下文运行后仅返回结论，保持主对话简洁。内置 4 个子 Agent（explore / general-purpose / plan / code-reviewer），支持自定义子 Agent
 - **Plan 模式**：`--plan` 或 `/plan` 进入只读探索模式，Agent 先制定方案、经用户批准后再执行代码修改
 - **Todo 追踪**：Agent 自动将复杂任务分解为 todo 列表并追踪执行进度
@@ -27,6 +27,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history`、`/memory`、`/review` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **多行输入**：`Alt+Enter`（macOS 为 `Option+Enter`）或行尾 `\` 后 Enter 插入换行；普通 Enter 直接发送
+- **历史输入回溯**：输入框为空时按 `↑`/`↓` 召回已提交的提示词
 - **跨平台**：支持 Windows、macOS、Linux
 - **非交互模式**：`--print` 配合管道输入，可嵌入脚本与 CI
 

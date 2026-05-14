@@ -4,14 +4,14 @@
 
 **X-Code CLI** is an open-source AI coding agent for your terminal — interact with your codebase using natural language to read, modify, debug, and build projects without leaving the command line.
 
-X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 15 built-in tools (file I/O, shell execution, code search, sub-agent delegation, task tracking, plan mode, etc.), and provides capabilities such as a permission model, context compression, file attachments, a knowledge system, and session resumption.
+X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen, Grok, GLM, Kimi, etc.), ships with 14 built-in tools (file I/O, shell execution, code search, sub-agent delegation, task tracking, plan mode, etc.), and provides capabilities such as a permission model, context compression, file attachments, a knowledge system, and session resumption.
 
 ![](./assets/hello.en.png)
 
 ## Features
 
 - **Multi-model support** — 8 built-in providers and any OpenAI-compatible custom endpoint
-- **15 built-in tools** — covers file I/O, shell execution, code search, web fetch, sub-agent delegation, task tracking, plan mode, and other common development tasks
+- **14 built-in tools** — covers file I/O, shell execution, code search, web fetch, sub-agent delegation, task tracking, plan mode, and other common development tasks
 - **Sub-agents (task tool)** — delegate research, code review, planning, and other sub-tasks to specialized sub-agents that run in isolated context and return only conclusions, keeping the main conversation lean. Ships with 4 built-in sub-agents (explore / general-purpose / plan / code-reviewer) and supports custom sub-agents
 - **Plan mode** — `--plan` or `/plan` enters a read-only exploration mode where the agent designs a plan first and only executes code changes after user approval
 - **Todo tracking** — the agent automatically breaks complex tasks into a todo list and tracks progress
@@ -27,6 +27,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, `/memory`, `/review`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
+- **Input history recall** — press `↑` / `↓` on an empty prompt to walk through previously submitted messages
 - **Cross-platform** — runs on Windows, macOS, and Linux
 - **Non-interactive mode** — `--print` with pipes for scripts and CI
 
