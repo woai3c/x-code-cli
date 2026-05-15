@@ -56,7 +56,9 @@ Practical consequence: don't add `<Box>` / `<Text>` Ink children that produce vi
 
 ```
 agentLoop()
-  └─ while (turnCount < maxTurns)
+  └─ let turn = 0
+     while (maxTurns === undefined || turn < maxTurns)
+       ├─ turn++
        ├─ checkAndCompressContext()      — light compact + (rare) summarize on overflow
        ├─ runTurn()
        │   ├─ applyCacheControl()        — provider-specific cache breakpoints
@@ -67,9 +69,11 @@ agentLoop()
             'tool-calls'  → processToolCalls() then continue
             'length'      → push "resume" nudge, continue (capped at MAX_CONTINUATIONS)
             'stop' / err  → break
+
+  returns { state, turnCount: turn }  // turnCount is per-invocation, not on state
 ```
 
-`LoopState` is reused across submits within one CLI session (see `loopStateRef` in `use-agent.ts`). It carries `messages`, accumulated `tokenUsage`, `recentToolCalls` (the loop-guard window), and `systemPromptCache`.
+`LoopState` is reused across submits within one CLI session (see `loopStateRef` in `use-agent.ts`). It carries `messages`, accumulated `tokenUsage`, `recentToolCalls` (the loop-guard window), and `systemPromptCache`. The per-invocation turn counter is **not** on `LoopState` — it's a local in `agentLoop` and surfaces via the return value, so re-entering the function (next user submit) starts at 0. Main interactive mode passes no `maxTurns` (unlimited; press Esc to stop); `--print` and sub-agents pass per-call caps.
 
 **`systemPromptCache` must remain byte-stable for the entire session.** OpenAI-compatible providers (DeepSeek / Moonshot / Alibaba / Zhipu / xAI) auto-cache stable prefixes, and `buildSystemPrompt` is called only on the first turn. Any change that interpolates per-turn data (timestamps, frame-shifting context) into the system prompt silently disables prompt caching for those providers.
 

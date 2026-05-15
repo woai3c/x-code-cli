@@ -175,7 +175,7 @@ xc [options] [prompt]
 --plan                Start in plan mode (read-only exploration; user must approve before code edits)
 --continue, -c        Resume the most recent session in this project (no picker)
 --resume, -r [id]     Resume a session: no argument opens the picker; with an ID jumps directly
---max-turns <n>       Maximum agent loop turns (default: 100)
+--max-turns <n>       Cap on agent loop turns per submit (optional; default: unlimited)
 --version, -v         Show version
 --help, -h            Show help
 ```

@@ -175,7 +175,7 @@ xc [options] [prompt]
 --plan                以 Plan 模式启动（只读探索，用户批准后才执行修改）
 --continue, -c        恢复当前项目最近一次会话（无选择器）
 --resume, -r [id]     恢复会话：无参数打开选择器，指定 ID 直达
---max-turns <n>       Agent 循环最大轮次（默认 100）
+--max-turns <n>       Agent 循环每次提交的轮次上限（可选，默认无上限）
 --version, -v         显示版本号
 --help, -h            显示帮助信息
 ```
