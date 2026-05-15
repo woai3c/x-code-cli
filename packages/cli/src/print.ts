@@ -73,7 +73,7 @@ export async function runPrintMode(
     const existingState = initialSession
       ? hydrateLoopState(initialSession, options.permissionMode ?? 'default')
       : undefined
-    const state = await agentLoop(
+    const { state } = await agentLoop(
       prompt,
       model,
       { ...options, abortSignal: controller.signal },

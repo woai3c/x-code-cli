@@ -97,7 +97,7 @@ describe('agent loop', () => {
       toolCalls: Promise.resolve([]),
     } as any)
 
-    const state = await agentLoop(
+    const { state, turnCount } = await agentLoop(
       'Say hello',
       {} as any,
       { modelId: 'anthropic:claude-sonnet-4-6', trustMode: false, maxTurns: 1, printMode: false },
@@ -114,7 +114,7 @@ describe('agent loop', () => {
     expect(usageArg.totalTokens).toBe(120)
     expect(usageArg.currentContextTokens).toBe(120)
 
-    expect(state.turnCount).toBe(1)
+    expect(turnCount).toBe(1)
     expect(state.messages.length).toBeGreaterThan(0)
   })
 
@@ -131,14 +131,14 @@ describe('agent loop', () => {
       toolCalls: Promise.resolve([]),
     } as any)
 
-    const state = await agentLoop(
+    const { turnCount } = await agentLoop(
       'Quick task',
       {} as any,
       { modelId: 'test:model', trustMode: false, maxTurns: 10, printMode: false },
       mockCallbacks,
     )
 
-    expect(state.turnCount).toBe(1)
+    expect(turnCount).toBe(1)
   })
 
   it('reports error when max turns exceeded', async () => {
@@ -165,5 +165,56 @@ describe('agent loop', () => {
     expect(mockCallbacks.onError).toHaveBeenCalled()
     const errArg = vi.mocked(mockCallbacks.onError).mock.calls[0][0]
     expect(errArg.message).toContain('maximum turns')
+  })
+
+  it('turn counter resets between submits sharing the same LoopState', async () => {
+    // Regression: turnCount used to live on LoopState and accumulate across
+    // every user submit within the same CLI session — after ~100 cumulative
+    // turns every subsequent submit hit the cap immediately. Now it's a
+    // per-invocation local, so two clean turns in a row each report 1.
+    vi.mocked(streamText).mockReturnValue({
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'ok' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'ok' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const opts = { modelId: 'test:model', trustMode: false, maxTurns: 1, printMode: false }
+    const first = await agentLoop('msg 1', {} as any, opts, mockCallbacks)
+    expect(first.turnCount).toBe(1)
+
+    // Re-enter with the same LoopState — simulates a second user submit.
+    const second = await agentLoop('msg 2', {} as any, opts, mockCallbacks, first.state)
+    expect(second.turnCount).toBe(1)
+  })
+
+  it('omitted maxTurns runs without a cap', async () => {
+    // The fix also makes maxTurns optional. When unset, the loop runs to
+    // a natural finish — no "Reached maximum turns" error.
+    vi.mocked(streamText).mockReturnValue({
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const { turnCount } = await agentLoop(
+      'no cap',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, printMode: false },
+      mockCallbacks,
+    )
+    expect(turnCount).toBe(1)
+    expect(mockCallbacks.onError).not.toHaveBeenCalled()
   })
 })

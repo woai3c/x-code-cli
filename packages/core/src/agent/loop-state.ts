@@ -11,7 +11,6 @@ export interface LoopState {
   sessionId: string
   startedAt: string
   filesModified: Set<string>
-  turnCount: number
   /** Rolling record of recently executed tool calls, keyed by a hash of the
    *  tool name + stable-stringified input. Used by the doom-loop guard to
    *  detect when the model is looping on the same failing call. */
@@ -97,7 +96,6 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     sessionId: generateSessionId(),
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
-    turnCount: 0,
     recentToolCalls: [],
     systemPromptCache: null,
     permissionMode: initialMode,

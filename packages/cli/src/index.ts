@@ -155,8 +155,10 @@ async function main() {
     })
     .option('max-turns', {
       type: 'number',
-      default: 100,
-      describe: 'Maximum agent loop turns',
+      // No default — interactive mode runs without a cap (the user presses
+      // Esc to stop). Pass a value to enforce a cap; mainly useful with
+      // `--print` where there's no human in the loop.
+      describe: 'Cap on agent loop iterations per submission (default: unlimited)',
     })
     .option('plan', {
       type: 'boolean',
@@ -278,7 +280,7 @@ async function main() {
     modelId,
     trustMode: argv.trust,
     printMode: argv.print,
-    maxTurns: argv['max-turns'] ?? 100,
+    maxTurns: argv['max-turns'],
     // Read the persisted /thinking toggle from disk. Default false so a
     // launch on a config-less machine matches the pre-feature baseline
     // (provider-default thinking behavior, no surprise latency / cost

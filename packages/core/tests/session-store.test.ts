@@ -81,7 +81,6 @@ describe('session-store: round-trip', () => {
     state.tokenUsage.inputTokens = 100
     state.tokenUsage.outputTokens = 20
     state.tokenUsage.totalTokens = 120
-    state.turnCount = 1
     await appendUsage(state, 'anthropic:claude-sonnet-4-6')
 
     const filePath = getSessionFilePath(state)
@@ -95,7 +94,6 @@ describe('session-store: round-trip', () => {
     expect(loaded!.messages[1]).toEqual({ role: 'assistant', content: 'Hi there' })
     expect(loaded!.tokenUsage.inputTokens).toBe(100)
     expect(loaded!.tokenUsage.totalTokens).toBe(120)
-    expect(loaded!.turnCount).toBe(1)
   })
 
   it('persistedMessageCount stays in sync after multiple flushes', async () => {
@@ -336,7 +334,6 @@ describe('session-store: hydrateLoopState', () => {
       cacheCreationTokens: 0,
       currentContextTokens: 55,
     }
-    s.turnCount = 1
     await appendHeader(s, 'anthropic:claude-sonnet-4-6', 'q')
     await flushPendingMessages(s)
     await appendUsage(s, 'anthropic:claude-sonnet-4-6')
@@ -348,6 +345,5 @@ describe('session-store: hydrateLoopState', () => {
     expect(hydrated.messages).toHaveLength(2)
     expect(hydrated.tokenUsage.inputTokens).toBe(50)
     expect(hydrated.persistedMessageCount).toBe(2)
-    expect(hydrated.turnCount).toBe(1)
   })
 })

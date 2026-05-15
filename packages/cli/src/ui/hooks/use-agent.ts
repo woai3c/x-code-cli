@@ -513,7 +513,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           })
         })
 
-        loopStateRef.current = await agentLoop(
+        // agentLoop returns { state, turnCount } — we only keep the state
+        // (long-lived session). turnCount is per-invocation and the main
+        // interactive loop has no use for it (the cap mechanism is what
+        // sub-agents and --print mode use).
+        const agentResult = await agentLoop(
           content,
           modelRef.current,
           {
@@ -530,6 +534,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           callbacks,
           loopStateRef.current ?? undefined,
         )
+        loopStateRef.current = agentResult.state
 
         // Finalize: drain whatever's left in the stream buffer into messages,
         // then clear the loading flag. As a safety net, if streaming produced

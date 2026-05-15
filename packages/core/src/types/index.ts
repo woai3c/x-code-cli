@@ -179,7 +179,11 @@ export interface AgentCallbacks {
 export interface AgentOptions {
   modelId: string
   trustMode: boolean
-  maxTurns: number
+  /** Hard cap on iterations within a single `agentLoop` invocation. When
+   *  omitted, the loop runs without a turn cap — the user's Esc / Ctrl+C
+   *  is the only stop. Sub-agents and `--print` mode are the two real
+   *  callers that pass a value; interactive sessions leave it unset. */
+  maxTurns?: number
   printMode: boolean
   /** When true, the agent loop opts into the maximum reasoning each
    *  provider supports (see providers/thinking.ts for the mapping).

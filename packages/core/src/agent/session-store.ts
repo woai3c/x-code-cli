@@ -74,7 +74,6 @@ interface UsageEntry {
   kind: 'usage'
   usage: TokenUsage
   modelId: string
-  turn: number
   ts: string
 }
 
@@ -196,7 +195,6 @@ export async function appendUsage(state: LoopState, modelId: string): Promise<vo
     kind: 'usage',
     usage: { ...state.tokenUsage },
     modelId,
-    turn: state.turnCount,
     ts: new Date().toISOString(),
   }
   await appendLine(filePath, entry)
@@ -259,7 +257,6 @@ export interface LoadedSession {
   firstPrompt: string
   messages: ModelMessage[]
   tokenUsage: TokenUsage
-  turnCount: number
   /** Path of the jsonl file so the agent loop can keep appending to the
    *  same file when the user resumes. */
   filePath: string
@@ -329,7 +326,6 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     firstPrompt: header.firstPrompt,
     messages: sanitizeMessageTail(messages),
     tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
-    turnCount: lastUsage?.turn ?? 0,
     filePath,
   }
 }
@@ -503,7 +499,6 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.messages = loaded.messages.slice()
   state.tokenUsage = { ...loaded.tokenUsage }
   state.lastInputTokens = loaded.tokenUsage.inputTokens
-  state.turnCount = loaded.turnCount
   state.persistedMessageCount = loaded.messages.length
   return state
 }

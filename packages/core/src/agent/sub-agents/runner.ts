@@ -215,10 +215,9 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
   }
 
   try {
-    const finalSubState = await agentLoop(prompt, subModel, subOptions, subCallbacks, subState)
+    const { state: finalSubState, turnCount } = await agentLoop(prompt, subModel, subOptions, subCallbacks, subState)
 
     const finalText = extractFinalText(finalSubState.messages)
-    const turnCount = finalSubState.turnCount
     const toolUseCount = countToolCalls(finalSubState.messages)
 
     // Accumulate sub-agent token usage into parent
@@ -264,6 +263,13 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
   } catch (err) {
     const durationMs = Date.now() - startTime
 
+    // agentLoop catches abort/error internally and returns normally with
+    // an outcome marker, so this catch only fires when something throws
+    // past those guards (usually setup-phase code: knowledge load, slug
+    // generation, etc.). At that point the sub-agent hasn't really
+    // executed any turns, so reporting 0 is honest.
+    const fallbackTurnCount = 0
+
     if (isAbortError(err, parentOptions.abortSignal)) {
       const partial = extractFinalText(subState.messages)
       const text = partial
@@ -276,7 +282,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
         toolCallId,
         finalText: text,
         tokenUsage: subState.tokenUsage,
-        turnCount: subState.turnCount,
+        turnCount: fallbackTurnCount,
         durationMs,
         aborted: true,
       })
@@ -284,7 +290,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
       return {
         resultText: text,
         tokenUsage: subState.tokenUsage,
-        turnCount: subState.turnCount,
+        turnCount: fallbackTurnCount,
         toolCallCount: toolUseCount,
         durationMs,
         aborted: true,
@@ -300,7 +306,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
       toolCallId,
       finalText: `[Sub-agent failed: ${message}]`,
       tokenUsage: subState.tokenUsage,
-      turnCount: subState.turnCount,
+      turnCount: fallbackTurnCount,
       durationMs,
       aborted: false,
     })
@@ -308,7 +314,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     return {
       resultText: `[Sub-agent failed: ${message}]`,
       tokenUsage: subState.tokenUsage,
-      turnCount: subState.turnCount,
+      turnCount: fallbackTurnCount,
       toolCallCount: toolUseCount,
       durationMs,
       aborted: false,

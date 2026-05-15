@@ -54,6 +54,20 @@ export type { LoopState } from './loop-state.js'
 // Re-exported for the CLI's resume / manual-compact path (see use-agent.ts).
 export { compressMessages } from './compression.js'
 
+/** What `agentLoop` returns to its caller.
+ *
+ *  - `state` is the long-lived session state (messages, tokenUsage, etc.).
+ *    The main interactive CLI stores it in `loopStateRef` and feeds it
+ *    back as `existingState` on the next user submit.
+ *  - `turnCount` is how many rounds of streamText this single invocation
+ *    ran. It's NOT on `state` because that would imply it accumulates
+ *    across submits — it doesn't. Sub-agent runner and `--print` mode
+ *    are the real consumers; the main interactive loop ignores it. */
+export interface AgentLoopResult {
+  state: LoopState
+  turnCount: number
+}
+
 /** Consume streamText output, dispatching chunks to the UI via callbacks.
  *  Reasoning-delta chunks (thinking-mode models — DeepSeek-reasoner, o1,
  *  etc.) are deliberately ignored: that's the model's internal chain of
@@ -211,6 +225,9 @@ async function runTurn(
   callbacks: AgentCallbacks,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   effectiveTools: Record<string, any>,
+  /** Current turn number — diagnostic only, threaded in so the debug log
+   *  can tag each finish with which iteration of the outer loop it was. */
+  turn: number,
 ): Promise<TurnOutcome> {
   // Defensive sweep BEFORE every API call: if the previous turn left
   // an assistant tool_call without a paired tool_result anywhere in
@@ -313,7 +330,7 @@ async function runTurn(
     const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks)
     debugLog(
       'turn.finish',
-      `reason=${finishReason} turn=${state.turnCount} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
+      `reason=${finishReason} turn=${turn} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
     )
     return { kind: 'done', finishReason, result }
   } catch (err) {
@@ -331,9 +348,16 @@ export async function agentLoop(
   options: AgentOptions,
   callbacks: AgentCallbacks,
   existingState?: LoopState,
-): Promise<LoopState> {
+): Promise<AgentLoopResult> {
   const state = existingState ?? createLoopState(options.permissionMode ?? 'default')
   state.messages.push({ role: 'user', content: userMessage })
+
+  // Per-invocation turn counter. Scoped to this single `agentLoop` call
+  // — re-entering the function (next user submit) starts at 0 again.
+  // This is the structural fix for the "Reached maximum turns" bug
+  // that fired on later submits because the counter used to live on
+  // `state` and accumulate across the whole CLI session.
+  let turn = 0
 
   // Derive the session task-slug ONCE per session, on the first turn.
   // Drives session-usage filenames (`<slug>-<sessionId>.usage.json`)
@@ -412,8 +436,11 @@ export async function agentLoop(
   // the only case where the post-turn memory extractor should run.
   let completedNormally = false
 
-  while (state.turnCount < options.maxTurns) {
-    state.turnCount++
+  // No `maxTurns` → run until the model says stop or the user aborts.
+  // This is the default for interactive mode (and Codex's main loop has
+  // no cap at all). `--print` and sub-agents pass a value.
+  while (options.maxTurns === undefined || turn < options.maxTurns) {
+    turn++
 
     // Sweep any unpersisted messages from the prior iteration (or the
     // initial user message on iter 1) into the jsonl. Diff-based: only
@@ -449,13 +476,13 @@ export async function agentLoop(
     }
     const systemPrompt = state.systemPromptCache
 
-    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools)
+    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turn)
 
     if (outcome.kind === 'error') break
     if (outcome.kind === 'aborted') break
     if (outcome.kind === 'retry') {
       // Don't count a failed attempt that got recovered via reactive compaction.
-      state.turnCount--
+      turn--
       continue
     }
 
@@ -481,10 +508,7 @@ export async function agentLoop(
     if (outcome.finishReason === 'length') {
       if (continuationAttempts < MAX_CONTINUATIONS) {
         continuationAttempts++
-        debugLog(
-          'turn.length-continuation',
-          `attempt=${continuationAttempts}/${MAX_CONTINUATIONS} turn=${state.turnCount}`,
-        )
+        debugLog('turn.length-continuation', `attempt=${continuationAttempts}/${MAX_CONTINUATIONS} turn=${turn}`)
         // Nudge the model to pick up exactly where it stopped. This goes
         // into state.messages but NOT into UI messages, so the user sees
         // one continuous streamed reply with at most a brief pause.
@@ -512,15 +536,14 @@ export async function agentLoop(
     break
   }
 
-  // Only report "max turns reached" when the loop genuinely ran out of
-  // budget without a clean finish. The `&& !completedNormally` guard
-  // matters at the boundary where the model's final 'stop' lands on the
-  // exact turn that equals maxTurns: prior to this guard we'd both break
-  // out of the loop normally AND fire the error message, which is a lie.
-  // Most relevant to the memory-extractor sub-loop (maxTurns=3, often
-  // genuinely finishes on turn 2 or 3) but the same bug existed for any
-  // user who set --max-turns N and got a clean reply on turn N.
-  if (state.turnCount >= options.maxTurns && !completedNormally) {
+  // Only report "max turns reached" when:
+  //   1. A cap was actually set (interactive mode has none — there's no
+  //      cap to "reach"), AND
+  //   2. We hit it, AND
+  //   3. The model didn't already finish cleanly on the same turn — the
+  //      `!completedNormally` guard handles the boundary where 'stop'
+  //      lands exactly on the maxTurns-th turn.
+  if (options.maxTurns !== undefined && turn >= options.maxTurns && !completedNormally) {
     callbacks.onError(new Error(`Reached maximum turns (${options.maxTurns}). Stopping agent loop.`))
   }
 
@@ -547,7 +570,7 @@ export async function agentLoop(
     })
   }
 
-  return state
+  return { state, turnCount: turn }
 }
 
 /** Sync any in-memory messages to the session jsonl. Called on exit /
