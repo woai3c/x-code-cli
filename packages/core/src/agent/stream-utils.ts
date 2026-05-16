@@ -10,6 +10,11 @@ export interface StreamResult {
     input?: unknown
     output?: unknown
     toolCallId?: string
+    /** When `type === 'error'`, the SDK's wrapped provider error. The SDK
+     *  does NOT throw from fullStream iteration on request failure — it
+     *  enqueues this chunk and closes the stream (stream-text.ts:1910).
+     *  Our streamChunksToUI re-throws so the outer try/catch can classify. */
+    error?: unknown
   }>
   response: Promise<{ messages: ModelMessage[] }>
   usage: Promise<

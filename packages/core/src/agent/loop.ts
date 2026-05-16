@@ -75,6 +75,16 @@ export interface AgentLoopResult {
  *  as regular text-delta chunks. */
 async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks): Promise<void> {
   for await (const chunk of result.fullStream) {
+    if (chunk.type === 'error') {
+      // AI SDK doesn't throw from fullStream iteration on request failure —
+      // it enqueues this chunk and closes the stream (stream-text.ts:1910).
+      // Without this re-throw the loop completes normally, then
+      // `await result.response` rejects with NoOutputGeneratedError —
+      // user sees that generic message instead of the real provider error
+      // (e.g. "insufficient balance"). Throw the original wrapped error so
+      // the outer try/catch can pass it to classifyApiError.
+      throw chunk.error instanceof Error ? chunk.error : new Error(String(chunk.error))
+    }
     if (chunk.type === 'text-delta') {
       const text = chunk.text ?? ''
       debugLog('stream.text-delta', text)
@@ -289,6 +299,15 @@ async function runTurn(
       // drift too fast to keep a strict union in sync. The runtime contract
       // is narrow JSON and we cast here at the single call site.
       providerOptions: mergedProviderOptions as Parameters<typeof streamText>[0]['providerOptions'],
+      // Suppress the SDK's default onError, which is `console.error(error)`
+      // and dumps the full RetryError object (stack + nested APICallError
+      // array + provider response bodies) via util.inspect to stderr. We
+      // already classify and surface a one-line user-friendly message via
+      // classifyApiError + callbacks.onError in the try/catch blocks below.
+      // The raw dump scares users and isn't actionable. Keep a debug hatch.
+      onError: ({ error }) => {
+        if (process.env.DEBUG_STDOUT) debugLog('stream.onError', String(error))
+      },
     }) as unknown as StreamResult
   } catch (err) {
     if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }

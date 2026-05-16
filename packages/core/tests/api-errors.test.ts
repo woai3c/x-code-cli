@@ -30,6 +30,9 @@ describe('isContextTooLongError', () => {
   it('returns false for unrelated errors', () => {
     expect(isContextTooLongError(new Error('network timeout'))).toBe(false)
   })
+  it('detects HTTP 413 (permanentErrorFetch rewrites context overflow to 413)', () => {
+    expect(isContextTooLongError(new Error('Request failed with status code 413'))).toBe(true)
+  })
 })
 
 describe('classifyApiError', () => {
@@ -58,9 +61,47 @@ describe('classifyApiError', () => {
     expect(result.retryable).toBe(false)
   })
 
+  it('classifies Moonshot suspended-account billing error (HTTP 429 body)', () => {
+    // Real Moonshot error: HTTP 429 with body saying the account is
+    // suspended for insufficient balance. Must classify as billing (not
+    // rate-limit) so the user is told to top up / switch provider rather
+    // than told to wait for a retry.
+    const result = classifyApiError(
+      new Error(
+        'Your account org-xxx <ak-yyy> is suspended due to insufficient balance, please recharge your account (429)',
+      ),
+    )
+    expect(result.message).toContain('balance insufficient')
+    expect(result.retryable).toBe(false)
+  })
+
   it('classifies 403 forbidden', () => {
     const result = classifyApiError(new Error('Request failed with status code 403'))
     expect(result.message).toContain('forbidden')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies 404 model not found by status', () => {
+    const result = classifyApiError(new Error('Request failed with status code 404'))
+    expect(result.message).toContain('Model not found')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies model_not_found by body keyword', () => {
+    const result = classifyApiError(new Error('The model `kimi-k99` does not exist (500)'))
+    expect(result.message).toContain('Model not found')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies 422 content policy by status', () => {
+    const result = classifyApiError(new Error('Request failed with status code 422'))
+    expect(result.message).toContain('safety filter')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies content_filter by body keyword', () => {
+    const result = classifyApiError(new Error('content_filter_triggered: prompt rejected (500)'))
+    expect(result.message).toContain('safety filter')
     expect(result.retryable).toBe(false)
   })
 

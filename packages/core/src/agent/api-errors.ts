@@ -17,9 +17,12 @@ export function extractHttpStatus(msg: string): number {
   return match ? Number(match[1]) : 0
 }
 
-/** True when an error message indicates the request exceeded the context window. */
+/** True when an error message indicates the request exceeded the context window.
+ *  Also matches HTTP 413, which `permanentErrorFetch` rewrites context-overflow
+ *  responses to so the SDK marks them non-retryable. */
 export function isContextTooLongError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
+  if (extractHttpStatus(msg) === 413) return true
   for (const pattern of CONTEXT_TOO_LONG_PATTERNS) {
     if (msg.includes(pattern)) return true
   }
@@ -51,12 +54,24 @@ function isUnauthorizedError(msg: string, status: number): boolean {
 }
 
 function isInsufficientBalanceError(msg: string, status: number): boolean {
+  if (status === 402) return true
+  // Case-insensitive: providers are inconsistent — DeepSeek returns
+  // "Insufficient Balance", OpenAI uses "insufficient_quota", Moonshot
+  // returns HTTP 429 with body "is suspended due to insufficient balance,
+  // please recharge your account" (lowercase, spaced). Without the
+  // permissive match Moonshot's billing failure falls through to the 429
+  // rate-limit branch and gets retried 4 times before surfacing as a
+  // RetryError, which is the exact opposite of what the user needs.
+  const lower = msg.toLowerCase()
   return (
-    status === 402 ||
-    msg.includes('Insufficient Balance') ||
-    msg.includes('insufficient_balance') ||
-    msg.includes('insufficient_quota') ||
-    msg.includes('exceeded your current quota')
+    lower.includes('insufficient balance') ||
+    lower.includes('insufficient_balance') ||
+    lower.includes('insufficient_quota') ||
+    lower.includes('insufficient quota') ||
+    lower.includes('exceeded your current quota') ||
+    lower.includes('exceeded_current_quota') ||
+    lower.includes('suspended due to insufficient') ||
+    lower.includes('please recharge')
   )
 }
 
@@ -75,6 +90,37 @@ function isMaxTokensError(msg: string): boolean {
 
 function isServiceUnavailableError(msg: string, status: number): boolean {
   return status === 503 || msg.includes('Service Unavailable') || msg.includes('overloaded')
+}
+
+/** Provider safety/moderation filter blocked the content. permanentErrorFetch
+ *  rewrites matching bodies to HTTP 422 so this fires on status alone; the
+ *  pattern fallback catches cases that bypass the fetch shim (other entry
+ *  points, alternate providers). */
+function isContentPolicyError(msg: string, status: number): boolean {
+  if (status === 422) return true
+  const lower = msg.toLowerCase()
+  return (
+    lower.includes('content_policy_violation') ||
+    lower.includes('content_filter_triggered') ||
+    lower.includes('content_filter') ||
+    lower.includes('content_policy') ||
+    lower.includes('input_blocked') ||
+    lower.includes('harmful_content') ||
+    lower.includes('safety_violation')
+  )
+}
+
+/** Model id unknown to the provider (typo / deprecated / not entitled).
+ *  permanentErrorFetch normalizes matching 5xx/429 bodies to 404; the pattern
+ *  list catches providers that already return 404 with a descriptive body. */
+function isModelNotFoundError(msg: string, status: number): boolean {
+  if (status === 404) return true
+  const lower = msg.toLowerCase()
+  // "model ... does not exist" — OpenAI inserts the model name between
+  // the two tokens, so we can't match the literal phrase; require both
+  // tokens present anywhere in the body.
+  if (lower.includes('model') && lower.includes('does not exist')) return true
+  return lower.includes('model_not_found') || lower.includes('model not found') || lower.includes('unknown model')
 }
 
 function isRateLimitedError(msg: string, status: number): boolean {
@@ -177,6 +223,20 @@ export function classifyApiError(err: unknown): ClassifiedError {
   if (isForbiddenError(msg, status)) {
     return {
       message: 'API access forbidden (403). Your API key may not have permission for this model.',
+      retryable: false,
+    }
+  }
+  if (isModelNotFoundError(msg, status)) {
+    return {
+      message:
+        'Model not found (404). The id may be wrong, deprecated, or not enabled for your account. Switch with /model.',
+      retryable: false,
+    }
+  }
+  if (isContentPolicyError(msg, status)) {
+    return {
+      message:
+        "Content blocked by the provider's safety filter (422). Rephrase the request or try a different model with /model.",
       retryable: false,
     }
   }
