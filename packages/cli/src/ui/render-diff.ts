@@ -179,7 +179,14 @@ function renderHunks(
   // Gutter format: " <num> <sigil> " — 1 leading space + num + 1 space +
   // sigil + 1 trailing space.
   const gutterWidth = lineNumWidth + 4
-  const codeWidth = Math.max(1, cols - RESULT_INDENT.length - gutterWidth)
+  // Reserve 1 trailing cell of safety: `-`/`+` rows pad their code column
+  // with bg-colored spaces so the diff band reaches the right edge. If the
+  // row's printable width hits exactly `cols`, the terminal enters
+  // delayed-wrap state at the last column; Windows conhost / Windows
+  // Terminal in some configurations counts that as a wrap and inserts a
+  // phantom blank row below every padded `-`/`+` line. Leaving one cell
+  // unpainted keeps the cursor strictly inside the row.
+  const codeWidth = Math.max(1, cols - RESULT_INDENT.length - gutterWidth - 1)
   const lang = detectLanguage(payload.filePath)
 
   const out: string[] = []
