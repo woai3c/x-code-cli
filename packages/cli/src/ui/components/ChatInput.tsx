@@ -371,13 +371,13 @@ const S_SUCCESS_DOT_DIM = '\x1b[0m\x1b[38;2;78;186;101;2m'
 // Must start with `\x1b[0m` to reset any prior foreground so bold doesn't
 // inherit a color from the preceding cell (same reasoning as S_DIM).
 const S_BOLD = '\x1b[0m\x1b[1m'
-// BLUE_PURPLE (permission rgb(177,185,249) #b1b9f9) — used for the
+// BLUE_PURPLE (permission #99ccff) — used for the
 // `(preview)` inside the live tool bubble to match committed
 // `c.hex(BLUE_PURPLE)('(...)')`. Previously used S_SPINNER blue here
 // (147,165,255) which is a DIFFERENT shade, producing a visible
 // color shift at the live→committed handoff.
-const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;177;185;249m'
-const S_BLUE_PURPLE_BOLD = '\x1b[0m\x1b[38;2;177;185;249;1m'
+const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;153;204;255m'
+const S_BLUE_PURPLE_BOLD = '\x1b[0m\x1b[38;2;153;204;255;1m'
 const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
 const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
 const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'

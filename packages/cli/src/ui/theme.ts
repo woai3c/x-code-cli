@@ -27,8 +27,8 @@ export const ACCENT_DIM = '#999999'
 /** System spinner blue (`claudeBlue_FOR_SYSTEM_SPINNER = rgb(147,165,255)`) */
 export const SPINNER_BLUE = '#93a5ff'
 
-/** Light blue-purple — permission dialogs, suggestions, highlights (`permission = rgb(177,185,249)`) */
-export const BLUE_PURPLE = '#b1b9f9'
+/** Light blue-purple — permission dialogs, suggestions, highlights (`permission = rgb(153,204,255)`) */
+export const BLUE_PURPLE = '#99ccff'
 
 /** Success / completed / diff-added (`success = rgb(78,186,101)`) */
 export const SUCCESS = '#4eba65'
