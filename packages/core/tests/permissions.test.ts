@@ -174,15 +174,55 @@ describe('extractCommandPrefix', () => {
     expect(extractCommandPrefix('npm install lodash')).toBe('npm install')
   })
 
-  it('strips env-var prefixes', () => {
+  it('strips whitelisted env-var prefixes', () => {
     expect(extractCommandPrefix('NODE_ENV=prod npm run dev')).toBe('npm run')
-    expect(extractCommandPrefix('FOO=1 BAR=2 git status')).toBe('git status')
+    expect(extractCommandPrefix('CI=1 DEBUG=foo npm test')).toBe('npm test')
+    expect(extractCommandPrefix('LANG=en_US.UTF-8 NODE_ENV=prod git status')).toBe('git status')
+  })
+
+  it('returns null for unsafe env-var prefixes', () => {
+    // Non-whitelisted assignment must block prefix extraction — otherwise
+    // a once-approved `npm run dev` rule would also auto-approve
+    // `BACKDOOR=1 npm run dev`. Forces exact-match fallback.
+    expect(extractCommandPrefix('FOO=1 git status')).toBeNull()
+    expect(extractCommandPrefix('PATH=/evil:$PATH npm run dev')).toBeNull()
+    expect(extractCommandPrefix('NODE_OPTIONS="--require ./evil.js" npm test')).toBeNull()
+    expect(extractCommandPrefix('http_proxy=http://attacker curl example.com')).toBeNull()
   })
 
   it('returns null for single-token or unprefixable commands', () => {
     expect(extractCommandPrefix('')).toBeNull()
     expect(extractCommandPrefix('ls')).toBeNull()
     expect(extractCommandPrefix('ls -la')).toBeNull()
+  })
+
+  it('skips global flags before the subcommand', () => {
+    // Real failure case: `git -C /tmp commit -m fix` extracted nothing
+    // because token[1] was `-C`, not a subcommand-shaped string.
+    expect(extractCommandPrefix('git -C /tmp commit -m fix')).toBe('git commit')
+    expect(extractCommandPrefix('git --no-pager log --oneline')).toBe('git log')
+    expect(extractCommandPrefix('git -c user.name=foo commit')).toBe('git commit')
+    expect(extractCommandPrefix('git --git-dir=/tmp/.git status')).toBe('git status')
+    expect(extractCommandPrefix('docker -H tcp://host:2375 ps')).toBe('docker ps')
+    expect(extractCommandPrefix('docker --context default ps -a')).toBe('docker ps')
+    expect(extractCommandPrefix('kubectl -n production get pods')).toBe('kubectl get')
+    expect(extractCommandPrefix('kubectl --context prod --namespace foo apply -f k.yaml')).toBe('kubectl apply')
+    expect(extractCommandPrefix('cargo +nightly build --release')).toBe('cargo build')
+    expect(extractCommandPrefix('cargo +stable test')).toBe('cargo test')
+  })
+
+  it('returns null for wrapper commands too broad to anchor a rule on', () => {
+    // Approving `sudo ls` must NOT auto-approve `sudo <anything>`. Same
+    // for env/time/xargs/bash -c. These force exact-match fallback.
+    expect(extractCommandPrefix('sudo npm install')).toBeNull()
+    expect(extractCommandPrefix('sudo apt-get update')).toBeNull()
+    expect(extractCommandPrefix('bash -c "git push"')).toBeNull()
+    expect(extractCommandPrefix('sh -c "rm foo"')).toBeNull()
+    expect(extractCommandPrefix('env FOO=bar npm test')).toBeNull()
+    expect(extractCommandPrefix('time npm run build')).toBeNull()
+    expect(extractCommandPrefix('xargs git add')).toBeNull()
+    expect(extractCommandPrefix('timeout 30 npm test')).toBeNull()
+    expect(extractCommandPrefix('nohup node server.js')).toBeNull()
   })
 
   it('extracts cmdlet from quoted powershell -Command form', () => {

@@ -16,7 +16,131 @@ export interface AllowRule {
 }
 
 // Env-var assignment prefix: VAR=value (unquoted, safe chars only).
-const ENV_VAR_RE = /^[A-Za-z_]\w*=[A-Za-z0-9_./:@-]*\s+/
+// The capture group exposes the name so the whitelist can decide whether
+// to strip the prefix or treat it as a poison pill (see SAFE_ENV_VARS).
+const ENV_VAR_RE = /^([A-Za-z_]\w*)=[A-Za-z0-9_./:@-]*\s+/
+
+// Env-var names safe to strip before deriving a "don't ask again" prefix.
+// Deliberately conservative — anything that could shift program behaviour
+// in security-relevant ways (PATH, LD_*, NODE_OPTIONS, http(s)_proxy,
+// DYLD_*, …) is excluded so a non-whitelisted assignment downgrades the
+// rule to exact-match. Without that, an agent could smuggle unaudited env
+// into an already-approved command shape.
+//
+// Picked to cover the common NODE_ENV / CI / DEBUG / locale / color
+// settings agents emit in practice, mirroring the spirit of Claude Code's
+// SAFE_ENV_VARS list.
+const SAFE_ENV_VARS = new Set([
+  'NODE_ENV',
+  'PYTHONUNBUFFERED',
+  'PYTHONIOENCODING',
+  'PYTHONDONTWRITEBYTECODE',
+  'CI',
+  'DEBUG',
+  'FORCE_COLOR',
+  'NO_COLOR',
+  'CLICOLOR',
+  'CLICOLOR_FORCE',
+  'TERM',
+  'COLORTERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  'LC_TIME',
+  'LC_COLLATE',
+  'TZ',
+  'EDITOR',
+  'VISUAL',
+  'PAGER',
+  'LESS',
+])
+
+// First-token wrappers too broad to anchor a "don't ask again" rule on.
+// `sudo ls` once approved must NOT auto-approve `sudo <anything>`, and we
+// don't (yet) crack open `bash -c "<inner>"` to re-extract — so for these
+// we return null and force exact-match. `sudo` is also caught upstream by
+// isDestructive(); listed here for defence-in-depth.
+const WRAPPER_BLOCKLIST = new Set([
+  'sudo',
+  'doas',
+  'su',
+  'bash',
+  'sh',
+  'zsh',
+  'fish',
+  'dash',
+  'ksh',
+  'cmd',
+  'env',
+  'time',
+  'nice',
+  'ionice',
+  'timeout',
+  'nohup',
+  'xargs',
+  'watch',
+  'parallel',
+  'exec',
+  'eval',
+])
+
+// Per-command global-flag tables: tokens between `cmd` and its real
+// subcommand. Without these, `git -C /tmp commit` would extract `git -C`
+// and miss every prefix rule the user has for `git commit`.
+//
+// `valued` flags consume the following token; everything else starting
+// with `-` is treated as a boolean flag (skip one). `--name=value` is
+// detected by the embedded `=`. `cargo +toolchain` is the one non-flag
+// token kind that needs skipping; gated by `takesPlus`.
+const GLOBAL_FLAGS: Record<string, { valued: Set<string>; takesPlus?: boolean }> = {
+  git: {
+    valued: new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix']),
+  },
+  docker: {
+    valued: new Set([
+      '-H',
+      '--host',
+      '--config',
+      '--context',
+      '-c',
+      '--log-level',
+      '--tlscacert',
+      '--tlscert',
+      '--tlskey',
+    ]),
+  },
+  podman: {
+    valued: new Set(['--connection', '-c', '--log-level', '--root', '--runroot', '--storage-driver', '--url']),
+  },
+  kubectl: {
+    valued: new Set([
+      '-n',
+      '--namespace',
+      '--context',
+      '--cluster',
+      '--kubeconfig',
+      '--server',
+      '-s',
+      '--user',
+      '--token',
+      '--as',
+      '--as-group',
+      '--cache-dir',
+      '--certificate-authority',
+      '--client-certificate',
+      '--client-key',
+    ]),
+  },
+  cargo: {
+    valued: new Set(['--config', '-Z', '--color', '--manifest-path']),
+    takesPlus: true,
+  },
+}
+
+// Subcommand-name shape: lowercase letter, then [a-z0-9-]. Hyphens only
+// internal (no trailing dash). Filters out `-flag`, `/flag`, and paths.
+const SUBCOMMAND_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/
 
 // Detects the `powershell` / `powershell.exe` / `pwsh` invocation prefix.
 // We don't try to match the WHOLE shape here — agents use a lot of flag
@@ -31,12 +155,20 @@ const PS_INNER_CMD_RE = /["']?\s*(?:&\s*\{?\s*)?([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z
 
 /**
  * Extract a command prefix suitable for prefix-match rules.
- * Returns `null` when no meaningful prefix can be derived.
+ * Returns `null` when no meaningful prefix can be safely derived —
+ * callers fall back to exact-match.
  *
  *   'git commit -m "fix"'                                    → 'git commit'
+ *   'git -C /tmp commit -m fix'                              → 'git commit'
+ *   'docker -H tcp://host:2375 ps'                           → 'docker ps'
+ *   'kubectl -n prod get pods'                               → 'kubectl get'
+ *   'cargo +nightly build --release'                         → 'cargo build'
  *   'pnpm run build'                                         → 'pnpm run'
  *   'npm install lodash'                                     → 'npm install'
  *   'NODE_ENV=prod npm run dev'                              → 'npm run'
+ *   'FOO=1 git status'                                       → null   (unsafe env)
+ *   'sudo npm install'                                       → null   (wrapper)
+ *   'bash -c "git status"'                                   → null   (wrapper)
  *   'powershell -Command "Get-CimInstance ..."'              → 'Get-CimInstance'
  *   'powershell -NoProfile -Command "Get-CimInstance ..."'   → 'Get-CimInstance'
  *   'powershell -ExecutionPolicy Bypass -c "git status"'     → 'git'
@@ -46,63 +178,123 @@ const PS_INNER_CMD_RE = /["']?\s*(?:&\s*\{?\s*)?([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z
  *   ''                                                       → null
  */
 export function extractCommandPrefix(command: string): string | null {
-  let cmd = command.trim()
-  while (ENV_VAR_RE.test(cmd)) {
-    cmd = cmd.replace(ENV_VAR_RE, '')
-  }
+  const cmd = command.trim()
+  if (!cmd) return null
 
-  // PowerShell: scan past launcher + flags to find the inner command.
-  // Agents emit varied flag combinations (`-NoProfile`, `-ExecutionPolicy
-  // Bypass`, `-c` vs `-Command`, etc.) — strip them all, then extract the
-  // first cmdlet/command from the remaining string. The earlier regex-based
-  // approach only matched a fixed flag layout and produced null for the
-  // common `-NoProfile` case, hiding the "don't ask again" option.
+  // PowerShell first — its argument syntax doesn't follow the POSIX
+  // VAR=value convention so the env-var stripping below doesn't apply.
   if (POWERSHELL_LAUNCHER_RE.test(cmd)) {
-    const tokens = cmd.split(/\s+/).filter(Boolean)
-    let i = 1 // skip launcher
-    while (i < tokens.length) {
-      const tok = tokens[i]!
-      if (!tok.startsWith('-')) break
-      const lower = tok.toLowerCase()
-      // -Command / -c ends the flag run — what follows is the actual command
-      if (lower === '-command' || lower === '-c') {
-        i++
-        break
-      }
-      // -File <path> — no useful prefix; bail.
-      if (lower === '-file') return null
-      // Flags that take an argument (consume next token too).
-      if (
-        lower === '-executionpolicy' ||
-        lower === '-encodedcommand' ||
-        lower === '-inputformat' ||
-        lower === '-outputformat' ||
-        lower === '-version' ||
-        lower === '-windowstyle' ||
-        lower === '-configurationname' ||
-        lower === '-mta' ||
-        lower === '-sta'
-      ) {
-        i += 2
-        continue
-      }
-      // Boolean flags (no argument): -NoProfile, -NoLogo, -NonInteractive, etc.
-      i++
-    }
-    if (i >= tokens.length) return null
-    const inner = tokens.slice(i).join(' ')
-    const m = PS_INNER_CMD_RE.exec(inner)
-    if (m?.[1]) return m[1]
-    return null
+    return extractPowershellPrefix(cmd)
   }
 
   const tokens = cmd.split(/\s+/).filter(Boolean)
-  if (tokens.length < 2) return null
-  const second = tokens[1]!
-  if (/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(second)) {
-    return `${tokens[0]} ${second}`
+  if (tokens.length === 0) return null
+
+  // Per-token env-var stripping. An env-var-shaped token (NAME=…) at the
+  // head must be either whitelisted or it's a hard stop — otherwise an
+  // agent could smuggle PATH=/evil, NODE_OPTIONS=--require ./evil.js,
+  // http_proxy=…, etc. into a rule shaped like `npm run`. Value chars are
+  // intentionally not constrained at this layer: it's the NAME that gates
+  // safety, and an arbitrary value class would let weird-but-safe values
+  // (`/`, `$`, `:`) bypass the check entirely.
+  let i = 0
+  while (i < tokens.length) {
+    const tok = tokens[i]!
+    const m = /^([A-Za-z_]\w*)=/.exec(tok)
+    if (!m) break
+    if (!SAFE_ENV_VARS.has(m[1]!)) return null
+    // A quoted value split across whitespace (`FOO="a b" cmd`) means our
+    // \s+ tokenizer broke the value boundary. We can't tell where the
+    // value ends without a real shell parser, so refuse the prefix.
+    const value = tok.slice(m[0].length)
+    if (hasUnclosedQuote(value)) return null
+    i++
   }
-  return null
+
+  const rest = tokens.slice(i)
+  if (rest.length < 2) return null
+
+  const firstLower = rest[0]!.toLowerCase()
+  if (WRAPPER_BLOCKLIST.has(firstLower)) return null
+
+  const subIdx = skipGlobalFlags(rest, firstLower)
+  if (subIdx >= rest.length) return null
+
+  const sub = rest[subIdx]!
+  if (!SUBCOMMAND_RE.test(sub)) return null
+
+  return `${rest[0]} ${sub}`
+}
+
+function hasUnclosedQuote(s: string): boolean {
+  let sq = 0
+  let dq = 0
+  for (const ch of s) {
+    if (ch === "'") sq++
+    else if (ch === '"') dq++
+  }
+  return sq % 2 === 1 || dq % 2 === 1
+}
+
+function skipGlobalFlags(tokens: string[], firstLower: string): number {
+  const cfg = GLOBAL_FLAGS[firstLower]
+  if (!cfg) return 1
+  let i = 1
+  while (i < tokens.length) {
+    const tok = tokens[i]!
+    if (cfg.takesPlus && tok.startsWith('+')) {
+      i++
+      continue
+    }
+    if (!tok.startsWith('-')) break
+    // --flag=value: single token, advance once.
+    if (tok.includes('=')) {
+      i++
+      continue
+    }
+    if (cfg.valued.has(tok)) {
+      i += 2
+      continue
+    }
+    // Unknown boolean-style flag — best-effort skip. Erring toward "find
+    // the subcommand" matches what users see at the CLI.
+    i++
+  }
+  return i
+}
+
+function extractPowershellPrefix(cmd: string): string | null {
+  const tokens = cmd.split(/\s+/).filter(Boolean)
+  let i = 1 // skip launcher
+  while (i < tokens.length) {
+    const tok = tokens[i]!
+    if (!tok.startsWith('-')) break
+    const lower = tok.toLowerCase()
+    if (lower === '-command' || lower === '-c') {
+      i++
+      break
+    }
+    if (lower === '-file') return null
+    if (
+      lower === '-executionpolicy' ||
+      lower === '-encodedcommand' ||
+      lower === '-inputformat' ||
+      lower === '-outputformat' ||
+      lower === '-version' ||
+      lower === '-windowstyle' ||
+      lower === '-configurationname' ||
+      lower === '-mta' ||
+      lower === '-sta'
+    ) {
+      i += 2
+      continue
+    }
+    i++
+  }
+  if (i >= tokens.length) return null
+  const inner = tokens.slice(i).join(' ')
+  const m = PS_INNER_CMD_RE.exec(inner)
+  return m?.[1] ?? null
 }
 
 /**
@@ -158,19 +350,24 @@ export function buildAllowRule(
     if (prefix) {
       return { rule: { tool: toolName, pattern: prefix, type: 'prefix' }, persist: true }
     }
-    // Strip env-var prefixes so a `NODE_ENV=prod foo …` approval works
-    // for plain `foo …` later — same key the matcher compares against.
-    const exact = stripEnvVars(cmd)
+    // Strip *safe* env-var prefixes only — same key the matcher compares
+    // against (stripSafeEnvVars). Non-whitelisted assignments stay in the
+    // pattern so an approval for `BACKDOOR=1 findstr …` doesn't
+    // accidentally auto-allow `findstr …` on its own.
+    const exact = stripSafeEnvVars(cmd)
     if (!exact) return null
     return { rule: { tool: toolName, pattern: exact, type: 'exact' }, persist: true }
   }
   return { rule: { tool: toolName, pattern: '*', type: 'tool' }, persist: false }
 }
 
-function stripEnvVars(command: string): string {
+function stripSafeEnvVars(command: string): string {
   let cmd = command.trim()
-  while (ENV_VAR_RE.test(cmd)) {
-    cmd = cmd.replace(ENV_VAR_RE, '')
+  while (true) {
+    const m = ENV_VAR_RE.exec(cmd)
+    if (!m) break
+    if (!SAFE_ENV_VARS.has(m[1]!)) break
+    cmd = cmd.slice(m[0].length)
   }
   return cmd.trim()
 }
@@ -219,7 +416,7 @@ class SessionPermissionStore {
       if (toolName === 'shell') {
         const cmd = (input.command as string) ?? ''
         const prefix = extractCommandPrefix(cmd)
-        if (rule.type === 'exact' && stripEnvVars(cmd) === rule.pattern) return true
+        if (rule.type === 'exact' && stripSafeEnvVars(cmd) === rule.pattern) return true
         if (rule.type === 'prefix' && prefix) {
           if (prefix === rule.pattern) return true
           if (prefix.startsWith(rule.pattern + ' ')) return true
