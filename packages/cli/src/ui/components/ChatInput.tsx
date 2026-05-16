@@ -1445,13 +1445,21 @@ export function ChatInput({
         return
       }
       if (key === 'up') {
-        if (activeMenu === 'at') {
-          if (atMatches.length > 0) setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
-          return
-        }
-        if (matches.length > 0) {
-          setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
-          return
+        // While actively browsing history, keep routing Up to history nav.
+        // Otherwise a restored entry like `/model` auto-opens the slash
+        // suggestion menu, which would steal the next Up press into
+        // completion-cycling (single-item, so effectively a no-op) and
+        // trap the user mid-history.
+        const inHistoryNav = historyIndexRef.current > 0
+        if (!inHistoryNav) {
+          if (activeMenu === 'at') {
+            if (atMatches.length > 0) setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
+            return
+          }
+          if (matches.length > 0) {
+            setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
+            return
+          }
         }
         // Cursor first; fall through to history nav only when the cursor was
         // already on the logical first line (so multi-line drafts and recalled
@@ -1460,13 +1468,16 @@ export function ChatInput({
         return
       }
       if (key === 'down') {
-        if (activeMenu === 'at') {
-          if (atMatches.length > 0) setAtCompletionIndex((p) => (p + 1) % atMatches.length)
-          return
-        }
-        if (matches.length > 0) {
-          setCompletionIndex((p) => (p + 1) % matches.length)
-          return
+        const inHistoryNav = historyIndexRef.current > 0
+        if (!inHistoryNav) {
+          if (activeMenu === 'at') {
+            if (atMatches.length > 0) setAtCompletionIndex((p) => (p + 1) % atMatches.length)
+            return
+          }
+          if (matches.length > 0) {
+            setCompletionIndex((p) => (p + 1) % matches.length)
+            return
+          }
         }
         if (!moveCursorVertically(1)) navigateHistoryDown()
         return
