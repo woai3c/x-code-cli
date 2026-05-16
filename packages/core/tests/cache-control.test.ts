@@ -76,6 +76,98 @@ describe('applyCacheControl', () => {
         expect((after as { providerOptions?: unknown }).providerOptions).toBeUndefined()
       }
     })
+
+    it('tags only the last tool with cache_control', () => {
+      const tools = {
+        read: { description: 'read a file' },
+        write: { description: 'write a file' },
+        edit: { description: 'edit a file' },
+      }
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'anthropic:claude-opus-4-7',
+        sessionId: 'abc',
+      })
+      expect(out.tools).toBeDefined()
+      // Earlier tools should not have providerOptions
+      expect((out.tools!.read as { providerOptions?: unknown }).providerOptions).toBeUndefined()
+      expect((out.tools!.write as { providerOptions?: unknown }).providerOptions).toBeUndefined()
+      const lastOpts = (out.tools!.edit as { providerOptions?: { anthropic?: { cacheControl?: { type: string } } } })
+        .providerOptions?.anthropic?.cacheControl
+      expect(lastOpts?.type).toBe('ephemeral')
+    })
+
+    it('preserves tool key order so the cached prefix stays byte-stable', () => {
+      const tools = { read: {}, write: {}, edit: {}, shell: {} }
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'anthropic:claude-opus-4-7',
+        sessionId: 'abc',
+      })
+      expect(Object.keys(out.tools!)).toEqual(['read', 'write', 'edit', 'shell'])
+    })
+
+    it('does not mutate the input tools record', () => {
+      const tools = { read: { description: 'r' }, write: { description: 'w' } }
+      applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'anthropic:claude-opus-4-7',
+        sessionId: 'abc',
+      })
+      expect((tools.write as { providerOptions?: unknown }).providerOptions).toBeUndefined()
+    })
+
+    it('handles missing tools gracefully', () => {
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        modelId: 'anthropic:claude-opus-4-7',
+        sessionId: 'abc',
+      })
+      expect(out.tools).toBeUndefined()
+    })
+
+    it('handles empty tools record', () => {
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools: {},
+        modelId: 'anthropic:claude-opus-4-7',
+        sessionId: 'abc',
+      })
+      expect(out.tools).toEqual({})
+    })
+
+    it('merges with any pre-existing tool providerOptions', () => {
+      const tools = {
+        read: {},
+        write: {
+          providerOptions: { anthropic: { cacheControl: { type: 'persistent' }, deferLoading: true } },
+        },
+      }
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'anthropic:claude-opus-4-7',
+        sessionId: 'abc',
+      })
+      const writeOpts = (
+        out.tools!.write as {
+          providerOptions?: { anthropic?: { cacheControl?: { type: string }; deferLoading?: boolean } }
+        }
+      ).providerOptions?.anthropic
+      // Our ephemeral mark overrides whatever was there, but unrelated keys
+      // (deferLoading) are preserved.
+      expect(writeOpts?.cacheControl?.type).toBe('ephemeral')
+      expect(writeOpts?.deferLoading).toBe(true)
+    })
   })
 
   describe('openai', () => {
@@ -102,6 +194,18 @@ describe('applyCacheControl', () => {
       expect(out.system).toBe('sys')
       expect(out.messages).toHaveLength(baseMessages.length)
     })
+
+    it('passes tools through untouched', () => {
+      const tools = { read: { description: 'r' }, write: { description: 'w' } }
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'openai:gpt-4.1',
+        sessionId: 'abc',
+      })
+      expect(out.tools).toBe(tools)
+    })
   })
 
   describe('openai-compatible (deepseek, moonshot, alibaba, zhipu)', () => {
@@ -113,15 +217,18 @@ describe('applyCacheControl', () => {
       ['xai:grok-3'],
       ['google:gemini-2.5-pro'],
     ])('leaves everything untouched for %s', (modelId) => {
+      const tools = { read: { description: 'r' } }
       const out = applyCacheControl({
         system: 'sys',
         messages: baseMessages,
+        tools,
         modelId,
         sessionId: 'abc',
       })
       expect(out.system).toBe('sys')
       expect(out.messages).toEqual(baseMessages)
       expect(out.providerOptions).toBeUndefined()
+      expect(out.tools).toBe(tools)
     })
   })
 })

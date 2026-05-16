@@ -4,11 +4,16 @@
 // providers offer it, but the activation protocol differs:
 //
 //   Anthropic   — set `cacheControl: { type: 'ephemeral' }` on the SYSTEM
-//                 message and the LAST two non-system messages (three
-//                 breakpoints total, under the API's limit of four). The
-//                 content at each breakpoint is cached server-side with a
-//                 5-minute TTL; subsequent requests that share the exact
-//                 prefix hit the cache and only pay for the uncached tail.
+//                 message, the LAST tool definition (caching the whole
+//                 tools schema in one breakpoint), and the LAST two
+//                 non-system messages — four breakpoints total, exactly
+//                 the API's limit. The content at each breakpoint is
+//                 cached server-side with a 5-minute TTL; subsequent
+//                 requests that share the exact prefix hit the cache and
+//                 only pay for the uncached tail. Tools schema is the
+//                 highest-leverage slot — it's the same bytes on every
+//                 turn and runs into the thousands of tokens once the
+//                 full tool set is registered.
 //
 //   OpenAI      — automatic prefix caching, but setting `promptCacheKey`
 //                 (routes identical keys to the same cache shard) and `store`
@@ -33,9 +38,10 @@ import { providerOf } from './capabilities.js'
 
 /** Max messages we attach an Anthropic cache breakpoint to. Anthropic allows
  *  up to 4 `cache_control` blocks per request; we spend one on the system
- *  prompt, leaving three for the message tail. Two is the sweet spot from
- *  opencode's testing — a third breakpoint costs a cache-write against a
- *  region (the just-before-last message) that's about to be evicted anyway. */
+ *  prompt and one on the last tool definition, leaving two for the message
+ *  tail. Two is the sweet spot from opencode's testing — a third message
+ *  breakpoint costs a cache-write against a region (the just-before-last
+ *  message) that's about to be evicted anyway. */
 const MESSAGE_CACHE_BREAKPOINTS = 2
 
 export interface CacheControlArgs {
@@ -44,6 +50,12 @@ export interface CacheControlArgs {
   system: string
   /** Conversation messages to send. */
   messages: ModelMessage[]
+  /** Tool registry passed to streamText. For Anthropic we tag the last entry
+   *  with cache_control so the whole tools schema enters the cache prefix.
+   *  buildTools() returns the same Record reference for the session, so key
+   *  order — and therefore the cached prefix — is byte-stable across turns. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tools?: Record<string, any>
   /** provider:model id used to select the caching strategy. */
   modelId: string
   /** Stable per-session key. Used by OpenAI's `promptCacheKey` to pin
@@ -57,6 +69,11 @@ export interface CacheControlResult {
    *  called without a separate `system` param. */
   system?: string
   messages: ModelMessage[]
+  /** For Anthropic, a shallow-cloned tools record with cache_control attached
+   *  to the last entry. Other providers get the input record returned as-is
+   *  (or undefined if none was passed). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tools?: Record<string, any>
   /** Top-level providerOptions to pass through to streamText. */
   providerOptions?: Record<string, unknown>
 }
@@ -103,6 +120,7 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     return {
       system: undefined,
       messages: [anthropicSystemMessage(args.system), ...tagged],
+      tools: tagLastTool(args.tools),
     }
   }
 
@@ -113,6 +131,7 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     return {
       system: args.system,
       messages: args.messages,
+      tools: args.tools,
       providerOptions: {
         openai: { promptCacheKey: args.sessionId, store: false },
       },
@@ -122,5 +141,28 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
   // OpenAI-compatible & Gemini: no explicit flags, just rely on stable prefix.
   // Callers must ensure buildSystemPrompt is cached in LoopState so the same
   // system string is re-sent every turn.
-  return { system: args.system, messages: args.messages }
+  return { system: args.system, messages: args.messages, tools: args.tools }
+}
+
+/** Shallow-clone `tools` and attach an Anthropic cache_control breakpoint to
+ *  the last entry, so the entire tools schema enters one cached prefix slot.
+ *  Returns the input unchanged when there are no tools — Anthropic rejects
+ *  empty `cache_control` on a non-existent block and there's nothing to
+ *  cache anyway. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function tagLastTool(tools: Record<string, any> | undefined): Record<string, any> | undefined {
+  if (!tools) return tools
+  const names = Object.keys(tools)
+  if (names.length === 0) return tools
+  const lastName = names[names.length - 1]
+  const lastTool = tools[lastName]
+  const existing = (lastTool?.providerOptions ?? {}) as Record<string, Record<string, unknown>>
+  const tagged = {
+    ...lastTool,
+    providerOptions: {
+      ...existing,
+      anthropic: { ...(existing.anthropic ?? {}), cacheControl: { type: 'ephemeral' } },
+    },
+  }
+  return { ...tools, [lastName]: tagged }
 }

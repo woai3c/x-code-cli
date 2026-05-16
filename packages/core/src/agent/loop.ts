@@ -257,12 +257,14 @@ async function runTurn(
   await downgradeBinaryPartsForProvider(state.messages, options.modelId)
 
   // Per-provider prompt caching: Anthropic gets cache_control breakpoints on
-  // the system prompt + last two messages; OpenAI gets a stable
-  // promptCacheKey keyed on sessionId; OpenAI-compatible providers rely on
-  // the system-prompt cache in LoopState keeping the prefix byte-stable.
+  // the system prompt + last tool + last two messages (4 total, the API
+  // maximum); OpenAI gets a stable promptCacheKey keyed on sessionId;
+  // OpenAI-compatible providers rely on the system-prompt cache in LoopState
+  // keeping the prefix byte-stable.
   const cached = applyCacheControl({
     system: systemPrompt,
     messages: state.messages,
+    tools: effectiveTools,
     modelId: options.modelId,
     sessionId: state.sessionId,
   })
@@ -285,7 +287,7 @@ async function runTurn(
       model,
       system: cached.system,
       messages: cached.messages,
-      tools: effectiveTools,
+      tools: cached.tools ?? effectiveTools,
       maxRetries: 3,
       abortSignal: options.abortSignal,
       // Explicit ceiling so provider defaults don't silently truncate long
