@@ -1,3 +1,33 @@
+## v0.2.9 (2026-05-16)
+
+### Bug Fixes
+
+- short-circuit retries on permanent provider errors (0768329)
+- keep arrow-history nav working on slash entries (b6a77ef)
+- leave 1 cell margin to avoid phantom blank rows (383e35b)
+
+## v0.2.8 (2026-05-12)
+
+No user-facing changes.
+
+## v0.2.7 (2026-05-12)
+
+### Bug Fixes
+
+- scope turnCount per agentLoop call, drop default cap (d960288)
+
+## v0.2.6 (2026-05-10)
+
+### Features
+
+- up/down arrow recall of submitted prompts (5d220ad)
+
+### Bug Fixes
+
+- preserve role alternation in repairOrphanToolCalls (d43e3cb)
+- graceful startup fallback + --continue in print mode (74eb53e)
+- await saveSession before exit (36f8ee5)
+
 ## v0.2.5 (2026-05-10)
 
 ### Bug Fixes

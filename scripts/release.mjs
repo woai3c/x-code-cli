@@ -9,11 +9,13 @@ const currentVersion = JSON.parse(readFileSync(resolve(rootDir, packages[0]), 'u
 
 function run(cmd, opts) {
   console.log(`\n> ${cmd}`)
-  return execSync(cmd, { stdio: 'inherit', cwd: rootDir, ...opts })
+  // Use shell: true for cross-platform compatibility (Windows needs this for some commands)
+  return execSync(cmd, { stdio: 'inherit', cwd: rootDir, shell: true, ...opts })
 }
 
 function runCapture(cmd) {
-  return execSync(cmd, { cwd: rootDir, encoding: 'utf-8' }).trim()
+  // Use shell: true for cross-platform compatibility (Windows cmd.exe vs Unix sh)
+  return execSync(cmd, { cwd: rootDir, encoding: 'utf-8', shell: true }).trim()
 }
 
 function ask(question) {
@@ -48,7 +50,13 @@ function updatePackageVersion(pkgPath, version) {
 }
 
 function generateChangelog(version) {
-  const lastTag = runCapture('git describe --tags --abbrev=0 2>/dev/null || echo ""')
+  // Use try-catch instead of Unix shell operators (2>/dev/null || echo) for Windows compatibility
+  let lastTag
+  try {
+    lastTag = runCapture('git describe --tags --abbrev=0')
+  } catch {
+    lastTag = ''
+  }
   const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
   const log = runCapture(`git log ${range} --pretty=format:"%s (%h)" --no-merges`)
 
