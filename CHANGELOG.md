@@ -1,3 +1,13 @@
+## v0.2.10 (2026-05-16)
+
+### Bug Fixes
+
+- tighten shell prefix extraction (ad57bdf)
+
+### Performance
+
+- cache Anthropic tools schema as 4th breakpoint (3c86961)
+
 ## v0.2.9 (2026-05-16)
 
 ### Bug Fixes
