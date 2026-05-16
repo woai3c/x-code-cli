@@ -65,7 +65,7 @@ ${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be comprehensive enough that t
   {
     name: 'general-purpose',
     description:
-      "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you're searching for a keyword or file and not confident the first few tries will hit, delegate the search here.",
+      'General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.',
     prompt: `You are a general-purpose agent. You have access to the full tool set — read files, search code, run shell commands, and write/edit files when the task genuinely requires it. Complete the task fully, but don't gold-plate.
 
 Guidelines:
