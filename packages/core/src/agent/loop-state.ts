@@ -43,8 +43,9 @@ export interface LoopState {
    *  tool. Full-replacement semantics — every todoWrite call rewrites
    *  this array. In-memory only, never persisted. Auto-cleared back
    *  to [] when the model submits a list with all items completed.
-   *  Survives `/clear` (matches Claude Code) so a multi-feature
-   *  checklist isn't wiped by an unrelated context reset. */
+   *  Cleared on `/clear` and `/resume` (the new LoopState starts
+   *  fresh with []); preserved across `/compact` so a multi-step
+   *  task survives history summarisation. */
   todos: TodoItem[]
   /** Number of messages already persisted to the session jsonl file.
    *  The agent loop calls `flushPendingMessages` at turn boundaries,
