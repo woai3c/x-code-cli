@@ -4,6 +4,8 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
+import { isMcpCallableName } from '../mcp/name-mangling.js'
+import { classifyDecision } from '../mcp/permissions.js'
 import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
@@ -17,6 +19,18 @@ import type { LoopState } from './loop-state.js'
 import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
+
+/** Detect AbortError from any source. Kept local (duplicates the helper
+ *  in loop.ts) because making it a shared utility would force a new
+ *  module just for six lines. Same logic both places. */
+function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) return true
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return true
+    if (/aborted|AbortError/i.test(err.message)) return true
+  }
+  return false
+}
 
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
@@ -255,6 +269,76 @@ async function handleTask(ctx: HandlerCtx): Promise<void> {
   pushToolResult(state, callbacks, toolCallId, toolName, `${result.resultText}\n${statsLine}`)
 }
 
+/** ── listMcpResources ──
+ *  Pure read against the in-memory registry; no side effects, no need
+ *  for loop-guard or permission. Server filter is optional. */
+async function handleListMcpResources(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, options, callbacks } = ctx
+  const registry = options.mcpRegistry
+  if (!registry) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString('MCP not configured'), true)
+    return
+  }
+  const filter = (input.server as string | undefined)?.trim() || undefined
+  const items = registry.listResources().filter((r) => !filter || r.serverName === filter)
+  if (items.length === 0) {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      filter ? `No resources on server "${filter}".` : 'No resources from any connected MCP server.',
+    )
+    return
+  }
+  const lines = items.map((r) => {
+    const mime = r.mimeType ? ` (${r.mimeType})` : ''
+    const desc = r.description ? `\n    ${r.description}` : ''
+    return `${r.uri}\t[${r.serverName}] ${r.name}${mime}${desc}`
+  })
+  pushToolResult(state, callbacks, toolCallId, toolName, lines.join('\n'))
+}
+
+/** ── readMcpResource ──
+ *  Forwards to the owning server's client. Errors / abort handled the
+ *  same way as MCP tool calls. */
+async function handleReadMcpResource(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, options, callbacks } = ctx
+  const registry = options.mcpRegistry
+  if (!registry) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString('MCP not configured'), true)
+    return
+  }
+  const uri = (input.uri as string | undefined) ?? ''
+  if (!uri) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString('Missing `uri` argument'), true)
+    return
+  }
+  const client = registry.resourceServer(uri)
+  if (!client) {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      toolErrorString(`Resource URI not known: ${uri} — call listMcpResources first`),
+      true,
+    )
+    return
+  }
+  reportProgress(toolCallId, `Reading ${uri}`)
+  try {
+    const result = await client.readResource(uri, options.abortSignal)
+    pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(result.text))
+  } catch (err) {
+    if (isAbortError(err, options.abortSignal)) {
+      pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+      return
+    }
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorFromUnknown(err), true)
+  }
+}
+
 /** Manual tools that bypass the loop guard and the writeFile/edit/shell
  *  permission + execution pipeline below. Each handler owns its own
  *  pushToolResult call. Adding a new bypass tool is a one-line entry here. */
@@ -267,6 +351,8 @@ const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
     handleEnterPlanMode(input, toolCallId, state, options, callbacks, pushToolResult),
   exitPlanMode: ({ input, toolCallId, state, callbacks }) =>
     handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult),
+  listMcpResources: handleListMcpResources,
+  readMcpResource: handleReadMcpResource,
 }
 
 /** Run the loop-guard machinery for a non-bypass tool. Returns true if the
@@ -408,6 +494,15 @@ async function handleToolCall(
     return
   }
 
+  // MCP tools route through their own permission path (per-tool ask +
+  // always-allow file) rather than the writeFile/edit/shell rules. They
+  // still go through the loop-guard so the model can't spin on a
+  // failing MCP call indefinitely.
+  if (isMcpCallableName(ctx.toolName)) {
+    await handleMcpToolCall(ctx, deferred)
+    return
+  }
+
   if (await applyLoopGuard(ctx, deferred)) return
   if (!(await checkWriteOrShellPermission(ctx))) return
 
@@ -415,6 +510,98 @@ async function handleToolCall(
   if (result == null) return
 
   pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, truncateToolResult(result.output), result.isError)
+}
+
+/** Dispatch an MCP tool call. Sits parallel to the writeFile/edit/shell
+ *  pipeline above — same loop-guard, same abort handling, but using the
+ *  per-tool permission store and the MCP registry's callTool. */
+async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Promise<void> {
+  const { toolName, input, toolCallId, state, options, callbacks } = ctx
+  const registry = options.mcpRegistry
+  const permissions = options.mcpPermissionStore
+
+  if (!registry) {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      toolErrorString(`MCP not configured; tool ${toolName} unavailable`),
+      true,
+    )
+    return
+  }
+
+  const entry = registry.get(toolName)
+  if (!entry) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString(`MCP tool not found: ${toolName}`), true)
+    return
+  }
+
+  // Loop-guard FIRST: even denied-by-mode calls count as the model
+  // "attempting" something, and we want to catch a loop of denials too.
+  if (await applyLoopGuard(ctx, deferred)) return
+
+  // Plan mode: MCP tools are opaque (we don't know if they write or
+  // not), so the only safe stance is "no". The model will see the
+  // denial as a tool result and should call exitPlanMode if it really
+  // needs external tools to proceed.
+  if (state.permissionMode === 'plan') {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      'MCP tools are disabled in plan mode. Call exitPlanMode first if you need this tool.',
+      true,
+    )
+    return
+  }
+
+  // Permission gate. trustMode bypasses everything; otherwise consult
+  // the store (session + persisted), and fall back to asking the user.
+  let approved = options.trustMode
+  if (!approved && permissions) approved = await permissions.isApproved(toolName)
+
+  if (!approved) {
+    let decision: 'yes' | 'always' | 'no'
+    try {
+      decision = await callbacks.onAskPermission({ toolCallId, toolName, input })
+    } catch (err) {
+      if (isAbortError(err, options.abortSignal)) {
+        pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+        return
+      }
+      throw err
+    }
+    if (options.abortSignal?.aborted) {
+      pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+      return
+    }
+    const choice = classifyDecision(decision)
+    if (choice === 'deny') {
+      pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
+      return
+    }
+    if (permissions) {
+      if (choice === 'allow-always') await permissions.approvePermanently(toolName)
+      else permissions.approveForSession(toolName)
+    }
+  }
+
+  // Execute. abortSignal threaded all the way down to the SDK request
+  // so Esc immediately cancels in-flight MCP calls.
+  reportProgress(toolCallId, `Calling ${entry.serverName}/${entry.rawName}`)
+  try {
+    const result = await registry.callTool(toolName, input, options.abortSignal)
+    pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(result.text), result.isError)
+  } catch (err) {
+    if (isAbortError(err, options.abortSignal)) {
+      pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+      return
+    }
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorFromUnknown(err), true)
+  }
 }
 
 /** Collect every toolCallId the AI SDK actually committed to the

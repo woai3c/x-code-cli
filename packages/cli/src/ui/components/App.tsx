@@ -11,6 +11,7 @@ import {
   getAutoMemory,
   getAvailableProviders,
   getContextWindow,
+  getTokenStorage,
   listSessions,
   loadSession,
   loadUserConfig,
@@ -66,6 +67,7 @@ export const SLASH_COMMANDS = [
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
   { name: '/memory', description: 'Show auto-memory entries (project + global)' },
+  { name: '/mcp', description: 'Manage MCP servers (list / tools / auth / logout / refresh)' },
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
@@ -573,6 +575,10 @@ export function App({
           handleMemory()
           return
 
+        case 'mcp':
+          await handleMcp(text, arg)
+          return
+
         case 'exit':
           await cleanup()
           exit()
@@ -1019,6 +1025,109 @@ export function App({
     sections.push('')
     sections.push(formatMemoryList('global', getAutoMemory('global').getAll()))
     addInfoMessage(sections.join('\n'))
+  }
+
+  /** /mcp — manage MCP servers (list / tools / auth / logout / refresh).
+   *
+   *  Most subcommands are pure-read against `options.mcpRegistry`, which
+   *  is the frozen snapshot from CLI startup. `auth` / `refresh` /
+   *  config changes all require a CLI restart to take effect because
+   *  the system prompt cache (and provider prefix caches) are stable
+   *  for the session — same constraint as sub-agents (see CLAUDE.md).
+   *  `logout` is the only mutator that takes effect immediately: it
+   *  just deletes a token from disk; the actual reconnect happens at
+   *  next launch. */
+  async function handleMcp(text: string, arg: string) {
+    const argTrimmed = arg.trim()
+    const sub = (argTrimmed.split(/\s+/)[0] ?? '').toLowerCase()
+    const subArg = argTrimmed.slice(sub.length).trim()
+    const registry = options.mcpRegistry
+
+    switch (sub) {
+      case '':
+      case 'list': {
+        const statuses = registry?.serverStatus() ?? []
+        if (statuses.length === 0) {
+          addCommandMessage(text, 'No MCP servers configured. Add `mcpServers` to ~/.x-code/config.json then restart.')
+          return
+        }
+        const lines = ['MCP servers:']
+        const namePad = Math.max(...statuses.map((s) => s.name.length), 8) + 2
+        for (const s of statuses) {
+          let badge = ''
+          switch (s.status.kind) {
+            case 'connected':
+              badge = `connected — ${s.status.toolCount} tool${s.status.toolCount === 1 ? '' : 's'}, ${s.status.resourceCount} resource${s.status.resourceCount === 1 ? '' : 's'}`
+              break
+            case 'disabled':
+              badge = 'disabled'
+              break
+            case 'connecting':
+              badge = 'connecting…'
+              break
+            case 'needs_auth':
+              badge = `needs auth — run /mcp logout ${s.name} and restart to retry`
+              break
+            case 'failed':
+              badge = `failed — ${s.status.error}`
+              break
+          }
+          lines.push(`  ${s.name.padEnd(namePad)} ${badge}`)
+        }
+        addCommandMessage(text, lines.join('\n'))
+        return
+      }
+      case 'tools': {
+        const all = registry?.list() ?? []
+        const filtered = subArg ? all.filter((t) => t.serverName === subArg) : all
+        if (filtered.length === 0) {
+          addCommandMessage(text, subArg ? `No tools on server "${subArg}".` : 'No MCP tools available.')
+          return
+        }
+        const lines = [subArg ? `MCP tools on ${subArg}:` : 'All MCP tools:']
+        for (const t of filtered) {
+          const desc = t.description ? ` — ${t.description.slice(0, 160).replace(/\s+/g, ' ').trim()}` : ''
+          lines.push(`  ${t.callableName}${desc}`)
+        }
+        addCommandMessage(text, lines.join('\n'))
+        return
+      }
+      case 'auth': {
+        if (!subArg) {
+          addCommandMessage(text, 'Usage: /mcp auth <server-name>')
+          return
+        }
+        addCommandMessage(
+          text,
+          `OAuth runs automatically the first time "${subArg}" connects. If you have stale tokens, run /mcp logout ${subArg} first, then restart the CLI.`,
+        )
+        return
+      }
+      case 'logout': {
+        if (!subArg) {
+          addCommandMessage(text, 'Usage: /mcp logout <server-name>')
+          return
+        }
+        try {
+          await getTokenStorage().clear(subArg)
+          addCommandMessage(text, `Removed stored OAuth tokens for "${subArg}". Restart the CLI to authenticate again.`)
+        } catch (err) {
+          addCommandMessage(text, `Failed to clear tokens: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        return
+      }
+      case 'refresh': {
+        addCommandMessage(
+          text,
+          'Config changes require a restart. Quit the CLI and run `xc` again to pick up new mcpServers entries.',
+        )
+        return
+      }
+      default: {
+        addCommandMessage(text, `Unknown subcommand: /mcp ${sub}. Available: list, tools, auth, logout, refresh.`)
+        return
+      }
+    }
   }
 
   // RENDERING ARCHITECTURE

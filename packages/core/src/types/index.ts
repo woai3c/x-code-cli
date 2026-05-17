@@ -4,6 +4,8 @@ import type { LanguageModel, ModelMessage } from 'ai'
 import type { EditDiffPayload } from '../agent/diff.js'
 import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
 import type { SubAgentEvent } from '../agent/sub-agents/types.js'
+import type { McpPermissionStore } from '../mcp/permissions.js'
+import type { McpRegistry } from '../mcp/registry.js'
 
 // ─── Permission ───
 
@@ -210,6 +212,19 @@ export interface AgentOptions {
   /** Tool allow/deny filter. Used by sub-agent loops to restrict
    *  which tools the child can call. `task` is always in `deny`. */
   toolFilter?: { allow?: string[]; deny?: string[] }
+
+  // ── MCP support ──
+
+  /** MCP registry, populated at CLI startup by loadMcpServers. Absent
+   *  means MCP is disabled entirely (no servers configured) — agent
+   *  loop short-circuits all MCP machinery. The registry itself is
+   *  immutable for the session lifetime; `/mcp refresh` replaces the
+   *  whole object on the next agentLoop entry. */
+  mcpRegistry?: McpRegistry
+  /** Permission store for MCP tool calls. Created once per CLI process,
+   *  caches the persisted always-allow list + session-scoped allows.
+   *  Absent ⇒ tool-execution falls back to ask-every-time semantics. */
+  mcpPermissionStore?: McpPermissionStore
 }
 
 // ─── Knowledge ───

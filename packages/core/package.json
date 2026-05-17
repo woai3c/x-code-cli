@@ -32,6 +32,7 @@
     "@ai-sdk/openai": "^3.0.0",
     "@ai-sdk/openai-compatible": "^2.0.0",
     "@ai-sdk/xai": "^3.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tavily/core": "^0.7.0",
     "@vscode/ripgrep": "^1.17.0",
     "ai": "^6.0.0",

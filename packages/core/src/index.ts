@@ -90,3 +90,22 @@ export {
   pickLatestSession,
 } from './agent/session-store.js'
 export type { LoadedSession, SessionListEntry } from './agent/session-store.js'
+
+// MCP — Model Context Protocol client support.
+export { McpRegistry, emptyRegistry } from './mcp/registry.js'
+export type { RegisteredServer } from './mcp/registry.js'
+export { loadMcpServers, loadMcpFromDisk } from './mcp/loader.js'
+export type { LoadOptions as McpLoadOptions, LoadResult as McpLoadResult, OAuthProviderFactory } from './mcp/loader.js'
+export { McpPermissionStore, classifyDecision } from './mcp/permissions.js'
+export type { McpPermissionDecision } from './mcp/permissions.js'
+export { isProjectTrusted, trustProject, promptForTrust, buildServerPreview } from './mcp/trust.js'
+export type { TrustChoice } from './mcp/trust.js'
+export { McpTokenStorage, getTokenStorage, setTokenStorageForTesting } from './mcp/oauth/token-storage.js'
+export type { StoredServerAuth } from './mcp/oauth/token-storage.js'
+export { McpOAuthProvider, createOAuthProviderFactory } from './mcp/oauth/provider.js'
+export { startCallbackServer } from './mcp/oauth/callback-server.js'
+export type { McpServerConfig, McpServerStatus, McpToolEntry, McpResourceEntry, McpCallResult } from './mcp/types.js'
+export { isStdioConfig, isHttpConfig } from './mcp/types.js'
+export { buildCallableName, isMcpCallableName, MCP_PREFIX } from './mcp/name-mangling.js'
+export { expandEnvDeep, expandEnvString, EnvExpansionError } from './mcp/expand-env.js'
+export { parseServersBlock, parseServerConfig, mcpServersSchema } from './mcp/config-schema.js'

@@ -21,7 +21,7 @@ You have access to these tools:
 - webFetch: Fetch and extract content from URLs
 - askUser: Ask the user clarifying questions with choices
 - todoWrite: Track multi-step tasks with a live checklist visible to the user
-- task: Delegate a task to a specialized sub-agent (explore, plan, review, general-purpose)
+- task: Delegate a task to a specialized sub-agent (explore, plan, review, general-purpose){mcpCapabilities}
 
 ## Sub-agent Delegation
 Use the task tool to delegate research, exploration, planning, or review tasks to a specialized sub-agent. Sub-agents run in isolated context — they don't see your conversation history and their intermediate tool calls never pollute your context window. Only the final conclusion comes back.
@@ -223,6 +223,60 @@ ${options.knowledgeContext || '(none)'}
 - IMPORTANT: You MUST NOT use any emojis, icons, or special Unicode symbols in your responses.`
 }
 
+/** Describes one MCP tool well enough for the system prompt. The
+ *  description is truncated to ~200 chars upstream so it doesn't bloat
+ *  the prompt — overly verbose server descriptions are a real problem
+ *  in the wild. */
+export interface SystemPromptMcpTool {
+  callableName: string
+  serverName: string
+  description: string
+}
+
+/** Format the optional MCP tools block. Returns "" when no tools AND
+ *  no registry are passed, so the byte layout of BASE_SYSTEM_PROMPT
+ *  after substitution exactly matches the pre-MCP version — preserves
+ *  prefix-cache hits for sessions without any MCP configuration.
+ *
+ *  When MCP is active the block always lists the two built-in
+ *  resource tools (listMcpResources / readMcpResource) at the top
+ *  even if no server-specific tools exist — because the resource
+ *  tools only get registered when MCP is active, so their advertising
+ *  must travel with this same block. */
+function formatMcpCapabilities(mcpTools: readonly SystemPromptMcpTool[] | undefined): string {
+  if (mcpTools === undefined) return ''
+
+  const lines: string[] = [
+    '',
+    '',
+    '## MCP Tools',
+    'These tools come from connected MCP servers. Prefer internal tools when both fit; use these for capabilities only the server provides.',
+    '- listMcpResources: List resources exposed by connected MCP servers (with optional `server` filter).',
+    '- readMcpResource: Read the contents of an MCP resource by URI (URIs come from listMcpResources).',
+  ]
+
+  if (mcpTools.length === 0) {
+    return lines.join('\n')
+  }
+
+  // Group by server for readability. Within a group, preserve incoming
+  // order (the registry hands them out in a stable order).
+  const byServer = new Map<string, SystemPromptMcpTool[]>()
+  for (const t of mcpTools) {
+    const list = byServer.get(t.serverName) ?? []
+    list.push(t)
+    byServer.set(t.serverName, list)
+  }
+  for (const [server, tools] of byServer) {
+    lines.push('', `### Server: ${server}`)
+    for (const t of tools) {
+      const desc = t.description ? `: ${t.description}` : ''
+      lines.push(`- ${t.callableName}${desc}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 /** Build the full system prompt with dynamic values and optional knowledge context */
 export function buildSystemPrompt(options?: {
   knowledgeContext?: string
@@ -235,6 +289,11 @@ export function buildSystemPrompt(options?: {
   /** Absolute path to the session's plan file. Required when
    *  `planMode === true`; ignored otherwise. */
   planFilePath?: string
+  /** Optional MCP tool surface. When provided, an additional
+   *  `## MCP Tools` section is appended to `## Capabilities`. When
+   *  absent or empty, the prompt body is byte-identical to the
+   *  pre-MCP version. */
+  mcpTools?: readonly SystemPromptMcpTool[]
 }): string {
   const shellProvider = getShellProvider()
 
@@ -243,6 +302,7 @@ export function buildSystemPrompt(options?: {
     .replace(/\{cwd\}/g, process.cwd())
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
     .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')
+    .replace(/\{mcpCapabilities\}/g, formatMcpCapabilities(options?.mcpTools))
 
   if (options?.knowledgeContext) {
     prompt += '\n\n' + options.knowledgeContext
