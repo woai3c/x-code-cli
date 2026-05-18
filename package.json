@@ -51,7 +51,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "@vscode/ripgrep"
     ],
     "peerDependencyRules": {
       "allowedVersions": {
