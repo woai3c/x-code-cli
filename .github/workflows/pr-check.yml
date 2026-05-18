@@ -7,6 +7,14 @@ on:
 permissions:
   contents: write
 
+# @vscode/ripgrep's postinstall hits api.github.com/repos/microsoft/ripgrep-prebuilt/releases
+# to find the rg binary URL. Unauthenticated requests are rate-limited to 60/h per IP, and
+# Actions runners share IP pools — concurrent runs across the org reliably trip the limit
+# and 403 the install. Passing the auto-provided GITHUB_TOKEN flips it into the
+# authenticated 5000/h bucket, which is plenty.
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   lint-format:
     name: Lint & Format
