@@ -12,7 +12,7 @@
 // hits Esc mid-tool-call the agent loop's signal aborts the SDK request,
 // which closes the JSON-RPC future without killing the underlying
 // connection — the next call can reuse the same transport.
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
+import { type OAuthClientProvider, UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -21,6 +21,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Stream } from 'node:stream'
 
 import { debugLog } from '../utils.js'
+import { McpOAuthProvider } from './oauth/provider.js'
 import {
   type McpCallResult,
   type McpResourceEntry,
@@ -136,6 +137,104 @@ export class McpClient {
     return this.cachedResources
   }
 
+  /** Connect with a full interactive OAuth round-trip.
+   *
+   *  The MCP SDK's StreamableHTTP transport handles auth lazily: a fresh
+   *  connect with no stored token calls `authProvider.redirectToAuthorization`
+   *  (which opens the browser) and then throws `UnauthorizedError` because
+   *  the token-exchange step has to wait for the user. The caller is
+   *  expected to wait for the redirect callback to land, hand the
+   *  authorization code to `transport.finishAuth(code)`, then retry
+   *  connect — at which point tokens are saved and the next attempt
+   *  succeeds.
+   *
+   *  We encapsulate that dance here so that loader / registry can opt
+   *  into "drive OAuth to completion" without each caller knowing about
+   *  `finishAuth`. The default `connect()` path (no driveOAuth) keeps
+   *  the lighter "throw UnauthorizedError, let caller mark needs_auth"
+   *  behaviour so CLI boot doesn't accidentally pop a browser window. */
+  async connectWithOAuth(hooks: { onBrowserOpen?: (url: string) => void } = {}): Promise<ConnectInfo> {
+    if (!this.authProvider) {
+      throw new Error(`MCP server "${this.serverName}" has no OAuth provider configured`)
+    }
+    if (!(this.authProvider instanceof McpOAuthProvider)) {
+      // Allow third-party providers but skip our `waitForAuthCode` hook —
+      // they're expected to handle the flow themselves.
+      return this.connect()
+    }
+
+    const provider = this.authProvider
+    // Forward the browser-open notification through the hook the caller
+    // wants. The provider was constructed with whatever onOpenBrowser
+    // was passed at factory time (printed via console.error in normal
+    // boot); the caller's hook fires alongside, so the /mcp auth
+    // handler can also print into the CLI scrollback.
+    if (hooks.onBrowserOpen) {
+      // McpOAuthProvider currently routes through its constructor hook;
+      // the simplest safe wiring is to tee via a one-shot listener on
+      // the next redirectToAuthorization call. We do that by wrapping
+      // the provider's redirect method, but only for THIS call —
+      // restoring on completion. The provider doesn't itself expose
+      // an event API, so we monkey-patch the method on the instance.
+      const original = provider.redirectToAuthorization.bind(provider)
+      provider.redirectToAuthorization = async (url: URL) => {
+        try {
+          hooks.onBrowserOpen?.(url.toString())
+        } catch {
+          // Hook failures must not abort the OAuth flow.
+        }
+        return original(url)
+      }
+      // Restore once this connectWithOAuth call resolves either way.
+      // (Stashed via try/finally below.)
+      try {
+        return await this.runOAuthDance()
+      } finally {
+        provider.redirectToAuthorization = original
+      }
+    }
+
+    return this.runOAuthDance()
+  }
+
+  /** The actual two-phase connect: attempt-1 fires redirect, then we
+   *  wait for the user, finish the auth, attempt-2 lands a real
+   *  session. Both attempts share `cachedTools` / `cachedResources`. */
+  private async runOAuthDance(): Promise<ConnectInfo> {
+    const provider = this.authProvider as McpOAuthProvider
+
+    // First attempt: most likely throws UnauthorizedError after the
+    // browser has been launched. If tokens were somehow already valid
+    // (stale state on disk) this succeeds and we short-circuit out.
+    try {
+      return await this.connect()
+    } catch (err) {
+      // Anything that isn't "we need to wait for the user" propagates.
+      if (!isUnauthorizedError(err)) {
+        provider.cancel()
+        throw err
+      }
+    }
+
+    // The provider has already called redirectToAuthorization (the SDK
+    // does that internally before throwing). Now wait for the user to
+    // come back via the callback server, then complete the exchange.
+    const { code } = await provider.waitForAuthCode()
+    const transport = this.transport
+    if (!(transport instanceof StreamableHTTPClientTransport)) {
+      throw new Error(`Internal error: OAuth flow expected an HTTP transport for "${this.serverName}"`)
+    }
+    await transport.finishAuth(code)
+
+    // Tokens are now saved. The first attempt left the client + transport
+    // in a half-open state (the SDK's connect threw mid-handshake); we
+    // need a clean transport for the retry, so close and rebuild. This
+    // also means the SDK's initialize roundtrip happens against a fresh
+    // socket, avoiding any "already connected" / state-leak surprises.
+    await this.safeClose()
+    return this.connect()
+  }
+
   async callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult> {
     if (!this.client) throw new Error(`MCP server "${this.serverName}" is not connected`)
     const result = await this.client.callTool(
@@ -241,6 +340,19 @@ export class McpClient {
     enriched.stack = base.stack
     return enriched
   }
+}
+
+/** Pattern-match an UnauthorizedError from the SDK without depending
+ *  on instanceof (which can be fragile across bundling boundaries when
+ *  the SDK is duplicated under different esm/cjs roots). The SDK exports
+ *  the class directly though, so we use both checks. */
+function isUnauthorizedError(err: unknown): boolean {
+  if (err instanceof UnauthorizedError) return true
+  if (err instanceof Error) {
+    if (err.name === 'UnauthorizedError') return true
+    if (/unauthorized|401/i.test(err.message)) return true
+  }
+  return false
 }
 
 /** Flatten MCP call result content blocks into a single string.

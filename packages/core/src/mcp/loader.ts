@@ -2,29 +2,32 @@
 //
 // One-shot orchestration called from the CLI entry: read user + project
 // configs, apply the trust gate to anything project-level, expand env
-// vars, spawn / dial every enabled server in parallel, build a frozen
-// registry. Failures on individual servers are recorded but never abort
-// the boot — `/mcp list` is the user's window into what went wrong.
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
-
+// vars, spawn / dial every enabled server in parallel, build a registry
+// that can later be mutated by `/mcp refresh` and `/mcp auth`. Failures
+// on individual servers are recorded but never abort the boot —
+// `/mcp list` is the user's window into what went wrong.
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { getUserConfigPath } from '../config/index.js'
 import { XCODE_DIR, debugLog } from '../utils.js'
-import { McpClient } from './client.js'
 import { parseServersBlock } from './config-schema.js'
-import { EnvExpansionError, expandEnvDeep } from './expand-env.js'
-import { buildCallableName } from './name-mangling.js'
-import { McpRegistry, type RegisteredServer, emptyRegistry } from './registry.js'
+import { buildCallableName as buildCallable } from './name-mangling.js'
+import {
+  type ConnectResult,
+  McpRegistry,
+  type OAuthProviderFactory,
+  type RegisteredServer,
+  connectOneServer,
+  emptyRegistry,
+} from './registry.js'
 import { type TrustChoice, buildServerPreview, isProjectTrusted, promptForTrust, trustProject } from './trust.js'
-import { type McpResourceEntry, type McpServerConfig, type McpToolEntry, isHttpConfig } from './types.js'
+import { type McpResourceEntry, type McpServerConfig, type McpToolEntry } from './types.js'
 
-/** Resolve the OAuth provider for a single HTTP server. Returns
- *  undefined for stdio (auth is the server's problem) or when no auth
- *  has been set up yet — the first connect will then 401 and the user
- *  is told to run `/mcp auth <name>`. */
-export type OAuthProviderFactory = (serverName: string, serverUrl: string) => OAuthClientProvider | undefined
+// Re-export for legacy callers that imported the type from this module.
+export type { OAuthProviderFactory }
+export type { RegisteredServer, ConnectResult }
+export type { McpResourceEntry, McpToolEntry }
 
 export interface LoadOptions {
   /** mcpServers from ~/.x-code/config.json. Trusted implicitly. */
@@ -76,6 +79,62 @@ export async function loadMcpFromDisk(opts: {
   })
 }
 
+/** Re-read configs from disk + apply the trust gate, but DON'T spawn any
+ *  servers. Used by `/mcp refresh` so the caller can hand the resulting
+ *  merged map to `registry.restartAll(...)` — that mutates the existing
+ *  registry in place rather than allocating a parallel one. */
+export async function loadMergedConfigsFromDisk(opts: { cwd: string; askUser: LoadOptions['askUser'] }): Promise<{
+  configs: Map<string, McpServerConfig>
+  configErrors: Array<{ name: string; message: string }>
+  projectSkipped: boolean
+}> {
+  const userServers = await readMcpServersFromFile(getUserConfigPath())
+  const projectServers = await readMcpServersFromFile(path.join(opts.cwd, XCODE_DIR, 'config.json'))
+
+  const configErrors: Array<{ name: string; message: string }> = []
+  let projectSkipped = false
+
+  const userParsed = parseServersBlock(userServers)
+  configErrors.push(...userParsed.errors.map((e) => ({ name: `user:${e.name}`, message: e.message })))
+  const projectParsed = parseServersBlock(projectServers)
+  configErrors.push(...projectParsed.errors.map((e) => ({ name: `project:${e.name}`, message: e.message })))
+
+  let projectServersToUse = projectParsed.servers
+  if (Object.keys(projectServersToUse).length > 0) {
+    const trusted = await isProjectTrusted(opts.cwd)
+    if (!trusted) {
+      const choice = await askForTrust(
+        {
+          // Synthesise just enough of a LoadOptions for askForTrust —
+          // only projectPath + askUser are read.
+          userServers,
+          projectServers,
+          projectPath: opts.cwd,
+          askUser: opts.askUser,
+        },
+        projectServersToUse,
+      )
+      if (choice === 'exit') {
+        // /mcp refresh deliberately ignores 'exit' — bailing the whole
+        // CLI from a slash command is too violent. We treat it as
+        // 'skip' so the user can pick again on a real restart.
+        projectServersToUse = {}
+        projectSkipped = true
+      } else if (choice === 'skip') {
+        projectServersToUse = {}
+        projectSkipped = true
+      } else if (choice === 'trust') {
+        await trustProject(opts.cwd).catch((err) => {
+          debugLog('mcp.trust-write-failed', String(err))
+        })
+      }
+    }
+  }
+
+  const merged = new Map<string, McpServerConfig>(Object.entries({ ...userParsed.servers, ...projectServersToUse }))
+  return { configs: merged, configErrors, projectSkipped }
+}
+
 /** Pure loader (no disk I/O on configs — caller injects them).
  *  Easier to test and lets the CLI control config sourcing. */
 export async function loadMcpServers(options: LoadOptions): Promise<LoadResult> {
@@ -122,15 +181,23 @@ export async function loadMcpServers(options: LoadOptions): Promise<LoadResult> 
   const merged: Record<string, McpServerConfig> = { ...userParsed.servers, ...projectServersToUse }
 
   // No servers configured anywhere → fast-path with an empty registry.
+  // We still pass the oauthFactory so a later /mcp refresh (after the
+  // user adds servers to config + restarts the CLI) would have it —
+  // although in practice the empty-registry path is only hit when both
+  // configs are empty at boot, and a later refresh rebuilds from disk
+  // via the CLI's own loadMcpFromDisk call.
   if (Object.keys(merged).length === 0) {
-    return { registry: emptyRegistry(), configErrors, projectSkipped }
+    return {
+      registry: new McpRegistry({ servers: [], tools: [], resources: [], oauthFactory: options.oauthProviderFor }),
+      configErrors,
+      projectSkipped,
+    }
   }
 
   // Spawn / dial in parallel. Each per-server promise is wrapped in
   // .then/.catch so one timeout doesn't trip the whole boot.
   const tasks = Object.entries(merged).map(async ([name, rawConfig]) => {
-    const result = await connectOneServer(name, rawConfig, options.oauthProviderFor)
-    return result
+    return connectOneServer(name, rawConfig, options.oauthProviderFor)
   })
   const results = await Promise.all(tasks)
 
@@ -146,7 +213,7 @@ export async function loadMcpServers(options: LoadOptions): Promise<LoadResult> 
 
   for (const r of results) {
     for (const t of r.tools) {
-      const callable = buildCallableName(r.server.name, t.name, taken)
+      const callable = buildCallable(r.server.name, t.name, taken)
       taken.add(callable)
       tools.push({
         callableName: callable,
@@ -159,10 +226,14 @@ export async function loadMcpServers(options: LoadOptions): Promise<LoadResult> 
     for (const res of r.resources) resources.push(res)
   }
 
+  const configs = new Map<string, McpServerConfig>(Object.entries(merged))
+
   const registry = new McpRegistry({
     servers: results.map((r) => r.server),
     tools,
     resources,
+    configs,
+    oauthFactory: options.oauthProviderFor,
   })
 
   return { registry, configErrors, projectSkipped }
@@ -183,73 +254,6 @@ async function askForTrust(
     // safe side: skip project config. Logged for debugging.
     debugLog('mcp.trust-prompt-failed', String(err))
     return 'skip'
-  }
-}
-
-interface ConnectResult {
-  server: RegisteredServer
-  tools: ReadonlyArray<{ name: string; description?: string; inputSchema: Record<string, unknown> }>
-  resources: ReadonlyArray<McpResourceEntry>
-}
-
-async function connectOneServer(
-  name: string,
-  rawConfig: McpServerConfig,
-  oauthFactory: OAuthProviderFactory | undefined,
-): Promise<ConnectResult> {
-  // Honour the `enabled: false` switch — register the server but skip
-  // the connection. Shows up in /mcp list as `disabled`.
-  if (rawConfig.enabled === false) {
-    const client = new McpClient(name, rawConfig)
-    return {
-      server: { name, client, status: { kind: 'disabled' } },
-      tools: [],
-      resources: [],
-    }
-  }
-
-  // Expand ${VAR} references. Done AFTER schema validation but BEFORE
-  // constructing the client — the client should never see literal
-  // unexpanded references.
-  let expanded: McpServerConfig
-  try {
-    expanded = expandEnvDeep(rawConfig)
-  } catch (err) {
-    const msg = err instanceof EnvExpansionError ? err.message : err instanceof Error ? err.message : String(err)
-    const client = new McpClient(name, rawConfig)
-    return {
-      server: { name, client, status: { kind: 'failed', error: msg } },
-      tools: [],
-      resources: [],
-    }
-  }
-
-  const authProvider = oauthFactory && isHttpConfig(expanded) ? oauthFactory(name, expanded.url) : undefined
-
-  const client = new McpClient(name, expanded, authProvider)
-  try {
-    const info = await client.connect()
-    return {
-      server: {
-        name,
-        client,
-        status: { kind: 'connected', toolCount: info.toolCount, resourceCount: info.resourceCount },
-      },
-      tools: client.tools(),
-      resources: client.resources(),
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    // Heuristic: SDK throws `UnauthorizedError` (or similar) on 401.
-    // Surface that as needs_auth instead of generic failure so the UI
-    // can route the user to /mcp auth.
-    const needsAuth = /unauth|401|UnauthorizedError/i.test(msg) && isHttpConfig(expanded)
-    const status: RegisteredServer['status'] = needsAuth ? { kind: 'needs_auth' } : { kind: 'failed', error: msg }
-    return {
-      server: { name, client, status, stderrTail: client.stderr() || undefined },
-      tools: [],
-      resources: [],
-    }
   }
 }
 

@@ -13,8 +13,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { McpClient } from '../src/mcp/client.js'
+import { loadMcpServers } from '../src/mcp/loader.js'
 import { buildCallableName } from '../src/mcp/name-mangling.js'
 import { McpRegistry } from '../src/mcp/registry.js'
+import type { McpServerConfig } from '../src/mcp/types.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MOCK_SERVER = path.join(__dirname, 'fixtures', 'mock-mcp-server.mjs')
@@ -66,6 +68,116 @@ describe('MCP integration (stdio)', () => {
       expect(r.isError).toBe(true)
     } finally {
       await client.close()
+    }
+  }, 15_000)
+
+  it('restartServer reconnects a stdio server in place', async () => {
+    // Bootstrap a real registry via the loader so configs + oauthFactory
+    // wiring is exercised end-to-end. The loader spawns the mock server,
+    // enumerates `echo` + `add`, and returns a registry whose configs
+    // map remembers the launch config — restartServer() reads from there.
+    const { registry } = await loadMcpServers({
+      userServers: {
+        mock: { command: process.execPath, args: [MOCK_SERVER] },
+      },
+      projectServers: undefined,
+      projectPath: process.cwd(),
+      askUser: async () => 'skip',
+    })
+    try {
+      const before = registry
+        .list()
+        .map((t) => t.callableName)
+        .sort()
+      expect(before).toContain('mcp__mock__echo')
+
+      const restarted = await registry.restartServer('mock')
+      expect(restarted.status.kind).toBe('connected')
+
+      // Tool list should be the same after a reconnect against the same
+      // server — we're verifying the registry rebuilt cleanly, not that
+      // the server changed its surface.
+      const after = registry
+        .list()
+        .map((t) => t.callableName)
+        .sort()
+      expect(after).toEqual(before)
+
+      // Verify the new client (not the old, now-closed one) handles calls.
+      const r = await registry.callTool('mcp__mock__echo', { text: 'after-restart' })
+      expect(r.text).toBe('after-restart')
+    } finally {
+      await registry.shutdown()
+    }
+  }, 20_000)
+
+  it('restartAll diffs added / removed / changed servers', async () => {
+    // Boot with one server, then restartAll with a different config set:
+    //   - 'mock' stays (with the same config)        → unchanged
+    //   - 'mock-b' is new                            → added
+    //   - 'mock-old' would've been there but isn't   → (n/a — wasn't booted)
+    // Then a second restartAll removes 'mock-b' to exercise the removed path.
+    const { registry } = await loadMcpServers({
+      userServers: {
+        mock: { command: process.execPath, args: [MOCK_SERVER] },
+      },
+      projectServers: undefined,
+      projectPath: process.cwd(),
+      askUser: async () => 'skip',
+    })
+    try {
+      // restartAll with `mock` unchanged + new `mock-b`
+      const configs1 = new Map<string, McpServerConfig>([
+        ['mock', { command: process.execPath, args: [MOCK_SERVER] }],
+        ['mock-b', { command: process.execPath, args: [MOCK_SERVER] }],
+      ])
+      const summary1 = await registry.restartAll(configs1)
+      expect(summary1.added).toEqual(['mock-b'])
+      expect(summary1.removed).toEqual([])
+      expect(summary1.unchanged).toEqual(['mock'])
+
+      // Now both connected — tool list spans both servers.
+      const names = registry
+        .list()
+        .map((t) => t.callableName)
+        .sort()
+      expect(names).toContain('mcp__mock__echo')
+      expect(names).toContain('mcp__mock_b__echo')
+
+      // Second restartAll: remove mock-b, change mock's args slightly.
+      const configs2 = new Map<string, McpServerConfig>([
+        ['mock', { command: process.execPath, args: [MOCK_SERVER], timeout: 15_000 }],
+      ])
+      const summary2 = await registry.restartAll(configs2)
+      expect(summary2.added).toEqual([])
+      expect(summary2.removed).toEqual(['mock-b'])
+      expect(summary2.changed).toEqual(['mock'])
+
+      // mock-b should no longer appear in the tool surface.
+      const afterRemoval = registry
+        .list()
+        .map((t) => t.callableName)
+        .sort()
+      expect(afterRemoval).not.toContain('mcp__mock_b__echo')
+      expect(afterRemoval).toContain('mcp__mock__echo')
+    } finally {
+      await registry.shutdown()
+    }
+  }, 30_000)
+
+  it('authenticateServer rejects stdio servers', async () => {
+    const { registry } = await loadMcpServers({
+      userServers: {
+        mock: { command: process.execPath, args: [MOCK_SERVER] },
+      },
+      projectServers: undefined,
+      projectPath: process.cwd(),
+      askUser: async () => 'skip',
+    })
+    try {
+      await expect(registry.authenticateServer('mock')).rejects.toThrow(/stdio/i)
+    } finally {
+      await registry.shutdown()
     }
   }, 15_000)
 

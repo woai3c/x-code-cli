@@ -13,6 +13,7 @@ import {
   getContextWindow,
   getTokenStorage,
   listSessions,
+  loadMergedConfigsFromDisk,
   loadSession,
   loadUserConfig,
   pickLatestSession,
@@ -245,6 +246,7 @@ export function App({
     switchModel,
     setThinking,
     getThinking,
+    invalidateSystemPromptCache,
     addInfoMessage,
     addUserMessage,
     addCommandMessage,
@@ -1097,10 +1099,62 @@ export function App({
           addCommandMessage(text, 'Usage: /mcp auth <server-name>')
           return
         }
-        addCommandMessage(
-          text,
-          `OAuth runs automatically the first time "${subArg}" connects. If you have stale tokens, run /mcp logout ${subArg} first, then restart the CLI.`,
-        )
+        if (!registry) {
+          addCommandMessage(text, 'No MCP servers configured. Add `mcpServers` to ~/.x-code/config.json first.')
+          return
+        }
+        const config = registry.getConfig(subArg)
+        if (!config) {
+          addCommandMessage(text, `Unknown MCP server: "${subArg}". Run /mcp list to see configured servers.`)
+          return
+        }
+        if (!('url' in config) || typeof config.url !== 'string') {
+          addCommandMessage(
+            text,
+            `MCP server "${subArg}" is a stdio server — OAuth applies to HTTP servers (those with a "url" field) only.`,
+          )
+          return
+        }
+        // Drop stored tokens up front. If the user runs /mcp auth on a
+        // server with valid tokens, we want a forced re-auth (matches
+        // Gemini CLI semantics — running auth again is a "let me log in
+        // from scratch", not "verify my existing session"). A separate
+        // /mcp logout exists for users who just want to clear without
+        // re-authing.
+        try {
+          await getTokenStorage().clear(subArg)
+        } catch {
+          // best-effort; an unwritable token store still lets the rest
+          // of the flow run and the user will see the actual failure
+          // when finishAuth tries to save.
+        }
+        addCommandMessage(text, `Authenticating "${subArg}" — opening browser...`)
+        try {
+          const server = await registry.authenticateServer(subArg, {
+            onBrowserOpen: (url) => {
+              addInfoMessage(`> Opened ${url}\n  Waiting for the authorization redirect...`)
+            },
+          })
+          if (server.status.kind === 'connected') {
+            // Tool surface may have grown — invalidate cache so the next
+            // turn rebuilds the system prompt with the newly-available
+            // tools.
+            invalidateSystemPromptCache()
+            addInfoMessage(
+              `  ⎿  ✓ Authenticated "${subArg}" — ${server.status.toolCount} tool${
+                server.status.toolCount === 1 ? '' : 's'
+              }, ${server.status.resourceCount} resource${server.status.resourceCount === 1 ? '' : 's'}`,
+            )
+          } else if (server.status.kind === 'needs_auth') {
+            addInfoMessage(`  ⎿  ⚠ Server still needs auth. The browser flow may have been cancelled.`)
+          } else if (server.status.kind === 'failed') {
+            addInfoMessage(`  ⎿  ✗ Auth completed but server failed to connect: ${server.status.error}`)
+          } else {
+            addInfoMessage(`  ⎿  Server is now in state: ${server.status.kind}`)
+          }
+        } catch (err) {
+          addInfoMessage(`  ⎿  ✗ Authentication failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
         return
       }
       case 'logout': {
@@ -1110,17 +1164,48 @@ export function App({
         }
         try {
           await getTokenStorage().clear(subArg)
-          addCommandMessage(text, `Removed stored OAuth tokens for "${subArg}". Restart the CLI to authenticate again.`)
+          addCommandMessage(
+            text,
+            `Removed stored OAuth tokens for "${subArg}". Run /mcp auth ${subArg} to log in again.`,
+          )
         } catch (err) {
           addCommandMessage(text, `Failed to clear tokens: ${err instanceof Error ? err.message : String(err)}`)
         }
         return
       }
       case 'refresh': {
-        addCommandMessage(
-          text,
-          'Config changes require a restart. Quit the CLI and run `xc` again to pick up new mcpServers entries.',
-        )
+        if (!registry) {
+          addCommandMessage(text, 'No MCP registry to refresh.')
+          return
+        }
+        addCommandMessage(text, 'Re-reading MCP config and reconnecting servers...')
+        try {
+          const { configs, configErrors, projectSkipped } = await loadMergedConfigsFromDisk({
+            cwd: process.cwd(),
+            askUser: (q, opts) => askQuestion(q, opts, { noOther: true }),
+          })
+          const summary = await registry.restartAll(configs)
+          // Invalidate prompt cache: the tool surface almost certainly
+          // changed (even "all unchanged" servers re-list their tools
+          // after reconnect, which can differ if the server has
+          // hot-reloaded definitions). Better to take one cache miss
+          // than to send a stale tool list.
+          invalidateSystemPromptCache()
+
+          const parts: string[] = []
+          if (summary.added.length) parts.push(`added: ${summary.added.join(', ')}`)
+          if (summary.removed.length) parts.push(`removed: ${summary.removed.join(', ')}`)
+          if (summary.changed.length) parts.push(`changed: ${summary.changed.join(', ')}`)
+          if (summary.unchanged.length) parts.push(`reconnected: ${summary.unchanged.join(', ')}`)
+          if (parts.length === 0) parts.push('no servers configured')
+          const lines = [`Reloaded MCP — ${parts.join('; ')}.`]
+          lines.push(`Note: next message rebuilds the system prompt, so prompt-cache will miss once.`)
+          if (projectSkipped) lines.push('Project-level MCP servers were skipped (not trusted).')
+          for (const e of configErrors) lines.push(`Config error in ${e.name}: ${e.message}`)
+          addInfoMessage(lines.join('\n'))
+        } catch (err) {
+          addInfoMessage(`  ⎿  ✗ Refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
         return
       }
       default: {

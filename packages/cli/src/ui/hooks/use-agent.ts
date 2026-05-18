@@ -801,6 +801,24 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   /** Read the current /thinking toggle (for status display). */
   const getThinking = useCallback(() => thinkingRef.current, [])
 
+  /** Drop the cached system prompt so the next agent turn rebuilds it
+   *  with whatever the current tool surface looks like.
+   *
+   *  The cache is the tool-list + plan-overlay snapshot the agent loop
+   *  builds at the start of every session and reuses across turns to
+   *  preserve OpenAI-compatible providers' prefix caches. Anything that
+   *  changes the visible tools — `/mcp refresh` adding or removing
+   *  servers, `/mcp auth <name>` bringing a previously-needs_auth server
+   *  online — MUST invalidate the cache so the next streamText call
+   *  sends a prompt that matches the actual tool list. Otherwise the
+   *  model would see tools that don't exist (or miss new ones), and
+   *  the loop's `MCP tool not found: …` error path would fire. */
+  const invalidateSystemPromptCache = useCallback(() => {
+    if (loopStateRef.current) {
+      loopStateRef.current.systemPromptCache = null
+    }
+  }, [])
+
   /** Set permission mode directly. Use this for /plan-style direct
    *  setters where the user is unambiguously asking for a specific
    *  target. Updates LoopState live (so the next agent turn picks up
@@ -881,6 +899,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     switchModel,
     setThinking,
     getThinking,
+    invalidateSystemPromptCache,
     setPermissionMode,
     addInfoMessage,
     addUserMessage,

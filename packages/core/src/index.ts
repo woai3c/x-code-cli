@@ -93,9 +93,15 @@ export type { LoadedSession, SessionListEntry } from './agent/session-store.js'
 
 // MCP — Model Context Protocol client support.
 export { McpRegistry, emptyRegistry } from './mcp/registry.js'
-export type { RegisteredServer } from './mcp/registry.js'
-export { loadMcpServers, loadMcpFromDisk } from './mcp/loader.js'
-export type { LoadOptions as McpLoadOptions, LoadResult as McpLoadResult, OAuthProviderFactory } from './mcp/loader.js'
+export type {
+  RegisteredServer,
+  RestartSummary as McpRestartSummary,
+  AuthHooks as McpAuthHooks,
+  ConnectResult as McpConnectResult,
+  OAuthProviderFactory,
+} from './mcp/registry.js'
+export { loadMcpServers, loadMcpFromDisk, loadMergedConfigsFromDisk } from './mcp/loader.js'
+export type { LoadOptions as McpLoadOptions, LoadResult as McpLoadResult } from './mcp/loader.js'
 export { McpPermissionStore, classifyDecision } from './mcp/permissions.js'
 export type { McpPermissionDecision } from './mcp/permissions.js'
 export { isProjectTrusted, trustProject, promptForTrust, buildServerPreview } from './mcp/trust.js'
