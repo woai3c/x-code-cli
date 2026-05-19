@@ -1,32 +1,34 @@
 import { describe, expect, it } from 'vitest'
 
-import { MCP_MAX_NAME_LEN, MCP_PREFIX, buildCallableName, isMcpCallableName } from '../src/mcp/name-mangling.js'
+import { MCP_MAX_NAME_LEN, buildCallableName } from '../src/mcp/name-mangling.js'
 
 describe('buildCallableName', () => {
-  it('produces mcp__<server>__<tool> for clean inputs', () => {
+  it('produces <server>__<tool> for clean inputs', () => {
     const name = buildCallableName('filesystem', 'read_file', new Set())
-    expect(name).toBe('mcp__filesystem__read_file')
+    expect(name).toBe('filesystem__read_file')
   })
 
   it('sanitises disallowed chars to underscore', () => {
     const name = buildCallableName('my-server.v2', 'foo:bar', new Set())
     // Hyphens, dots, colons → "_"; runs collapse to a single underscore
-    expect(name).toBe('mcp__my_server_v2__foo_bar')
+    expect(name).toBe('my_server_v2__foo_bar')
   })
 
   it('falls back to hash when sanitisation empties a part', () => {
     // All-CJK server name has no [A-Za-z0-9_] chars — must still produce
-    // a valid, unique identifier rather than `mcp____tool`.
+    // a valid, unique identifier rather than `__tool`.
     const name = buildCallableName('文件系统', 'read', new Set())
-    expect(name).toMatch(/^mcp__[a-f0-9]{6}__read$/)
+    expect(name).toMatch(/^[a-f0-9]{6}__read$/)
   })
 
-  it('keeps the prefix and stays under the 64-char cap', () => {
+  it('stays under the 64-char cap with truncation hash', () => {
     const longServer = 'x'.repeat(40)
     const longTool = 'y'.repeat(40)
     const name = buildCallableName(longServer, longTool, new Set())
     expect(name.length).toBeLessThanOrEqual(MCP_MAX_NAME_LEN)
-    expect(name.startsWith(MCP_PREFIX)).toBe(true)
+    // Truncated form ends with `_<6-char hash>` so two long, similar
+    // names don't collapse to the same string.
+    expect(name).toMatch(/_[a-f0-9]{6}$/)
   })
 
   it('disambiguates collisions across servers', () => {
@@ -47,13 +49,5 @@ describe('buildCallableName', () => {
       taken.add(name)
     }
     expect(taken.size).toBe(5)
-  })
-})
-
-describe('isMcpCallableName', () => {
-  it('detects the prefix', () => {
-    expect(isMcpCallableName('mcp__a__b')).toBe(true)
-    expect(isMcpCallableName('readFile')).toBe(false)
-    expect(isMcpCallableName('mcpFoo')).toBe(false) // single underscore — not ours
   })
 })

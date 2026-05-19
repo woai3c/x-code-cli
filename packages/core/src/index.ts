@@ -112,7 +112,7 @@ export { McpOAuthProvider, createOAuthProviderFactory } from './mcp/oauth/provid
 export { startCallbackServer } from './mcp/oauth/callback-server.js'
 export type { McpServerConfig, McpServerStatus, McpToolEntry, McpResourceEntry, McpCallResult } from './mcp/types.js'
 export { isStdioConfig, isHttpConfig } from './mcp/types.js'
-export { buildCallableName, isMcpCallableName, MCP_PREFIX } from './mcp/name-mangling.js'
+export { buildCallableName, MCP_MAX_NAME_LEN } from './mcp/name-mangling.js'
 export { expandEnvDeep, expandEnvString, EnvExpansionError } from './mcp/expand-env.js'
 export { parseServersBlock, parseServerConfig, mcpServersSchema } from './mcp/config-schema.js'
 export { parseAdd, parseAddJson, parseRemove, tokenize } from './mcp/arg-parser.js'

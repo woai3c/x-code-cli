@@ -70,7 +70,7 @@ export interface RestartSummary {
 
 export class McpRegistry {
   /** callableName → entry. callableName is the model-facing
-   *  `mcp__<server>__<tool>` form; collisions resolved at insert time. */
+   *  `<server>__<tool>` form; collisions resolved at insert time. */
   private readonly entries = new Map<string, McpToolEntry>()
   /** uri → entry. URIs are unique per spec; if two servers genuinely
    *  expose the same URI we keep the first and warn (handled by loader). */

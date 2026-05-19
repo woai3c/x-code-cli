@@ -47,7 +47,7 @@ export type McpServerStatus =
 
 /** One MCP tool, after name-mangling.
  *
- *  callableName is the model-facing name (mcp__<server>__<tool>);
+ *  callableName is the model-facing name (<server>__<tool>);
  *  rawName is what we pass back to client.callTool — MCP servers don't
  *  know about our prefix scheme. */
 export interface McpToolEntry {

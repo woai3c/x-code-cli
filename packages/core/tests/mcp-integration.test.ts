@@ -89,7 +89,7 @@ describe('MCP integration (stdio)', () => {
         .list()
         .map((t) => t.callableName)
         .sort()
-      expect(before).toContain('mcp__mock__echo')
+      expect(before).toContain('mock__echo')
 
       const restarted = await registry.restartServer('mock')
       expect(restarted.status.kind).toBe('connected')
@@ -104,7 +104,7 @@ describe('MCP integration (stdio)', () => {
       expect(after).toEqual(before)
 
       // Verify the new client (not the old, now-closed one) handles calls.
-      const r = await registry.callTool('mcp__mock__echo', { text: 'after-restart' })
+      const r = await registry.callTool('mock__echo', { text: 'after-restart' })
       expect(r.text).toBe('after-restart')
     } finally {
       await registry.shutdown()
@@ -141,8 +141,8 @@ describe('MCP integration (stdio)', () => {
         .list()
         .map((t) => t.callableName)
         .sort()
-      expect(names).toContain('mcp__mock__echo')
-      expect(names).toContain('mcp__mock_b__echo')
+      expect(names).toContain('mock__echo')
+      expect(names).toContain('mock_b__echo')
 
       // Second restartAll: remove mock-b, change mock's args slightly.
       const configs2 = new Map<string, McpServerConfig>([
@@ -158,8 +158,8 @@ describe('MCP integration (stdio)', () => {
         .list()
         .map((t) => t.callableName)
         .sort()
-      expect(afterRemoval).not.toContain('mcp__mock_b__echo')
-      expect(afterRemoval).toContain('mcp__mock__echo')
+      expect(afterRemoval).not.toContain('mock_b__echo')
+      expect(afterRemoval).toContain('mock__echo')
     } finally {
       await registry.shutdown()
     }

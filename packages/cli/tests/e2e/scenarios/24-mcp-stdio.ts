@@ -49,7 +49,7 @@ function handle(msg) {
 
 const scenario: Scenario = {
   id: '24-mcp-stdio',
-  name: 'MCP stdio: model calls mcp__mock__greet and quotes the server-stamped marker',
+  name: 'MCP stdio: model calls mock__greet and quotes the server-stamped marker',
   async run(ctx) {
     // 1. Write the inline mock MCP server into the tmpDir and the user
     //    config that points to it. The harness already isolates
@@ -77,12 +77,12 @@ const scenario: Scenario = {
     )
 
     // 2. Run the CLI. --trust short-circuits the per-tool ask prompt so
-    //    the model can call mcp__mock__greet without onAskPermission
+    //    the model can call mock__greet without onAskPermission
     //    blocking print-mode (no UI to answer the dialog).
     const r = await ctx.runCli(
       [
         'There is an MCP server named "mock" connected. It exposes a tool',
-        'mcp__mock__greet that takes { name: string } and returns a greeting',
+        'mock__greet that takes { name: string } and returns a greeting',
         'string. Call it with name="World" and then quote the EXACT text the',
         'tool returned in your reply.',
       ].join(' '),
@@ -90,7 +90,7 @@ const scenario: Scenario = {
     )
 
     ctx.expect.exitCode(r, 0)
-    ctx.expect.toolCalled(r, 'mcp__mock__greet', { name: 'World' })
+    ctx.expect.toolCalled(r, 'mock__greet', { name: 'World' })
     // The marker is a random-looking token the server stamps in. Models
     // that didn't actually wait for the tool result can't reproduce it.
     ctx.expect.assistantMentions(r, /MCP_MARKER_AB12CD34/)

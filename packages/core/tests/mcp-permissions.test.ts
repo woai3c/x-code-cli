@@ -23,43 +23,62 @@ describe('McpPermissionStore', () => {
 
   it('starts empty', async () => {
     const store = new McpPermissionStore()
-    expect(await store.isApproved('mcp__foo__bar')).toBe(false)
+    expect(await store.isApproved('foo__bar')).toBe(false)
   })
 
   it('approves for session only without persisting', async () => {
     const store = new McpPermissionStore()
-    store.approveForSession('mcp__foo__bar')
-    expect(await store.isApproved('mcp__foo__bar')).toBe(true)
+    store.approveForSession('foo__bar')
+    expect(await store.isApproved('foo__bar')).toBe(true)
 
     // New store instance — should still be unapproved (session-only).
     const store2 = new McpPermissionStore()
-    expect(await store2.isApproved('mcp__foo__bar')).toBe(false)
+    expect(await store2.isApproved('foo__bar')).toBe(false)
   })
 
   it('approvePermanently persists across instances', async () => {
     const store = new McpPermissionStore()
-    await store.approvePermanently('mcp__foo__bar')
+    await store.approvePermanently('foo__bar')
 
     const store2 = new McpPermissionStore()
-    expect(await store2.isApproved('mcp__foo__bar')).toBe(true)
+    expect(await store2.isApproved('foo__bar')).toBe(true)
   })
 
   it('writes a 0600 file with sorted entries', async () => {
     const store = new McpPermissionStore()
-    await store.approvePermanently('mcp__zeta__b')
-    await store.approvePermanently('mcp__alpha__a')
+    await store.approvePermanently('zeta__b')
+    await store.approvePermanently('alpha__a')
 
     const filePath = path.join(home, 'mcp-permissions.json')
     const raw = await fs.readFile(filePath, 'utf-8')
     const parsed = JSON.parse(raw) as { alwaysAllow: string[] }
-    expect(parsed.alwaysAllow).toEqual(['mcp__alpha__a', 'mcp__zeta__b'])
+    expect(parsed.alwaysAllow).toEqual(['alpha__a', 'zeta__b'])
   })
 
   it('ignores re-approving an already-permanent entry', async () => {
     const store = new McpPermissionStore()
-    await store.approvePermanently('mcp__foo__bar')
-    await store.approvePermanently('mcp__foo__bar')
-    expect(await store.isApproved('mcp__foo__bar')).toBe(true)
+    await store.approvePermanently('foo__bar')
+    await store.approvePermanently('foo__bar')
+    expect(await store.isApproved('foo__bar')).toBe(true)
+  })
+
+  it('migrates legacy mcp__-prefixed entries on read', async () => {
+    // Simulate a permissions.json written by an earlier version, which
+    // saved names as `mcp__<server>__<tool>`. The prefix is stripped at
+    // load time so users keep their always-allow grants after the
+    // rename to plain `<server>__<tool>`.
+    const filePath = path.join(home, 'mcp-permissions.json')
+    await fs.mkdir(home, { recursive: true })
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ alwaysAllow: ['mcp__fs__read_file', 'mcp__sentry__find_issues'] }),
+      'utf-8',
+    )
+    const store = new McpPermissionStore()
+    expect(await store.isApproved('fs__read_file')).toBe(true)
+    expect(await store.isApproved('sentry__find_issues')).toBe(true)
+    // The old prefixed names should NOT match — migration is one-way.
+    expect(await store.isApproved('mcp__fs__read_file')).toBe(false)
   })
 })
 

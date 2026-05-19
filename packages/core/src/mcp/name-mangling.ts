@@ -1,15 +1,25 @@
 // @x-code-cli/core — MCP tool name mangling
 //
-// We expose MCP tools to the model under prefixed names so they can't
+// We expose MCP tools to the model under namespaced names so they can't
 // collide with built-in tools (readFile, shell, ...) and so the model
 // can tell at a glance "this came from server X":
 //
-//     mcp__<server>__<tool>
+//     <server>__<tool>
 //
 // Both server and tool names are sanitised: any char outside
 // [A-Za-z0-9_] becomes `_`. We pick `__` (double underscore) as the
 // separator so a tool whose raw name contains a single underscore
 // (very common — `read_file`, `list_issues`) is unambiguous.
+//
+// History: an earlier version added an extra `mcp__` prefix on the front
+// (`mcp__<server>__<tool>`). That matched Claude Code's convention but
+// burned tokens on a per-tool basis without telling the model anything
+// the description doesn't already carry. Codex and Gemini CLI both omit
+// the prefix; we follow them. Routing — "is this tool MCP or built-in?"
+// — moved from a name-prefix check to a registry lookup in
+// tool-execution.ts. The mcp-permissions.json loader strips legacy
+// `mcp__` prefixes on read so users carry their old always-allow grants
+// forward.
 //
 // The model-facing tool name has a hard cap at 64 chars (OpenAI's
 // historical limit; Anthropic/Google are higher but 64 keeps us
@@ -22,12 +32,11 @@
 // second.
 import { createHash } from 'node:crypto'
 
-export const MCP_PREFIX = 'mcp__'
 export const MCP_MAX_NAME_LEN = 64
 
 function sanitize(part: string): string {
   // Replace any run of disallowed chars with a single `_`. Trim leading
-  // / trailing underscores so we don't end up with `mcp___server__tool_`.
+  // / trailing underscores so we don't end up with `_server__tool_`.
   const cleaned = part.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '')
   // Empty after sanitisation (e.g. all-CJK server name) → fall back to a
   // hash so we still produce a stable, valid identifier.
@@ -53,14 +62,14 @@ export function buildCallableName(serverName: string, rawToolName: string, exist
   const s = sanitize(serverName)
   const t = sanitize(rawToolName)
 
-  let name = `${MCP_PREFIX}${s}__${t}`
+  let name = `${s}__${t}`
 
-  // Over-length: truncate while preserving the prefix + a content hash so
+  // Over-length: truncate while preserving a content hash so
   // truncated-different names don't collapse to the same string.
   if (name.length > MCP_MAX_NAME_LEN) {
     const hash = shortHash(`${serverName}::${rawToolName}`, 6)
-    const room = MCP_MAX_NAME_LEN - MCP_PREFIX.length - 1 /* underscore */ - hash.length
-    name = `${MCP_PREFIX}${(s + '__' + t).slice(0, room)}_${hash}`
+    const room = MCP_MAX_NAME_LEN - 1 /* underscore */ - hash.length
+    name = `${(s + '__' + t).slice(0, room)}_${hash}`
   }
 
   // Collision: append a 4-char server-name hash. If THAT still collides
@@ -82,10 +91,4 @@ export function buildCallableName(serverName: string, rawToolName: string, exist
   }
 
   return name
-}
-
-/** True iff a name looks like one of ours.
- *  Used by tool-execution to route `mcp__*` calls down the MCP path. */
-export function isMcpCallableName(name: string): boolean {
-  return name.startsWith(MCP_PREFIX)
 }

@@ -4,7 +4,6 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
-import { isMcpCallableName } from '../mcp/name-mangling.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
@@ -498,7 +497,11 @@ async function handleToolCall(
   // always-allow file) rather than the writeFile/edit/shell rules. They
   // still go through the loop-guard so the model can't spin on a
   // failing MCP call indefinitely.
-  if (isMcpCallableName(ctx.toolName)) {
+  //
+  // Routing is by registry lookup, not name pattern: MCP tool names are
+  // `<server>__<tool>` (no special prefix), so the only authoritative
+  // "is this MCP?" answer is "is it registered with the MCP registry?".
+  if (ctx.options.mcpRegistry?.get(ctx.toolName)) {
     await handleMcpToolCall(ctx, deferred)
     return
   }

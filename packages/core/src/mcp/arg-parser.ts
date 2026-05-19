@@ -54,9 +54,9 @@ export type ParseResult<T extends ParsedCommand = ParsedCommand> =
 /** Names allowed in `mcpServers.<name>`. Tightened relative to the runtime
  *  name-mangling sanitizer because *config entry point* is a better place
  *  to refuse weird names — surprising sanitisation post-add ("I typed
- *  `my server!` and got `mcp__my_server___xxx`") is worse than a clear
- *  rejection. Length 32 leaves headroom for the `mcp__{server}__{tool}`
- *  prefix to stay well under the model-side 64-char tool name limit. */
+ *  `my server!` and got `my_server___xxx`") is worse than a clear
+ *  rejection. Length 32 leaves headroom for the `{server}__{tool}`
+ *  format to stay well under the model-side 64-char tool name limit. */
 const NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/
 
 // ── Top-level entry points ─────────────────────────────────────────────────
