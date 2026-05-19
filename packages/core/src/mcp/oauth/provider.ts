@@ -174,7 +174,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     authorizationUrl.searchParams.set('redirect_uri', this.callbackServer!.url)
 
     this.opts.onOpenBrowser?.(authorizationUrl.toString())
-    openInBrowser(authorizationUrl.toString())
+    await openInBrowser(authorizationUrl.toString())
 
     // Stash the pending callback so the caller can `await` it through
     // `waitForAuthCode()` while the transport machinery handles the
@@ -229,10 +229,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
  *  block on the browser process; stdio piped to /dev/null so output
  *  doesn't smear into our terminal UI. Failures are logged but never
  *  thrown — the user can still copy/paste the URL by hand. */
-function openInBrowser(url: string): void {
+async function openInBrowser(url: string): Promise<void> {
   try {
-    let cmd: string
-    let args: string[]
     if (process.platform === 'win32') {
       // We deliberately AVOID `cmd /c start` here. cmd.exe treats `&`
       // as a command separator, so an OAuth URL like
@@ -247,21 +245,93 @@ function openInBrowser(url: string): void {
       // `rundll32 url.dll,FileProtocolHandler <url>` is the documented
       // Win32 way to invoke the default browser's protocol handler.
       // It bypasses cmd entirely, so `&` passes through verbatim.
-      cmd = 'rundll32'
-      args = ['url.dll,FileProtocolHandler', url]
-    } else if (process.platform === 'darwin') {
-      cmd = 'open'
-      args = [url]
-    } else {
-      cmd = 'xdg-open'
-      args = [url]
+      spawnDetached('rundll32', ['url.dll,FileProtocolHandler', url])
+      return
     }
-    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
-    child.unref()
-    child.on('error', (err) => debugLog('mcp.browser-open-failed', String(err)))
+    if (process.platform === 'darwin') {
+      // macOS `open` is rock-solid for URLs, no quirks.
+      spawnDetached('open', [url])
+      return
+    }
+
+    // Linux / *BSD: no single command works everywhere. xdg-utils
+    // (`xdg-open`) is the de-facto standard but missing on minimal
+    // containers and many server distros; `gio open` covers newer
+    // GNOME stacks; `wslview` covers WSL → Windows browser (when
+    // xdg-open inside WSL doesn't reach the host); `kde-open` and
+    // `gnome-open` cover their respective legacy desktops.
+    //
+    // We try each in turn, falling through on ENOENT or non-zero exit.
+    // Failing silently with no opener would leave the user staring at
+    // the CLI scrollback wondering why nothing happened — we surface a
+    // `mcp.browser-open-no-opener` debug entry so the situation is at
+    // least diagnosable, and the CLI's "Opened …" line already gave
+    // them the URL to copy/paste by hand.
+    const candidates: Array<[string, string[]]> = [
+      ['xdg-open', [url]],
+      ['gio', ['open', url]],
+      ['wslview', [url]],
+      ['kde-open', [url]],
+      ['gnome-open', [url]],
+    ]
+    for (const [cmd, args] of candidates) {
+      if (await trySpawnOpener(cmd, args)) return
+    }
+    debugLog('mcp.browser-open-no-opener', `no working URL opener found; advised user to copy/paste manually`)
   } catch (err) {
     debugLog('mcp.browser-open-threw', String(err))
   }
+}
+
+/** Fire a child process, detach, walk away. Used on Windows/macOS where
+ *  the command is known-good — failure-detection is just a debug log. */
+function spawnDetached(cmd: string, args: string[]): void {
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+  child.unref()
+  child.on('error', (err) => debugLog('mcp.browser-open-failed', String(err)))
+}
+
+/** Try one Linux URL opener candidate. Resolves true if the binary
+ *  exists and either exited cleanly OR is still alive after a brief
+ *  grace window (most openers exec into a browser and exit ~immediately,
+ *  but a few — notably wslview on cold start — fork and stay running for
+ *  a moment). Resolves false on ENOENT or non-zero exit, signalling the
+ *  caller to try the next candidate. */
+function trySpawnOpener(cmd: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      resolve(ok)
+    }
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+    } catch {
+      settle(false)
+      return
+    }
+    child.on('error', () => settle(false))
+    child.on('exit', (code) => {
+      if (code === 0) {
+        child.unref()
+        settle(true)
+      } else {
+        settle(false)
+      }
+    })
+    // Grace window for openers that fork-and-stay-alive. 500 ms is well
+    // under any user-perceptible delay yet covers the slowest reasonable
+    // launch path; anything still alive at this point is almost certainly
+    // the real browser-launching process.
+    setTimeout(() => {
+      if (!settled) {
+        child.unref()
+        settle(true)
+      }
+    }, 500)
+  })
 }
 
 /** Factory used by loader.ts. Returns undefined for stdio servers — the
