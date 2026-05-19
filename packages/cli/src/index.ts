@@ -7,20 +7,24 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {
+  McpPermissionStore,
   PROVIDER_DETECTION_ORDER,
   PROVIDER_KEY_URLS,
   createModelRegistry,
+  createOAuthProviderFactory,
   createSubAgentRegistry,
   debugLog,
   getAvailableProviders,
   getEnvVarName,
+  getTokenStorage,
   listSessions,
+  loadMcpFromDisk,
   loadSession,
   loadUserConfig,
   pickLatestSession,
   resolveModelId,
 } from '@x-code-cli/core'
-import type { AgentOptions, LoadedSession } from '@x-code-cli/core'
+import type { AgentOptions, LoadedSession, McpRegistry } from '@x-code-cli/core'
 
 import { getCleanupFn, getSessionExitInfo, startApp } from './app.js'
 import { detectShell, formatPersistCommand } from './shell.js'
@@ -82,6 +86,12 @@ function checkNodeVersion(): void {
 // and the delayed stdout flush made it appear after the shell prompt,
 // confusing users.
 let shutdownInProgress = false
+/** Captured at startup so gracefulShutdown can close MCP servers
+ *  (kill stdio child processes, terminate HTTP transports) on the way
+ *  out. Without this, stdio servers would linger until they noticed
+ *  their parent's stdin closed — usually fine, but explicit shutdown
+ *  is faster and less surprising. */
+let mcpRegistryForShutdown: McpRegistry | null = null
 
 // Belt-and-suspenders terminal restore. Runs synchronously before exit so even
 // if Ink's unmount is partially broken (e.g. a useEffect cleanup threw, or the
@@ -117,6 +127,13 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   // incremental saves during the session (opencode's approach).
   const cleanup = getCleanupFn()
   if (cleanup) cleanup().catch(() => undefined)
+
+  // Fire-and-forget MCP shutdown. Stdio servers also clean themselves up
+  // when their stdin closes, so even if process.exit beats this promise
+  // the OS reaps the children — this just makes it explicit / faster.
+  if (mcpRegistryForShutdown) {
+    mcpRegistryForShutdown.shutdown().catch(() => undefined)
+  }
 
   resetTerminal()
   // Print AFTER resetTerminal so the line lands cleanly above the
@@ -276,6 +293,35 @@ async function main() {
   const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
   const subAgentRegistry = await createSubAgentRegistry()
 
+  // MCP: load servers, run trust dialog if project-level config is
+  // unfamiliar. Done BEFORE Ink mounts so the readline-based trust
+  // prompt has a clean terminal. The MCP machinery is opt-in: a user
+  // with no mcpServers in their config pays a single fs.stat (one for
+  // user config, one for project config) and that's it.
+  const tokenStorage = getTokenStorage()
+  const mcpPermissionStore = new McpPermissionStore()
+  const mcpLoadResult = await loadMcpFromDisk({
+    cwd: process.cwd(),
+    askUser: (question, opts) => askInTerminal(question, opts),
+    oauthProviderFor: createOAuthProviderFactory(tokenStorage, (server, url) => {
+      console.error(chalk.cyan(`[mcp] Opening browser for ${server}: ${url}`))
+    }),
+    onExitRequested: () => process.exit(0),
+  })
+  mcpRegistryForShutdown = mcpLoadResult.registry
+
+  if (mcpLoadResult.configErrors.length > 0) {
+    for (const e of mcpLoadResult.configErrors) {
+      console.error(chalk.yellow(`[mcp] config error in ${e.name}: ${e.message}`))
+    }
+  }
+  if (mcpLoadResult.projectSkipped) {
+    console.error(chalk.yellow(`[mcp] Project-level MCP servers skipped (not trusted).`))
+  }
+  // Preload the always-allow list so the first tool call doesn't pay
+  // the file-read latency.
+  await mcpPermissionStore.preload()
+
   const options: AgentOptions = {
     modelId,
     trustMode: argv.trust,
@@ -294,6 +340,8 @@ async function main() {
     permissionMode: argv.plan ? 'plan' : 'default',
     modelRegistry: providerRegistry,
     subAgentRegistry,
+    mcpRegistry: mcpLoadResult.registry,
+    mcpPermissionStore,
   }
 
   // Resume / continue. Three resume entry points:
@@ -485,6 +533,50 @@ function printNoWebSearchKeyHint(): void {
 
   const cmd = formatPersistCommand('TAVILY_API_KEY', 'tvly-...', shell)
   console.error(`  ${dim(`(${shell})`)}  ${code(cmd)}\n`)
+}
+
+/** Plain-terminal prompt used during startup, before Ink mounts.
+ *  Currently the only caller is the MCP project-level trust dialog —
+ *  loader.ts hands its `askUser` callback an arbitrary list of options
+ *  and expects one of the option labels back.
+ *
+ *  Falls back gracefully when stdin isn't a TTY (piped input, CI,
+ *  `--print` mode): we return the option whose label looks like
+ *  "skip" if present, otherwise the second option (loader's convention
+ *  is index 1 == safe default). This guarantees we never block waiting
+ *  for input that will never arrive. */
+async function askInTerminal(
+  question: string,
+  options: Array<{ label: string; description: string }>,
+): Promise<string> {
+  const safeDefault = options.find((o) => /skip/i.test(o.label))?.label ?? options[1]?.label ?? options[0]?.label ?? ''
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return safeDefault
+  }
+
+  const readline = await import('node:readline/promises')
+
+  // Render to stderr so the prompt body lands in the same stream as
+  // other CLI status messages; this keeps stdout clean if someone is
+  // capturing it (rare during interactive startup but better-safe).
+  process.stderr.write('\n' + chalk.yellow(question) + '\n')
+  for (let i = 0; i < options.length; i++) {
+    const o = options[i]
+    process.stderr.write(`  ${chalk.bold(`${i + 1}.`)} ${o.label} — ${chalk.gray(o.description)}\n`)
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+  try {
+    const answer = await rl.question(`\nChoose [1-${options.length}]: `)
+    const idx = parseInt(answer.trim(), 10) - 1
+    if (Number.isFinite(idx) && idx >= 0 && idx < options.length) {
+      return options[idx].label
+    }
+    return safeDefault
+  } finally {
+    rl.close()
+  }
 }
 
 function readStdin(): Promise<string> {

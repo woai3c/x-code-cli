@@ -9,6 +9,8 @@ import { streamText } from 'ai'
 import type { LanguageModel, UserContent } from 'ai'
 
 import { buildKnowledgeContext } from '../knowledge/loader.js'
+import { listMcpResources, readMcpResource } from '../mcp/resources.js'
+import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
@@ -206,6 +208,20 @@ function buildTools(options: AgentOptions) {
 
   if (options.subAgentRegistry) {
     tools.task = createTaskTool(options.subAgentRegistry)
+  }
+
+  // MCP tools: declared without `execute` so the AI SDK leaves them in
+  // `result.toolCalls` for processToolCalls to hand-dispatch through the
+  // permission / loop-guard / abortSignal pipeline.
+  if (options.mcpRegistry) {
+    // Two universal MCP-aware built-ins. Only registered when MCP is
+    // active so a model without any MCP context doesn't see them and
+    // start hallucinating resource URIs.
+    tools.listMcpResources = listMcpResources
+    tools.readMcpResource = readMcpResource
+    for (const entry of options.mcpRegistry.list()) {
+      tools[entry.callableName] = bridgeMcpTool(entry)
+    }
   }
 
   const filter = options.toolFilter
@@ -493,6 +509,12 @@ export async function agentLoop(
         isGitRepo,
         planMode: state.permissionMode === 'plan',
         planFilePath: state.currentPlanPath ?? undefined,
+        // Pass MCP tools so the `## MCP Tools` section is appended.
+        // Empty / absent registry → buildSystemPrompt's placeholder
+        // resolves to "" and the prompt is byte-identical to the
+        // pre-MCP shape, preserving prefix-cache for sessions
+        // without MCP configured.
+        mcpTools: options.mcpRegistry ? toSystemPromptEntries(options.mcpRegistry.list()) : undefined,
       })
     }
     const systemPrompt = state.systemPromptCache

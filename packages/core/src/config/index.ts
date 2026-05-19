@@ -97,6 +97,18 @@ export interface UserConfig {
    *  because core doesn't depend on the CLI's theme list. Unknown
    *  values fall back to the default ('dark') silently. */
   theme?: string
+  /** MCP server declarations. Loose-typed here because the schema is
+   *  validated in `mcp/config-schema.ts` — we don't want to drag a Zod
+   *  type into the config module's surface. Loader uses
+   *  `parseServersBlock` to validate before constructing clients. */
+  mcpServers?: Record<string, unknown>
+}
+
+/** Path to the user config file. Exposed so other modules that want to
+ *  read the same JSON (e.g. the MCP loader for the `mcpServers` field)
+ *  honour the X_CODE_HOME override automatically. */
+export function getUserConfigPath(): string {
+  return userConfigPath()
 }
 
 function userConfigPath(): string {

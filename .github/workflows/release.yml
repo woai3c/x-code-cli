@@ -8,6 +8,12 @@ permissions:
   contents: write
   id-token: write
 
+# Authenticate @vscode/ripgrep's postinstall against the GitHub API to
+# avoid the 60 req/h anonymous rate limit shared across Actions runners.
+# Same reasoning as pr-check.yml — see the note there.
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   release:
     name: Release
