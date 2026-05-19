@@ -21,6 +21,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Stream } from 'node:stream'
 
 import { debugLog } from '../utils.js'
+import { VERSION } from '../version.js'
 import { McpOAuthProvider } from './oauth/provider.js'
 import {
   type McpCallResult,
@@ -36,7 +37,7 @@ import {
  *  meaningful error and a useless "exit code 1". */
 const STDERR_TAIL_LINES = 20
 
-const CLIENT_INFO = { name: 'x-code-cli', version: '0.2.10' }
+const CLIENT_INFO = { name: 'x-code-cli', version: VERSION }
 
 /** Default first-connect timeout (ms). Overridable per-server via the
  *  config's `timeout` field. 30s is generous — community stdio servers

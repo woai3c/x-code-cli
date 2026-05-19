@@ -9,6 +9,7 @@ import { z } from 'zod'
 
 import { LruCache } from '../utils/lru-cache.js'
 import { formatToolError } from '../utils/tool-errors.js'
+import { VERSION } from '../version.js'
 import { reportProgress } from './progress.js'
 
 const FETCH_TIMEOUT_MS = 15_000
@@ -29,7 +30,7 @@ const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 // Used as Cloudflare fallback: aggressive bot rules often let honest CLI UAs through
 // while blocking browser impersonators that fail TLS-fingerprint checks.
-const FALLBACK_UA = 'x-code-cli/0.1 (+https://github.com/woai3c/x-code-cli)'
+const FALLBACK_UA = `x-code-cli/${VERSION} (+https://github.com/woai3c/x-code-cli)`
 
 const YEAR = new Date().getFullYear()
 
