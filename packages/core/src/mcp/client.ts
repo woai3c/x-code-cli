@@ -85,8 +85,17 @@ export class McpClient {
     try {
       await this.client.connect(this.transport, { signal: ctrl.signal })
     } catch (err) {
-      // Tear down the half-open transport so we don't leak a child process.
-      await this.safeClose()
+      // UnauthorizedError is the expected throw during an OAuth flow:
+      // the SDK has called redirectToAuthorization and now wants the
+      // caller to finishAuth(code) on the SAME transport. If we tear
+      // down here, runOAuthDance loses its handle and can't complete
+      // the exchange. Leave transport + client alive; the caller
+      // (runOAuthDance) or finally-shutdown path will clean up. For
+      // any other error we still safeClose to avoid leaking a child
+      // process / dangling HTTP connection.
+      if (!isUnauthorizedError(err)) {
+        await this.safeClose()
+      }
       throw this.enrichError(err)
     } finally {
       clearTimeout(timer)
@@ -141,18 +150,18 @@ export class McpClient {
    *
    *  The MCP SDK's StreamableHTTP transport handles auth lazily: a fresh
    *  connect with no stored token calls `authProvider.redirectToAuthorization`
-   *  (which opens the browser) and then throws `UnauthorizedError` because
-   *  the token-exchange step has to wait for the user. The caller is
-   *  expected to wait for the redirect callback to land, hand the
-   *  authorization code to `transport.finishAuth(code)`, then retry
-   *  connect — at which point tokens are saved and the next attempt
-   *  succeeds.
+   *  and then throws `UnauthorizedError` because the token-exchange step
+   *  has to wait for the user. The caller is expected to wait for the
+   *  redirect callback to land, hand the authorization code to
+   *  `transport.finishAuth(code)`, then retry connect — at which point
+   *  tokens are saved and the next attempt succeeds.
    *
-   *  We encapsulate that dance here so that loader / registry can opt
-   *  into "drive OAuth to completion" without each caller knowing about
-   *  `finishAuth`. The default `connect()` path (no driveOAuth) keeps
-   *  the lighter "throw UnauthorizedError, let caller mark needs_auth"
-   *  behaviour so CLI boot doesn't accidentally pop a browser window. */
+   *  We encapsulate that dance here so that the `/mcp auth` handler can
+   *  opt into "drive OAuth to completion" without knowing about
+   *  `finishAuth`. The default `connect()` path keeps the OAuth provider
+   *  PASSIVE — `redirectToAuthorization` is a no-op until we flip
+   *  `setInteractive(true)` here, so CLI boot doesn't accidentally pop a
+   *  browser window for servers in `needs_auth`. */
   async connectWithOAuth(hooks: { onBrowserOpen?: (url: string) => void } = {}): Promise<ConnectInfo> {
     if (!this.authProvider) {
       throw new Error(`MCP server "${this.serverName}" has no OAuth provider configured`)
@@ -164,37 +173,40 @@ export class McpClient {
     }
 
     const provider = this.authProvider
-    // Forward the browser-open notification through the hook the caller
-    // wants. The provider was constructed with whatever onOpenBrowser
-    // was passed at factory time (printed via console.error in normal
-    // boot); the caller's hook fires alongside, so the /mcp auth
-    // handler can also print into the CLI scrollback.
+
+    // Eagerly start the callback server so the real loopback port is
+    // bound to `clientMetadata.redirect_uris` and `redirectUrl` BEFORE
+    // the SDK builds the dynamic-registration request. Otherwise we
+    // register with a port-less placeholder and Sentry (and any other
+    // auth server that doesn't honour RFC 8252 §7.3 loopback any-port)
+    // rejects the auth URL's real-port redirect_uri as "Invalid".
+    await provider.prepareForAuth()
+
+    // Tee the browser-open notification through the caller's hook so the
+    // /mcp auth handler can print into the CLI scrollback alongside the
+    // provider's own onOpenBrowser callback. We monkey-patch the method
+    // for the lifetime of THIS call (try/finally restores it). The
+    // provider doesn't expose an event API, but patching one method on
+    // one instance for one flow is bounded enough to be safe.
+    const originalRedirect = provider.redirectToAuthorization.bind(provider)
     if (hooks.onBrowserOpen) {
-      // McpOAuthProvider currently routes through its constructor hook;
-      // the simplest safe wiring is to tee via a one-shot listener on
-      // the next redirectToAuthorization call. We do that by wrapping
-      // the provider's redirect method, but only for THIS call —
-      // restoring on completion. The provider doesn't itself expose
-      // an event API, so we monkey-patch the method on the instance.
-      const original = provider.redirectToAuthorization.bind(provider)
       provider.redirectToAuthorization = async (url: URL) => {
         try {
           hooks.onBrowserOpen?.(url.toString())
         } catch {
           // Hook failures must not abort the OAuth flow.
         }
-        return original(url)
-      }
-      // Restore once this connectWithOAuth call resolves either way.
-      // (Stashed via try/finally below.)
-      try {
-        return await this.runOAuthDance()
-      } finally {
-        provider.redirectToAuthorization = original
+        return originalRedirect(url)
       }
     }
-
-    return this.runOAuthDance()
+    try {
+      return await this.runOAuthDance()
+    } finally {
+      provider.setInteractive(false)
+      if (hooks.onBrowserOpen) {
+        provider.redirectToAuthorization = originalRedirect
+      }
+    }
   }
 
   /** The actual two-phase connect: attempt-1 fires redirect, then we

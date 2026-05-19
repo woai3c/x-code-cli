@@ -51,3 +51,44 @@ describe('McpOAuthProvider.redirectUrl', () => {
     expect(provider.clientMetadata.redirect_uris).toContain(provider.redirectUrl)
   })
 })
+
+describe('McpOAuthProvider.redirectToAuthorization (passive vs interactive)', () => {
+  beforeEach(() => {
+    isolate()
+  })
+  afterEach(() => {
+    delete process.env.X_CODE_HOME
+  })
+
+  it('does NOT open a browser by default (passive mode)', async () => {
+    // Regression: a previous version unconditionally opened the browser
+    // here, which fired on CLI boot whenever an HTTP MCP server had no
+    // stored token. No competing CLI does that — they all wait for an
+    // explicit user action. We verify by checking that no callback
+    // server got started and no onOpenBrowser hook fired.
+    let opened: string | null = null
+    const provider = new McpOAuthProvider({
+      serverName: 'test-server',
+      serverUrl: 'https://example.com/mcp',
+      storage: new McpTokenStorage(),
+      onOpenBrowser: (url) => {
+        opened = url
+      },
+    })
+
+    const before = provider.redirectUrl
+    await provider.redirectToAuthorization(new URL('https://auth.example.com/authorize'))
+    const after = provider.redirectUrl
+
+    expect(opened).toBeNull()
+    // Same placeholder before AND after — the callback server was never
+    // started, so the URL didn't change to include a real port.
+    expect(after).toBe(before)
+  })
+
+  // We deliberately don't test the interactive (setInteractive(true))
+  // path here. That path calls openInBrowser → child_process.spawn,
+  // which would actually launch the developer's browser every time
+  // `pnpm test` runs. The interactive flow is covered by manual /mcp
+  // auth testing + the existing connectWithOAuth wiring.
+})

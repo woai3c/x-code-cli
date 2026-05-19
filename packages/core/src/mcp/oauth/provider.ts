@@ -62,8 +62,36 @@ export class McpOAuthProvider implements OAuthClientProvider {
   /** Pending callback that the SDK will consume via `finishAuth` on
    *  the transport. Caller of `waitForAuthCode()` retrieves it. */
   private pendingCode: Promise<{ code: string; state?: string }> | null = null
+  /** Whether `redirectToAuthorization` should actually launch a browser.
+   *  Default false — booting the CLI with an HTTP MCP server that has
+   *  no stored token must NOT silently open a browser window. The flag
+   *  is flipped on for the duration of `connectWithOAuth` (driven by
+   *  `/mcp auth <name>`) and back off in `finally`. */
+  private interactive = false
 
   constructor(private readonly opts: CreateProviderOptions) {}
+
+  /** Caller (client.ts:connectWithOAuth) toggles this around an
+   *  authenticated dance. Outside that window we stay passive. */
+  setInteractive(value: boolean): void {
+    this.interactive = value
+  }
+
+  /** Eagerly start the callback server, so the real loopback port is
+   *  available to `redirectUrl` and `clientMetadata.redirect_uris`
+   *  BEFORE the SDK constructs the dynamic-registration request.
+   *
+   *  Why this matters: Sentry (and any auth server that doesn't follow
+   *  RFC 8252 §7.3 strictly) validates the auth-URL `redirect_uri` against
+   *  the value the client registered with. If we register with the
+   *  port-less placeholder and then redirect to a concrete port, the
+   *  server replies "Invalid redirect URI" and the whole flow dies.
+   *  Pre-starting the server ensures registration and authorization use
+   *  the SAME concrete `http://127.0.0.1:<port>/callback`. */
+  async prepareForAuth(): Promise<void> {
+    this.interactive = true
+    await this.ensureCallbackServer()
+  }
 
   // ── OAuthClientProvider ────────────────────────────────────────────────
 
@@ -124,6 +152,20 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    // Passive (boot) mode: the SDK is in the middle of a "lazy" first
+    // connect with no stored token. We must NOT open a browser window
+    // unprompted — every other MCP-aware CLI (Claude Code, Gemini,
+    // OpenCode) waits for explicit user action before doing that, and
+    // a CLI start-up that hijacks the user's browser is a hostile
+    // surprise. Returning here is enough: the SDK will throw
+    // UnauthorizedError next, the registry classifies it as
+    // `needs_auth`, and `/mcp auth <name>` can drive the real flow
+    // (after setInteractive(true) flips us into the interactive path
+    // below).
+    if (!this.interactive) {
+      return
+    }
+
     // Lazy-start the callback server right before we hand the auth URL
     // to the browser, so the URL we advertise (via `redirectUrl`)
     // matches what we'll listen on. We rebuild the auth URL with the
@@ -144,7 +186,16 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** Block until the auth server has redirected back. Resolves with the
    *  captured code; the caller then calls `transport.finishAuth(code)`
-   *  on the SDK's StreamableHTTPClientTransport. */
+   *  on the SDK's StreamableHTTPClientTransport.
+   *
+   *  We close the callback server here because we already have the code
+   *  — Sentry won't call us back again on this flow. But we leave
+   *  `memoryCodeVerifier` alive: the SDK reads it during
+   *  `transport.finishAuth(code)`, which the caller runs AFTER this
+   *  promise resolves. Nulling the verifier in this finally block was
+   *  the cause of "No PKCE verifier set — auth flow not in progress".
+   *  Cleanup of the verifier happens either via `cancel()` (abort
+   *  path) or naturally on the next `saveCodeVerifier(...)` call. */
   async waitForAuthCode(): Promise<{ code: string; state?: string }> {
     if (!this.pendingCode) {
       throw new Error('Auth flow not started — redirectToAuthorization was never invoked')
@@ -153,7 +204,6 @@ export class McpOAuthProvider implements OAuthClientProvider {
       return await this.pendingCode
     } finally {
       this.pendingCode = null
-      this.memoryCodeVerifier = null
       this.callbackServer?.close()
       this.callbackServer = null
     }
@@ -184,12 +234,21 @@ function openInBrowser(url: string): void {
     let cmd: string
     let args: string[]
     if (process.platform === 'win32') {
-      // `start` is a cmd builtin, so we go via cmd /c.
-      cmd = 'cmd'
-      // Empty "" arg is the window title — `start "title" "url"` so
-      // a URL containing spaces (rare but possible in test contexts)
-      // isn't interpreted as the title.
-      args = ['/c', 'start', '""', url]
+      // We deliberately AVOID `cmd /c start` here. cmd.exe treats `&`
+      // as a command separator, so an OAuth URL like
+      //   https://x.com/auth?response_type=code&client_id=abc&code_challenge=...
+      // got silently truncated to `https://x.com/auth?response_type=code`
+      // — the user's browser landed on a URL with no client_id /
+      // redirect_uri / PKCE challenge and Sentry replied "Invalid
+      // redirect URI". Node's argv quoting doesn't quote `&` (it's not
+      // a Windows-native special char, only a cmd-builtin special char)
+      // so even passing the URL as a separate arg didn't save us.
+      //
+      // `rundll32 url.dll,FileProtocolHandler <url>` is the documented
+      // Win32 way to invoke the default browser's protocol handler.
+      // It bypasses cmd entirely, so `&` passes through verbatim.
+      cmd = 'rundll32'
+      args = ['url.dll,FileProtocolHandler', url]
     } else if (process.platform === 'darwin') {
       cmd = 'open'
       args = [url]
