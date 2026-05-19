@@ -115,3 +115,21 @@ export { isStdioConfig, isHttpConfig } from './mcp/types.js'
 export { buildCallableName, isMcpCallableName, MCP_PREFIX } from './mcp/name-mangling.js'
 export { expandEnvDeep, expandEnvString, EnvExpansionError } from './mcp/expand-env.js'
 export { parseServersBlock, parseServerConfig, mcpServersSchema } from './mcp/config-schema.js'
+export { parseAdd, parseAddJson, parseRemove, tokenize } from './mcp/arg-parser.js'
+export type {
+  AddCommand,
+  AddJsonCommand,
+  RemoveCommand,
+  ParsedCommand,
+  ParseResult,
+  ConfigScope,
+} from './mcp/arg-parser.js'
+export {
+  detectScope,
+  getConfigPath as getMcpConfigPath,
+  readServerConfig,
+  removeServerFromConfig,
+  serverExists,
+  writeServerToConfig,
+} from './mcp/config-writer.js'
+export type { DetectScopeResult } from './mcp/config-writer.js'

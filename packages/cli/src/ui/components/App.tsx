@@ -7,18 +7,28 @@ import {
   MODEL_ALIASES,
   PROVIDER_MODELS,
   createModelRegistry,
+  detectScope,
   estimateTokenCount,
   getAutoMemory,
   getAvailableProviders,
   getContextWindow,
+  getMcpConfigPath,
   getTokenStorage,
   listSessions,
   loadMergedConfigsFromDisk,
   loadSession,
   loadUserConfig,
+  parseAdd,
+  parseAddJson,
+  parseRemove,
   pickLatestSession,
+  readServerConfig,
+  removeServerFromConfig,
   resolveModelId,
   saveUserConfig,
+  serverExists,
+  trustProject,
+  writeServerToConfig,
 } from '@x-code-cli/core'
 import type { AgentOptions, KnowledgeFact, LanguageModel, LoadedSession, TokenUsage } from '@x-code-cli/core'
 
@@ -68,7 +78,10 @@ export const SLASH_COMMANDS = [
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
   { name: '/memory', description: 'Show auto-memory entries (project + global)' },
-  { name: '/mcp', description: 'Manage MCP servers (list / tools / auth / logout / refresh)' },
+  {
+    name: '/mcp',
+    description: 'Manage MCP servers (list / tools / add / add-json / remove / auth / logout / refresh)',
+  },
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
@@ -1208,11 +1221,230 @@ export function App({
         }
         return
       }
+      case 'add':
+        await handleMcpAdd(text, subArg)
+        return
+
+      case 'add-json':
+        await handleMcpAddJson(text, subArg)
+        return
+
+      case 'remove':
+      case 'rm':
+        await handleMcpRemove(text, subArg)
+        return
+
       default: {
-        addCommandMessage(text, `Unknown subcommand: /mcp ${sub}. Available: list, tools, auth, logout, refresh.`)
+        addCommandMessage(
+          text,
+          `Unknown subcommand: /mcp ${sub}. Available: list, tools, add, add-json, remove, auth, logout, refresh.`,
+        )
         return
       }
     }
+  }
+
+  /** /mcp add — write a new server to user (default) or project config.
+   *
+   *  Doesn't auto-connect: tool surface changes mid-session would invalidate
+   *  the prompt cache and force a miss on the next turn (OpenAI-compatible
+   *  providers' prefix cache). User is told to `/mcp refresh` or restart
+   *  when they're ready — matches the design doc's "explicit refresh"
+   *  philosophy.
+   *
+   *  --scope project also auto-trusts the project (the user running the
+   *  command IS the consent signal — no point making them confirm a
+   *  trust dialog for their own command on next start). Collaborators
+   *  who clone the repo still go through the dialog normally. */
+  async function handleMcpAdd(text: string, subArgRaw: string) {
+    const res = parseAdd(subArgRaw)
+    if (!res.ok) {
+      addCommandMessage(text, res.error)
+      return
+    }
+    const { name, scope, config } = res.command
+
+    // Duplicate-check in the requested scope. We use serverExists rather
+    // than detectScope here on purpose: cross-scope name reuse is allowed
+    // (a user-scope and project-scope server can legitimately share a
+    // name — e.g. a personal vs team-shared variant). Only same-scope
+    // collisions block the add.
+    if (await serverExists(name, scope, process.cwd())) {
+      const existing = await readServerConfig(name, scope, process.cwd())
+      const summary =
+        existing && typeof existing === 'object'
+          ? JSON.stringify(existing, null, 2)
+              .split('\n')
+              .map((l) => '  ' + l)
+              .join('\n')
+          : '(unreadable)'
+      addCommandMessage(
+        text,
+        [
+          `Server "${name}" already exists in ${scope} scope:`,
+          summary,
+          '',
+          `Run /mcp remove --scope ${scope} ${name} first, or pick a different name.`,
+        ].join('\n'),
+      )
+      return
+    }
+
+    let written: { path: string }
+    try {
+      written = await writeServerToConfig(name, config, scope, process.cwd())
+    } catch (err) {
+      addCommandMessage(text, `Failed to add "${name}": ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+
+    // For project scope, auto-trust this path so the user doesn't bump
+    // into their own consent dialog on next launch.
+    let autoTrusted = false
+    if (scope === 'project') {
+      try {
+        await trustProject(process.cwd())
+        autoTrusted = true
+      } catch {
+        // Non-fatal — they'll just see the trust dialog next launch.
+      }
+    }
+
+    const transport = 'url' in config ? 'http' : 'stdio'
+    const lines = [`Added MCP server "${name}" (${transport}) to ${written.path}.`]
+    if (autoTrusted) {
+      lines.push('Auto-trusted this project for future launches.')
+    }
+    if (scope === 'project') {
+      lines.push('Tip: commit `.x-code/config.json` to share with collaborators.')
+    }
+    lines.push('Run /mcp refresh to load it now, or restart xc.')
+    addCommandMessage(text, lines.join('\n'))
+  }
+
+  /** /mcp add-json — same as /mcp add but takes a raw JSON object for the
+   *  config body. The escape hatch for complex configs that don't fit
+   *  command-line flags (nested env, multiple headers, custom cwd, etc.). */
+  async function handleMcpAddJson(text: string, subArgRaw: string) {
+    const res = parseAddJson(subArgRaw)
+    if (!res.ok) {
+      addCommandMessage(text, res.error)
+      return
+    }
+    const { name, scope, config } = res.command
+
+    if (await serverExists(name, scope, process.cwd())) {
+      addCommandMessage(
+        text,
+        `Server "${name}" already exists in ${scope} scope. Run /mcp remove --scope ${scope} ${name} first.`,
+      )
+      return
+    }
+
+    let written: { path: string }
+    try {
+      written = await writeServerToConfig(name, config, scope, process.cwd())
+    } catch (err) {
+      addCommandMessage(text, `Failed to add "${name}": ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+
+    let autoTrusted = false
+    if (scope === 'project') {
+      try {
+        await trustProject(process.cwd())
+        autoTrusted = true
+      } catch {
+        // best-effort
+      }
+    }
+
+    const lines = [`Added MCP server "${name}" to ${written.path}.`]
+    if (autoTrusted) lines.push('Auto-trusted this project for future launches.')
+    if (scope === 'project') lines.push('Tip: commit `.x-code/config.json` to share with collaborators.')
+    lines.push('Run /mcp refresh to load it now, or restart xc.')
+    addCommandMessage(text, lines.join('\n'))
+  }
+
+  /** /mcp remove — delete a server from config.json. Asks y/N before doing
+   *  anything destructive (every other competitor skips this — we keep
+   *  it because a typo can nuke a real entry and the cost of one extra
+   *  keypress is near zero). Current session keeps running with whatever
+   *  it had loaded — disconnecting mid-session has more downside (live
+   *  tool calls get orphaned) than upside (the file change only matters
+   *  at next launch / refresh). */
+  async function handleMcpRemove(text: string, subArgRaw: string) {
+    const res = parseRemove(subArgRaw)
+    if (!res.ok) {
+      addCommandMessage(text, res.error)
+      return
+    }
+    const { name } = res.command
+    let scope = res.command.scope
+
+    if (!scope) {
+      // Auto-detect. The ambiguous case (both scopes) forces an explicit
+      // --scope so we don't silently delete the wrong one.
+      const detected = await detectScope(name, process.cwd())
+      switch (detected.kind) {
+        case 'not-found':
+          addCommandMessage(text, `Server "${name}" is not in user or project config — nothing to remove.`)
+          return
+        case 'both':
+          addCommandMessage(text, `Server "${name}" exists at both scopes. Specify --scope user or --scope project.`)
+          return
+        case 'user':
+        case 'project':
+          scope = detected.kind
+          break
+      }
+    } else {
+      // Explicit scope: verify presence before bothering the user with a
+      // confirmation dialog.
+      if (!(await serverExists(name, scope, process.cwd()))) {
+        addCommandMessage(
+          text,
+          `Server "${name}" is not in ${scope} scope (${getMcpConfigPath(scope, process.cwd())}) — nothing to remove.`,
+        )
+        return
+      }
+    }
+
+    const confirmAnswer = await askQuestion(
+      `Remove MCP server "${name}" from ${scope} scope?\n  (${getMcpConfigPath(scope, process.cwd())})`,
+      [
+        { label: 'Remove', description: 'Delete this server entry. Current session unchanged.' },
+        { label: 'Cancel', description: 'Keep the config as-is.' },
+      ],
+      { noOther: true },
+    )
+    if (confirmAnswer !== 'Remove') {
+      addCommandMessage(text, `Cancelled — "${name}" not removed.`)
+      return
+    }
+
+    let result: { path: string; removed: boolean }
+    try {
+      result = await removeServerFromConfig(name, scope, process.cwd())
+    } catch (err) {
+      addCommandMessage(text, `Failed to remove "${name}": ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    if (!result.removed) {
+      // Race: someone deleted the file or entry between detection and
+      // remove. Idempotent path — just say so.
+      addCommandMessage(text, `Server "${name}" was already gone from ${scope} scope.`)
+      return
+    }
+
+    addCommandMessage(
+      text,
+      [
+        `Removed "${name}" from ${scope} scope (${result.path}).`,
+        'Current session unchanged — the running server (if any) keeps working until xc exits.',
+        `Stored OAuth tokens (if any) kept — run /mcp logout ${name} to clear them too.`,
+      ].join('\n'),
+    )
   }
 
   // RENDERING ARCHITECTURE
