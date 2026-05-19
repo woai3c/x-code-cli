@@ -68,14 +68,19 @@ export class McpOAuthProvider implements OAuthClientProvider {
   // ── OAuthClientProvider ────────────────────────────────────────────────
 
   get redirectUrl(): string {
-    // Caller MUST call ensureCallbackServer() before this getter is
-    // first used by the SDK. The SDK calls `redirectUrl` after
-    // `redirectToAuthorization` has been invoked (per its own flow),
-    // so the practical ordering holds.
-    if (!this.callbackServer) {
-      throw new Error('Callback server not started — redirectToAuthorization must be called first')
-    }
-    return this.callbackServer.url
+    // The SDK actually reads `redirectUrl` BEFORE `redirectToAuthorization`
+    // fires (e.g. while constructing the authorize URL during the very
+    // first connect attempt with no stored token). An earlier version
+    // threw here, which surfaced HTTP servers as `failed` instead of the
+    // intended `needs_auth` on the first launch after `/mcp add`.
+    //
+    // We return the same loopback placeholder `clientMetadata.redirect_uris`
+    // already uses. RFC 8252 §7.3 says authorisation servers MUST accept any
+    // port on a registered loopback redirect_uri, so the placeholder being
+    // port-less is fine for the registration roundtrip; `redirectToAuthorization`
+    // rewrites the actual `redirect_uri` query param with the real port
+    // right before launching the browser.
+    return this.callbackServer?.url ?? 'http://127.0.0.1/callback'
   }
 
   get clientMetadata(): OAuthClientMetadata {
