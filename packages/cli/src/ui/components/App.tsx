@@ -66,21 +66,49 @@ interface AppProps {
 /** Slash commands — used for both help text and tab completion */
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
-  { name: '/model', description: 'Pick a model (no-arg = interactive) — choice is saved' },
-  { name: '/thinking', description: 'Toggle extended thinking on/off (no-arg = show status) — saved' },
-  { name: '/theme', description: 'Pick UI theme (no-arg = interactive picker) — drives diff colors + syntax palette' },
-  { name: '/plan', description: 'Toggle plan mode on/off (no-arg = show status) — saved' },
+  {
+    name: '/model',
+    description: 'Pick a model (no-arg = interactive) — choice is saved',
+    argumentHint: '[model-id]',
+  },
+  {
+    name: '/thinking',
+    description: 'Toggle extended thinking on/off (no-arg = show status) — saved',
+    argumentHint: '[on|off]',
+  },
+  {
+    name: '/theme',
+    description: 'Pick UI theme (no-arg = interactive picker) — drives diff colors + syntax palette',
+    argumentHint: '[name]',
+  },
+  {
+    name: '/plan',
+    description: 'Toggle plan mode on/off (no-arg = show status) — saved',
+    argumentHint: '[on|off]',
+  },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
-  { name: '/resume', description: 'Pick a past session in this project to resume' },
+  { name: '/resume', description: 'Pick a past session in this project to resume', argumentHint: '[id]' },
   { name: '/init', description: 'Initialize project knowledge' },
-  { name: '/review', description: 'Review a pull request (no-arg = list open PRs)' },
+  { name: '/review', description: 'Review a pull request (no-arg = list open PRs)', argumentHint: '[PR]' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
   { name: '/memory', description: 'Show auto-memory entries (project + global)' },
   {
     name: '/mcp',
-    description: 'Manage MCP servers (list / tools / add / add-json / remove / auth / logout / refresh)',
+    description: 'Manage MCP servers',
+    // Subcommand menu fires on `/mcp ` or `/mcp <prefix>`. Order matches
+    // handleMcp's switch in this file so the menu reflects every branch.
+    subcommands: [
+      { name: 'list', description: 'List configured MCP servers' },
+      { name: 'tools', description: 'List tools from connected servers (optionally filter by server)' },
+      { name: 'add', description: 'Add a new MCP server (stdio or http) to user / project config' },
+      { name: 'add-json', description: 'Add an MCP server from a raw JSON config object' },
+      { name: 'remove', description: 'Remove an MCP server from config' },
+      { name: 'auth', description: 'Authenticate an HTTP MCP server via OAuth' },
+      { name: 'logout', description: 'Clear stored OAuth tokens for a server' },
+      { name: 'refresh', description: 'Reload mcpServers from disk and reconnect' },
+    ],
   },
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const

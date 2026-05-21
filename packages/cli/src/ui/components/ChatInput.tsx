@@ -148,9 +148,37 @@ function countContentRows(content: string, termWidth: number): number {
 
 // ── Types ───────────────────────────────────────────────────────────────
 
+/** One row in the slash-completion menu. Top-level command rows and
+ *  subcommand rows are both rendered through this shape — display columns
+ *  use `name`/`description`, but accept paths use `applyText` so a
+ *  subcommand row (`{ name: 'auth', applyText: '/mcp auth' }`) replaces the
+ *  whole input correctly. */
+interface MenuItem {
+  name: string
+  description: string
+  applyText: string
+  /** Dim suffix shown after `name` in the menu (e.g. `[on|off]` for
+   *  `/thinking`). Only populated for stage-1 rows; subcommand rows
+   *  don't carry one because the description column already explains
+   *  the shape. */
+  argumentHint?: string
+}
+
 export interface SlashCommand {
   name: string
   description: string
+  /** Grey placeholder shown after the command name in the slash menu.
+   *  Example: `argumentHint: '[on|off]'` makes the menu line read
+   *  `/thinking [on|off]  Toggle extended thinking ...`. Used by
+   *  commands that take args but have no fixed enumerable subcommands
+   *  (e.g. `/model <model-id>`, `/review [PR]`). */
+  argumentHint?: string
+  /** Fixed enumerable subcommands. When present, typing `/cmd ` (with
+   *  trailing space) or `/cmd <prefix>` shows a second-stage fuzzy
+   *  menu over `subcommands` — same UI as the top-level command menu.
+   *  Reserved for commands with many discrete second tokens that are
+   *  easy to forget (`/mcp` has 8). */
+  subcommands?: ReadonlyArray<{ name: string; description: string }>
 }
 
 export interface SpinnerState {
@@ -942,18 +970,61 @@ export function ChatInput({
   }, [])
 
   // ── Fuzzy matching ──
-  const matches = useMemo(() => {
-    if (!text.startsWith('/') || text.includes(' ')) return []
-    const query = text.slice(1).toLowerCase()
-    if (!query) return [...commands]
-    return commands.filter((cmd) => {
-      const name = cmd.name.slice(1).toLowerCase()
+  //
+  // Two-stage menu: stage 1 completes the slash command name itself
+  // (`/mc` → `/mcp`); stage 2 fires after the user types a space and
+  // completes a subcommand for commands that declare one (`/mcp ` →
+  // `list / tools / auth / ...`). A third stage (server names, model
+  // ids) would need an async per-command `complete()` callback —
+  // intentionally not implemented; the second stage handles 80% of the
+  // pain (the 8-subcommand `/mcp` block) at a tenth the code.
+  //
+  // Items carry `applyText` so the accept paths (Tab / Enter) can set
+  // the input to the full path (`/mcp auth`) regardless of which stage
+  // the user picked from. Display columns still use the bare `name`
+  // (stage 2 shows `auth`, not `/mcp auth`) so the menu stays scannable.
+  const matches = useMemo<MenuItem[]>(() => {
+    if (!text.startsWith('/')) return []
+
+    const fuzzyMatches = (name: string, query: string): boolean => {
       let qi = 0
       for (let ni = 0; ni < name.length && qi < query.length; ni++) {
         if (name[ni] === query[qi]) qi++
       }
       return qi === query.length
-    })
+    }
+
+    const firstSpace = text.indexOf(' ')
+    if (firstSpace === -1) {
+      // Stage 1: typing the command name. Match against /-stripped names.
+      const query = text.slice(1).toLowerCase()
+      const filtered = !query ? commands : commands.filter((c) => fuzzyMatches(c.name.slice(1).toLowerCase(), query))
+      return filtered.map<MenuItem>((c) => ({
+        name: c.name,
+        description: c.description,
+        applyText: c.name,
+        argumentHint: c.argumentHint,
+      }))
+    }
+
+    // Stage 2: typing the subcommand. `head` is the command (e.g. "/mcp"),
+    // `tail` is whatever follows the first space. A second space means the
+    // user has moved past the subcommand slot; we don't auto-complete
+    // beyond that (no third-stage callback yet).
+    const head = text.slice(0, firstSpace)
+    const tail = text.slice(firstSpace + 1)
+    if (tail.includes(' ')) return []
+
+    const cmd = commands.find((c) => c.name === head)
+    if (!cmd?.subcommands) return []
+
+    const query = tail.toLowerCase()
+    const filtered = !query ? cmd.subcommands : cmd.subcommands.filter((s) => fuzzyMatches(s.name.toLowerCase(), query))
+    return filtered.map<MenuItem>((s) => ({
+      name: s.name,
+      description: s.description,
+      applyText: `${head} ${s.name}`,
+    }))
   }, [text, commands])
 
   const safeIndex = matches.length > 0 ? completionIndex % matches.length : 0
@@ -1375,9 +1446,11 @@ export function ChatInput({
         // command directly instead of submitting whatever's in the input
         // (usually just `/` or a prefix), matching Claude Code's behavior.
         // Previously the user had to hit Tab first to materialize the
-        // selection, then Enter — redundant.
+        // selection, then Enter — redundant. `applyText` carries the full
+        // path so picking a stage-2 subcommand submits `/mcp auth`, not
+        // bare `auth`.
         if (currentMatch) {
-          handleSubmit(currentMatch.name)
+          handleSubmit(currentMatch.applyText)
           return
         }
         // Backslash continuation: `\` immediately before the cursor + Enter
@@ -1487,7 +1560,7 @@ export function ChatInput({
           return
         }
         if (currentMatch) {
-          dispatch({ type: 'SET_TEXT', text: currentMatch.name, cursor: currentMatch.name.length })
+          dispatch({ type: 'SET_TEXT', text: currentMatch.applyText, cursor: currentMatch.applyText.length })
           setCompletionIndex(0)
         }
         return
@@ -2498,19 +2571,37 @@ export function ChatInput({
     // would both compete for the rows above the input box, and a
     // resize would clobber whichever drew last.
     if (activeMenu === 'slash') {
-      const maxNameLen = matches.reduce((max, cmd) => Math.max(max, cmd.name.length), 0)
+      // Column width includes the longest "name + space + argumentHint" so
+      // every description column starts at the same x. Without folding
+      // the hint into the width, hint-bearing rows would push description
+      // to a different column from hint-less rows, producing a ragged
+      // right edge.
+      const labelWidth = matches.reduce((max, cmd) => {
+        const hintW = cmd.argumentHint ? cmd.argumentHint.length + 1 : 0
+        return Math.max(max, cmd.name.length + hintW)
+      }, 0)
       for (let i = 0; i < matches.length; i++) {
         const cmd = matches[i]
         const sel = i === safeIndex
         const cells: Cell[] = []
         cells.push({ char: ' ', style: S_NONE, width: 1 })
         cells.push({ char: ' ', style: S_NONE, width: 1 })
-        const nameStr = cmd.name.padEnd(maxNameLen + 2)
+        const labelLen = cmd.name.length + (cmd.argumentHint ? cmd.argumentHint.length + 1 : 0)
+        const padRight = ' '.repeat(Math.max(2, labelWidth + 2 - labelLen))
         if (sel) {
-          cells.push(...textToCells(nameStr, S_BLUE_PURPLE_BOLD))
+          cells.push(...textToCells(cmd.name, S_BLUE_PURPLE_BOLD))
+          if (cmd.argumentHint) {
+            cells.push(...textToCells(' ', S_NONE))
+            cells.push(...textToCells(cmd.argumentHint, S_DIM))
+          }
+          cells.push(...textToCells(padRight, S_NONE))
           cells.push(...textToCells(cmd.description, S_RESET))
         } else {
-          cells.push(...textToCells(nameStr + cmd.description, S_DIM))
+          cells.push(...textToCells(cmd.name, S_DIM))
+          if (cmd.argumentHint) {
+            cells.push(...textToCells(' ' + cmd.argumentHint, S_DIM))
+          }
+          cells.push(...textToCells(padRight + cmd.description, S_DIM))
         }
         frame.push(cells)
       }
