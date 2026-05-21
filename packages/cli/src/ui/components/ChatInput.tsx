@@ -162,6 +162,10 @@ export interface PermissionRequest {
   toolName: string
   input: Record<string, unknown>
   onResolve: (decision: 'yes' | 'always' | 'no') => void
+  /** Set by use-agent when the tool resolves to an MCP registry entry.
+   *  Drives the MCP-flavoured title / preview / always-allow label in
+   *  the dialog. Absent for built-in tools (shell/edit/writeFile/…). */
+  mcp?: { serverName: string; rawName: string }
 }
 
 export interface SelectRequest {
@@ -525,7 +529,8 @@ function ansiTextToCells(text: string): Cell[] {
   return cells
 }
 
-function permissionTitle(toolName: string): string {
+function permissionTitle(toolName: string, mcp?: { serverName: string; rawName: string }): string {
+  if (mcp) return `X-Code wants to use MCP tool: ${mcp.serverName}/${mcp.rawName}`
   switch (toolName) {
     case 'shell':
       return 'X-Code wants to run a shell command'
@@ -546,7 +551,36 @@ const PERMISSION_LEVEL_STYLE: Record<string, { label: string; style: string }> =
   deny: { label: 'dangerous', style: S_ERROR_BOLD },
 }
 
-function permissionContentCells(toolName: string, input: Record<string, unknown>, termWidth: number): Cell[] | null {
+/** One-line `key: value, key: value` summary of an MCP tool's input.
+ *  Values are JSON-encoded so strings render with their quotes and
+ *  nested objects stay readable; long ones get trimmed before the join
+ *  so a single oversized field can't swallow every other key. The outer
+ *  truncate-to-terminal-width in `permissionContentCells` then caps the
+ *  whole row. */
+function mcpInputPreview(input: Record<string, unknown>): string {
+  const keys = Object.keys(input)
+  if (keys.length === 0) return '(no args)'
+  const PER_VALUE_MAX = 60
+  const parts = keys.map((k) => {
+    let v: string
+    try {
+      v = JSON.stringify(input[k])
+    } catch {
+      v = String(input[k])
+    }
+    if (v === undefined) v = 'undefined'
+    if (v.length > PER_VALUE_MAX) v = v.slice(0, PER_VALUE_MAX - 1) + '…'
+    return `${k}: ${v}`
+  })
+  return parts.join(', ')
+}
+
+function permissionContentCells(
+  toolName: string,
+  input: Record<string, unknown>,
+  termWidth: number,
+  mcp?: { serverName: string; rawName: string },
+): Cell[] | null {
   // Frame geometry assumes exactly ONE row per permission content line.
   // When a string is longer than termWidth the terminal will auto-wrap it
   // onto the next physical row, which breaks every downstream absolute
@@ -558,6 +592,20 @@ function permissionContentCells(toolName: string, input: Record<string, unknown>
   const truncateToWidth = (text: string, reservedCols: number): string => {
     const maxLen = Math.max(10, termWidth - reservedCols)
     return text.length > maxLen ? text.slice(0, maxLen - 1) + GLYPH_ELLIPSIS : text
+  }
+  if (mcp) {
+    // One-line `key: value, key: value` preview of the input. MCP tools
+    // can take arbitrary schemas, so we fall back to a generic serialiser
+    // rather than trying to guess "the important field". Empty input
+    // still renders the row (with `(no args)`) so the dialog height
+    // matches shell/edit and the always-allow row sits where the user
+    // expects it.
+    const preview = mcpInputPreview(input)
+    const cells: Cell[] = []
+    cells.push({ char: ' ', style: S_NONE, width: 1 })
+    cells.push({ char: ' ', style: S_NONE, width: 1 })
+    cells.push(...textToCells(truncateToWidth(preview, 2 + 2), S_ACCENT))
+    return cells
   }
   if (toolName === 'shell') {
     const level = getPermissionLevel('shell', input)
@@ -1212,7 +1260,7 @@ export function ChatInput({
     onKey: (key) => {
       // Permission dialog captures navigation + submit keys.
       if (permission) {
-        const hasAlwaysOption = suggestRuleLabel(permission.toolName, permission.input) !== null
+        const hasAlwaysOption = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp) !== null
         const maxIdx = hasAlwaysOption ? 2 : 1
         if (key === 'up') {
           setPermissionSelected((p) => (p > 0 ? p - 1 : maxIdx))
@@ -1951,17 +1999,17 @@ export function ChatInput({
     // and the input's top separator) so the input stays pinned at the
     // bottom of the screen regardless of dialog state.
     if (permission) {
-      const titleText = permissionTitle(permission.toolName)
+      const titleText = permissionTitle(permission.toolName, permission.mcp)
       const titleCells: Cell[] = []
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push(...textToCells(titleText, S_WARNING_BOLD))
       frame.push(titleCells)
 
-      const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth)
+      const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
       if (contentCells) frame.push(contentCells)
 
-      const ruleLabel = suggestRuleLabel(permission.toolName, permission.input)
+      const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
       // When no rule can be suggested (e.g. powershell -Command "...",
       // enterPlanMode), only show Yes/No (2 options). When a prefix is
       // available, show Yes / Yes don't ask again / No (3 options).

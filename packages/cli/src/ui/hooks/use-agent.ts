@@ -36,6 +36,12 @@ export interface PendingPermission {
   toolCallId: string
   toolName: string
   input: Record<string, unknown>
+  /** Populated when the tool name resolves to an MCP registry entry.
+   *  Carries the unmangled `<server>/<rawName>` pair so the dialog can
+   *  show "MCP tool: filesystem/read_file" instead of the mangled
+   *  `filesystem__read_file`. Looked up here rather than in ChatInput so
+   *  the registry stays a CLI-startup concern. */
+  mcp?: { serverName: string; rawName: string }
 }
 
 interface PendingQuestion {
@@ -346,10 +352,17 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         onAskPermission: (toolCall) => {
           return new Promise<'yes' | 'always' | 'no'>((resolve) => {
             permissionResolversRef.current.push(resolve)
+            // MCP lookup: the registry holds the unmangled server + raw
+            // tool name pair we need for the dialog title and the
+            // always-allow label. Built-in tools miss the registry and
+            // leave `mcp` undefined — ChatInput falls back to its
+            // existing per-tool rendering for them.
+            const mcpEntry = options.mcpRegistry?.get(toolCall.toolName)
             const entry: PendingPermission = {
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
               input: toolCall.input,
+              mcp: mcpEntry ? { serverName: mcpEntry.serverName, rawName: mcpEntry.rawName } : undefined,
             }
             setState((prev) => ({ ...prev, permissionQueue: [...prev.permissionQueue, entry] }))
           })

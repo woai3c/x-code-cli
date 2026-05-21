@@ -1518,6 +1518,7 @@ export function App({
           ? {
               toolName: permissionRequest.toolName,
               input: permissionRequest.input,
+              mcp: permissionRequest.mcp,
               onResolve: resolvePermission,
             }
           : null

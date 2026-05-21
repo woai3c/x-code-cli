@@ -309,9 +309,13 @@ function extractPowershellPrefix(cmd: string): string | null {
  *   the prefix regex; without this fallback the user gets only Yes/No
  *   forever for repeated identical commands).
  * Write tools (writeFile / edit): `all edits this session` (session-only)
+ * MCP tools (isMcp=true):         `this MCP tool` (persisted to disk via
+ *   McpPermissionStore — the label matches that posture, unlike write
+ *   tools which fall back to session-only).
  */
-export function suggestRuleLabel(toolName: string, input: Record<string, unknown>): string | null {
+export function suggestRuleLabel(toolName: string, input: Record<string, unknown>, isMcp = false): string | null {
   if (toolName === 'enterPlanMode') return null
+  if (isMcp) return 'this MCP tool'
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''
     const prefix = extractCommandPrefix(cmd)

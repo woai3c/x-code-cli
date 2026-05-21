@@ -340,4 +340,14 @@ describe('suggestRuleLabel + buildAllowRule fallback for unrecognised shell comm
   it('returns null for enterPlanMode (no recurring action to remember)', () => {
     expect(suggestRuleLabel('enterPlanMode', {})).toBeNull()
   })
+
+  it('returns "this MCP tool" when isMcp is true regardless of tool name', () => {
+    // MCP tools used to fall through to the writeFile branch and render
+    // as "all edits this session" — wrong text and wrong persistence
+    // posture (MCP always-allow is written to disk via McpPermissionStore,
+    // not session-only). The explicit isMcp flag bypasses the shell /
+    // write fallbacks and returns the MCP-flavoured label.
+    expect(suggestRuleLabel('filesystem__read_file', { path: '/tmp' }, true)).toBe('this MCP tool')
+    expect(suggestRuleLabel('any_name_at_all', {}, true)).toBe('this MCP tool')
+  })
 })
