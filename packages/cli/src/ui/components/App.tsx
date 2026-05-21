@@ -263,6 +263,7 @@ export function App({
     addInfoMessage,
     addUserMessage,
     addCommandMessage,
+    addCommandResult,
     askQuestion,
     setPermissionMode,
   } = useAgent(model, options, initialSession)
@@ -1145,7 +1146,10 @@ export function App({
         try {
           const server = await registry.authenticateServer(subArg, {
             onBrowserOpen: (url) => {
-              addInfoMessage(`> Opened ${url}\n  Waiting for the authorization redirect...`)
+              // addCommandResult appends another `⎿` line under the same
+              // echo — no leading blank, no trailing \n\n padding. Manual
+              // ⎿/> prefixes are dropped because the helper supplies them.
+              addCommandResult(`Opened ${url}\nWaiting for the authorization redirect...`)
             },
           })
           if (server.status.kind === 'connected') {
@@ -1153,20 +1157,20 @@ export function App({
             // turn rebuilds the system prompt with the newly-available
             // tools.
             invalidateSystemPromptCache()
-            addInfoMessage(
-              `  ⎿  ✓ Authenticated "${subArg}" — ${server.status.toolCount} tool${
+            addCommandResult(
+              `✓ Authenticated "${subArg}" — ${server.status.toolCount} tool${
                 server.status.toolCount === 1 ? '' : 's'
               }, ${server.status.resourceCount} resource${server.status.resourceCount === 1 ? '' : 's'}`,
             )
           } else if (server.status.kind === 'needs_auth') {
-            addInfoMessage(`  ⎿  ⚠ Server still needs auth. The browser flow may have been cancelled.`)
+            addCommandResult(`⚠ Server still needs auth. The browser flow may have been cancelled.`)
           } else if (server.status.kind === 'failed') {
-            addInfoMessage(`  ⎿  ✗ Auth completed but server failed to connect: ${server.status.error}`)
+            addCommandResult(`✗ Auth completed but server failed to connect: ${server.status.error}`)
           } else {
-            addInfoMessage(`  ⎿  Server is now in state: ${server.status.kind}`)
+            addCommandResult(`Server is now in state: ${server.status.kind}`)
           }
         } catch (err) {
-          addInfoMessage(`  ⎿  ✗ Authentication failed: ${err instanceof Error ? err.message : String(err)}`)
+          addCommandResult(`✗ Authentication failed: ${err instanceof Error ? err.message : String(err)}`)
         }
         return
       }
@@ -1215,9 +1219,9 @@ export function App({
           lines.push(`Note: next message rebuilds the system prompt, so prompt-cache will miss once.`)
           if (projectSkipped) lines.push('Project-level MCP servers were skipped (not trusted).')
           for (const e of configErrors) lines.push(`Config error in ${e.name}: ${e.message}`)
-          addInfoMessage(lines.join('\n'))
+          addCommandResult(lines.join('\n'))
         } catch (err) {
-          addInfoMessage(`  ⎿  ✗ Refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+          addCommandResult(`✗ Refresh failed: ${err instanceof Error ? err.message : String(err)}`)
         }
         return
       }

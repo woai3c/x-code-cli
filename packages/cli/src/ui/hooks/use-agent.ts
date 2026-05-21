@@ -898,6 +898,32 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     [appendMessage],
   )
 
+  /** Append an extra `  ⎿  result` line under the most recent command echo
+   *  WITHOUT re-echoing the command. For multi-step slash commands like
+   *  /mcp refresh and /mcp auth where one user input produces a tight
+   *  result block that fills in over time:
+   *    > /mcp auth sentry
+   *      ⎿  Authenticating "sentry" — opening browser...    (addCommandMessage)
+   *      ⎿  Opened https://...                              (addCommandResult)
+   *           Waiting for the authorization redirect...
+   *      ⎿  ✓ Authenticated "sentry" — 14 tools             (addCommandResult)
+   *  Using addInfoMessage for the follow-ups would render each piece as a
+   *  standalone assistant block with leading + trailing blank rows, padding
+   *  the result with 3+ blanks before the next prompt. */
+  const addCommandResult = useCallback(
+    (content: string) => {
+      const base = Date.now()
+      appendMessage({
+        id: `cmd-res-${base}`,
+        role: 'assistant',
+        content,
+        timestamp: base,
+        kind: 'command-result',
+      })
+    },
+    [appendMessage],
+  )
+
   return {
     state,
     submit,
@@ -917,6 +943,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     addInfoMessage,
     addUserMessage,
     addCommandMessage,
+    addCommandResult,
     askQuestion,
   }
 }

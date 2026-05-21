@@ -303,8 +303,16 @@ async function main() {
   const mcpLoadResult = await loadMcpFromDisk({
     cwd: process.cwd(),
     askUser: (question, opts) => askInTerminal(question, opts),
+    // The browser-open hook only fires during /mcp auth (passive boot
+    // mode never invokes redirectToAuthorization — see
+    // McpOAuthProvider.redirectToAuthorization). The /mcp auth handler
+    // in App.tsx already surfaces the URL via addCommandResult; writing
+    // ANOTHER copy here via console.error would land in stderr and
+    // corrupt ChatInput's cell frame (the `[` glyph collides with the
+    // bottom separator of the input box). Send it to the debug log so
+    // it's still recoverable for support.
     oauthProviderFor: createOAuthProviderFactory(tokenStorage, (server, url) => {
-      console.error(chalk.cyan(`[mcp] Opening browser for ${server}: ${url}`))
+      debugLog('mcp.open-browser', `${server}: ${url}`)
     }),
     onExitRequested: () => process.exit(0),
   })
