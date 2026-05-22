@@ -7,5 +7,9 @@
     "source.organizeImports": "never"
   },
   "eslint.useFlatConfig": true,
-  "typescript.tsdk": "node_modules/typescript/lib"
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "[markdown]": {
+    "editor.formatOnSave": false,
+    "editor.defaultFormatter": "vscode.markdown-language-features"
+  }
 }
