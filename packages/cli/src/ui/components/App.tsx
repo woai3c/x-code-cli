@@ -1,9 +1,13 @@
 // @x-code-cli/cli — Root App component
-import { useCallback, useEffect, useRef, useState } from 'react'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useApp } from 'ink'
 
 import {
+  GLOBAL_XCODE_DIR,
   MODEL_ALIASES,
   PROVIDER_MODELS,
   createModelRegistry,
@@ -63,7 +67,8 @@ interface AppProps {
   onSessionInfoReady?: (getter: () => { sessionId: string; taskSlug: string; messageCount: number } | null) => void
 }
 
-/** Slash commands — used for both help text and tab completion */
+/** Slash commands — built-in static set used for help text and tab completion.
+ *  Skill commands are appended dynamically at runtime from the skill registry. */
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   {
@@ -108,6 +113,14 @@ export const SLASH_COMMANDS = [
       { name: 'auth', description: 'Authenticate an HTTP MCP server via OAuth' },
       { name: 'logout', description: 'Clear stored OAuth tokens for a server' },
       { name: 'refresh', description: 'Reload mcpServers from disk and reconnect' },
+    ],
+  },
+  {
+    name: '/skill',
+    description: 'Manage skills',
+    subcommands: [
+      { name: 'install', description: 'Fetch and install a skill from a URL' },
+      { name: 'list', description: 'List installed skills' },
     ],
   },
   { name: '/exit', description: 'Exit (flushes session)' },
@@ -184,11 +197,18 @@ function formatRelativeTime(epochMs: number): string {
 // formatUsageHistory was replaced by the interactive handleUsageHistory
 // picker inside the component — see handleUsageHistory().
 
-const HELP_TEXT =
-  `X-Code CLI v${VERSION}\n\n` +
-  SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
-  `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
-  `\nKeyboard: Esc to interrupt the current turn · ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} (twice) to exit`
+function buildHelpText(skillCommands: readonly { name: string; description: string }[]): string {
+  const allCommands = [
+    ...SLASH_COMMANDS,
+    ...skillCommands.map((s) => ({ name: `/${s.name}`, description: s.description })),
+  ]
+  return (
+    `X-Code CLI v${VERSION}\n\n` +
+    allCommands.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
+    `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
+    `\nKeyboard: Esc to interrupt the current turn · ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} (twice) to exit`
+  )
+}
 
 // Prompt body for `/init`. Submitted as the user message so the agent runs
 // its full toolchain (Read/Glob/Grep/Edit/Write) over the codebase and
@@ -295,6 +315,26 @@ export function App({
     askQuestion,
     setPermissionMode,
   } = useAgent(model, options, initialSession)
+
+  // Derived from options.skillRegistry — stable for the session lifetime.
+  // Used both for tab completion (allCommands) and /skillname dispatch.
+  const skillCommands = useMemo(
+    () => (options.skillRegistry ? options.skillRegistry.list() : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  // Combined command list: built-ins + loaded skills (for tab completion).
+  const allCommands = useMemo(
+    () => [...SLASH_COMMANDS, ...skillCommands.map((s) => ({ name: `/${s.name}`, description: s.description }))],
+    [skillCommands],
+  )
+
+  /** Skill pending injection: set when the user types `/skillname` with no
+   *  argument (so we don't trigger an immediate AI response just to the skill
+   *  XML). The skill content is prepended to the NEXT non-slash-command user
+   *  message. Cleared on /clear or when consumed. */
+  const pendingSkillRef = useRef<{ name: string; content: string } | null>(null)
 
   // Transient one-line hint shown below the input box (in ChatInput's
   // footer slot, alongside the plan-mode / accept-edits indicators). Today
@@ -555,7 +595,7 @@ export function App({
       switch (command) {
         case 'help':
           echoCommand(text)
-          addInfoMessage(HELP_TEXT)
+          addInfoMessage(buildHelpText(skillCommands))
           return
 
         case 'model':
@@ -581,6 +621,7 @@ export function App({
           // cleared." line would force the cleared screen to immediately
           // start re-painting at row 1, defeating the "fresh launch" look
           // the user asked for.
+          pendingSkillRef.current = null
           clear()
           return
 
@@ -619,6 +660,10 @@ export function App({
           handleMemory()
           return
 
+        case 'skill':
+          await handleSkill(text, arg)
+          return
+
         case 'mcp':
           await handleMcp(text, arg)
           return
@@ -628,12 +673,42 @@ export function App({
           exit()
           return
 
-        default:
+        default: {
+          // Check if the command matches a loaded skill before giving up.
+          const skill = options.skillRegistry?.get(command)
+          if (skill) {
+            echoCommand(text)
+            if (arg) {
+              // Skill + immediate request — inject and submit together so the
+              // model applies the skill persona to the user's specific ask.
+              await submit(`<activated_skill name="${skill.name}">\n${skill.content}\n</activated_skill>\n\n${arg}`, {
+                silent: true,
+              })
+            } else {
+              // No follow-up yet — store as pending so the AI doesn't respond
+              // to the skill XML as if it were a user greeting. The skill
+              // context will be prepended to the user's next real message.
+              pendingSkillRef.current = { name: skill.name, content: skill.content }
+              addCommandMessage(text, `Skill **${skill.name}** loaded. Type your request.`)
+            }
+            return
+          }
           addCommandMessage(text, `Unknown command: /${command}. Type /help for available commands.`)
           return
+        }
       }
     }
 
+    // Prepend any pending skill context to the user's message, then clear it.
+    const pendingSkill = pendingSkillRef.current
+    if (pendingSkill) {
+      pendingSkillRef.current = null
+      await submit(
+        `<activated_skill name="${pendingSkill.name}">\n${pendingSkill.content}\n</activated_skill>\n\n${text}`,
+        { silent: true },
+      )
+      return
+    }
     await submit(text)
   }
 
@@ -1075,9 +1150,72 @@ export function App({
    *
    *  Most subcommands are pure-read against `options.mcpRegistry`, which
    *  is the frozen snapshot from CLI startup. `auth` / `refresh` /
-   *  config changes all require a CLI restart to take effect because
-   *  the system prompt cache (and provider prefix caches) are stable
-   *  for the session — same constraint as sub-agents (see CLAUDE.md).
+  /** Minimal YAML name extractor for SKILL.md frontmatter.
+   *  Only needs to find `name: <value>` — full parse happens in the loader. */
+  function extractSkillName(content: string): string | null {
+    const match = content.match(/^---\r?\n[\s\S]*?^name:\s*["']?([^"'\r\n]+)["']?\s*$/m)
+    return match ? match[1].trim() : null
+  }
+
+  async function handleSkill(text: string, arg: string) {
+    echoCommand(text)
+    const parts = arg.trim().split(/\s+/)
+    const sub = parts[0]?.toLowerCase()
+    const subArg = parts.slice(1).join(' ').trim()
+
+    if (sub === 'install') {
+      if (!subArg) {
+        addCommandMessage(text, 'Usage: `/skill install <url>`')
+        return
+      }
+      let content: string
+      try {
+        const res = await fetch(subArg)
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+        content = await res.text()
+      } catch (err) {
+        addCommandMessage(text, `Failed to fetch \`${subArg}\`: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+
+      const name = extractSkillName(content)
+      if (!name) {
+        addCommandMessage(text, 'Invalid SKILL.md: missing `name` in frontmatter.')
+        return
+      }
+
+      const skillDir = path.join(GLOBAL_XCODE_DIR, 'skills', name)
+      const skillFile = path.join(skillDir, 'SKILL.md')
+      try {
+        await fs.mkdir(skillDir, { recursive: true })
+        await fs.writeFile(skillFile, content, 'utf-8')
+      } catch (err) {
+        addCommandMessage(text, `Failed to save skill: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+
+      addCommandMessage(text, `Skill **${name}** installed to \`${skillFile}\`\n\nRestart the CLI to use \`/${name}\`.`)
+      return
+    }
+
+    if (sub === 'list') {
+      const skills = options.skillRegistry?.list() ?? []
+      if (skills.length === 0) {
+        const skillsPath = path.join(GLOBAL_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
+        addCommandMessage(text, `No skills loaded. Place SKILL.md files in \`${skillsPath}\` and restart.`)
+        return
+      }
+      const lines = skills.map((s) => `- **${s.name}** (${s.source}): ${s.description}`)
+      addCommandMessage(text, `**Loaded skills** (${skills.length}):\n\n${lines.join('\n')}`)
+      return
+    }
+
+    addCommandMessage(text, 'Usage: `/skill install <url>` · `/skill list`')
+  }
+
+  /** Skills and MCP server config changes all require a CLI restart to take
+   *  effect because the system prompt cache (and provider prefix caches) are
+   *  stable for the session — same constraint as sub-agents (see CLAUDE.md).
    *  `logout` is the only mutator that takes effect immediately: it
    *  just deletes a token from disk; the actual reconnect happens at
    *  next launch. */
@@ -1566,7 +1704,7 @@ export function App({
             }
           : null
       }
-      commands={SLASH_COMMANDS}
+      commands={allCommands}
     />
   )
 }
