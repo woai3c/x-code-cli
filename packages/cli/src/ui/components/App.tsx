@@ -677,10 +677,11 @@ export function App({
           // Check if the command matches a loaded skill before giving up.
           const skill = options.skillRegistry?.get(command)
           if (skill) {
-            echoCommand(text)
             if (arg) {
-              // Skill + immediate request — inject and submit together so the
-              // model applies the skill persona to the user's specific ask.
+              // Skill + immediate request — echo then inject and submit together
+              // so the model applies the skill persona to the user's specific ask.
+              // submit is silent so echoCommand provides the visible echo.
+              echoCommand(text)
               await submit(`<activated_skill name="${skill.name}">\n${skill.content}\n</activated_skill>\n\n${arg}`, {
                 silent: true,
               })
@@ -688,6 +689,7 @@ export function App({
               // No follow-up yet — store as pending so the AI doesn't respond
               // to the skill XML as if it were a user greeting. The skill
               // context will be prepended to the user's next real message.
+              // addCommandMessage handles the echo, so echoCommand is not needed.
               pendingSkillRef.current = { name: skill.name, content: skill.content }
               addCommandMessage(text, `Skill **${skill.name}** loaded. Type your request.`)
             }
@@ -1158,7 +1160,6 @@ export function App({
   }
 
   async function handleSkill(text: string, arg: string) {
-    echoCommand(text)
     const parts = arg.trim().split(/\s+/)
     const sub = parts[0]?.toLowerCase()
     const subArg = parts.slice(1).join(' ').trim()
