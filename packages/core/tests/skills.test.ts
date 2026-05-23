@@ -153,6 +153,141 @@ describe('loadSkills', () => {
   })
 })
 
+// ── loadSkills: dir + files population ───────────────────────────────────────
+
+describe('loadSkills bundled-resources support', () => {
+  it('populates `dir` with the absolute skill directory path', async () => {
+    const dir = await makeTempSkillsDir([
+      {
+        dir: 'with-dir',
+        frontmatter: 'name: with-dir\ndescription: Skill that has a dir',
+        body: 'Body',
+      },
+    ])
+    process.env.XC_SKILLS_DIR = dir
+
+    const skills = await loadSkills()
+    expect(skills).toHaveLength(1)
+    expect(skills[0].dir).toBe(path.join(dir, 'with-dir'))
+  })
+
+  it('lists bundled files (excluding SKILL.md itself)', async () => {
+    const dir = await makeTempSkillsDir([
+      {
+        dir: 'with-files',
+        frontmatter: 'name: with-files\ndescription: Has bundled files',
+        body: 'Body',
+      },
+    ])
+    // Add scripts + references next to SKILL.md
+    const skillRoot = path.join(dir, 'with-files')
+    await fs.mkdir(path.join(skillRoot, 'scripts'), { recursive: true })
+    await fs.writeFile(path.join(skillRoot, 'scripts', 'preflight.sh'), '#!/bin/sh\necho ok\n', 'utf-8')
+    await fs.mkdir(path.join(skillRoot, 'references'), { recursive: true })
+    await fs.writeFile(path.join(skillRoot, 'references', 'api.md'), '# API\n', 'utf-8')
+    process.env.XC_SKILLS_DIR = dir
+
+    const skills = await loadSkills()
+    expect(skills).toHaveLength(1)
+    expect(skills[0].files.sort()).toEqual(['references/api.md', 'scripts/preflight.sh'])
+  })
+
+  it('skips hidden files and heavy directories (.git, node_modules)', async () => {
+    const dir = await makeTempSkillsDir([
+      {
+        dir: 'with-heavy',
+        frontmatter: 'name: with-heavy\ndescription: Has noise',
+        body: 'Body',
+      },
+    ])
+    const skillRoot = path.join(dir, 'with-heavy')
+    // Hidden file at root + nested .git dir + node_modules dir
+    await fs.writeFile(path.join(skillRoot, '.DS_Store'), '', 'utf-8')
+    await fs.mkdir(path.join(skillRoot, '.git'), { recursive: true })
+    await fs.writeFile(path.join(skillRoot, '.git', 'HEAD'), 'ref: ...', 'utf-8')
+    await fs.mkdir(path.join(skillRoot, 'node_modules', 'foo'), { recursive: true })
+    await fs.writeFile(path.join(skillRoot, 'node_modules', 'foo', 'package.json'), '{}', 'utf-8')
+    // A real file that should still be listed
+    await fs.writeFile(path.join(skillRoot, 'real.txt'), 'real content', 'utf-8')
+    process.env.XC_SKILLS_DIR = dir
+
+    const skills = await loadSkills()
+    expect(skills).toHaveLength(1)
+    expect(skills[0].files).toEqual(['real.txt'])
+  })
+
+  it('returns empty files array when skill directory has only SKILL.md', async () => {
+    const dir = await makeTempSkillsDir([
+      {
+        dir: 'only-md',
+        frontmatter: 'name: only-md\ndescription: Just markdown',
+        body: 'Body',
+      },
+    ])
+    process.env.XC_SKILLS_DIR = dir
+
+    const skills = await loadSkills()
+    expect(skills).toHaveLength(1)
+    expect(skills[0].files).toEqual([])
+  })
+})
+
+// ── wrapActivatedSkill / formatSkillActivationBody ───────────────────────────
+
+describe('wrapActivatedSkill', () => {
+  it('wraps body in <activated_skill> with base directory + file list footer', async () => {
+    const { wrapActivatedSkill } = await import('../src/skills/registry.js')
+    const skill = {
+      name: 'demo',
+      description: 'desc',
+      content: 'Do the thing.',
+      source: 'global' as const,
+      dir: '/abs/path/to/skills/demo',
+      files: ['scripts/run.sh', 'references/notes.md'],
+    }
+    const out = wrapActivatedSkill(skill)
+    expect(out).toContain('<activated_skill name="demo">')
+    expect(out).toContain('</activated_skill>')
+    expect(out).toContain('Do the thing.')
+    expect(out).toContain('Base directory for this skill: /abs/path/to/skills/demo')
+    expect(out).toContain('- scripts/run.sh')
+    expect(out).toContain('- references/notes.md')
+  })
+
+  it('omits file list section when skill has no bundled files', async () => {
+    const { wrapActivatedSkill } = await import('../src/skills/registry.js')
+    const skill = {
+      name: 'pure',
+      description: 'desc',
+      content: 'Plain prompt.',
+      source: 'global' as const,
+      dir: '/abs/pure',
+      files: [],
+    }
+    const out = wrapActivatedSkill(skill)
+    expect(out).toContain('Base directory for this skill: /abs/pure')
+    expect(out).not.toContain('Files in this skill directory:')
+  })
+
+  it('truncates very long file lists with a "... N more" marker', async () => {
+    const { wrapActivatedSkill } = await import('../src/skills/registry.js')
+    const files = Array.from({ length: 55 }, (_, i) => `file${i}.txt`)
+    const skill = {
+      name: 'big',
+      description: 'desc',
+      content: 'Body',
+      source: 'global' as const,
+      dir: '/abs/big',
+      files,
+    }
+    const out = wrapActivatedSkill(skill)
+    expect(out).toContain('- file0.txt')
+    expect(out).toContain('- file49.txt')
+    expect(out).not.toContain('- file50.txt')
+    expect(out).toContain('and 5 more file(s) not shown')
+  })
+})
+
 // ── SkillRegistry ─────────────────────────────────────────────────────────────
 
 describe('SkillRegistry', () => {
@@ -169,7 +304,14 @@ describe('SkillRegistry', () => {
 
   it('get returns the skill by name', () => {
     const registry = new SkillRegistry([
-      { name: 'review', description: 'Code review', content: 'Review...', source: 'global' },
+      {
+        name: 'review',
+        description: 'Code review',
+        content: 'Review...',
+        source: 'global',
+        dir: '/skills/review',
+        files: [],
+      },
     ])
     const skill = registry.get('review')
     expect(skill).toBeDefined()
@@ -179,8 +321,8 @@ describe('SkillRegistry', () => {
 
   it('list returns all skills', () => {
     const defs = [
-      { name: 'a', description: 'A', content: 'Body A', source: 'global' as const },
-      { name: 'b', description: 'B', content: 'Body B', source: 'project' as const },
+      { name: 'a', description: 'A', content: 'Body A', source: 'global' as const, dir: '/skills/a', files: [] },
+      { name: 'b', description: 'B', content: 'Body B', source: 'project' as const, dir: '/skills/b', files: [] },
     ]
     const registry = new SkillRegistry(defs)
     expect(registry.list()).toHaveLength(2)
@@ -188,8 +330,8 @@ describe('SkillRegistry', () => {
 
   it('names returns all skill names', () => {
     const defs = [
-      { name: 'alpha', description: 'Alpha', content: '', source: 'global' as const },
-      { name: 'beta', description: 'Beta', content: '', source: 'global' as const },
+      { name: 'alpha', description: 'Alpha', content: '', source: 'global' as const, dir: '/skills/alpha', files: [] },
+      { name: 'beta', description: 'Beta', content: '', source: 'global' as const, dir: '/skills/beta', files: [] },
     ]
     const registry = new SkillRegistry(defs)
     expect(registry.names().sort()).toEqual(['alpha', 'beta'])
@@ -199,8 +341,22 @@ describe('SkillRegistry', () => {
     // loadSkills returns globals first, then project — registry deduplicates
     // by last-write-wins, so project wins.
     const defs = [
-      { name: 'review', description: 'Global review', content: 'Global body', source: 'global' as const },
-      { name: 'review', description: 'Project review', content: 'Project body', source: 'project' as const },
+      {
+        name: 'review',
+        description: 'Global review',
+        content: 'Global body',
+        source: 'global' as const,
+        dir: '/global/skills/review',
+        files: [],
+      },
+      {
+        name: 'review',
+        description: 'Project review',
+        content: 'Project body',
+        source: 'project' as const,
+        dir: '/project/skills/review',
+        files: [],
+      },
     ]
     const registry = new SkillRegistry(defs)
     expect(registry.list()).toHaveLength(1)
@@ -210,8 +366,8 @@ describe('SkillRegistry', () => {
 
   it('different names are not deduplicated', () => {
     const defs = [
-      { name: 'a', description: 'A', content: '', source: 'global' as const },
-      { name: 'b', description: 'B', content: '', source: 'project' as const },
+      { name: 'a', description: 'A', content: '', source: 'global' as const, dir: '/skills/a', files: [] },
+      { name: 'b', description: 'B', content: '', source: 'project' as const, dir: '/skills/b', files: [] },
     ]
     const registry = new SkillRegistry(defs)
     expect(registry.list()).toHaveLength(2)
@@ -219,8 +375,15 @@ describe('SkillRegistry', () => {
 
   it('disabled skills are hidden from list/names/get but appear in listAll', () => {
     const defs = [
-      { name: 'on-skill', description: 'On', content: '', source: 'global' as const },
-      { name: 'off-skill', description: 'Off', content: '', source: 'global' as const },
+      { name: 'on-skill', description: 'On', content: '', source: 'global' as const, dir: '/skills/on', files: [] },
+      {
+        name: 'off-skill',
+        description: 'Off',
+        content: '',
+        source: 'global' as const,
+        dir: '/skills/off',
+        files: [],
+      },
     ]
     const registry = new SkillRegistry(defs, new Set(['off-skill']))
     expect(registry.list().map((s) => s.name)).toEqual(['on-skill'])
@@ -251,17 +414,52 @@ describe('SkillRegistry', () => {
 
   it('reload() replaces entries in place and returns a diff vs the previous state', () => {
     const v1 = [
-      { name: 'alpha', description: 'A v1', content: 'body A v1', source: 'global' as const },
-      { name: 'beta', description: 'B v1', content: 'body B v1', source: 'global' as const },
+      {
+        name: 'alpha',
+        description: 'A v1',
+        content: 'body A v1',
+        source: 'global' as const,
+        dir: '/skills/alpha',
+        files: [],
+      },
+      {
+        name: 'beta',
+        description: 'B v1',
+        content: 'body B v1',
+        source: 'global' as const,
+        dir: '/skills/beta',
+        files: [],
+      },
     ]
     const registry = new SkillRegistry(v1)
     const refBefore = registry
 
     // alpha unchanged, beta description changed, gamma added, delta absent
     const v2 = [
-      { name: 'alpha', description: 'A v1', content: 'body A v1', source: 'global' as const },
-      { name: 'beta', description: 'B v2', content: 'body B v1', source: 'global' as const },
-      { name: 'gamma', description: 'G', content: 'body G', source: 'global' as const },
+      {
+        name: 'alpha',
+        description: 'A v1',
+        content: 'body A v1',
+        source: 'global' as const,
+        dir: '/skills/alpha',
+        files: [],
+      },
+      {
+        name: 'beta',
+        description: 'B v2',
+        content: 'body B v1',
+        source: 'global' as const,
+        dir: '/skills/beta',
+        files: [],
+      },
+      {
+        name: 'gamma',
+        description: 'G',
+        content: 'body G',
+        source: 'global' as const,
+        dir: '/skills/gamma',
+        files: [],
+      },
     ]
     const summary = registry.reload(v2, new Set())
 
@@ -280,13 +478,29 @@ describe('SkillRegistry', () => {
 
   it('reload() reports removed skills and clears them from list/get', () => {
     const v1 = [
-      { name: 'alpha', description: 'A', content: 'body A', source: 'global' as const },
-      { name: 'beta', description: 'B', content: 'body B', source: 'global' as const },
+      {
+        name: 'alpha',
+        description: 'A',
+        content: 'body A',
+        source: 'global' as const,
+        dir: '/skills/alpha',
+        files: [],
+      },
+      { name: 'beta', description: 'B', content: 'body B', source: 'global' as const, dir: '/skills/beta', files: [] },
     ]
     const registry = new SkillRegistry(v1)
 
     const summary = registry.reload(
-      [{ name: 'alpha', description: 'A', content: 'body A', source: 'global' as const }],
+      [
+        {
+          name: 'alpha',
+          description: 'A',
+          content: 'body A',
+          source: 'global' as const,
+          dir: '/skills/alpha',
+          files: [],
+        },
+      ],
       new Set(),
     )
 
@@ -296,7 +510,9 @@ describe('SkillRegistry', () => {
   })
 
   it('reload() reports a disable toggle as changed', () => {
-    const defs = [{ name: 'alpha', description: 'A', content: 'body', source: 'global' as const }]
+    const defs = [
+      { name: 'alpha', description: 'A', content: 'body', source: 'global' as const, dir: '/skills/alpha', files: [] },
+    ]
     const registry = new SkillRegistry(defs)
     expect(registry.get('alpha')).toBeDefined()
 

@@ -79,7 +79,13 @@ export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from 
 export type { SubAgentDefinition, SubAgentEvent, SubAgentTrace } from './agent/sub-agents/index.js'
 
 // Skills
-export { SkillRegistry, createSkillRegistry, reloadSkillRegistry } from './skills/registry.js'
+export {
+  SkillRegistry,
+  createSkillRegistry,
+  reloadSkillRegistry,
+  formatSkillActivationBody,
+  wrapActivatedSkill,
+} from './skills/registry.js'
 export type { SkillDefinition, SkillEntry, SkillReloadSummary } from './skills/registry.js'
 export { getScopedDisabledSkills, setSkillDisabled, skillSettingsPath } from './skills/settings.js'
 export type { SkillSettingsScope } from './skills/settings.js'

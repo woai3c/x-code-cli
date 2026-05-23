@@ -23,6 +23,15 @@ export interface SkillDefinition {
   description: string
   content: string
   source: 'global' | 'project'
+  /** Absolute path to the skill's directory (the one containing SKILL.md).
+   *  Used at activation time so the model can resolve relative paths to
+   *  bundled scripts / references / assets. */
+  dir: string
+  /** Relative paths of files in the skill directory, excluding SKILL.md and
+   *  hidden / heavy directories. Listed at activation time alongside the body
+   *  so the model knows what bundled resources exist without globbing. Capped
+   *  at MAX_LISTED_FILES — long lists get truncated with a "... N more" marker. */
+  files: string[]
 }
 
 export interface SkillEntry extends SkillDefinition {
@@ -117,6 +126,42 @@ export class SkillRegistry {
   getEntry(name: string): SkillEntry | undefined {
     return this.byName.get(name)
   }
+}
+
+/** Hard upper bound mirrored from loader's MAX_LISTED_FILES — the
+ *  injection formatter caps the rendered file list at the same value so
+ *  the two stay aligned. Loader sorts + truncates first, this function
+ *  treats `skill.files` as already-bounded. */
+const MAX_RENDERED_FILES = 50
+
+/** Build the exact text that goes inside `<activated_skill name="...">...</activated_skill>`
+ *  for both activation paths (model self-decide via `activateSkill` tool, and
+ *  user explicit `/<skillname>`). Format follows Opencode's convention: body
+ *  first, then a footer with base directory + relative-paths hint + file list.
+ *  Sharing one formatter between the two call sites keeps the byte stream the
+ *  model sees identical regardless of who triggered activation. */
+export function formatSkillActivationBody(skill: SkillDefinition): string {
+  const lines: string[] = [skill.content.trim(), '']
+  lines.push(`Base directory for this skill: ${skill.dir}`)
+  lines.push(
+    'Relative paths in this skill (e.g., scripts/foo.sh, references/api.md) are resolved against the base directory above.',
+  )
+  if (skill.files.length > 0) {
+    lines.push('', 'Files in this skill directory:')
+    const shown = skill.files.slice(0, MAX_RENDERED_FILES)
+    for (const f of shown) lines.push(`- ${f}`)
+    if (skill.files.length > MAX_RENDERED_FILES) {
+      lines.push(`- ... and ${skill.files.length - MAX_RENDERED_FILES} more file(s) not shown`)
+    }
+  }
+  return lines.join('\n')
+}
+
+/** Wrap a skill's activation body in the `<activated_skill name="X">`
+ *  XML envelope. Used by both activation paths so the wrapper is byte-
+ *  identical regardless of trigger. */
+export function wrapActivatedSkill(skill: SkillDefinition): string {
+  return `<activated_skill name="${skill.name}">\n${formatSkillActivationBody(skill)}\n</activated_skill>`
 }
 
 export async function createSkillRegistry(): Promise<SkillRegistry> {

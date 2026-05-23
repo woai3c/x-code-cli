@@ -36,6 +36,7 @@ import {
   setSkillDisabled,
   skillSettingsPath,
   trustProject,
+  wrapActivatedSkill,
   writeServerToConfig,
 } from '@x-code-cli/core'
 import type {
@@ -43,6 +44,7 @@ import type {
   KnowledgeFact,
   LanguageModel,
   LoadedSession,
+  SkillDefinition,
   SkillSettingsScope,
   TokenUsage,
 } from '@x-code-cli/core'
@@ -357,7 +359,7 @@ export function App({
    *  argument (so we don't trigger an immediate AI response just to the skill
    *  XML). The skill content is prepended to the NEXT non-slash-command user
    *  message. Cleared on /clear or when consumed. */
-  const pendingSkillRef = useRef<{ name: string; content: string } | null>(null)
+  const pendingSkillRef = useRef<SkillDefinition | null>(null)
 
   // Transient one-line hint shown below the input box (in ChatInput's
   // footer slot, alongside the plan-mode / accept-edits indicators). Today
@@ -704,16 +706,19 @@ export function App({
               // Skill + immediate request — echo then inject and submit together
               // so the model applies the skill persona to the user's specific ask.
               // submit is silent so echoCommand provides the visible echo.
+              // wrapActivatedSkill builds the same <activated_skill> envelope
+              // (body + base directory + file list) used by the activateSkill
+              // tool, so the two activation paths look byte-identical to the
+              // model regardless of who triggered them.
               echoCommand(text)
-              await submit(`<activated_skill name="${skill.name}">\n${skill.content}\n</activated_skill>\n\n${arg}`, {
+              await submit(`${wrapActivatedSkill(skill)}\n\n${arg}`, {
                 silent: true,
               })
             } else {
-              // No follow-up yet — store as pending so the AI doesn't respond
-              // to the skill XML as if it were a user greeting. The skill
-              // context will be prepended to the user's next real message.
-              // addCommandMessage handles the echo, so echoCommand is not needed.
-              pendingSkillRef.current = { name: skill.name, content: skill.content }
+              // No follow-up yet — store the whole SkillDefinition so we can
+              // re-format it with the same wrapper when the user's next
+              // real message arrives. addCommandMessage handles the echo.
+              pendingSkillRef.current = skill
               addCommandMessage(text, `Skill **${skill.name}** loaded. Type your request.`)
             }
             return
@@ -728,10 +733,7 @@ export function App({
     const pendingSkill = pendingSkillRef.current
     if (pendingSkill) {
       pendingSkillRef.current = null
-      await submit(
-        `<activated_skill name="${pendingSkill.name}">\n${pendingSkill.content}\n</activated_skill>\n\n${text}`,
-        { silent: true },
-      )
+      await submit(`${wrapActivatedSkill(pendingSkill)}\n\n${text}`, { silent: true })
       return
     }
     await submit(text)

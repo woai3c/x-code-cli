@@ -18,10 +18,69 @@ import type { SkillDefinition } from './registry.js'
 
 const SKILL_FILENAME = 'SKILL.md'
 
+/** Hard upper bound on the file count we list per skill — keeps the
+ *  activation payload bounded even for skills that ship dozens of
+ *  references / assets / scripts. Skills exceeding this get a truncation
+ *  marker appended so the model knows the list isn't exhaustive. */
+const MAX_LISTED_FILES = 50
+
+/** Directory names skipped while listing a skill's bundled files —
+ *  hidden dirs and obvious heavy ones that almost never contain skill
+ *  resources. Listed by basename, not glob. */
+const SKILL_FILE_LIST_SKIP_DIRS = new Set([
+  'node_modules',
+  '__pycache__',
+  '.git',
+  '.venv',
+  'venv',
+  'dist',
+  'build',
+  'target',
+])
+
 const frontmatterSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
 })
+
+/** Walk a skill directory and return relative paths of its non-hidden
+ *  files (excluding SKILL.md itself). Used at load time so SkillRegistry
+ *  has a ready-to-inject list of bundled resources — Opencode and
+ *  Gemini CLI do the same listing at activation, but X-Code caches it
+ *  alongside the SkillDefinition since the registry is frozen for the
+ *  session anyway (`/skill refresh` rebuilds). */
+async function listSkillFiles(skillDir: string): Promise<string[]> {
+  const out: string[] = []
+
+  async function walk(currentDir: string): Promise<void> {
+    if (out.length >= MAX_LISTED_FILES) return
+
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (out.length >= MAX_LISTED_FILES) return
+      if (entry.name.startsWith('.')) continue
+      if (entry.isDirectory()) {
+        if (SKILL_FILE_LIST_SKIP_DIRS.has(entry.name)) continue
+        await walk(path.join(currentDir, entry.name))
+        continue
+      }
+      if (!entry.isFile()) continue
+      const fullPath = path.join(currentDir, entry.name)
+      const rel = path.relative(skillDir, fullPath).split(path.sep).join('/')
+      if (rel === SKILL_FILENAME) continue
+      out.push(rel)
+    }
+  }
+
+  await walk(skillDir)
+  return out.sort()
+}
 
 /** Minimal YAML frontmatter parser — reuses the same subset logic as
  *  sub-agent loader: string scalars only, no dependency on gray-matter. */
@@ -77,7 +136,8 @@ async function loadSkillsFromDir(dir: string, source: SkillDefinition['source'])
   }
 
   for (const entry of entries) {
-    const skillFile = path.join(dir, entry, SKILL_FILENAME)
+    const skillDir = path.join(dir, entry)
+    const skillFile = path.join(skillDir, SKILL_FILENAME)
 
     try {
       await fs.access(skillFile)
@@ -101,11 +161,15 @@ async function loadSkillsFromDir(dir: string, source: SkillDefinition['source'])
         continue
       }
 
+      const files = await listSkillFiles(skillDir)
+
       skills.push({
         name: result.data.name,
         description: result.data.description,
         content: parsed.body.trim(),
         source,
+        dir: skillDir,
+        files,
       })
     } catch (err) {
       console.error(`[skills] Skipping ${skillFile}: ${err instanceof Error ? err.message : String(err)}`)

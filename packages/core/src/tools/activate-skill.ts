@@ -13,6 +13,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import type { SkillRegistry } from '../skills/registry.js'
+import { wrapActivatedSkill } from '../skills/registry.js'
 
 export function createActivateSkillTool(registry: SkillRegistry) {
   const nameList = registry.names().join(', ')
@@ -30,7 +31,7 @@ export function createActivateSkillTool(registry: SkillRegistry) {
           ? `Skill "${name}" not found. Available: ${available.join(', ')}`
           : `Skill "${name}" not found. No skills are currently loaded.`
       }
-      return `<activated_skill name="${skill.name}">\n${skill.content}\n</activated_skill>`
+      return wrapActivatedSkill(skill)
     },
   })
 }
