@@ -511,6 +511,18 @@ export async function agentLoop(
     // for as long as the mode is active. Only the boundary turn pays the
     // cache miss.
     if (!state.systemPromptCache) {
+      // Names actually going into the system prompt — used to verify that
+      // disabled skills are filtered out (registry.list() drops them) and
+      // that the names you see match the registry's enabled set. Fires
+      // once per session because the prompt is built once and cached.
+      if (options.skillRegistry) {
+        const enabled = options.skillRegistry.list().map((s) => s.name)
+        const disabled = options.skillRegistry
+          .listAll()
+          .filter((s) => s.disabled)
+          .map((s) => s.name)
+        debugLog('agent.skills.system-prompt', `enabled=[${enabled.join(',')}] disabled=[${disabled.join(',')}]`)
+      }
       state.systemPromptCache = buildSystemPrompt({
         knowledgeContext: fullKnowledgeContext,
         modelId: options.modelId,

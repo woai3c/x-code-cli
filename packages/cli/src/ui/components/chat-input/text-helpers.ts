@@ -22,6 +22,39 @@ export function truncateCellRow(cells: Cell[], maxWidth: number): Cell[] {
   return cells
 }
 
+/** Hard-wrap `cells` across up to `maxRows` rows of `maxWidth` width each.
+ *  When content overflows the row budget, trims trailing cells from the
+ *  last row and appends an ellipsis. Char-based wrap (no word boundaries)
+ *  — same model as `truncateCellRow`, just multi-row. */
+export function wrapCellsToRows(cells: Cell[], maxWidth: number, maxRows: number): Cell[][] {
+  if (maxRows <= 0 || maxWidth <= 0) return []
+  const rows: Cell[][] = []
+  let current: Cell[] = []
+  let currentWidth = 0
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i]!
+    if (currentWidth + c.width > maxWidth) {
+      rows.push(current)
+      if (rows.length >= maxRows) {
+        const last = rows[rows.length - 1]!
+        let lastW = currentWidth
+        const ellipsisStyle = last.length > 0 ? last[last.length - 1]!.style : c.style
+        while (last.length > 0 && lastW + 1 > maxWidth) {
+          lastW -= last.pop()!.width
+        }
+        last.push({ char: GLYPH_ELLIPSIS, style: ellipsisStyle, width: 1 })
+        return rows
+      }
+      current = []
+      currentWidth = 0
+    }
+    current.push(c)
+    currentWidth += c.width
+  }
+  if (current.length > 0) rows.push(current)
+  return rows
+}
+
 export function skipByWidth(str: string, skipCols: number): number {
   let w = 0,
     i = 0

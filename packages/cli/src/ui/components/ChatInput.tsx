@@ -83,7 +83,13 @@ import {
 } from './chat-input/palette.js'
 import { formatElapsed, permissionContentCells, permissionTitle } from './chat-input/permission.js'
 import { inputReducer } from './chat-input/reducer.js'
-import { countContentRows, skipByWidth, truncateCellRow, truncatePathFromStart } from './chat-input/text-helpers.js'
+import {
+  countContentRows,
+  skipByWidth,
+  truncateCellRow,
+  truncatePathFromStart,
+  wrapCellsToRows,
+} from './chat-input/text-helpers.js'
 import type { MenuItem, PermissionRequest, SelectRequest, SlashCommand, SpinnerState } from './chat-input/types.js'
 
 export type { PermissionRequest, SelectRequest, SlashCommand, SpinnerState } from './chat-input/types.js'
@@ -2060,30 +2066,43 @@ export function ChatInput({
         const hintW = cmd.argumentHint ? cmd.argumentHint.length + 1 : 0
         return Math.max(max, cmd.name.length + hintW)
       }, 0)
+      // Each description is wrapped across up to 2 rows; a description that
+      // still overflows gets an ellipsis at the end of row 2. Truncation is
+      // required: a row wider than termWidth hard-wraps at the physical-row
+      // level (cell-diff treats it as one grid row, so [K clears miss the
+      // wrapped overflow) and, when it spills past the last terminal row,
+      // scrolls the viewport — drifting the frame out of sync with
+      // lastFrameTopRef and leaving a phantom input box on every menu
+      // open/dismiss cycle.
+      const maxRowWidth = Math.max(20, termWidth - 1)
+      const descCol = labelWidth + 4 // 2-space gutter + label area (labelWidth + 2-space pad)
+      const descWidth = Math.max(10, maxRowWidth - descCol)
       for (let i = 0; i < matches.length; i++) {
         const cmd = matches[i]
         const sel = i === safeIndex
-        const cells: Cell[] = []
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
         const labelLen = cmd.name.length + (cmd.argumentHint ? cmd.argumentHint.length + 1 : 0)
         const padRight = ' '.repeat(Math.max(2, labelWidth + 2 - labelLen))
-        if (sel) {
-          cells.push(...textToCells(cmd.name, S_BLUE_PURPLE_BOLD))
-          if (cmd.argumentHint) {
-            cells.push(...textToCells(' ', S_NONE))
-            cells.push(...textToCells(cmd.argumentHint, S_DIM))
-          }
-          cells.push(...textToCells(padRight, S_NONE))
-          cells.push(...textToCells(cmd.description, S_RESET))
-        } else {
-          cells.push(...textToCells(cmd.name, S_DIM))
-          if (cmd.argumentHint) {
-            cells.push(...textToCells(' ' + cmd.argumentHint, S_DIM))
-          }
-          cells.push(...textToCells(padRight + cmd.description, S_DIM))
+        const padStyle = sel ? S_NONE : S_DIM
+        const descStyle = sel ? S_RESET : S_DIM
+
+        const labelCells: Cell[] = []
+        labelCells.push({ char: ' ', style: S_NONE, width: 1 })
+        labelCells.push({ char: ' ', style: S_NONE, width: 1 })
+        labelCells.push(...textToCells(cmd.name, sel ? S_BLUE_PURPLE_BOLD : S_DIM))
+        if (cmd.argumentHint) {
+          labelCells.push(...textToCells(' ', padStyle))
+          labelCells.push(...textToCells(cmd.argumentHint, S_DIM))
         }
-        frame.push(cells)
+        labelCells.push(...textToCells(padRight, padStyle))
+
+        const descRows = wrapCellsToRows(textToCells(cmd.description, descStyle), descWidth, 2)
+        const row1: Cell[] = [...labelCells, ...(descRows[0] ?? [])]
+        frame.push(truncateCellRow(row1, maxRowWidth))
+        if (descRows.length > 1) {
+          const indent: Cell[] = []
+          for (let k = 0; k < descCol; k++) indent.push({ char: ' ', style: S_NONE, width: 1 })
+          frame.push(truncateCellRow([...indent, ...descRows[1]!], maxRowWidth))
+        }
       }
     } else if (activeMenu === 'at') {
       if (atMatches.length === 0) {

@@ -32,7 +32,19 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   const body = match[2]!
   const data: Record<string, unknown> = {}
 
+  // Fold YAML continuation lines: an indented non-empty line is joined to
+  // the previous line with a single space. Matches the folded-scalar form
+  // commonly used for long `description:` values in agent frontmatter.
+  const foldedLines: string[] = []
   for (const line of yamlBlock.split(/\r?\n/)) {
+    if (/^\s/.test(line) && line.trim() && foldedLines.length > 0) {
+      foldedLines[foldedLines.length - 1] += ' ' + line.trim()
+    } else {
+      foldedLines.push(line)
+    }
+  }
+
+  for (const line of foldedLines) {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
 

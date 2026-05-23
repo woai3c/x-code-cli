@@ -17,6 +17,7 @@ import {
   getAvailableProviders,
   getContextWindow,
   getMcpConfigPath,
+  getScopedDisabledSkills,
   getTokenStorage,
   listSessions,
   loadMergedConfigsFromDisk,
@@ -31,10 +32,19 @@ import {
   resolveModelId,
   saveUserConfig,
   serverExists,
+  setSkillDisabled,
+  skillSettingsPath,
   trustProject,
   writeServerToConfig,
 } from '@x-code-cli/core'
-import type { AgentOptions, KnowledgeFact, LanguageModel, LoadedSession, TokenUsage } from '@x-code-cli/core'
+import type {
+  AgentOptions,
+  KnowledgeFact,
+  LanguageModel,
+  LoadedSession,
+  SkillSettingsScope,
+  TokenUsage,
+} from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
 import { useAgent } from '../hooks/use-agent.js'
@@ -120,7 +130,10 @@ export const SLASH_COMMANDS = [
     description: 'Manage skills',
     subcommands: [
       { name: 'install', description: 'Fetch and install a skill from a URL' },
-      { name: 'list', description: 'List installed skills' },
+      { name: 'list', description: 'List installed skills (with on/off state)' },
+      { name: 'disable', description: 'Disable a skill (kept on disk, takes effect after restart)' },
+      { name: 'enable', description: 'Re-enable a previously disabled skill' },
+      { name: 'remove', description: 'Delete a skill directory from disk' },
     ],
   },
   { name: '/exit', description: 'Exit (flushes session)' },
@@ -1159,6 +1172,27 @@ export function App({
     return match ? match[1].trim() : null
   }
 
+  /** Split a skill argument into `(name, scope)`, recognizing
+   *  `--scope=global` / `--scope=project` / `-s=global` etc. Bare arg with
+   *  no flag returns `scope: undefined` so the caller can default off the
+   *  skill's source. Unknown scope strings are ignored (scope stays
+   *  undefined) — keeps the parser permissive. */
+  function parseSkillScopeFlag(arg: string): { name: string; scope?: SkillSettingsScope } {
+    const tokens = arg.split(/\s+/).filter(Boolean)
+    let scope: SkillSettingsScope | undefined
+    const remaining: string[] = []
+    for (const tok of tokens) {
+      const m = tok.match(/^(?:--scope|-s)(?:=(.+))?$/)
+      if (m) {
+        const value = m[1]?.toLowerCase()
+        if (value === 'global' || value === 'project') scope = value
+        continue
+      }
+      remaining.push(tok)
+    }
+    return { name: remaining.join(' '), scope }
+  }
+
   async function handleSkill(text: string, arg: string) {
     const parts = arg.trim().split(/\s+/)
     const sub = parts[0]?.toLowerCase()
@@ -1200,18 +1234,118 @@ export function App({
     }
 
     if (sub === 'list') {
-      const skills = options.skillRegistry?.list() ?? []
+      const skills = options.skillRegistry?.listAll() ?? []
       if (skills.length === 0) {
         const skillsPath = path.join(GLOBAL_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
         addCommandMessage(text, `No skills loaded. Place SKILL.md files in \`${skillsPath}\` and restart.`)
         return
       }
-      const lines = skills.map((s) => `- **${s.name}** (${s.source}): ${s.description}`)
+      const lines = skills.map((s) => {
+        const tag = s.disabled ? '[off]' : '[on] '
+        return `- ${tag} **${s.name}** (${s.source}): ${s.description}`
+      })
       addCommandMessage(text, `**Loaded skills** (${skills.length}):\n\n${lines.join('\n')}`)
       return
     }
 
-    addCommandMessage(text, 'Usage: `/skill install <url>` · `/skill list`')
+    if (sub === 'disable' || sub === 'enable') {
+      const name = subArg.trim()
+      if (!name) {
+        addCommandMessage(text, `Usage: \`/skill ${sub} <name> [--scope=global|project]\``)
+        return
+      }
+      const { name: bareName, scope } = parseSkillScopeFlag(name)
+      const entry = options.skillRegistry?.getEntry(bareName)
+      if (!entry) {
+        addCommandMessage(
+          text,
+          `No skill named \`${bareName}\` is loaded. Run \`/skill list\` to see available skills.`,
+        )
+        return
+      }
+      // Default the disable scope to the skill's own source so users get the
+      // expected "disable the project skill yansu" without typing --scope.
+      // Re-enable is symmetric: clear from the source scope first; if the
+      // skill is still effectively disabled it's because the OTHER scope
+      // also lists it, and we'll surface that.
+      const effectiveScope: SkillSettingsScope = scope ?? entry.source
+      const disable = sub === 'disable'
+      let result: 'changed' | 'noop'
+      try {
+        result = await setSkillDisabled(bareName, effectiveScope, disable)
+      } catch (err) {
+        addCommandMessage(text, `Failed to update settings: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      const settingsFile = skillSettingsPath(effectiveScope)
+      if (result === 'noop') {
+        addCommandMessage(
+          text,
+          disable
+            ? `Skill **${bareName}** is already disabled in ${effectiveScope} settings (\`${settingsFile}\`).`
+            : `Skill **${bareName}** is not disabled in ${effectiveScope} settings (\`${settingsFile}\`).`,
+        )
+        return
+      }
+      // After re-enable, check whether the other scope is still hiding it
+      // — common pitfall when the user disables globally and then expects
+      // a project-level enable to revive it.
+      let otherScopeNote = ''
+      if (!disable) {
+        const other: SkillSettingsScope = effectiveScope === 'global' ? 'project' : 'global'
+        try {
+          const stillDisabled = (await getScopedDisabledSkills(other)).includes(bareName)
+          if (stillDisabled) {
+            otherScopeNote = `\n\n_Note: \`${bareName}\` is also listed in ${other} settings (\`${skillSettingsPath(other)}\`). Run \`/skill enable ${bareName} --scope=${other}\` to fully re-enable._`
+          }
+        } catch {
+          // best-effort hint — silent failure is fine
+        }
+      }
+      const verb = disable ? 'Disabled' : 'Enabled'
+      addCommandMessage(
+        text,
+        `${verb} skill **${bareName}** in ${effectiveScope} settings (\`${settingsFile}\`).${otherScopeNote}\n\nRestart the CLI to apply.`,
+      )
+      return
+    }
+
+    if (sub === 'remove') {
+      const name = subArg.trim()
+      if (!name) {
+        addCommandMessage(text, 'Usage: `/skill remove <name>`')
+        return
+      }
+      const entry = options.skillRegistry?.getEntry(name)
+      if (!entry) {
+        addCommandMessage(text, `No skill named \`${name}\` is loaded. Run \`/skill list\` to see available skills.`)
+        return
+      }
+      const baseDir = entry.source === 'global' ? GLOBAL_XCODE_DIR : path.join(process.cwd(), '.x-code')
+      const skillDir = path.join(baseDir, 'skills', name)
+      try {
+        await fs.rm(skillDir, { recursive: true, force: true })
+      } catch (err) {
+        addCommandMessage(text, `Failed to remove \`${skillDir}\`: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      // Also clear any disable entries — leaving stale entries pointing
+      // at a removed skill would silently swallow a future re-install
+      // with the same name (it'd come back disabled).
+      try {
+        await setSkillDisabled(name, 'global', false)
+        await setSkillDisabled(name, 'project', false)
+      } catch {
+        // best-effort — main rm already succeeded
+      }
+      addCommandMessage(text, `Removed skill **${name}** from \`${skillDir}\`.\n\nRestart the CLI to apply.`)
+      return
+    }
+
+    addCommandMessage(
+      text,
+      'Usage: `/skill install <url>` · `/skill list` · `/skill disable <name>` · `/skill enable <name>` · `/skill remove <name>`',
+    )
   }
 
   /** Skills and MCP server config changes all require a CLI restart to take

@@ -216,4 +216,99 @@ describe('SkillRegistry', () => {
     const registry = new SkillRegistry(defs)
     expect(registry.list()).toHaveLength(2)
   })
+
+  it('disabled skills are hidden from list/names/get but appear in listAll', () => {
+    const defs = [
+      { name: 'on-skill', description: 'On', content: '', source: 'global' as const },
+      { name: 'off-skill', description: 'Off', content: '', source: 'global' as const },
+    ]
+    const registry = new SkillRegistry(defs, new Set(['off-skill']))
+    expect(registry.list().map((s) => s.name)).toEqual(['on-skill'])
+    expect(registry.names()).toEqual(['on-skill'])
+    expect(registry.get('off-skill')).toBeUndefined()
+    expect(registry.get('on-skill')).toBeDefined()
+    expect(registry.listAll()).toHaveLength(2)
+    expect(registry.listAll().find((s) => s.name === 'off-skill')!.disabled).toBe(true)
+    expect(registry.listAll().find((s) => s.name === 'on-skill')!.disabled).toBe(false)
+    expect(registry.getEntry('off-skill')!.disabled).toBe(true)
+  })
+
+  it('YAML folded scalar in description joins continuation lines', async () => {
+    const dir = await makeTempSkillsDir([
+      {
+        dir: 'folded',
+        frontmatter:
+          'name: folded\ndescription: First chunk of the description\n  continues on the next line\n  and a third line',
+        body: 'Body',
+      },
+    ])
+    process.env.XC_SKILLS_DIR = dir
+
+    const skills = await loadSkills()
+    expect(skills).toHaveLength(1)
+    expect(skills[0].description).toBe('First chunk of the description continues on the next line and a third line')
+  })
+})
+
+// ── settings (disabledSkills) ─────────────────────────────────────────────────
+
+describe('skill settings', () => {
+  let originalHome: string | undefined
+  let originalCwd: string
+
+  beforeEach(() => {
+    originalHome = process.env.X_CODE_HOME
+    originalCwd = process.cwd()
+  })
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.X_CODE_HOME
+    else process.env.X_CODE_HOME = originalHome
+    process.chdir(originalCwd)
+  })
+
+  it('union of global + project disabled lists', async () => {
+    const { setSkillDisabled, loadDisabledSkillsSet } = await import('../src/skills/settings.js')
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-settings-test-home-'))
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-settings-test-proj-'))
+    // utils.ts caches GLOBAL_XCODE_DIR at module-eval time, so X_CODE_HOME
+    // alone won't redirect the global path here. We chdir into a temp
+    // project dir to point the project scope at a fresh location; the
+    // global path lives wherever utils.ts resolved it on first import.
+    process.chdir(projectDir)
+
+    await setSkillDisabled('alpha', 'project', true)
+    await setSkillDisabled('beta', 'project', true)
+    const disabled = await loadDisabledSkillsSet()
+    expect(disabled.has('alpha')).toBe(true)
+    expect(disabled.has('beta')).toBe(true)
+  })
+
+  it('setSkillDisabled returns noop when state already matches', async () => {
+    const { setSkillDisabled } = await import('../src/skills/settings.js')
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-settings-noop-'))
+    process.chdir(projectDir)
+
+    expect(await setSkillDisabled('gamma', 'project', true)).toBe('changed')
+    expect(await setSkillDisabled('gamma', 'project', true)).toBe('noop')
+    expect(await setSkillDisabled('gamma', 'project', false)).toBe('changed')
+    expect(await setSkillDisabled('gamma', 'project', false)).toBe('noop')
+  })
+
+  it('preserves unrelated fields in settings.json', async () => {
+    const { setSkillDisabled, skillSettingsPath } = await import('../src/skills/settings.js')
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-settings-merge-'))
+    process.chdir(projectDir)
+
+    const file = skillSettingsPath('project')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({ keepMe: 'yes', other: 42 }), 'utf-8')
+
+    await setSkillDisabled('delta', 'project', true)
+    const raw = await fs.readFile(file, 'utf-8')
+    const parsed = JSON.parse(raw)
+    expect(parsed.keepMe).toBe('yes')
+    expect(parsed.other).toBe(42)
+    expect(parsed.disabledSkills).toEqual(['delta'])
+  })
 })

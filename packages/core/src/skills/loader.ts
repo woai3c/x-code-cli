@@ -33,7 +33,20 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   const body = match[2]!
   const data: Record<string, unknown> = {}
 
+  // Fold YAML continuation lines: an indented non-empty line is joined to
+  // the previous line with a single space. Mirrors the folded-scalar form
+  // used by skill SKILL.md files where a long `description:` is wrapped
+  // with 2-space indented continuations.
+  const foldedLines: string[] = []
   for (const line of yamlBlock.split(/\r?\n/)) {
+    if (/^\s/.test(line) && line.trim() && foldedLines.length > 0) {
+      foldedLines[foldedLines.length - 1] += ' ' + line.trim()
+    } else {
+      foldedLines.push(line)
+    }
+  }
+
+  for (const line of foldedLines) {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
 

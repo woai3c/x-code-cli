@@ -80,7 +80,9 @@ export type { SubAgentDefinition, SubAgentEvent, SubAgentTrace } from './agent/s
 
 // Skills
 export { SkillRegistry, createSkillRegistry } from './skills/registry.js'
-export type { SkillDefinition } from './skills/registry.js'
+export type { SkillDefinition, SkillEntry } from './skills/registry.js'
+export { getScopedDisabledSkills, setSkillDisabled, skillSettingsPath } from './skills/settings.js'
+export type { SkillSettingsScope } from './skills/settings.js'
 
 // Session store (per-session jsonl transcript — used by /resume,
 // /usage history, and the CLI startup --resume / --continue flags).
