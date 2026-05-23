@@ -25,7 +25,7 @@ import { debugLog } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderEditDiff } from './render-diff.js'
-import { renderMarkdown } from './render-markdown.js'
+import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
 import { GLYPH_BULLET, GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET } from './terminal-glyphs.js'
 import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
 import {
@@ -308,12 +308,23 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   // Compact slash-command result — render as a tight `  ⎿  text` line so the
   // pair `> /cmd` + result shows up as the Claude-style 2-line block instead
   // of command + blank + indented body + blank.
+  //
+  // Body lines go through `renderInlineMarkdown` so `**name**` / `` `code` `` /
+  // `_italic_` markers our slash-command handlers emit display styled rather
+  // than as raw `**` / backtick characters. We deliberately do NOT wrap the
+  // body in `c.gray(...)` even though that's the conventional "secondary
+  // info" tint: the gray base dims everything inside it (incl. bold and
+  // truecolor inline-code), so the markdown rendering visually disappears
+  // — bold gray-on-gray reads as just gray, and the blue-purple inline-code
+  // color loses its contrast against a gray surround. The `⎿` glyph stays
+  // gray as the structural marker; body content uses the terminal default
+  // foreground so bold + inline-code stand out against it.
   if (msg.kind === 'command-result' && msg.content) {
     const content = normalizeLineEndings(msg.content)
     debugLog('stdout.command-result', content)
     const lines = content.split('\n')
-    const head = `  ${c.gray(GLYPH_RESULT_BRACKET)}  ${c.gray(lines[0] ?? '')}`
-    const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${c.gray(l)}`)
+    const head = `  ${c.gray(GLYPH_RESULT_BRACKET)}  ${renderInlineMarkdown(lines[0] ?? '')}`
+    const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${renderInlineMarkdown(l)}`)
     write(toCRLF([head, ...tail].join('\n') + '\n'))
     prevWriteEndedWithBlankRow = false
     prevWriteWasStreamingChunk = false

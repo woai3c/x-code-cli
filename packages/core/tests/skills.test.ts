@@ -248,6 +248,111 @@ describe('SkillRegistry', () => {
     expect(skills).toHaveLength(1)
     expect(skills[0].description).toBe('First chunk of the description continues on the next line and a third line')
   })
+
+  it('reload() replaces entries in place and returns a diff vs the previous state', () => {
+    const v1 = [
+      { name: 'alpha', description: 'A v1', content: 'body A v1', source: 'global' as const },
+      { name: 'beta', description: 'B v1', content: 'body B v1', source: 'global' as const },
+    ]
+    const registry = new SkillRegistry(v1)
+    const refBefore = registry
+
+    // alpha unchanged, beta description changed, gamma added, delta absent
+    const v2 = [
+      { name: 'alpha', description: 'A v1', content: 'body A v1', source: 'global' as const },
+      { name: 'beta', description: 'B v2', content: 'body B v1', source: 'global' as const },
+      { name: 'gamma', description: 'G', content: 'body G', source: 'global' as const },
+    ]
+    const summary = registry.reload(v2, new Set())
+
+    expect(summary.added).toEqual(['gamma'])
+    expect(summary.changed).toEqual(['beta'])
+    expect(summary.unchanged).toEqual(['alpha'])
+    expect(summary.removed).toEqual([])
+
+    // Object identity preserved — callers caching the registry don't lose it
+    expect(registry).toBe(refBefore)
+
+    // Visible state matches v2
+    expect(registry.names().sort()).toEqual(['alpha', 'beta', 'gamma'])
+    expect(registry.get('beta')!.description).toBe('B v2')
+  })
+
+  it('reload() reports removed skills and clears them from list/get', () => {
+    const v1 = [
+      { name: 'alpha', description: 'A', content: 'body A', source: 'global' as const },
+      { name: 'beta', description: 'B', content: 'body B', source: 'global' as const },
+    ]
+    const registry = new SkillRegistry(v1)
+
+    const summary = registry.reload(
+      [{ name: 'alpha', description: 'A', content: 'body A', source: 'global' as const }],
+      new Set(),
+    )
+
+    expect(summary.removed).toEqual(['beta'])
+    expect(registry.get('beta')).toBeUndefined()
+    expect(registry.names()).toEqual(['alpha'])
+  })
+
+  it('reload() reports a disable toggle as changed', () => {
+    const defs = [{ name: 'alpha', description: 'A', content: 'body', source: 'global' as const }]
+    const registry = new SkillRegistry(defs)
+    expect(registry.get('alpha')).toBeDefined()
+
+    const summary = registry.reload(defs, new Set(['alpha']))
+    expect(summary.changed).toEqual(['alpha'])
+    // Disabled — hidden from list/get, still visible via listAll
+    expect(registry.get('alpha')).toBeUndefined()
+    expect(registry.listAll()).toHaveLength(1)
+    expect(registry.listAll()[0].disabled).toBe(true)
+  })
+})
+
+// ── reloadSkillRegistry (integration) ────────────────────────────────────────
+
+describe('reloadSkillRegistry', () => {
+  let originalCwd: string
+
+  beforeEach(() => {
+    originalCwd = process.cwd()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+  })
+
+  it('rescans disk + settings and mutates the registry in place', async () => {
+    const { createSkillRegistry, reloadSkillRegistry } = await import('../src/skills/registry.js')
+
+    // Initial state: one skill on disk, no disabledSkills setting
+    const skillsDir = await makeTempSkillsDir([
+      {
+        dir: 'initial',
+        frontmatter: 'name: initial\ndescription: First skill',
+        body: 'initial body',
+      },
+    ])
+    process.env.XC_SKILLS_DIR = skillsDir
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-refresh-int-'))
+    process.chdir(projectDir)
+
+    const registry = await createSkillRegistry()
+    expect(registry.names()).toEqual(['initial'])
+
+    // Simulate user adding a new skill on disk
+    await fs.mkdir(path.join(skillsDir, 'added'), { recursive: true })
+    await fs.writeFile(
+      path.join(skillsDir, 'added', 'SKILL.md'),
+      `---\nname: added\ndescription: Second skill\n---\nadded body`,
+      'utf-8',
+    )
+
+    const summary = await reloadSkillRegistry(registry)
+    expect(summary.added).toEqual(['added'])
+    expect(summary.unchanged).toEqual(['initial'])
+    expect(registry.names().sort()).toEqual(['added', 'initial'])
+  })
 })
 
 // ── settings (disabledSkills) ─────────────────────────────────────────────────

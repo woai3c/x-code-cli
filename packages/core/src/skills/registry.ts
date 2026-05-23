@@ -1,11 +1,20 @@
 // @x-code-cli/core — Skill registry
 //
-// Built once at CLI startup and frozen for the session. Adding, removing,
-// enabling, or disabling a skill requires a CLI restart: the skill list is
-// embedded in the system prompt and exposed as slash commands, and both
-// caches assume byte-stable inputs for the whole session (CLAUDE.md). The
-// /skill disable|enable|remove handlers write settings to disk and print a
-// "Restart the CLI to apply." hint — they never mutate this registry.
+// Built once at CLI startup and reused across the session. The skill list
+// is embedded in two byte-stable surfaces — the system prompt's
+// `## Available Skills` block and the `activateSkill` tool description —
+// both cached on LoopState.systemPromptCache. Adding, removing, enabling,
+// or disabling a skill therefore needs to either (a) run before the next
+// streamText call AND invalidate that cache, or (b) wait for a CLI
+// restart. The /skill disable|enable|remove handlers do (b) — they write
+// settings to disk and print a "Restart the CLI to apply." hint. The
+// /skill refresh handler does (a) — it calls `reloadSkillRegistry()` on
+// this object to rebuild the internal map in place, then triggers a
+// systemPromptCache invalidation so the next turn picks up the change.
+// Keeping the same SkillRegistry object reference across refresh means
+// every other code path that captured `options.skillRegistry` (agent
+// loop's buildTools, App.tsx's slash-command tab completion, …) stays
+// pointed at the right thing without needing to be re-wired.
 import { loadSkills } from './loader.js'
 import { loadDisabledSkillsSet } from './settings.js'
 
@@ -20,8 +29,18 @@ export interface SkillEntry extends SkillDefinition {
   disabled: boolean
 }
 
+/** Summary returned by `reloadSkillRegistry()`. Drives the message
+ *  surface in /skill refresh — caller can show "added: a, b" /
+ *  "removed: c" / "unchanged: d, e" the same way /mcp refresh does. */
+export interface SkillReloadSummary {
+  added: string[]
+  removed: string[]
+  changed: string[]
+  unchanged: string[]
+}
+
 export class SkillRegistry {
-  private readonly byName: Map<string, SkillEntry>
+  private byName: Map<string, SkillEntry>
 
   constructor(skills: SkillDefinition[], disabled: ReadonlySet<string> = new Set()) {
     this.byName = new Map()
@@ -30,6 +49,44 @@ export class SkillRegistry {
     for (const skill of skills) {
       this.byName.set(skill.name, { ...skill, disabled: disabled.has(skill.name) })
     }
+  }
+
+  /** Replace the in-memory skill list with a fresh load. Used by
+   *  /skill refresh — keeps the same SkillRegistry object identity so
+   *  every cached `options.skillRegistry` reference (agent loop, CLI
+   *  slash completion, App.tsx handlers) keeps pointing at the right
+   *  thing. Returns a per-name diff vs the previous state so the
+   *  caller can render an "added / removed / changed / unchanged"
+   *  summary in the user-facing message. */
+  reload(skills: SkillDefinition[], disabled: ReadonlySet<string>): SkillReloadSummary {
+    const previous = this.byName
+    const next = new Map<string, SkillEntry>()
+    for (const skill of skills) {
+      next.set(skill.name, { ...skill, disabled: disabled.has(skill.name) })
+    }
+
+    const summary: SkillReloadSummary = { added: [], removed: [], changed: [], unchanged: [] }
+    for (const [name, entry] of next) {
+      const prev = previous.get(name)
+      if (!prev) {
+        summary.added.push(name)
+      } else if (
+        prev.description !== entry.description ||
+        prev.content !== entry.content ||
+        prev.source !== entry.source ||
+        prev.disabled !== entry.disabled
+      ) {
+        summary.changed.push(name)
+      } else {
+        summary.unchanged.push(name)
+      }
+    }
+    for (const name of previous.keys()) {
+      if (!next.has(name)) summary.removed.push(name)
+    }
+
+    this.byName = next
+    return summary
   }
 
   /** Enabled skill by name. Disabled skills are hidden from the agent loop
@@ -65,4 +122,13 @@ export class SkillRegistry {
 export async function createSkillRegistry(): Promise<SkillRegistry> {
   const [skills, disabled] = await Promise.all([loadSkills(), loadDisabledSkillsSet()])
   return new SkillRegistry(skills, disabled)
+}
+
+/** Re-scan skill directories + settings.json, then mutate the given
+ *  registry in place. Caller is responsible for invalidating any
+ *  systemPromptCache that embedded the previous skill list — the
+ *  /skill refresh handler does exactly this. */
+export async function reloadSkillRegistry(registry: SkillRegistry): Promise<SkillReloadSummary> {
+  const [skills, disabled] = await Promise.all([loadSkills(), loadDisabledSkillsSet()])
+  return registry.reload(skills, disabled)
 }

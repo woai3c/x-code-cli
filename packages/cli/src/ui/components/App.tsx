@@ -28,6 +28,7 @@ import {
   parseRemove,
   pickLatestSession,
   readServerConfig,
+  reloadSkillRegistry,
   removeServerFromConfig,
   resolveModelId,
   saveUserConfig,
@@ -131,6 +132,7 @@ export const SLASH_COMMANDS = [
     subcommands: [
       { name: 'install', description: 'Fetch and install a skill from a URL' },
       { name: 'list', description: 'List installed skills (with on/off state)' },
+      { name: 'refresh', description: 'Re-scan skills dirs and apply changes without restart' },
       { name: 'disable', description: 'Disable a skill (kept on disk, takes effect after restart)' },
       { name: 'enable', description: 'Re-enable a previously disabled skill' },
       { name: 'remove', description: 'Delete a skill directory from disk' },
@@ -329,12 +331,20 @@ export function App({
     setPermissionMode,
   } = useAgent(model, options, initialSession)
 
-  // Derived from options.skillRegistry — stable for the session lifetime.
-  // Used both for tab completion (allCommands) and /skillname dispatch.
+  // Bumped whenever /skill refresh mutates the registry in place. The
+  // registry's object identity is stable across refresh (reload() rewrites
+  // the internal map), so React needs an explicit dependency to know the
+  // visible skill list changed — without this counter the memoized
+  // skillCommands array would stay stale.
+  const [skillRegistryVersion, setSkillRegistryVersion] = useState(0)
+
+  // Derived from options.skillRegistry. Recomputed when the registry
+  // version bumps (via /skill refresh) so tab completion + /help reflect
+  // the new skill set without restart.
   const skillCommands = useMemo(
     () => (options.skillRegistry ? options.skillRegistry.list() : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [skillRegistryVersion],
   )
 
   // Combined command list: built-ins + loaded skills (for tab completion).
@@ -1229,7 +1239,10 @@ export function App({
         return
       }
 
-      addCommandMessage(text, `Skill **${name}** installed to \`${skillFile}\`\n\nRestart the CLI to use \`/${name}\`.`)
+      addCommandMessage(
+        text,
+        `Skill **${name}** installed to \`${skillFile}\`\nRun \`/skill refresh\` to use \`/${name}\` now, or restart xc.`,
+      )
       return
     }
 
@@ -1237,14 +1250,62 @@ export function App({
       const skills = options.skillRegistry?.listAll() ?? []
       if (skills.length === 0) {
         const skillsPath = path.join(GLOBAL_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
-        addCommandMessage(text, `No skills loaded. Place SKILL.md files in \`${skillsPath}\` and restart.`)
+        addCommandMessage(
+          text,
+          `No skills loaded. Place SKILL.md files in \`${skillsPath}\` then run \`/skill refresh\` (or restart).`,
+        )
         return
       }
       const lines = skills.map((s) => {
         const tag = s.disabled ? '[off]' : '[on] '
         return `- ${tag} **${s.name}** (${s.source}): ${s.description}`
       })
-      addCommandMessage(text, `**Loaded skills** (${skills.length}):\n\n${lines.join('\n')}`)
+      addCommandMessage(text, `**Loaded skills** (${skills.length}):\n${lines.join('\n')}`)
+      return
+    }
+
+    if (sub === 'refresh') {
+      if (!options.skillRegistry) {
+        addCommandMessage(text, 'No skill registry to refresh.')
+        return
+      }
+      let summary
+      try {
+        summary = await reloadSkillRegistry(options.skillRegistry)
+      } catch (err) {
+        addCommandMessage(text, `Failed to reload skills: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      // Invalidate prompt cache: both the system prompt's `## Available
+      // Skills` block and the activateSkill tool description embed the
+      // skill list. Better to take one cache miss than to send a stale
+      // skill surface to the model. Same trade /mcp refresh makes.
+      invalidateSystemPromptCache()
+      // Drop a pending skill if the user `/<skillname>` for a skill that
+      // was just removed or disabled — otherwise the next plain user
+      // message would inject orphaned skill content.
+      const pending = pendingSkillRef.current
+      if (pending && !options.skillRegistry.get(pending.name)) {
+        pendingSkillRef.current = null
+      }
+      // Force the slash-command tab completion + /help list to re-memo
+      // off the new skill set. The registry object identity is stable
+      // (reload() mutates in place), so the version counter is the
+      // signal React needs to recompute the memoized list.
+      setSkillRegistryVersion((v) => v + 1)
+
+      const parts: string[] = []
+      if (summary.added.length) parts.push(`added: ${summary.added.join(', ')}`)
+      if (summary.removed.length) parts.push(`removed: ${summary.removed.join(', ')}`)
+      if (summary.changed.length) parts.push(`changed: ${summary.changed.join(', ')}`)
+      if (summary.unchanged.length) parts.push(`unchanged: ${summary.unchanged.join(', ')}`)
+      if (parts.length === 0) parts.push('no skills found')
+      const lines = [`Reloaded skills — ${parts.join('; ')}.`]
+      // Tight `\n` between primary result and the advisory note — matches the
+      // pattern used by /mcp refresh and the rest of /skill install / disable /
+      // enable / remove. No blank line within a single command's result block.
+      lines.push('Note: next message rebuilds the system prompt, so prompt-cache will miss once.')
+      addCommandMessage(text, lines.join('\n'))
       return
     }
 
@@ -1296,7 +1357,7 @@ export function App({
         try {
           const stillDisabled = (await getScopedDisabledSkills(other)).includes(bareName)
           if (stillDisabled) {
-            otherScopeNote = `\n\n_Note: \`${bareName}\` is also listed in ${other} settings (\`${skillSettingsPath(other)}\`). Run \`/skill enable ${bareName} --scope=${other}\` to fully re-enable._`
+            otherScopeNote = `\n_Note: \`${bareName}\` is also listed in ${other} settings (\`${skillSettingsPath(other)}\`). Run \`/skill enable ${bareName} --scope=${other}\` to fully re-enable._`
           }
         } catch {
           // best-effort hint — silent failure is fine
@@ -1305,7 +1366,7 @@ export function App({
       const verb = disable ? 'Disabled' : 'Enabled'
       addCommandMessage(
         text,
-        `${verb} skill **${bareName}** in ${effectiveScope} settings (\`${settingsFile}\`).${otherScopeNote}\n\nRestart the CLI to apply.`,
+        `${verb} skill **${bareName}** in ${effectiveScope} settings (\`${settingsFile}\`).${otherScopeNote}\nRun \`/skill refresh\` to apply now, or restart xc.`,
       )
       return
     }
@@ -1338,13 +1399,16 @@ export function App({
       } catch {
         // best-effort — main rm already succeeded
       }
-      addCommandMessage(text, `Removed skill **${name}** from \`${skillDir}\`.\n\nRestart the CLI to apply.`)
+      addCommandMessage(
+        text,
+        `Removed skill **${name}** from \`${skillDir}\`.\nRun \`/skill refresh\` to apply now, or restart xc.`,
+      )
       return
     }
 
     addCommandMessage(
       text,
-      'Usage: `/skill install <url>` · `/skill list` · `/skill disable <name>` · `/skill enable <name>` · `/skill remove <name>`',
+      'Usage: `/skill install <url>` · `/skill list` · `/skill refresh` · `/skill disable <name>` · `/skill enable <name>` · `/skill remove <name>`',
     )
   }
 
