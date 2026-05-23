@@ -312,3 +312,73 @@ describe('skill settings', () => {
     expect(parsed.disabledSkills).toEqual(['delta'])
   })
 })
+
+// ── createSkillRegistry integration ───────────────────────────────────────────
+// End-to-end through loader + settings + registry filter. The unit tests
+// above each cover one layer in isolation; this guards against future
+// refactors that decouple the layers and silently let a disabled skill
+// reach the agent loop (the failure mode would be a settings.json entry
+// that the registry stops honoring).
+
+describe('createSkillRegistry', () => {
+  let originalCwd: string
+
+  beforeEach(() => {
+    originalCwd = process.cwd()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+  })
+
+  it('reads skills from disk, applies project-scope disable, and filters list/names/get', async () => {
+    const { createSkillRegistry } = await import('../src/skills/registry.js')
+    const { skillSettingsPath } = await import('../src/skills/settings.js')
+
+    const skillsDir = await makeTempSkillsDir([
+      {
+        dir: 'skill-on',
+        frontmatter: 'name: skill-on\ndescription: Stays enabled',
+        body: 'On body',
+      },
+      {
+        dir: 'skill-off',
+        frontmatter: 'name: skill-off\ndescription: Should be disabled',
+        body: 'Off body',
+      },
+    ])
+    process.env.XC_SKILLS_DIR = skillsDir
+
+    // Project-scope settings live under cwd/.x-code/settings.local.json.
+    // Chdir to a fresh temp dir so we don't pollute the real repo or the
+    // user's home (utils.ts caches GLOBAL_XCODE_DIR at import time, so we
+    // can't redirect global scope here — project scope is sufficient
+    // because XC_SKILLS_DIR also tags loaded skills as source='project').
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-registry-int-'))
+    process.chdir(projectDir)
+    const settingsFile = skillSettingsPath('project')
+    await fs.mkdir(path.dirname(settingsFile), { recursive: true })
+    await fs.writeFile(settingsFile, JSON.stringify({ disabledSkills: ['skill-off'] }), 'utf-8')
+
+    const registry = await createSkillRegistry()
+
+    // listAll surfaces both, with disabled flag set correctly.
+    const all = registry.listAll()
+    expect(all).toHaveLength(2)
+    const onEntry = all.find((s) => s.name === 'skill-on')!
+    const offEntry = all.find((s) => s.name === 'skill-off')!
+    expect(onEntry.disabled).toBe(false)
+    expect(offEntry.disabled).toBe(true)
+
+    // list / names / get all hide the disabled one — this is the contract
+    // the agent loop and system-prompt builder rely on.
+    expect(registry.list().map((s) => s.name)).toEqual(['skill-on'])
+    expect(registry.names()).toEqual(['skill-on'])
+    expect(registry.get('skill-off')).toBeUndefined()
+    expect(registry.get('skill-on')).toBeDefined()
+
+    // getEntry is the one accessor that still returns disabled skills,
+    // for the /skill list + /skill enable handlers to act on them.
+    expect(registry.getEntry('skill-off')?.disabled).toBe(true)
+  })
+})
