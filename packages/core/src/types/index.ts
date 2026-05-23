@@ -6,6 +6,7 @@ import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
 import type { SubAgentEvent } from '../agent/sub-agents/types.js'
 import type { McpPermissionStore } from '../mcp/permissions.js'
 import type { McpRegistry } from '../mcp/registry.js'
+import type { SkillRegistry } from '../skills/registry.js'
 
 // ─── Permission ───
 
@@ -212,6 +213,14 @@ export interface AgentOptions {
   /** Tool allow/deny filter. Used by sub-agent loops to restrict
    *  which tools the child can call. `task` is always in `deny`. */
   toolFilter?: { allow?: string[]; deny?: string[] }
+
+  // ── Skill support ──
+
+  /** Skill registry, populated at CLI startup by createSkillRegistry.
+   *  Absent means no skills are configured — activateSkill tool is not
+   *  registered and the `## Available Skills` section is omitted from
+   *  the system prompt. */
+  skillRegistry?: SkillRegistry
 
   // ── MCP support ──
 

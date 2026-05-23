@@ -1,5 +1,8 @@
 // @x-code-cli/core — System Prompt management
+import path from 'node:path'
+
 import { getShellProvider } from '../tools/shell-provider.js'
+import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal. You are powered by the {model} model.
 
@@ -21,7 +24,7 @@ You have access to these tools:
 - webFetch: Fetch and extract content from URLs
 - askUser: Ask the user clarifying questions with choices
 - todoWrite: Track multi-step tasks with a live checklist visible to the user
-- task: Delegate a task to a specialized sub-agent (explore, plan, review, general-purpose){mcpCapabilities}
+- task: Delegate a task to a specialized sub-agent (explore, plan, review, general-purpose){mcpCapabilities}{skillCapabilities}
 
 ## Sub-agent Delegation
 Use the task tool to delegate research, exploration, planning, or review tasks to a specialized sub-agent. Sub-agents run in isolated context — they don't see your conversation history and their intermediate tool calls never pollute your context window. Only the final conclusion comes back.
@@ -233,6 +236,31 @@ export interface SystemPromptMcpTool {
   description: string
 }
 
+/** Format the optional skills block. Returns "" when no skills are loaded
+ *  so the prompt is byte-identical to the no-skills shape, preserving
+ *  prefix-cache hits for sessions without any skills configured. */
+function formatSkillCapabilities(skills: readonly { name: string; description: string }[] | undefined): string {
+  const globalSkillsDir = path.join(GLOBAL_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
+  const projectSkillsDir = path.join(XCODE_DIR, 'skills', '<name>', 'SKILL.md')
+  const installHint = `To install a skill from a URL: use the shell tool to download the raw file directly (e.g. \`Invoke-WebRequest -Uri <url> -OutFile "${globalSkillsDir}"\` on Windows, or \`curl -L <url> -o "${globalSkillsDir}"\` on macOS/Linux), then confirm the path. Do NOT use webFetch + write — webFetch renders markdown and corrupts YAML frontmatter. Alternatively, use /skill install <url>. Restart the CLI after installing.`
+
+  if (!skills || skills.length === 0) {
+    return `\n\n## Skills\n${installHint}`
+  }
+
+  const lines = [
+    '',
+    '',
+    '## Available Skills',
+    "Use the activateSkill tool to inject a skill's instructions when the task matches its description:",
+  ]
+  for (const s of skills) {
+    lines.push(`- ${s.name}: ${s.description}`)
+  }
+  lines.push('', installHint)
+  return lines.join('\n')
+}
+
 /** Format the optional MCP tools block. Returns "" when no tools AND
  *  no registry are passed, so the byte layout of BASE_SYSTEM_PROMPT
  *  after substitution exactly matches the pre-MCP version — preserves
@@ -294,6 +322,10 @@ export function buildSystemPrompt(options?: {
    *  absent or empty, the prompt body is byte-identical to the
    *  pre-MCP version. */
   mcpTools?: readonly SystemPromptMcpTool[]
+  /** Optional skill surface. When provided, an `## Available Skills`
+   *  section is appended listing each skill name + description. When
+   *  absent or empty, the prompt is byte-identical to the no-skills shape. */
+  skills?: readonly { name: string; description: string }[]
 }): string {
   const shellProvider = getShellProvider()
 
@@ -303,6 +335,7 @@ export function buildSystemPrompt(options?: {
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
     .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')
     .replace(/\{mcpCapabilities\}/g, formatMcpCapabilities(options?.mcpTools))
+    .replace(/\{skillCapabilities\}/g, formatSkillCapabilities(options?.skills))
 
   if (options?.knowledgeContext) {
     prompt += '\n\n' + options.knowledgeContext

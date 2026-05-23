@@ -12,6 +12,7 @@ import {
   PROVIDER_KEY_URLS,
   createModelRegistry,
   createOAuthProviderFactory,
+  createSkillRegistry,
   createSubAgentRegistry,
   debugLog,
   getAvailableProviders,
@@ -292,6 +293,7 @@ async function main() {
   const providerRegistry = createModelRegistry()
   const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
   const subAgentRegistry = await createSubAgentRegistry()
+  const skillRegistry = await createSkillRegistry()
 
   // MCP: load servers, run trust dialog if project-level config is
   // unfamiliar. Done BEFORE Ink mounts so the readline-based trust
@@ -348,6 +350,7 @@ async function main() {
     permissionMode: argv.plan ? 'plan' : 'default',
     modelRegistry: providerRegistry,
     subAgentRegistry,
+    skillRegistry,
     mcpRegistry: mcpLoadResult.registry,
     mcpPermissionStore,
   }

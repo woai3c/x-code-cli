@@ -13,6 +13,7 @@ import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
+import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createTaskTool } from '../tools/task.js'
@@ -208,6 +209,10 @@ function buildTools(options: AgentOptions) {
 
   if (options.subAgentRegistry) {
     tools.task = createTaskTool(options.subAgentRegistry)
+  }
+
+  if (options.skillRegistry && options.skillRegistry.names().length > 0) {
+    tools.activateSkill = createActivateSkillTool(options.skillRegistry)
   }
 
   // MCP tools: declared without `execute` so the AI SDK leaves them in
@@ -412,9 +417,12 @@ export async function agentLoop(
   // file is created (well before the first runTurn), so paths are
   // never written with a stale empty slug.
   const taskText = userContentToText(userMessage)
+  // Strip <activated_skill> XML blocks so the session slug and firstPrompt
+  // reflect the user's real intent rather than injected skill content.
+  const taskTextForMeta = taskText.replace(/<activated_skill\b[^>]*>[\s\S]*?<\/activated_skill>/gi, '').trim()
   const taskSlugPromise: Promise<string> = state.taskSlug
     ? Promise.resolve(state.taskSlug)
-    : generateTaskSlug(taskText, model, options.modelId, options.abortSignal)
+    : generateTaskSlug(taskTextForMeta || taskText, model, options.modelId, options.abortSignal)
 
   // Session continuation is handled explicitly by the UI: if the user accepts
   // the resume prompt, the pending work is embedded directly in their first
@@ -453,7 +461,7 @@ export async function agentLoop(
   // the header line already exists in that case and we skip). Must come
   // AFTER taskSlug resolution because the filename is `<slug>-<id>.jsonl`.
   // Fire-and-forget — never blocks the loop on FS errors.
-  void appendHeader(state, options.modelId, taskText)
+  void appendHeader(state, options.modelId, taskTextForMeta || taskText)
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
 
@@ -503,6 +511,18 @@ export async function agentLoop(
     // for as long as the mode is active. Only the boundary turn pays the
     // cache miss.
     if (!state.systemPromptCache) {
+      // Names actually going into the system prompt — used to verify that
+      // disabled skills are filtered out (registry.list() drops them) and
+      // that the names you see match the registry's enabled set. Fires
+      // once per session because the prompt is built once and cached.
+      if (options.skillRegistry) {
+        const enabled = options.skillRegistry.list().map((s) => s.name)
+        const disabled = options.skillRegistry
+          .listAll()
+          .filter((s) => s.disabled)
+          .map((s) => s.name)
+        debugLog('agent.skills.system-prompt', `enabled=[${enabled.join(',')}] disabled=[${disabled.join(',')}]`)
+      }
       state.systemPromptCache = buildSystemPrompt({
         knowledgeContext: fullKnowledgeContext,
         modelId: options.modelId,
@@ -515,6 +535,7 @@ export async function agentLoop(
         // pre-MCP shape, preserving prefix-cache for sessions
         // without MCP configured.
         mcpTools: options.mcpRegistry ? toSystemPromptEntries(options.mcpRegistry.list()) : undefined,
+        skills: options.skillRegistry ? options.skillRegistry.list() : undefined,
       })
     }
     const systemPrompt = state.systemPromptCache
