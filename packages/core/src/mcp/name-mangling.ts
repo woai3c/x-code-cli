@@ -11,15 +11,11 @@
 // separator so a tool whose raw name contains a single underscore
 // (very common — `read_file`, `list_issues`) is unambiguous.
 //
-// History: an earlier version added an extra `mcp__` prefix on the front
-// (`mcp__<server>__<tool>`). That matched Claude Code's convention but
-// burned tokens on a per-tool basis without telling the model anything
-// the description doesn't already carry. Codex and Gemini CLI both omit
-// the prefix; we follow them. Routing — "is this tool MCP or built-in?"
-// — moved from a name-prefix check to a registry lookup in
-// tool-execution.ts. The mcp-permissions.json loader strips legacy
-// `mcp__` prefixes on read so users carry their old always-allow grants
-// forward.
+// No `mcp__` umbrella prefix — Claude Code adds one (`mcp__<server>__<tool>`)
+// but it burns tokens per-tool without telling the model anything the
+// description doesn't already carry. Codex and Gemini CLI both omit the
+// prefix; we follow them. "Is this tool MCP or built-in?" routing is a
+// registry lookup in tool-execution.ts, not a name-prefix check.
 //
 // The model-facing tool name has a hard cap at 64 chars (OpenAI's
 // historical limit; Anthropic/Google are higher but 64 keeps us

@@ -2067,7 +2067,7 @@ export function App({
               badge = 'connecting…'
               break
             case 'needs_auth':
-              badge = `needs auth — run /mcp logout ${s.name} and restart to retry`
+              badge = `needs auth — run /mcp auth ${s.name} to log in`
               break
             case 'failed':
               badge = `failed — ${s.status.error}`

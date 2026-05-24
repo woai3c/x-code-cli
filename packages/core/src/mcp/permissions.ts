@@ -100,17 +100,7 @@ async function readPersisted(): Promise<Set<string>> {
     const raw = await fs.readFile(permissionsFile(), 'utf-8')
     const parsed = JSON.parse(raw) as StoreShape
     if (parsed && Array.isArray(parsed.alwaysAllow)) {
-      // Migration: an earlier version prefixed callable names with `mcp__`
-      // (e.g. `mcp__fs__read_file`). Strip the prefix on load so users
-      // keep their always-allow grants after the rename to plain
-      // `<server>__<tool>`. The strip is idempotent and runs every load
-      // — once the user next approves anything, writePersisted re-sorts
-      // and dedupes, which physically migrates the file on disk.
-      return new Set(
-        parsed.alwaysAllow
-          .filter((s): s is string => typeof s === 'string')
-          .map((s) => (s.startsWith('mcp__') ? s.slice('mcp__'.length) : s)),
-      )
+      return new Set(parsed.alwaysAllow.filter((s): s is string => typeof s === 'string'))
     }
   } catch {
     // missing / malformed — start with empty allow list, degrade to all-ask

@@ -61,25 +61,6 @@ describe('McpPermissionStore', () => {
     await store.approvePermanently('foo__bar')
     expect(await store.isApproved('foo__bar')).toBe(true)
   })
-
-  it('migrates legacy mcp__-prefixed entries on read', async () => {
-    // Simulate a permissions.json written by an earlier version, which
-    // saved names as `mcp__<server>__<tool>`. The prefix is stripped at
-    // load time so users keep their always-allow grants after the
-    // rename to plain `<server>__<tool>`.
-    const filePath = path.join(home, 'mcp-permissions.json')
-    await fs.mkdir(home, { recursive: true })
-    await fs.writeFile(
-      filePath,
-      JSON.stringify({ alwaysAllow: ['mcp__fs__read_file', 'mcp__sentry__find_issues'] }),
-      'utf-8',
-    )
-    const store = new McpPermissionStore()
-    expect(await store.isApproved('fs__read_file')).toBe(true)
-    expect(await store.isApproved('sentry__find_issues')).toBe(true)
-    // The old prefixed names should NOT match — migration is one-way.
-    expect(await store.isApproved('mcp__fs__read_file')).toBe(false)
-  })
 })
 
 describe('classifyDecision', () => {
