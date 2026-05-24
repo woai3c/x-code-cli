@@ -4,8 +4,11 @@ import type { LanguageModel, ModelMessage } from 'ai'
 import type { EditDiffPayload } from '../agent/diff.js'
 import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
 import type { SubAgentEvent } from '../agent/sub-agents/types.js'
+import type { CommandRegistry } from '../commands/registry.js'
+import type { HookBus } from '../hooks/bus.js'
 import type { McpPermissionStore } from '../mcp/permissions.js'
 import type { McpRegistry } from '../mcp/registry.js'
+import type { PluginRegistry } from '../plugins/registry.js'
 import type { SkillRegistry } from '../skills/registry.js'
 
 // ─── Permission ───
@@ -234,6 +237,35 @@ export interface AgentOptions {
    *  caches the persisted always-allow list + session-scoped allows.
    *  Absent ⇒ tool-execution falls back to ask-every-time semantics. */
   mcpPermissionStore?: McpPermissionStore
+
+  // ── Plugin support ──
+
+  /** Plugin registry, populated at CLI startup by loadAllPlugins. Holds
+   *  every successfully-loaded plugin (enabled + disabled), exposed so
+   *  the `/plugin ...` slash command family can list / inspect / toggle
+   *  without re-scanning the cache. Plugin contributions (skills /
+   *  agents / mcp) are already merged into their respective registries
+   *  by the CLI startup wiring — this field is only the metadata
+   *  surface for the slash command UI. Absent ⇒ plugins disabled
+   *  (`--no-plugins`) or no plugins installed. */
+  pluginRegistry?: PluginRegistry
+
+  /** Hook bus built from enabled plugins' `hooks` contributions. The
+   *  agent loop emits SessionStart / UserPromptSubmit / TurnComplete /
+   *  SessionEnd events through it; tool-execution adds PreToolUse /
+   *  PostToolUse. Absent ⇒ no hook emission (the agent loop skips
+   *  emit-sites entirely). Use `emptyHookBus()` for tests / sub-agents
+   *  that should be allowed to call into the emit-sites but have no
+   *  listeners. */
+  hookBus?: HookBus
+
+  /** File-based slash command registry built from plugin-contributed
+   *  `commands/` directories. The App.tsx default slash dispatcher
+   *  checks this after the built-in command list and skill registry;
+   *  matching a name here expands the command body (with $ARGUMENTS
+   *  / ${CLAUDE_PLUGIN_ROOT} substitution) and submits as a model
+   *  prompt. Absent ⇒ no plugin commands available. */
+  commandRegistry?: CommandRegistry
 }
 
 // ─── Knowledge ───
@@ -262,7 +294,7 @@ export interface KnowledgeFact {
  *  a fact to AutoMemory. Lets the UI render a "Remembered: …" line in
  *  scrollback so the user has visibility into otherwise-silent writes. */
 export interface MemoryWriteNotice {
-  scope: 'project' | 'global'
+  scope: 'project' | 'user'
   category: KnowledgeCategory
   key: string
   fact: string

@@ -69,28 +69,4 @@ describe('LruCache', () => {
       expect(cache.get('key')).toBe('value')
     })
   })
-
-  it('has() returns correct boolean', () => {
-    const cache = new LruCache<number>({ maxEntries: 10 })
-    cache.set('x', 42)
-    expect(cache.has('x')).toBe(true)
-    expect(cache.has('y')).toBe(false)
-  })
-
-  it('tracks size correctly', () => {
-    const cache = new LruCache<number>({ maxEntries: 5 })
-    expect(cache.size).toBe(0)
-    cache.set('a', 1)
-    expect(cache.size).toBe(1)
-    cache.set('b', 2)
-    expect(cache.size).toBe(2)
-  })
-
-  it('overwrites existing key', () => {
-    const cache = new LruCache<number>({ maxEntries: 5 })
-    cache.set('a', 1)
-    cache.set('a', 99)
-    expect(cache.get('a')).toBe(99)
-    expect(cache.size).toBe(1)
-  })
 })

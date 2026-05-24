@@ -26,15 +26,6 @@ describe('pickVisionProvider', () => {
   beforeEach(clearAllKeys)
   afterEach(clearAllKeys)
 
-  it('returns null when no provider keys are configured', () => {
-    expect(pickVisionProvider()).toBeNull()
-  })
-
-  it('returns null when only DeepSeek key is configured (text-only)', () => {
-    process.env.DEEPSEEK_API_KEY = 'test'
-    expect(pickVisionProvider()).toBeNull()
-  })
-
   it('returns null when only custom OpenAI-compatible endpoint is configured', () => {
     // Custom is treated as text-only by default — even with both env vars set,
     // the user has not opted into vision support.

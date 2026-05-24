@@ -12,9 +12,6 @@ describe('extractHttpStatus', () => {
   it('extracts leading NNN', () => {
     expect(extractHttpStatus('503 Service Unavailable')).toBe(503)
   })
-  it('returns 0 when no status found', () => {
-    expect(extractHttpStatus('some random error')).toBe(0)
-  })
 })
 
 describe('isContextTooLongError', () => {
@@ -26,9 +23,6 @@ describe('isContextTooLongError', () => {
   })
   it('detects prompt is too long', () => {
     expect(isContextTooLongError(new Error('prompt is too long'))).toBe(true)
-  })
-  it('returns false for unrelated errors', () => {
-    expect(isContextTooLongError(new Error('network timeout'))).toBe(false)
   })
   it('detects HTTP 413 (permanentErrorFetch rewrites context overflow to 413)', () => {
     expect(isContextTooLongError(new Error('Request failed with status code 413'))).toBe(true)

@@ -8,6 +8,8 @@ import path from 'node:path'
 import { streamText } from 'ai'
 import type { LanguageModel, UserContent } from 'ai'
 
+import { aggregateUserPromptSubmit } from '../hooks/bus.js'
+import type { HookEvent } from '../hooks/types.js'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
@@ -33,6 +35,18 @@ import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { processToolCalls } from './tool-execution.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
+
+/** Prepend an injected context block to a UserContent payload. Used by
+ *  the UserPromptSubmit hook decision: plugins can inject context (e.g.
+ *  current sprint info) before the model sees the user's actual prompt.
+ *  We prepend INTO the user message rather than insert a separate user
+ *  message to avoid producing two consecutive user turns (some providers
+ *  reject that — Claude refuses to alternate role==='user' twice). */
+function prependContext(userMessage: UserContent, context: string): UserContent {
+  const block = `<plugin_context>\n${context}\n</plugin_context>\n\n`
+  if (typeof userMessage === 'string') return block + userMessage
+  return [{ type: 'text', text: block }, ...userMessage]
+}
 
 /** Pull plain text out of a UserContent payload for slugification.
  *  UserContent can be a string OR a multi-part array (text/image/file
@@ -356,7 +370,12 @@ async function runTurn(
 
     if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
     if (isContextTooLongError(err)) {
-      const compressed = await handleContextTooLong(state, model, callbacks)
+      const compressed = await handleContextTooLong(state, model, callbacks, {
+        hookBus: options.hookBus,
+        modelId: options.modelId,
+        cwd: process.cwd(),
+        abortSignal: options.abortSignal,
+      })
       // Compression makes its own LLM round-trip (2–5s) and doesn't accept
       // an abort signal. If the user Esc'd while it ran, the next runTurn
       // would issue another streamText only to have the SDK reject it
@@ -392,7 +411,62 @@ export async function agentLoop(
   existingState?: LoopState,
 ): Promise<AgentLoopResult> {
   const state = existingState ?? createLoopState(options.permissionMode ?? 'default')
-  state.messages.push({ role: 'user', content: userMessage })
+
+  // ── Plugin hook: SessionStart ──
+  // First-invocation-of-the-session marker. Fire-and-forget, but awaited
+  // so hooks have a chance to inject session-scoped env / state before
+  // the user's prompt is processed. Skipped on subsequent calls within
+  // the same session (existingState !== undefined).
+  if (!existingState && options.hookBus?.has('SessionStart')) {
+    await options.hookBus
+      .emit(
+        { name: 'SessionStart', session: { cwd: process.cwd(), modelId: options.modelId } },
+        { signal: options.abortSignal },
+      )
+      .catch((err) => {
+        if (options.abortSignal?.aborted) throw err
+        debugLog('agent.hook-session-start-error', String(err))
+      })
+  }
+
+  // ── Plugin hook: UserPromptSubmit ──
+  // Runs BEFORE the message is pushed into state.messages so a `deny`
+  // decision keeps the transcript clean (no stranded prompt). A
+  // `modify` with `context` prepends the injected text into the user
+  // message itself rather than as a second user message — back-to-back
+  // user messages confuse some providers' tool-call sequencing.
+  let effectiveUserMessage = userMessage
+  if (options.hookBus?.has('UserPromptSubmit')) {
+    const promptText = userContentToText(userMessage)
+    try {
+      const decisions = await options.hookBus.emit(
+        { name: 'UserPromptSubmit', session: { cwd: process.cwd(), modelId: options.modelId }, prompt: promptText },
+        { signal: options.abortSignal },
+      )
+      const effect = aggregateUserPromptSubmit(decisions)
+      if (effect.decision === 'deny') {
+        const reason = effect.reason ?? 'blocked by plugin hook'
+        const notice = `[Prompt blocked by plugin hook: ${reason}]`
+        callbacks.onTextDelta(notice)
+        // Push BOTH the user's original message and a synthetic assistant
+        // response — keeps state.messages valid as alternating user /
+        // assistant turns the next submit can build on.
+        state.messages.push({ role: 'user', content: userMessage })
+        state.messages.push({ role: 'assistant', content: notice })
+        return { state, turnCount: 0 }
+      }
+      if (effect.context) {
+        effectiveUserMessage = prependContext(userMessage, effect.context)
+      }
+    } catch (err) {
+      if (options.abortSignal?.aborted) {
+        return { state, turnCount: 0 }
+      }
+      debugLog('agent.hook-user-prompt-error', String(err))
+    }
+  }
+
+  state.messages.push({ role: 'user', content: effectiveUserMessage })
 
   // Per-invocation turn counter. Scoped to this single `agentLoop` call
   // — re-entering the function (next user submit) starts at 0 again.
@@ -496,7 +570,12 @@ export async function agentLoop(
     // pre-compaction tail is already on disk.
     void flushPendingMessages(state)
 
-    await checkAndCompressContext(state, model, compressionThreshold, callbacks)
+    await checkAndCompressContext(state, model, compressionThreshold, callbacks, {
+      hookBus: options.hookBus,
+      modelId: options.modelId,
+      cwd: process.cwd(),
+      abortSignal: options.abortSignal,
+    })
 
     // Build the system prompt once per session and reuse it across turns.
     // Stable byte-level prefix is a prerequisite for OpenAI-compatible
@@ -541,6 +620,27 @@ export async function agentLoop(
     const systemPrompt = state.systemPromptCache
 
     const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turn)
+
+    // ── Plugin hook: TurnComplete ──
+    // Fires regardless of finish reason (including error / abort) so
+    // notification / audit hooks see every turn, not just clean stops.
+    // Parallel + best-effort: hook failures and aborts can't block the
+    // outcome dispatch below.
+    if (options.hookBus?.has('TurnComplete')) {
+      const event: HookEvent = {
+        name: 'TurnComplete',
+        session: { cwd: process.cwd(), modelId: options.modelId },
+        turn,
+        tokenUsage: {
+          inputTokens: state.tokenUsage.inputTokens,
+          outputTokens: state.tokenUsage.outputTokens,
+          totalTokens: state.tokenUsage.totalTokens,
+        },
+      }
+      void options.hookBus
+        .emit(event, { signal: options.abortSignal })
+        .catch((err) => debugLog('agent.hook-turn-complete-error', String(err)))
+    }
 
     if (outcome.kind === 'error') break
     if (outcome.kind === 'aborted') break

@@ -21,15 +21,19 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Session resumption** — `--continue` resumes the most recent session; `--resume` opens a session picker or jumps directly by ID
 - **Knowledge system** — layered context loading (global AGENTS.md / global auto-memory / project AGENTS.md chain / project auto-memory / project-root `AGENTS.local.md`); subpackage AGENTS.md overrides the repo root. Each directory prefers `AGENTS.md` and falls back to `CLAUDE.md` when absent (Claude Code compat, read-only; `/init` only reads/writes `AGENTS.md`)
 - **Auto-memory** — after each turn, durable facts from the conversation (user preferences, corrections, project state, external pointers) are automatically saved and loaded as context next session; `/memory` to inspect entries, edit `auto.md` directly to modify
+- **Skills** — describe reusable workflow templates as `SKILL.md` (e.g. code-review checklists, PR-review playbooks); trigger via `/<skill-name>` in the chat; `/skill` manages
+- **MCP integration** — first-class Model Context Protocol support (stdio + HTTP with OAuth) via `/mcp`; server tools fold into the agent's tool set
+- **Plugin system** — bundle skills / sub-agents / MCP servers / hooks into installable units, with subscribed marketplaces driving discovery. Manifest is byte-compatible with Claude Code's `.claude-plugin/plugin.json`, so its ecosystem installs directly. See [docs/plugins.md](./docs/plugins.md)
+- **Hooks** — plugins can register ten lifecycle event callbacks (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` / `SubagentStart` / `SubagentStop` / `TurnComplete` / `SessionEnd`) as shell commands that intercept or rewrite agent behaviour; supports `commandWindows` / `commandDarwin` / `commandLinux` per-platform overrides and a persistent `${pluginDataDir}` variable. See [docs/hooks.md](./docs/hooks.md)
 - **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, `/memory`, `/review`, and more
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/usage`, `/usage-history`, `/memory`, `/review`, `/skill`, `/mcp`, `/plugin`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
 - **Input history recall** — press `↑` / `↓` on an empty prompt to walk through previously submitted messages
 - **Cross-platform** — runs on Windows, macOS, and Linux
-- **Non-interactive mode** — `--print` with pipes for scripts and CI
+- **Non-interactive mode** — `--print` with pipes for scripts and CI; `xc plugin <...>` for non-interactive plugin management
 
 ## Install
 
@@ -176,9 +180,21 @@ xc [options] [prompt]
 --continue, -c        Resume the most recent session in this project (no picker)
 --resume, -r [id]     Resume a session: no argument opens the picker; with an ID jumps directly
 --max-turns <n>       Cap on agent loop turns per submit (optional; default: unlimited)
+--no-plugins          Disable the plugin system entirely (only built-in contributions; useful for triage)
+--no-hooks            Plugins still load, but skip all hook execution
 --version, -v         Show version
 --help, -h            Show help
 ```
+
+### Non-interactive subcommands
+
+```text
+xc plugin <subcommand>            Manage plugins (list / install / uninstall / enable / disable / search / update / info / doctor / marketplace)
+xc plugin install [--yes] <src>   Install a plugin; non-TTY defaults to deny, --yes skips confirmation
+xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add / remove / refresh / info)
+```
+
+Full usage: [docs/plugins.md](./docs/plugins.md).
 
 ## Slash Commands
 
@@ -197,6 +213,9 @@ xc [options] [prompt]
 | `/init`               | Analyze the codebase and create or update `AGENTS.md` at the project root                         |
 | `/review [PR#]`       | Review a GitHub PR (no argument lists open PRs); requires `gh` to be installed locally            |
 | `/memory`             | List auto-memory entries (project + global, grouped by category)                                  |
+| `/skill <sub>`        | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `remove`)                  |
+| `/mcp <sub>`          | Manage MCP servers (`list` / `tools` / `add` / `remove` / `auth` / `refresh`, etc.)               |
+| `/plugin <sub>`       | Manage plugins and marketplaces — see [docs/plugins.md](./docs/plugins.md)                        |
 | `/exit`               | Save the session and exit                                                                         |
 
 ### Thinking-mode notes
@@ -260,6 +279,23 @@ Per-provider support:
 - The sub-agent returns a text description rather than supporting true multimodal interaction; DeepSeek cannot ask follow-up questions about the image (e.g. "what color is the button in the top-right corner" cannot be answered)
 - For complex UI reproduction or pixel-level layout review, the text description may omit fine details
 - For such scenarios, switch to a multimodal model (Claude, Gemini, GLM-4V, etc.) via `/model` and continue the conversation directly
+
+## Detailed Usage Docs
+
+This README is the entry view. Each feature has a focused doc under [`docs/`](./docs/) (bilingual — Chinese as `*.md`, English as `*.en.md`):
+
+| Doc                                                            | What it covers                                                                                            |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [`docs/skills.en.md`](./docs/skills.en.md)                     | Write reusable workflow templates, trigger with `/<name>`                                                 |
+| [`docs/sub-agents.en.md`](./docs/sub-agents.en.md)             | Use built-in / custom sub-agents via the `task` tool                                                      |
+| [`docs/mcp.en.md`](./docs/mcp.en.md)                           | Configure MCP servers (stdio / HTTP / OAuth) + `/mcp` commands                                            |
+| [`docs/knowledge.en.md`](./docs/knowledge.en.md)               | Knowledge base (`AGENTS.md` / `CLAUDE.md` 5-layer load) and auto-memory                                   |
+| [`docs/plugins.en.md`](./docs/plugins.en.md)                   | Install / manage plugins, `/plugin` slash commands, `xc plugin` non-interactive form                      |
+| [`docs/marketplace.en.md`](./docs/marketplace.en.md)           | Subscribe to / self-host a plugin marketplace                                                             |
+| [`docs/hooks.en.md`](./docs/hooks.en.md)                       | Plugins hook into 10 agent lifecycle events (decision protocol, cross-platform commands, worked examples) |
+| [`docs/plugin-authoring.en.md`](./docs/plugin-authoring.en.md) | Write your own plugin (full manifest schema, layout conventions, iteration loop)                          |
+
+**Claude Code compatibility**: the plugin loader recognises both `.x-code-plugin/plugin.json` and `.claude-plugin/plugin.json`, so plugins authored for Claude Code / Codex install directly; the MCP config schema is identical to Claude Code's. First-run automatically subscribes to `anthropic-marketplace`.
 
 ## Troubleshooting
 

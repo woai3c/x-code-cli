@@ -6,6 +6,8 @@
 import type { LanguageModel } from 'ai'
 
 import { resolveModelId } from '../../config/index.js'
+import type { HookBus } from '../../hooks/bus.js'
+import type { HookEvent } from '../../hooks/types.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog } from '../../utils.js'
 import { createLoopState } from '../loop-state.js'
@@ -14,6 +16,18 @@ import { agentLoop } from '../loop.js'
 import { buildSubAgentSystemPrompt } from '../system-prompt.js'
 import type { SubAgentRegistry } from './registry.js'
 import type { SubAgentDefinition } from './types.js'
+
+/** Fire a SubagentStart / SubagentStop hook. Best effort — sub-agent
+ *  invocation is mandatory once the parent decides to delegate, so hook
+ *  failures and aborts must never bubble. */
+function emitSubAgentHook(
+  bus: HookBus | undefined,
+  event: HookEvent & { name: 'SubagentStart' | 'SubagentStop' },
+  signal: AbortSignal | undefined,
+): void {
+  if (!bus?.has(event.name)) return
+  void bus.emit(event, { signal }).catch((err) => debugLog(`agent.hook-${event.name.toLowerCase()}-error`, String(err)))
+}
 
 export interface RunSubAgentArgs {
   parentState: LoopState
@@ -144,6 +158,18 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     prompt,
   })
 
+  // Plugin hook: SubagentStart — fires after the agent definition is
+  // resolved but before the nested agentLoop runs. Best-effort.
+  emitSubAgentHook(
+    parentOptions.hookBus,
+    {
+      name: 'SubagentStart',
+      session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+      agent: { name: agentName, description, prompt },
+    },
+    parentOptions.abortSignal,
+  )
+
   const subModel = resolveSubModel(agentDef, parentOptions, parentModel)
   const subModelId = agentDef.model ? (resolveModelId(agentDef.model) ?? parentOptions.modelId) : parentOptions.modelId
 
@@ -241,6 +267,23 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
       aborted: false,
     })
 
+    emitSubAgentHook(
+      parentOptions.hookBus,
+      {
+        name: 'SubagentStop',
+        session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+        agent: { name: agentName, description },
+        durationMs,
+        outcome: 'completed',
+        tokenUsage: {
+          inputTokens: finalSubState.tokenUsage.inputTokens,
+          outputTokens: finalSubState.tokenUsage.outputTokens,
+          totalTokens: finalSubState.tokenUsage.totalTokens,
+        },
+      },
+      parentOptions.abortSignal,
+    )
+
     if (turnCount >= agentDef.maxTurns && !finalText) {
       return {
         resultText: `[Sub-agent reached max turns (${agentDef.maxTurns}) without finishing. Partial output: ${extractFinalText(finalSubState.messages) || 'none'}]`,
@@ -287,6 +330,18 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
         aborted: true,
       })
 
+      emitSubAgentHook(
+        parentOptions.hookBus,
+        {
+          name: 'SubagentStop',
+          session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+          agent: { name: agentName, description },
+          durationMs,
+          outcome: 'aborted',
+        },
+        parentOptions.abortSignal,
+      )
+
       return {
         resultText: text,
         tokenUsage: subState.tokenUsage,
@@ -310,6 +365,18 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
       durationMs,
       aborted: false,
     })
+
+    emitSubAgentHook(
+      parentOptions.hookBus,
+      {
+        name: 'SubagentStop',
+        session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+        agent: { name: agentName, description },
+        durationMs,
+        outcome: 'failed',
+      },
+      parentOptions.abortSignal,
+    )
 
     return {
       resultText: `[Sub-agent failed: ${message}]`,

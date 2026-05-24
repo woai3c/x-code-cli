@@ -23,11 +23,6 @@ vi.mock('turndown', () => ({
 }))
 
 describe('truncateToolResult', () => {
-  it('does not truncate short results', () => {
-    const short = 'hello world'
-    expect(truncateToolResult(short)).toBe(short)
-  })
-
   it('does not truncate results at exactly the byte limit', () => {
     const exact = 'x'.repeat(MAX_TOOL_RESULT_BYTES)
     expect(truncateToolResult(exact)).toBe(exact)

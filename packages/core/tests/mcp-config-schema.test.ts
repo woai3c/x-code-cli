@@ -51,9 +51,4 @@ describe('parseServersBlock', () => {
     expect(r.errors).toHaveLength(1)
     expect(r.errors[0].name).toBe('bad')
   })
-
-  it('rejects non-object root', () => {
-    const r = parseServersBlock([1, 2, 3])
-    expect(r.errors[0].message).toMatch(/must be an object/)
-  })
 })

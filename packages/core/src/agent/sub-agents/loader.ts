@@ -81,7 +81,11 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   return { data, body }
 }
 
-async function loadAgentsFromDir(dir: string, source: SubAgentDefinition['source']): Promise<SubAgentDefinition[]> {
+async function loadAgentsFromDir(
+  dir: string,
+  source: SubAgentDefinition['source'],
+  pluginId?: string,
+): Promise<SubAgentDefinition[]> {
   const agents: SubAgentDefinition[] = []
 
   let entries: string[]
@@ -122,6 +126,7 @@ async function loadAgentsFromDir(dir: string, source: SubAgentDefinition['source
         maxTurns: fm.maxTurns ?? 30,
         shellRestrictions: fm.shellRestrictions,
         source,
+        ...(pluginId ? { pluginId } : {}),
       })
     } catch (err) {
       console.error(`[sub-agents] Skipping ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
@@ -131,19 +136,40 @@ async function loadAgentsFromDir(dir: string, source: SubAgentDefinition['source
   return agents
 }
 
-/** Load custom sub-agents from global + project directories.
- *  Environment variable `XC_AGENTS_DIR` overrides paths (testing only). */
-export async function loadCustomAgents(): Promise<SubAgentDefinition[]> {
+export interface LoadCustomAgentsOptions {
+  /** Extra sub-agent directories to scan, with the owning plugin id.
+   *  See packages/core/src/plugins/integration.ts for how plugin
+   *  contributions get turned into this shape. */
+  extraDirs?: ReadonlyArray<{ dir: string; pluginId: string }>
+}
+
+/** Load custom sub-agents from global + project directories, plus any
+ *  extra dirs (plugin-contributed). Environment variable `XC_AGENTS_DIR`
+ *  overrides the built-in paths for testing (extras are still honoured). */
+export async function loadCustomAgents(opts: LoadCustomAgentsOptions = {}): Promise<SubAgentDefinition[]> {
   const override = process.env.XC_AGENTS_DIR
   if (override) {
-    return loadAgentsFromDir(override, 'project')
+    const overrideAgents = await loadAgentsFromDir(override, 'project')
+    return [...overrideAgents, ...(await loadAgentsFromExtras(opts.extraDirs))]
   }
 
-  const globalDir = path.join(GLOBAL_XCODE_DIR, 'agents')
+  const userDir = path.join(GLOBAL_XCODE_DIR, 'agents')
   const projectDir = path.join(process.cwd(), XCODE_DIR, 'agents')
 
-  const globalAgents = await loadAgentsFromDir(globalDir, 'global')
+  const userAgents = await loadAgentsFromDir(userDir, 'user')
+  const pluginAgents = await loadAgentsFromExtras(opts.extraDirs)
   const projectAgents = await loadAgentsFromDir(projectDir, 'project')
 
-  return [...globalAgents, ...projectAgents]
+  // user → plugin → project. SubAgentRegistry's Map.set overrides on
+  // duplicate names, so later entries win — same precedence as skills.
+  return [...userAgents, ...pluginAgents, ...projectAgents]
+}
+
+async function loadAgentsFromExtras(extras: LoadCustomAgentsOptions['extraDirs']): Promise<SubAgentDefinition[]> {
+  if (!extras || extras.length === 0) return []
+  const out: SubAgentDefinition[] = []
+  for (const { dir, pluginId } of extras) {
+    out.push(...(await loadAgentsFromDir(dir, 'user', pluginId)))
+  }
+  return out
 }

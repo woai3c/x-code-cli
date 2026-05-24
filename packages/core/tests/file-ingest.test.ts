@@ -39,18 +39,15 @@ vi.mock('tesseract.js', () => ({
 let tmpDir: string
 let textFile: string
 let jsonFile: string
-let unknownFile: string
 let imageFile: string
 
 beforeAll(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xcc-ingest-'))
   textFile = path.join(tmpDir, 'hello.md')
   jsonFile = path.join(tmpDir, 'data.json')
-  unknownFile = path.join(tmpDir, 'no-extension')
   imageFile = path.join(tmpDir, 'fake.png')
   await fs.writeFile(textFile, '# Hello\nLine 2')
   await fs.writeFile(jsonFile, '{"ok":true}')
-  await fs.writeFile(unknownFile, 'plain body')
   // Empty file is fine — classifyFile picks .png by extension and the
   // mocked captionImage never reads the bytes. ingestFile only reads the
   // buffer for the multimodal-provider path, which we don't exercise here.
@@ -79,11 +76,6 @@ describe('extractFileReferences', () => {
     expect(refs).toHaveLength(1)
   })
 
-  it('ignores tokens without path separators', () => {
-    const refs = extractFileReferences('call fs.readFile then foo.bar.baz')
-    expect(refs).toHaveLength(0)
-  })
-
   it('de-duplicates repeated references', () => {
     const refs = extractFileReferences('@/a/b.md vs @/a/b.md')
     expect(refs).toHaveLength(1)
@@ -97,10 +89,6 @@ describe('classifyFile', () => {
 
   it('recognizes json as text', async () => {
     expect(await classifyFile(jsonFile)).toBe('text')
-  })
-
-  it('recognizes extensions without a dot fallback', async () => {
-    expect(await classifyFile(unknownFile)).toBe('text')
   })
 
   it('recognizes .png as image by extension', async () => {

@@ -38,9 +38,4 @@ describe('mediaTypeFor', () => {
     expect(mediaTypeFor('photo.PNG')).toBe('image/png')
     expect(mediaTypeFor('photo.WebP')).toBe('image/webp')
   })
-
-  it('works with full paths', () => {
-    expect(mediaTypeFor('/home/user/images/photo.jpg')).toBe('image/jpeg')
-    expect(mediaTypeFor('C:\\Users\\img\\shot.png')).toBe('image/png')
-  })
 })

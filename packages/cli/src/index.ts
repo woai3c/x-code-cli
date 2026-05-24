@@ -10,24 +10,32 @@ import {
   McpPermissionStore,
   PROVIDER_DETECTION_ORDER,
   PROVIDER_KEY_URLS,
+  buildPluginIntegration,
+  createCommandRegistry,
   createModelRegistry,
   createOAuthProviderFactory,
   createSkillRegistry,
   createSubAgentRegistry,
   debugLog,
+  debugLogIntegrationDiagnostics,
+  emptyHookBus,
+  ensureDefaultMarketplaces,
   getAvailableProviders,
   getEnvVarName,
   getTokenStorage,
   listSessions,
+  loadAllPlugins,
   loadMcpFromDisk,
   loadSession,
   loadUserConfig,
   pickLatestSession,
   resolveModelId,
+  setPluginDebugMirror,
 } from '@x-code-cli/core'
-import type { AgentOptions, LoadedSession, McpRegistry } from '@x-code-cli/core'
+import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-cli/core'
 
 import { getCleanupFn, getSessionExitInfo, startApp } from './app.js'
+import { runPluginCli } from './plugin-cli.js'
 import { detectShell, formatPersistCommand } from './shell.js'
 import type { ShellType } from './shell.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
@@ -93,6 +101,11 @@ let shutdownInProgress = false
  *  their parent's stdin closed — usually fine, but explicit shutdown
  *  is faster and less surprising. */
 let mcpRegistryForShutdown: McpRegistry | null = null
+/** Plugin hook bus captured at startup so gracefulShutdown can fire
+ *  `SessionEnd` to plugin hooks before the process exits. Fire-and-
+ *  forget — the 1s shutdown grace window is the only thing standing
+ *  between a slow hook and an abrupt process kill. */
+let hookBusForShutdown: HookBus | null = null
 
 // Belt-and-suspenders terminal restore. Runs synchronously before exit so even
 // if Ink's unmount is partially broken (e.g. a useEffect cleanup threw, or the
@@ -136,6 +149,14 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
     mcpRegistryForShutdown.shutdown().catch(() => undefined)
   }
 
+  // Plugin SessionEnd hooks. Fire-and-forget — we don't await because
+  // a slow hook would block the user's shell prompt from returning,
+  // and the exit-time grace is a small window anyway. Hooks needing
+  // guaranteed delivery should also subscribe to TurnComplete.
+  if (hookBusForShutdown?.has('SessionEnd')) {
+    hookBusForShutdown.emit({ name: 'SessionEnd', session: { cwd: process.cwd(), modelId: '' } }).catch(() => undefined)
+  }
+
   resetTerminal()
   // Print AFTER resetTerminal so the line lands cleanly above the
   // shell prompt — colors are reset, raw mode is off, cursor is
@@ -149,6 +170,16 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
 async function main() {
   checkNodeVersion()
   loadEnvFile()
+
+  // Non-interactive plugin management subcommand. Routed BEFORE yargs
+  // parses the rest of argv — otherwise `xc plugin install ./foo`
+  // would be treated as a prompt the agent should respond to. This
+  // runs without mounting Ink and exits when done.
+  const rawArgs = hideBin(process.argv)
+  if (rawArgs[0] === 'plugin') {
+    const exitCode = await runPluginCli(rawArgs.slice(1))
+    process.exit(exitCode)
+  }
 
   // Parse CLI arguments
   const argv = await yargs(hideBin(process.argv))
@@ -184,6 +215,36 @@ async function main() {
       // No short alias — `-p` is already `--print`. Plan mode constrains the
       // model to read-only exploration + a plan file until the user approves.
       describe: 'Start the session in plan mode (read-only exploration; user must approve before code edits)',
+    })
+    .option('plugins', {
+      type: 'boolean',
+      default: true,
+      // Declared as positive `--plugins` (default on) so yargs auto-derives
+      // the `--no-plugins` negation. The flag is an escape hatch for
+      // diagnosing whether a misbehaving plugin (broken skill, runaway
+      // hook, etc.) is the cause of a problem — `--no-plugins` skips
+      // loadAllPlugins entirely so only built-in contributions are active.
+      describe: 'Enable plugin discovery (default true). `--no-plugins` to disable for one session.',
+    })
+    .option('hooks', {
+      type: 'boolean',
+      default: true,
+      // Same `--no-hooks` negation pattern as `--plugins`. Plugins still
+      // load (skills / agents / mcp contributions still register), only
+      // the hook subsystem is skipped — wires `emptyHookBus()` instead
+      // of the integration-built one. Use when a slow / runaway hook
+      // is suspected, without losing the rest of a plugin's content.
+      describe: 'Enable plugin hooks (default true). `--no-hooks` to skip hook execution for one session.',
+    })
+    .option('plugin-debug', {
+      type: 'boolean',
+      default: false,
+      // Targeted debug output for plugin / hook / marketplace activity.
+      // Mirrors the matching debugLog() lines to stderr in addition to the
+      // log file, so you can see them live without tailing ~/.x-code/logs/.
+      // Equivalent to setting `XC_PLUGIN_DEBUG=1`. Doesn't change behaviour
+      // — only changes where the breadcrumbs go.
+      describe: 'Mirror plugin / hook / marketplace debug breadcrumbs to stderr (also XC_PLUGIN_DEBUG=1).',
     })
     .option('continue', {
       alias: 'c',
@@ -292,8 +353,48 @@ async function main() {
   // Create registries and get model
   const providerRegistry = createModelRegistry()
   const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
-  const subAgentRegistry = await createSubAgentRegistry()
-  const skillRegistry = await createSkillRegistry()
+
+  // --plugin-debug / XC_PLUGIN_DEBUG=1: mirror plugin/hook/marketplace
+  // debugLog breadcrumbs to stderr so they're visible live without
+  // tailing ~/.x-code/logs/debug.log. Install BEFORE ensureDefaultMarketplaces
+  // so first-run subscribe messages show up too. Done as a global hook on
+  // debugLog rather than a new logger — keeps every existing call site
+  // automatic and avoids two parallel logging paths.
+  if (argv['plugin-debug'] || process.env.XC_PLUGIN_DEBUG === '1') {
+    setPluginDebugMirror(true)
+  }
+
+  // First-run seed: writes the default `anthropic-marketplace`
+  // subscription to known_marketplaces.json if no subscription file
+  // exists yet. Idempotent — a user who explicitly removed the
+  // subscription won't get it back. Done before loadAllPlugins so the
+  // first run sees a populated marketplaces list.
+  if (argv.plugins !== false) {
+    await ensureDefaultMarketplaces().catch((err) => debugLog('plugins.ensure-defaults-failed', String(err)))
+  }
+
+  // Plugins must load BEFORE skill / sub-agent / mcp registries so their
+  // contributions can be folded into each. `--no-plugins` short-circuits
+  // the entire chain. We surface non-fatal load errors to stderr in the
+  // same style as `[mcp] config error in ...` below — one broken plugin
+  // never blocks the others. Detailed diagnostics (collisions, unsupported
+  // commands, hook errors) go to debug.log via
+  // debugLogIntegrationDiagnostics for `/plugin doctor` to surface.
+  const pluginLoad = await loadAllPlugins({ cwd: process.cwd(), disabled: argv.plugins === false })
+  for (const e of pluginLoad.registry.loadErrors()) {
+    console.error(chalk.yellow(`[plugin] ${e.id ?? e.path}: ${e.message}`))
+  }
+  const pluginIntegration = await buildPluginIntegration(pluginLoad)
+  debugLogIntegrationDiagnostics(pluginIntegration)
+  if (pluginIntegration.mcpErrors.length > 0) {
+    for (const e of pluginIntegration.mcpErrors) {
+      console.error(chalk.yellow(`[plugin] ${e.pluginId}: ${e.message}`))
+    }
+  }
+
+  const subAgentRegistry = await createSubAgentRegistry({ extraDirs: pluginIntegration.agentsDirs })
+  const skillRegistry = await createSkillRegistry({ extraDirs: pluginIntegration.skillsDirs })
+  const commandRegistry = await createCommandRegistry({ extraDirs: pluginIntegration.commandsDirs })
 
   // MCP: load servers, run trust dialog if project-level config is
   // unfamiliar. Done BEFORE Ink mounts so the readline-based trust
@@ -304,6 +405,7 @@ async function main() {
   const mcpPermissionStore = new McpPermissionStore()
   const mcpLoadResult = await loadMcpFromDisk({
     cwd: process.cwd(),
+    extraServers: pluginIntegration.mcpServers,
     askUser: (question, opts) => askInTerminal(question, opts),
     // The browser-open hook only fires during /mcp auth (passive boot
     // mode never invokes redirectToAuthorization — see
@@ -319,6 +421,9 @@ async function main() {
     onExitRequested: () => process.exit(0),
   })
   mcpRegistryForShutdown = mcpLoadResult.registry
+  // Don't fire SessionEnd hooks when --no-hooks is set — the user
+  // explicitly opted out of all hook execution this session.
+  hookBusForShutdown = argv.hooks === false ? null : pluginIntegration.hookBus
 
   if (mcpLoadResult.configErrors.length > 0) {
     for (const e of mcpLoadResult.configErrors) {
@@ -353,6 +458,12 @@ async function main() {
     skillRegistry,
     mcpRegistry: mcpLoadResult.registry,
     mcpPermissionStore,
+    pluginRegistry: pluginLoad.registry,
+    commandRegistry,
+    // --no-hooks: swap in an empty bus so emit-sites are no-ops without
+    // touching the rest of plugin loading (skills / agents / mcp still
+    // register, just nothing listens on lifecycle events).
+    hookBus: argv.hooks === false ? emptyHookBus() : pluginIntegration.hookBus,
   }
 
   // Resume / continue. Three resume entry points:

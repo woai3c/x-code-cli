@@ -15,14 +15,14 @@
 // every other code path that captured `options.skillRegistry` (agent
 // loop's buildTools, App.tsx's slash-command tab completion, …) stays
 // pointed at the right thing without needing to be re-wired.
-import { loadSkills } from './loader.js'
+import { type LoadSkillsOptions, loadSkills } from './loader.js'
 import { loadDisabledSkillsSet } from './settings.js'
 
 export interface SkillDefinition {
   name: string
   description: string
   content: string
-  source: 'global' | 'project'
+  source: 'user' | 'project'
   /** Absolute path to the skill's directory (the one containing SKILL.md).
    *  Used at activation time so the model can resolve relative paths to
    *  bundled scripts / references / assets. */
@@ -32,6 +32,10 @@ export interface SkillDefinition {
    *  so the model knows what bundled resources exist without globbing. Capped
    *  at MAX_LISTED_FILES — long lists get truncated with a "... N more" marker. */
   files: string[]
+  /** When this skill comes from a plugin contribution, the owning plugin's
+   *  id (`name@marketplace`). UI shows this as "(from plugin: …)" and
+   *  `/skill remove` redirects to `/plugin uninstall`. */
+  pluginId?: string
 }
 
 export interface SkillEntry extends SkillDefinition {
@@ -164,8 +168,8 @@ export function wrapActivatedSkill(skill: SkillDefinition): string {
   return `<activated_skill name="${skill.name}">\n${formatSkillActivationBody(skill)}\n</activated_skill>`
 }
 
-export async function createSkillRegistry(): Promise<SkillRegistry> {
-  const [skills, disabled] = await Promise.all([loadSkills(), loadDisabledSkillsSet()])
+export async function createSkillRegistry(opts: LoadSkillsOptions = {}): Promise<SkillRegistry> {
+  const [skills, disabled] = await Promise.all([loadSkills(opts), loadDisabledSkillsSet()])
   return new SkillRegistry(skills, disabled)
 }
 
@@ -173,7 +177,10 @@ export async function createSkillRegistry(): Promise<SkillRegistry> {
  *  registry in place. Caller is responsible for invalidating any
  *  systemPromptCache that embedded the previous skill list — the
  *  /skill refresh handler does exactly this. */
-export async function reloadSkillRegistry(registry: SkillRegistry): Promise<SkillReloadSummary> {
-  const [skills, disabled] = await Promise.all([loadSkills(), loadDisabledSkillsSet()])
+export async function reloadSkillRegistry(
+  registry: SkillRegistry,
+  opts: LoadSkillsOptions = {},
+): Promise<SkillReloadSummary> {
+  const [skills, disabled] = await Promise.all([loadSkills(opts), loadDisabledSkillsSet()])
   return registry.reload(skills, disabled)
 }

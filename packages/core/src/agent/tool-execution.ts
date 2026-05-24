@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
+import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import { checkPermission } from '../permissions/index.js'
 import { truncateToolResult } from '../tools/index.js'
@@ -224,6 +225,34 @@ interface HandlerCtx {
   options: AgentOptions
   callbacks: AgentCallbacks
   parentModel: LanguageModel
+}
+
+/** Wrap pushToolResult with a PostToolUse hook emission. Only the two
+ *  "real" success-result call sites use this — error / interrupt /
+ *  permission-denial paths still call pushToolResult directly because
+ *  emitting PostToolUse on a synthetic deny would be confusing for hook
+ *  authors. Bypass handlers (askUser / task / MCP resources) also push
+ *  directly today; lifting them to this helper is a follow-up. */
+async function pushSuccessfulToolResult(ctx: HandlerCtx, output: string, isError: boolean): Promise<void> {
+  let effectiveOutput = output
+  if (ctx.options.hookBus?.has('PostToolUse')) {
+    try {
+      const decisions = await ctx.options.hookBus.emit(
+        {
+          name: 'PostToolUse',
+          session: { cwd: process.cwd(), modelId: ctx.options.modelId },
+          tool: { name: ctx.toolName, args: ctx.input, callId: ctx.toolCallId, output, isError },
+        },
+        { signal: ctx.options.abortSignal },
+      )
+      const effect = aggregatePostToolUse(decisions)
+      if (effect.output !== undefined) effectiveOutput = effect.output
+    } catch (err) {
+      if (ctx.options.abortSignal?.aborted) return
+      debugLog('agent.hook-post-tool-error', String(err))
+    }
+  }
+  pushToolResult(ctx.state, ctx.callbacks, ctx.toolCallId, ctx.toolName, effectiveOutput, isError)
 }
 
 type ToolHandler = (ctx: HandlerCtx) => Promise<void>
@@ -487,6 +516,45 @@ async function handleToolCall(
     parentModel,
   }
 
+  // ── Plugin hook: PreToolUse ──
+  // Fires before bypass-handler routing and before MCP dispatch so the
+  // hook sees EVERY tool the model attempts (including askUser, task,
+  // and MCP tools). A deny becomes a synthetic tool_result the model
+  // sees, keeping state.messages valid. A modify can rewrite the input
+  // record (mutated in-place on ctx.input so downstream handlers and
+  // the loop guard see the post-modification args).
+  if (ctx.options.hookBus?.has('PreToolUse')) {
+    try {
+      const decisions = await ctx.options.hookBus.emit(
+        {
+          name: 'PreToolUse',
+          session: { cwd: process.cwd(), modelId: ctx.options.modelId },
+          tool: { name: ctx.toolName, args: ctx.input, callId: ctx.toolCallId },
+        },
+        { signal: ctx.options.abortSignal },
+      )
+      const effect = aggregatePreToolUse(decisions)
+      if (effect.decision === 'deny') {
+        const reason = effect.reason ?? 'blocked by plugin hook'
+        pushToolResult(
+          state,
+          callbacks,
+          ctx.toolCallId,
+          ctx.toolName,
+          toolErrorString(`Tool denied by plugin hook: ${reason}`),
+          true,
+        )
+        return
+      }
+      if (effect.args && typeof effect.args === 'object' && !Array.isArray(effect.args)) {
+        ctx.input = effect.args as Record<string, unknown>
+      }
+    } catch (err) {
+      if (ctx.options.abortSignal?.aborted) return
+      debugLog('agent.hook-pre-tool-error', String(err))
+    }
+  }
+
   const bypassHandler = BYPASS_LOOP_GUARD_HANDLERS[ctx.toolName]
   if (bypassHandler) {
     await bypassHandler(ctx)
@@ -512,7 +580,7 @@ async function handleToolCall(
   const result = await executeWriteOrShell(ctx)
   if (result == null) return
 
-  pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, truncateToolResult(result.output), result.isError)
+  await pushSuccessfulToolResult(ctx, truncateToolResult(result.output), result.isError)
 }
 
 /** Dispatch an MCP tool call. Sits parallel to the writeFile/edit/shell
@@ -596,8 +664,8 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
   // so Esc immediately cancels in-flight MCP calls.
   reportProgress(toolCallId, `Calling ${entry.serverName}/${entry.rawName}`)
   try {
-    const result = await registry.callTool(toolName, input, options.abortSignal)
-    pushToolResult(state, callbacks, toolCallId, toolName, truncateToolResult(result.text), result.isError)
+    const result = await registry.callTool(toolName, ctx.input, options.abortSignal)
+    await pushSuccessfulToolResult(ctx, truncateToolResult(result.text), result.isError)
   } catch (err) {
     if (isAbortError(err, options.abortSignal)) {
       pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
