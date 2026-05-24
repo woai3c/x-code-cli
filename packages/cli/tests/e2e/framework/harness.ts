@@ -25,7 +25,7 @@ export async function runCliInDir(
   const args = ['-p', prompt, ...(options?.args ?? [])]
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    X_CODE_HOME: path.join(cwd, '.x-code-home'), // isolate global ~/.x-code per scenario
+    X_CODE_HOME: path.join(cwd, '.x-code-home'), // isolate user-scope ~/.x-code per scenario
     X_CODE_MODEL: cfg.modelId,
     NODE_ENV: 'test',
     NO_COLOR: '1',

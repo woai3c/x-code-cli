@@ -64,7 +64,7 @@ export { loadPersistedRules, persistRule } from './permissions/index.js'
 export type { AllowRule } from './permissions/session-store.js'
 
 // Utils
-export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog, setPluginDebugMirror } from './utils.js'
+export { USER_XCODE_DIR, XCODE_DIR, debugLog, setPluginDebugMirror } from './utils.js'
 export { LruCache } from './utils/lru-cache.js'
 export { mediaTypeFor } from './utils/media-type.js'
 export { extractText } from './utils/message-helpers.js'

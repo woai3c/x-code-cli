@@ -14,13 +14,13 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { GLOBAL_XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR } from '../utils.js'
 
 /** Resolve `~/.x-code` (or its X_CODE_HOME override) at call time.
- *  GLOBAL_XCODE_DIR is fixed at module load, but tests redirect via
+ *  USER_XCODE_DIR is fixed at module load, but tests redirect via
  *  the env var — same pattern config/index.ts uses for userConfigPath. */
 function xcodeHome(): string {
-  return process.env.X_CODE_HOME ?? GLOBAL_XCODE_DIR
+  return process.env.X_CODE_HOME ?? USER_XCODE_DIR
 }
 function trustedFile(): string {
   return path.join(xcodeHome(), 'trusted-projects.json')

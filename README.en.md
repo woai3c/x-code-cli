@@ -19,7 +19,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Streaming output** — results render as they are generated
 - **Context compression** — long conversations are auto-compressed; loop-guard detects repeated tool invocations; prompt caching reuses prefixes to reduce input cost
 - **Session resumption** — `--continue` resumes the most recent session; `--resume` opens a session picker or jumps directly by ID
-- **Knowledge system** — layered context loading (global AGENTS.md / global auto-memory / project AGENTS.md chain / project auto-memory / project-root `AGENTS.local.md`); subpackage AGENTS.md overrides the repo root. Each directory prefers `AGENTS.md` and falls back to `CLAUDE.md` when absent (Claude Code compat, read-only; `/init` only reads/writes `AGENTS.md`)
+- **Knowledge system** — layered context loading (user-scope AGENTS.md / user-scope auto-memory / project AGENTS.md chain / project auto-memory / project-root `AGENTS.local.md`); subpackage AGENTS.md overrides the repo root. Each directory prefers `AGENTS.md` and falls back to `CLAUDE.md` when absent (Claude Code compat, read-only; `/init` only reads/writes `AGENTS.md`)
 - **Auto-memory** — after each turn, durable facts from the conversation (user preferences, corrections, project state, external pointers) are automatically saved and loaded as context next session; `/memory` to inspect entries, edit `auto.md` directly to modify
 - **Skills** — describe reusable workflow templates as `SKILL.md` (e.g. code-review checklists, PR-review playbooks); trigger via `/<skill-name>` in the chat; `/skill` manages
 - **MCP integration** — first-class Model Context Protocol support (stdio + HTTP with OAuth) via `/mcp`; server tools fold into the agent's tool set
@@ -212,7 +212,7 @@ Full usage: [docs/plugins.md](./docs/plugins.md).
 | `/resume`             | Pick a past session in this project to resume                                                     |
 | `/init`               | Analyze the codebase and create or update `AGENTS.md` at the project root                         |
 | `/review [PR#]`       | Review a GitHub PR (no argument lists open PRs); requires `gh` to be installed locally            |
-| `/memory`             | List auto-memory entries (project + global, grouped by category)                                  |
+| `/memory`             | List auto-memory entries (project + user, grouped by category)                                    |
 | `/skill <sub>`        | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `remove`)                  |
 | `/mcp <sub>`          | Manage MCP servers (`list` / `tools` / `add` / `remove` / `auth` / `refresh`, etc.)               |
 | `/plugin <sub>`       | Manage plugins and marketplaces — see [docs/plugins.md](./docs/plugins.md)                        |

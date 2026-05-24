@@ -42,10 +42,10 @@ Drop a `.md` file under either path:
 
 | Scope   | Path                              |
 | ------- | --------------------------------- |
-| Global  | `~/.x-code/agents/<name>.md`      |
+| User    | `~/.x-code/agents/<name>.md`      |
 | Project | `<repo>/.x-code/agents/<name>.md` |
 
-Loaded at startup. Project-level wins over global of the same name; both
+Loaded at startup. Project-level wins over user-scope of the same name; both
 override built-ins.
 
 > **Windows paths**: `~/.x-code` maps to `%USERPROFILE%\.x-code`.
@@ -175,5 +175,5 @@ Rule of thumb: sub-agent ≈ "named callable sub-process"; skill ≈
 
 A plugin's manifest can declare `agents: "./agents"`; the `.md` files
 under that path become available sub-agents. They load identically to
-hand-authored global sub-agents, with a `pluginId` tag attached. See
+hand-authored user-scope sub-agents, with a `pluginId` tag attached. See
 [plugins.en.md](./plugins.en.md).

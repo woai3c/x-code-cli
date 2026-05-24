@@ -35,10 +35,10 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 | Scope | 路径                              |
 | ----- | --------------------------------- |
-| 全局  | `~/.x-code/agents/<name>.md`      |
+| 用户  | `~/.x-code/agents/<name>.md`      |
 | 项目  | `<repo>/.x-code/agents/<name>.md` |
 
-启动期自动扫描。项目级同名覆盖全局；同名再覆盖内置。
+启动期自动扫描。项目级同名覆盖用户级；同名再覆盖内置。
 
 > **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`。
 
@@ -152,4 +152,4 @@ shellRestrictions: [rm, sudo, npm publish, git push]
 
 ## 与插件的关系
 
-插件可以在 manifest 里声明 `agents: "./agents"`，子目录的 `.md` 文件就成为可用的子 agent，与你手写的全局子 agent 完全一致，只是带 `pluginId` 标记。详见 [plugins.md](./plugins.md)。
+插件可以在 manifest 里声明 `agents: "./agents"`，子目录的 `.md` 文件就成为可用的子 agent，与你手写的用户级子 agent 完全一致，只是带 `pluginId` 标记。详见 [plugins.md](./plugins.md)。

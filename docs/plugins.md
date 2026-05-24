@@ -107,7 +107,7 @@ Slash 命令版 `/plugin install` 暂时不弹此提示——交互内打命令�
 ```bash
 # 仅在当前项目禁用某插件，不影响其他项目
 xc plugin disable linear@anthropic-marketplace --scope=project
-# 全局启用（默认行为）
+# 用户级启用（默认行为）
 xc plugin enable linear@anthropic-marketplace --scope=user
 ```
 

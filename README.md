@@ -19,7 +19,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **流式输出**：边生成边显示，无需等待完整响应
 - **上下文压缩**：长对话自动压缩历史；loop-guard 检测循环调用；prompt cache 复用前缀降低重复输入成本
 - **会话恢复**：`--continue` 恢复最近一次会话；`--resume` 打开历史会话选择器或按 ID 直达
-- **知识库系统**：分层加载（全局 AGENTS.md / 全局自动记忆 / 项目 AGENTS.md chain / 项目自动记忆 / 项目根 `AGENTS.local.md`），项目子包可覆盖根级约定；每个目录优先读 `AGENTS.md`，缺失时回退到 `CLAUDE.md`（Claude Code 兼容,只读不写,`/init` 只读写 `AGENTS.md`）
+- **知识库系统**：分层加载（用户级 AGENTS.md / 用户级自动记忆 / 项目 AGENTS.md chain / 项目自动记忆 / 项目根 `AGENTS.local.md`），项目子包可覆盖根级约定；每个目录优先读 `AGENTS.md`，缺失时回退到 `CLAUDE.md`（Claude Code 兼容,只读不写,`/init` 只读写 `AGENTS.md`）
 - **自动记忆**：每轮对话结束后自动从最近转录里筛选值得长期记住的事实(用户偏好、纠正反馈、项目状态、外部资源指针),下次会话作为上下文加载;`/memory` 查看当前条目,直接编辑 `auto.md` 修改
 - **Skills**：以 `SKILL.md` 描述可复用工作流模板（如代码审查清单、PR 评审范式），交互中通过 `/<skill-name>` 触发；`/skill` 管理
 - **MCP 集成**：支持 Model Context Protocol 服务器（stdio + HTTP，含 OAuth），由 `/mcp` 管理；服务器工具自动并入 agent 工具集
@@ -212,7 +212,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/resume`             | 从当前项目的历史会话中选择一个恢复                                              |
 | `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                                      |
 | `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）                            |
-| `/memory`             | 查看当前自动记忆条目（project + global,按类目分组）                             |
+| `/memory`             | 查看当前自动记忆条目（project + user,按类目分组）                               |
 | `/skill <sub>`        | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `remove`） |
 | `/mcp <sub>`          | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）  |
 | `/plugin <sub>`       | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）             |

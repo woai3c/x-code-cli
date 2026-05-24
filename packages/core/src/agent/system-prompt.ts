@@ -2,7 +2,7 @@
 import path from 'node:path'
 
 import { getShellProvider } from '../tools/shell-provider.js'
-import { GLOBAL_XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR } from '../utils.js'
 
 const BASE_SYSTEM_PROMPT = `You are X-Code, an AI coding assistant running in the user's terminal. You are powered by the {model} model.
 
@@ -240,8 +240,8 @@ export interface SystemPromptMcpTool {
  *  so the prompt is byte-identical to the no-skills shape, preserving
  *  prefix-cache hits for sessions without any skills configured. */
 function formatSkillCapabilities(skills: readonly { name: string; description: string }[] | undefined): string {
-  const globalSkillsDir = path.join(GLOBAL_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
-  const installHint = `To install a skill from a URL: use the shell tool to download the raw file directly (e.g. \`Invoke-WebRequest -Uri <url> -OutFile "${globalSkillsDir}"\` on Windows, or \`curl -L <url> -o "${globalSkillsDir}"\` on macOS/Linux), then confirm the path. Do NOT use webFetch + write — webFetch renders markdown and corrupts YAML frontmatter. Alternatively, use /skill install <url>. After installing, run /skill refresh to load the new skill in this session, or restart xc.`
+  const userSkillsDir = path.join(USER_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
+  const installHint = `To install a skill from a URL: use the shell tool to download the raw file directly (e.g. \`Invoke-WebRequest -Uri <url> -OutFile "${userSkillsDir}"\` on Windows, or \`curl -L <url> -o "${userSkillsDir}"\` on macOS/Linux), then confirm the path. Do NOT use webFetch + write — webFetch renders markdown and corrupts YAML frontmatter. Alternatively, use /skill install <url>. After installing, run /skill refresh to load the new skill in this session, or restart xc.`
 
   if (!skills || skills.length === 0) {
     return `\n\n## Skills\n${installHint}`

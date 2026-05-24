@@ -17,7 +17,7 @@ import fsSync from 'node:fs'
 import path from 'node:path'
 
 import { MODEL_ALIASES, PROVIDER_DETECTION_ORDER } from '../types/index.js'
-import { GLOBAL_XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR } from '../utils.js'
 
 /** Provider → environment variable mapping */
 const ENV_MAP: Record<string, string> = {
@@ -118,7 +118,7 @@ function userConfigPath(): string {
   // state. Falls through to `~/.x-code` otherwise.
   const override = process.env.X_CODE_HOME
   if (override) return path.join(override, 'config.json')
-  return path.join(GLOBAL_XCODE_DIR, 'config.json')
+  return path.join(USER_XCODE_DIR, 'config.json')
 }
 
 /** Read the user config. Returns empty object on any failure (missing file,
@@ -140,7 +140,7 @@ export function loadUserConfig(): UserConfig {
 export function saveUserConfig(update: Partial<UserConfig>): void {
   const merged: UserConfig = { ...loadUserConfig(), ...update }
   try {
-    fsSync.mkdirSync(GLOBAL_XCODE_DIR, { recursive: true })
+    fsSync.mkdirSync(USER_XCODE_DIR, { recursive: true })
     fsSync.writeFileSync(userConfigPath(), JSON.stringify(merged, null, 2) + '\n', 'utf-8')
   } catch {
     // Best-effort: don't crash the UI if the config dir is read-only.

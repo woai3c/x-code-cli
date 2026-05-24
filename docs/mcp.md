@@ -34,10 +34,10 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 
 | Scope | 路径                         | 何时用                                     |
 | ----- | ---------------------------- | ------------------------------------------ |
-| 全局  | `~/.x-code/config.json`      | 个人通用 MCP 服务（filesystem、github 等） |
+| 用户  | `~/.x-code/config.json`      | 个人通用 MCP 服务（filesystem、github 等） |
 | 项目  | `<repo>/.x-code/config.json` | 仅此项目的 MCP 服务（公司内部 server 等）  |
 
-两个 scope 合并：项目级覆盖同名全局。**项目级配置首次出现时弹"是否信任"对话框**（同 Claude Code 的安全模型），用户拒绝则跳过项目级。信任决定持久化到 `~/.x-code/trusted-projects.json`。
+两个 scope 合并：项目级覆盖同名用户级。**项目级配置首次出现时弹"是否信任"对话框**（同 Claude Code 的安全模型），用户拒绝则跳过项目级。信任决定持久化到 `~/.x-code/trusted-projects.json`。
 
 > **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`，下文不再重复。
 
@@ -110,7 +110,7 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 | ---------------------- | ------------------------------------------------------------------------------ |
 | `/mcp list`            | 列出所有配置的 server + 当前状态（connected / disabled / needs_auth / failed） |
 | `/mcp tools [server]`  | 列出可用工具；可选按 server 名过滤                                             |
-| `/mcp add`             | 交互式添加一个 stdio / HTTP server 到全局或项目 config                         |
+| `/mcp add`             | 交互式添加一个 stdio / HTTP server 到用户或项目 config                         |
 | `/mcp add-json`        | 从一段裸 JSON 添加一个 server（适合粘贴文档示例）                              |
 | `/mcp remove`          | 从 config 移除 server                                                          |
 | `/mcp auth <server>`   | 触发 HTTP server 的 OAuth 流程                                                 |

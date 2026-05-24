@@ -27,11 +27,11 @@ import type {
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { GLOBAL_XCODE_DIR, debugLog } from '../../utils.js'
+import { USER_XCODE_DIR, debugLog } from '../../utils.js'
 
 /** Resolved at call time so tests can redirect via X_CODE_HOME. */
 function xcodeHome(): string {
-  return process.env.X_CODE_HOME ?? GLOBAL_XCODE_DIR
+  return process.env.X_CODE_HOME ?? USER_XCODE_DIR
 }
 function authFile(): string {
   return path.join(xcodeHome(), 'mcp-auth.json')

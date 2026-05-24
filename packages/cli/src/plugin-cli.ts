@@ -76,7 +76,7 @@ function printUsage(): void {
       "  info <id>                 Show a plugin's manifest, contributions, hooks",
       '  install <source>          Install from name@marketplace, github:owner/repo, git URL, or local path',
       '  uninstall <id>            Remove a plugin (cache + settings; data dir preserved)',
-      '  enable <id>               Enable a plugin (global scope)',
+      '  enable <id>               Enable a plugin (user scope)',
       '  disable <id>              Disable a plugin without uninstalling',
       '  search <keyword>          Search subscribed marketplaces',
       '  update <id>               Reinstall from recorded source',

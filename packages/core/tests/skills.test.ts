@@ -311,16 +311,16 @@ describe('SkillRegistry', () => {
     expect(registry.names().sort()).toEqual(['alpha', 'beta'])
   })
 
-  it('project skill overrides global skill with same name', () => {
-    // loadSkills returns globals first, then project — registry deduplicates
+  it('project skill overrides user-scope skill with same name', () => {
+    // loadSkills returns user-scope first, then project — registry deduplicates
     // by last-write-wins, so project wins.
     const defs = [
       {
         name: 'review',
-        description: 'Global review',
-        content: 'Global body',
+        description: 'User review',
+        content: 'User body',
         source: 'user' as const,
-        dir: '/global/skills/review',
+        dir: '/user/skills/review',
         files: [],
       },
       {
@@ -562,14 +562,14 @@ describe('skill settings', () => {
     process.chdir(originalCwd)
   })
 
-  it('union of global + project disabled lists', async () => {
+  it('union of user + project disabled lists', async () => {
     const { setSkillDisabled, loadDisabledSkillsSet } = await import('../src/skills/settings.js')
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-settings-test-home-'))
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-settings-test-proj-'))
-    // utils.ts caches GLOBAL_XCODE_DIR at module-eval time, so X_CODE_HOME
-    // alone won't redirect the global path here. We chdir into a temp
+    // utils.ts caches USER_XCODE_DIR at module-eval time, so X_CODE_HOME
+    // alone won't redirect the user-scope path here. We chdir into a temp
     // project dir to point the project scope at a fresh location; the
-    // global path lives wherever utils.ts resolved it on first import.
+    // user-scope path lives wherever utils.ts resolved it on first import.
     process.chdir(projectDir)
 
     await setSkillDisabled('alpha', 'project', true)
@@ -646,8 +646,8 @@ describe('createSkillRegistry', () => {
 
     // Project-scope settings live under cwd/.x-code/settings.local.json.
     // Chdir to a fresh temp dir so we don't pollute the real repo or the
-    // user's home (utils.ts caches GLOBAL_XCODE_DIR at import time, so we
-    // can't redirect global scope here — project scope is sufficient
+    // user's home (utils.ts caches USER_XCODE_DIR at import time, so we
+    // can't redirect user scope here — project scope is sufficient
     // because XC_SKILLS_DIR also tags loaded skills as source='project').
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-registry-int-'))
     process.chdir(projectDir)

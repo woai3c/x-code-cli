@@ -18,7 +18,7 @@
 //   installed_plugins.json           — bookkeeping of installed plugins
 import path from 'node:path'
 
-import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 const PLUGINS_DIR_NAME = 'plugins'
 
@@ -27,7 +27,7 @@ const PLUGINS_DIR_NAME = 'plugins'
 export function pluginsRoot(): string {
   const override = process.env.XC_PLUGINS_DIR
   if (override) return override
-  return path.join(GLOBAL_XCODE_DIR, PLUGINS_DIR_NAME)
+  return path.join(USER_XCODE_DIR, PLUGINS_DIR_NAME)
 }
 
 /** ~/.x-code/plugins/known_marketplaces.json */
@@ -73,7 +73,7 @@ export function installedPluginsPath(): string {
 
 /** <cwd>/.x-code/plugins/ — rare; used when a project ships its own
  *  plugins committed to the repo (vs. installing from a marketplace).
- *  The loader scans this in addition to the global cache. */
+ *  The loader scans this in addition to the user-scope cache. */
 export function projectPluginsDir(cwd: string): string {
   return path.join(cwd, XCODE_DIR, 'plugins')
 }

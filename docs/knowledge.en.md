@@ -15,8 +15,8 @@ At startup, the layers are concatenated in this order. **Later layers
 win** on duplicate names or shadowing concepts:
 
 ```
-1. ~/.x-code/AGENTS.md                  # global preferences (hand-written)
-2. ~/.x-code/memory/auto.md             # global auto-memory (AI-written)
+1. ~/.x-code/AGENTS.md                  # user-scope preferences (hand-written)
+2. ~/.x-code/memory/auto.md             # user-scope auto-memory (AI-written)
 3. <repo>/AGENTS.md chain               # walked from cwd up to .git root, root → leaf
 4. <repo>/.x-code/memory/auto.md        # project auto-memory (AI-written)
 5. <repo-root>/AGENTS.local.md          # project personal prefs (hand-written, gitignored)
@@ -46,7 +46,7 @@ At each layer, the loader prefers `AGENTS.md` and falls back to
 
 ## What goes in each file
 
-### `~/.x-code/AGENTS.md` — global preferences
+### `~/.x-code/AGENTS.md` — user-scope preferences
 
 Cross-project facts and conventions. Example:
 
@@ -123,7 +123,7 @@ Two files:
 
 | Path                            | Scope   |
 | ------------------------------- | ------- |
-| `~/.x-code/memory/auto.md`      | Global  |
+| `~/.x-code/memory/auto.md`      | User    |
 | `<repo>/.x-code/memory/auto.md` | Project |
 
 Each memory is a standalone Markdown section with YAML frontmatter (type,
@@ -133,7 +133,7 @@ key, date, etc. as metadata).
 
 ```text
 > /memory
-(the agent renders the list, grouped by category, project + global combined)
+(the agent renders the list, grouped by category, project + user combined)
 ```
 
 ### Edit by hand

@@ -9,7 +9,7 @@
 ## TL;DR
 
 ```bash
-# 全局 skill（所有项目可用）
+# 用户级 skill（所有项目可用）
 mkdir -p ~/.x-code/skills/code-review
 cat > ~/.x-code/skills/code-review/SKILL.md <<'EOF'
 ---
@@ -71,10 +71,10 @@ frontmatter 只接受两个字段：
 
 | Scope | 路径                                    | 何时用               |
 | ----- | --------------------------------------- | -------------------- |
-| 全局  | `~/.x-code/skills/<name>/SKILL.md`      | 个人通用工作流       |
+| 用户  | `~/.x-code/skills/<name>/SKILL.md`      | 个人通用工作流       |
 | 项目  | `<repo>/.x-code/skills/<name>/SKILL.md` | 仅此项目使用的工作流 |
 
-项目级同名 skill 会覆盖全局同名。`.x-code/` 在仓库根是 gitignored 的，团队共享 skill 需要换约定或者发布成 plugin（见 [plugins.md](./plugins.md)）。
+项目级同名 skill 会覆盖用户级同名。`.x-code/` 在仓库根是 gitignored 的，团队共享 skill 需要换约定或者发布成 plugin（见 [plugins.md](./plugins.md)）。
 
 > **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`，下文不再重复。
 
@@ -111,14 +111,14 @@ description: 用于检查 React Hook 调用是否符合 rules-of-hooks
 
 ## `/skill` 命令族
 
-| 命令                                            | 说明                                                          |
-| ----------------------------------------------- | ------------------------------------------------------------- |
-| `/skill list`                                   | 列出所有已加载 skill，含 on/off 状态 + 来源（user / project） |
-| `/skill install <url>`                          | 从 URL 下载一个 SKILL.md 装到全局（直接 HTTP fetch，无 git）  |
-| `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                          |
-| `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                        |
-| `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，下次启动生效）                      |
-| `/skill remove <name>`                          | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）            |
+| 命令                                            | 说明                                                           |
+| ----------------------------------------------- | -------------------------------------------------------------- |
+| `/skill list`                                   | 列出所有已加载 skill，含 on/off 状态 + 来源（user / project）  |
+| `/skill install <url>`                          | 从 URL 下载一个 SKILL.md 装到用户级（直接 HTTP fetch，无 git） |
+| `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                           |
+| `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                         |
+| `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，下次启动生效）                       |
+| `/skill remove <name>`                          | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）             |
 
 启用状态写到对应 scope 的 settings：
 
@@ -211,7 +211,7 @@ xychart-beta
 
 ## 与 plugin 的关系
 
-Plugin 可以把 skills 打包发布：plugin 的 manifest 声明 `"skills": "./skills"`，里面的每个子目录就是一个 skill，加载方式与你手写的全局 skill 完全一致，只是会带上 `pluginId` 标记。
+Plugin 可以把 skills 打包发布：plugin 的 manifest 声明 `"skills": "./skills"`，里面的每个子目录就是一个 skill，加载方式与你手写的用户级 skill 完全一致，只是会带上 `pluginId` 标记。
 
 `/skill remove` 不能删 plugin skill——会提示你用 `/plugin uninstall` 卸载整个 plugin。
 

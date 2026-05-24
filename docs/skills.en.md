@@ -11,7 +11,7 @@ playbooks, language- or framework-specific best-practice cheatsheets.
 ## TL;DR
 
 ```bash
-# A global skill (available in every project)
+# A user-scope skill (available in every project)
 mkdir -p ~/.x-code/skills/code-review
 cat > ~/.x-code/skills/code-review/SKILL.md <<'EOF'
 ---
@@ -76,10 +76,10 @@ Walk through the checklist in references/checklist.md and apply each item.
 
 | Scope   | Path                                    | When                                     |
 | ------- | --------------------------------------- | ---------------------------------------- |
-| Global  | `~/.x-code/skills/<name>/SKILL.md`      | Personal workflows that apply everywhere |
+| User    | `~/.x-code/skills/<name>/SKILL.md`      | Personal workflows that apply everywhere |
 | Project | `<repo>/.x-code/skills/<name>/SKILL.md` | Workflows for one repo only              |
 
-A project-level skill overrides a global skill of the same name. `.x-code/`
+A project-level skill overrides a user-scope skill of the same name. `.x-code/`
 at the repo root is gitignored — to share skills with a team, publish them
 as a plugin (see [plugins.en.md](./plugins.en.md)).
 
@@ -225,7 +225,7 @@ xychart-beta
 
 Plugins can bundle skills: a plugin manifest declares `"skills": "./skills"`
 and each subdir under that path becomes a skill. They load identically to
-hand-authored global skills, but carry a `pluginId` tag.
+hand-authored user-scope skills, but carry a `pluginId` tag.
 
 `/skill remove` won't delete a plugin-sourced skill — it redirects to
 `/plugin uninstall` for the owning plugin.

@@ -12,7 +12,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 export type SkillSettingsScope = 'user' | 'project'
 
@@ -21,7 +21,7 @@ export interface SkillSettings {
 }
 
 export function skillSettingsPath(scope: SkillSettingsScope): string {
-  if (scope === 'user') return path.join(GLOBAL_XCODE_DIR, 'settings.json')
+  if (scope === 'user') return path.join(USER_XCODE_DIR, 'settings.json')
   return path.join(process.cwd(), XCODE_DIR, 'settings.local.json')
 }
 

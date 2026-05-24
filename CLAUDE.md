@@ -106,8 +106,8 @@ When changing tool execution code, **always thread `options.abortSignal` through
 `buildKnowledgeContext` (in `core/src/knowledge`) merges five layers, in order:
 
 ```
-~/.x-code/AGENTS.md            global preferences (human-written)
-~/.x-code/memory/auto.md       global auto-memory  (AI-written)
+~/.x-code/AGENTS.md            user-scope preferences (human-written)
+~/.x-code/memory/auto.md       user-scope auto-memory  (AI-written)
 <repo-root>/AGENTS.md chain    walked from cwd up to .git root, root→leaf
 .x-code/memory/auto.md         project auto-memory (AI-written)
 <repo-root>/AGENTS.local.md    per-user, gitignored (personal preferences)

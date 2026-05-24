@@ -203,7 +203,7 @@ describe('loadAllPlugins', () => {
     expect(result.contributions.size).toBe(0)
   })
 
-  it('loads globally-installed plugins from installed_plugins.json', async () => {
+  it('loads user-scope installed plugins from installed_plugins.json', async () => {
     const src = await makeTempPlugin({ name: 'demo', version: '1.0.0', skills: './skills' })
     await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
 

@@ -1,7 +1,7 @@
 // @x-code-cli/core — Plan-mode file storage
 //
 // Plans live in `.x-code/plans/<slug>-<YYYYMMDD-HHMMSS>.md` inside the
-// user's project (NOT in the global `~/.x-code/`). This mirrors how
+// user's project (NOT in the user-scope `~/.x-code/`). This mirrors how
 // `.x-code/sessions/` and `.x-code/memory/` are scoped: per-project,
 // gitignored, never shared across repos. The slug-then-timestamp shape
 // matches the legacy filenames already living under `.x-code/plans/`

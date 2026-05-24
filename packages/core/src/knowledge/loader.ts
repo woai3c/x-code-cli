@@ -3,8 +3,8 @@
 // Layered project context loading. Sources (root-to-leaf precedence within a
 // section; sections concatenated in the order below):
 //
-//   1. Global AGENTS.md (~/.x-code/) — fallback to CLAUDE.md when absent
-//   2. Global auto memory (~/.x-code/memory/auto.md)   — AI-written via post-turn extractor
+//   1. User AGENTS.md (~/.x-code/) — fallback to CLAUDE.md when absent
+//   2. User auto memory (~/.x-code/memory/auto.md)     — AI-written via post-turn extractor
 //   3. Project AGENTS.md chain — fallback to CLAUDE.md per directory
 //   4. Project auto memory (.x-code/memory/auto.md)    — AI-written via post-turn extractor
 //   5. AGENTS.local.md at project root                 — personal preferences, gitignored
@@ -21,10 +21,10 @@
 // ignored. Writes (`/init`, future tooling) always target AGENTS.md.
 import path from 'node:path'
 
-import { GLOBAL_XCODE_DIR, fileExists, readFileSafe } from '../utils.js'
+import { USER_XCODE_DIR, fileExists, readFileSafe } from '../utils.js'
 import { getAutoMemory } from './auto-memory.js'
 
-const GLOBAL_DIR = GLOBAL_XCODE_DIR
+const USER_DIR = USER_XCODE_DIR
 
 /** Filenames recognised at each directory, tried in order. The first one
  *  found wins for that directory; the rest are skipped. AGENTS.md is our
@@ -80,19 +80,19 @@ async function collectProjectKnowledgeChain(
 export async function buildKnowledgeContext(options?: { sessionContext?: string }): Promise<string> {
   const sections: string[] = []
 
-  // Global human-written prefs: AGENTS.md preferred; fall back to
+  // User-scope human-written prefs: AGENTS.md preferred; fall back to
   // CLAUDE.md so users with an existing `~/.x-code/CLAUDE.md` (or one
   // copied over from Claude Code's home) get it picked up without
   // having to rename.
-  const globalKnowledge = await readKnowledgeFile(GLOBAL_DIR)
-  if (globalKnowledge) {
-    sections.push(`### Global Preferences (~/.x-code/${globalKnowledge.fileName})\n${globalKnowledge.content}`)
+  const userKnowledge = await readKnowledgeFile(USER_DIR)
+  if (userKnowledge) {
+    sections.push(`### User Preferences (~/.x-code/${userKnowledge.fileName})\n${userKnowledge.content}`)
   }
 
   const userMemory = getAutoMemory('user')
   const userMemoryContent = userMemory.getPromptContent()
   if (userMemoryContent) {
-    sections.push('### Global Auto Memory\n' + userMemoryContent)
+    sections.push('### User Auto Memory\n' + userMemoryContent)
   }
 
   const cwd = process.cwd()

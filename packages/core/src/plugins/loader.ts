@@ -2,7 +2,7 @@
 //
 // One-shot orchestration called from the CLI entry. Two passes:
 //
-//   Pass 1 — globally-installed plugins from installed_plugins.json. Each
+//   Pass 1 — user-scope installs from installed_plugins.json. Each
 //            record points at a versioned cache dir; we load whichever
 //            version the record names. Orphan records (record present but
 //            cache dir missing) surface as PluginLoadError.
@@ -12,7 +12,7 @@
 //            committed to the repo as in-tree plugins. Marketplace name
 //            is always "local" for these.
 //
-// `installed_plugins.json` is the source of truth for global installs.
+// `installed_plugins.json` is the source of truth for user-scope installs.
 // Orphan cache dirs (no record) are silently ignored — they'll be cleaned
 // up next time the user runs `/plugin uninstall`.
 //
@@ -92,7 +92,7 @@ export async function loadAllPlugins(opts: LoadOptions): Promise<LoadResult> {
   const errors: PluginLoadError[] = []
   const contributions = new Map<string, ResolvedContributions>()
 
-  // ── Pass 1: global installs ────────────────────────────────────────────
+  // ── Pass 1: user-scope installs ────────────────────────────────────────
   const installed = await listInstalledPlugins()
   for (const record of installed) {
     const rootDir = pluginCacheDir(record.marketplace, record.name, record.version)

@@ -141,7 +141,7 @@ Pick the scope explicitly via `--scope`:
 ```bash
 # Disable a plugin in this project only, leaving other projects untouched
 xc plugin disable linear@anthropic-marketplace --scope=project
-# Enable globally (the default)
+# Enable in user scope (the default)
 xc plugin enable linear@anthropic-marketplace --scope=user
 ```
 

@@ -13,7 +13,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
 import type { SkillDefinition } from './registry.js'
 
 const SKILL_FILENAME = 'SKILL.md'
@@ -205,7 +205,7 @@ export async function loadSkills(opts: LoadSkillsOptions = {}): Promise<SkillDef
     return [...overrideSkills, ...(await loadFromExtras(opts.extraDirs))]
   }
 
-  const userDir = path.join(GLOBAL_XCODE_DIR, 'skills')
+  const userDir = path.join(USER_XCODE_DIR, 'skills')
   const projectDir = path.join(process.cwd(), XCODE_DIR, 'skills')
 
   const userSkills = await loadSkillsFromDir(userDir, 'user')

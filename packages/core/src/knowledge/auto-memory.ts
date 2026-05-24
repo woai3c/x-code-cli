@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { KnowledgeCategory, KnowledgeFact } from '../types/index.js'
-import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
 const MAX_LOAD_LINES = 200
 
@@ -179,8 +179,8 @@ function parseMemoryFile(content: string): KnowledgeFact[] {
 // Project memory is keyed by cwd so that if the process ever changes its
 // working directory (e.g. embedding in a daemon or test harness), we get a
 // fresh instance bound to the right file rather than silently reusing the
-// stale one. Global memory is a true singleton — its path is fixed by
-// GLOBAL_XCODE_DIR.
+// stale one. User-scope memory is a true singleton — its path is fixed by
+// USER_XCODE_DIR.
 
 const projectMemories = new Map<string, AutoMemory>()
 let userMemory: AutoMemory | null = null
@@ -200,7 +200,7 @@ export function getAutoMemory(scope: 'project' | 'user'): AutoMemory {
     return mem
   }
   if (!userMemory) {
-    userMemory = new AutoMemory(path.join(GLOBAL_XCODE_DIR, 'memory', 'auto.md'))
+    userMemory = new AutoMemory(path.join(USER_XCODE_DIR, 'memory', 'auto.md'))
   }
   return userMemory
 }

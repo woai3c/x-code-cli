@@ -7,9 +7,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from 'ink'
 
 import {
-  GLOBAL_XCODE_DIR,
   MODEL_ALIASES,
   PROVIDER_MODELS,
+  USER_XCODE_DIR,
   addKnownMarketplace,
   clearPluginEntry,
   createModelRegistry,
@@ -127,7 +127,7 @@ export const SLASH_COMMANDS = [
   { name: '/review', description: 'Review a pull request (no-arg = list open PRs)', argumentHint: '[PR]' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
-  { name: '/memory', description: 'Show auto-memory entries (project + global)' },
+  { name: '/memory', description: 'Show auto-memory entries (project + user)' },
   {
     name: '/mcp',
     description: 'Manage MCP servers',
@@ -1288,7 +1288,7 @@ export function App({
         return
       }
 
-      const skillDir = path.join(GLOBAL_XCODE_DIR, 'skills', name)
+      const skillDir = path.join(USER_XCODE_DIR, 'skills', name)
       const skillFile = path.join(skillDir, 'SKILL.md')
       try {
         await fs.mkdir(skillDir, { recursive: true })
@@ -1308,7 +1308,7 @@ export function App({
     if (sub === 'list') {
       const skills = options.skillRegistry?.listAll() ?? []
       if (skills.length === 0) {
-        const skillsPath = path.join(GLOBAL_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
+        const skillsPath = path.join(USER_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
         addCommandMessage(
           text,
           `No skills loaded. Place SKILL.md files in \`${skillsPath}\` then run \`/skill refresh\` (or restart).`,
@@ -1452,7 +1452,7 @@ export function App({
         )
         return
       }
-      const baseDir = entry.source === 'user' ? GLOBAL_XCODE_DIR : path.join(process.cwd(), '.x-code')
+      const baseDir = entry.source === 'user' ? USER_XCODE_DIR : path.join(process.cwd(), '.x-code')
       const skillDir = path.join(baseDir, 'skills', name)
       try {
         await fs.rm(skillDir, { recursive: true, force: true })

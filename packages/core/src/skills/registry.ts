@@ -57,8 +57,8 @@ export class SkillRegistry {
 
   constructor(skills: SkillDefinition[], disabled: ReadonlySet<string> = new Set()) {
     this.byName = new Map()
-    // Last-write wins: project skills override globals of the same name
-    // because loadSkills() returns globals first, then project skills.
+    // Last-write wins: project skills override user-scope skills of the
+    // same name because loadSkills() returns user-scope first, then project.
     for (const skill of skills) {
       this.byName.set(skill.name, { ...skill, disabled: disabled.has(skill.name) })
     }

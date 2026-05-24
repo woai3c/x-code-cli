@@ -11,8 +11,8 @@ X-Code CLI 在每个会话启动时把"项目背景 + 你的偏好 + 上次的�
 启动时按下面顺序拼接，**先写的优先级低，后写的覆盖前面同名/同类内容**：
 
 ```
-1. ~/.x-code/AGENTS.md                  # 全局偏好（手写）
-2. ~/.x-code/memory/auto.md             # 全局自动记忆（AI 写）
+1. ~/.x-code/AGENTS.md                  # 用户级偏好（手写）
+2. ~/.x-code/memory/auto.md             # 用户级自动记忆（AI 写）
 3. <repo>/AGENTS.md chain               # 从 cwd 走到 .git 根，root → leaf
 4. <repo>/.x-code/memory/auto.md        # 项目自动记忆（AI 写）
 5. <repo-root>/AGENTS.local.md          # 项目私人偏好（手写，gitignored）
@@ -38,7 +38,7 @@ X-Code CLI 在每个会话启动时把"项目背景 + 你的偏好 + 上次的�
 
 ## 三类文件分别写什么
 
-### `~/.x-code/AGENTS.md` — 全局偏好
+### `~/.x-code/AGENTS.md` — 用户级偏好
 
 写跨项目通用的事实和偏好。例：
 
@@ -111,7 +111,7 @@ monorepo 子包想覆盖根级约定时，在子包根放自己的 `AGENTS.md`�
 
 | 路径                            | 范围 |
 | ------------------------------- | ---- |
-| `~/.x-code/memory/auto.md`      | 全局 |
+| `~/.x-code/memory/auto.md`      | 用户 |
 | `<repo>/.x-code/memory/auto.md` | 项目 |
 
 文件里每条记忆是一个独立的 markdown section + YAML frontmatter（type、key、date 等元信息）。
@@ -120,7 +120,7 @@ monorepo 子包想覆盖根级约定时，在子包根放自己的 `AGENTS.md`�
 
 ```text
 > /memory
-（agent 弹列表，按类目分组，project + global 都列）
+（agent 弹列表，按类目分组，project + user 都列）
 ```
 
 ### 手动改

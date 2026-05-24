@@ -7,8 +7,8 @@ import path from 'node:path'
 /** Project-local config directory name */
 export const XCODE_DIR = '.x-code'
 
-/** Global config directory (~/.x-code) */
-export const GLOBAL_XCODE_DIR = path.join(os.homedir(), '.x-code')
+/** User-scope config directory (~/.x-code) */
+export const USER_XCODE_DIR = path.join(os.homedir(), '.x-code')
 
 // ── Debug log (shared by core + cli) ────────────────────────────────────
 // Turn on with `DEBUG_STDOUT=1`. Writes to ~/.x-code/logs/debug.log so a
@@ -48,7 +48,7 @@ const MAX_LOG_BYTES = 10 * 1024 * 1024
  *  file count is in the tens of thousands. */
 const MAX_LINE_BYTES = 1024
 
-const LOG_DIR = path.join(GLOBAL_XCODE_DIR, 'logs')
+const LOG_DIR = path.join(USER_XCODE_DIR, 'logs')
 const LOG_FILE = path.join(LOG_DIR, 'debug.log')
 const LOG_FILE_OLD = path.join(LOG_DIR, 'debug.log.1')
 

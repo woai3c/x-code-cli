@@ -39,10 +39,10 @@ to see the tools each server exposes.
 
 | Scope   | Path                         | When to use                                           |
 | ------- | ---------------------------- | ----------------------------------------------------- |
-| Global  | `~/.x-code/config.json`      | Personal-use servers (filesystem, github, etc.)       |
+| User    | `~/.x-code/config.json`      | Personal-use servers (filesystem, github, etc.)       |
 | Project | `<repo>/.x-code/config.json` | Repo-specific servers (internal company server, etc.) |
 
-The two scopes merge: project entries override global entries with the
+The two scopes merge: project entries override user-scope entries with the
 same name. **Project-level configs trigger a trust dialog the first time
 they appear** (matching Claude Code's security model). Declining skips
 project servers for that session. The trust decision persists at
@@ -128,7 +128,7 @@ server `failed` (the other servers still load).
 | ---------------------- | ----------------------------------------------------------------------------------------- |
 | `/mcp list`            | List every configured server with its status (connected / disabled / needs_auth / failed) |
 | `/mcp tools [server]`  | List tools available; optional filter by server name                                      |
-| `/mcp add`             | Interactive add of a stdio / HTTP server to global or project config                      |
+| `/mcp add`             | Interactive add of a stdio / HTTP server to user or project config                        |
 | `/mcp add-json`        | Add a server from raw JSON (handy for pasting docs examples)                              |
 | `/mcp remove`          | Remove a server from config                                                               |
 | `/mcp auth <server>`   | Drive the OAuth flow for an HTTP server                                                   |

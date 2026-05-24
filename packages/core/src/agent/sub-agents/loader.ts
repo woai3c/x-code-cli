@@ -8,7 +8,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../../utils.js'
+import { USER_XCODE_DIR, XCODE_DIR } from '../../utils.js'
 import type { SubAgentDefinition } from './types.js'
 
 const frontmatterSchema = z.object({
@@ -143,7 +143,7 @@ export interface LoadCustomAgentsOptions {
   extraDirs?: ReadonlyArray<{ dir: string; pluginId: string }>
 }
 
-/** Load custom sub-agents from global + project directories, plus any
+/** Load custom sub-agents from user + project directories, plus any
  *  extra dirs (plugin-contributed). Environment variable `XC_AGENTS_DIR`
  *  overrides the built-in paths for testing (extras are still honoured). */
 export async function loadCustomAgents(opts: LoadCustomAgentsOptions = {}): Promise<SubAgentDefinition[]> {
@@ -153,7 +153,7 @@ export async function loadCustomAgents(opts: LoadCustomAgentsOptions = {}): Prom
     return [...overrideAgents, ...(await loadAgentsFromExtras(opts.extraDirs))]
   }
 
-  const userDir = path.join(GLOBAL_XCODE_DIR, 'agents')
+  const userDir = path.join(USER_XCODE_DIR, 'agents')
   const projectDir = path.join(process.cwd(), XCODE_DIR, 'agents')
 
   const userAgents = await loadAgentsFromDir(userDir, 'user')
