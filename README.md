@@ -21,15 +21,19 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **会话恢复**：`--continue` 恢复最近一次会话；`--resume` 打开历史会话选择器或按 ID 直达
 - **知识库系统**：分层加载（全局 AGENTS.md / 全局自动记忆 / 项目 AGENTS.md chain / 项目自动记忆 / 项目根 `AGENTS.local.md`），项目子包可覆盖根级约定；每个目录优先读 `AGENTS.md`，缺失时回退到 `CLAUDE.md`（Claude Code 兼容,只读不写,`/init` 只读写 `AGENTS.md`）
 - **自动记忆**：每轮对话结束后自动从最近转录里筛选值得长期记住的事实(用户偏好、纠正反馈、项目状态、外部资源指针),下次会话作为上下文加载;`/memory` 查看当前条目,直接编辑 `auto.md` 修改
+- **Skills**：以 `SKILL.md` 描述可复用工作流模板（如代码审查清单、PR 评审范式），交互中通过 `/<skill-name>` 触发；`/skill` 管理
+- **MCP 集成**：支持 Model Context Protocol 服务器（stdio + HTTP，含 OAuth），由 `/mcp` 管理；服务器工具自动并入 agent 工具集
+- **插件系统**：将 skill / sub-agent / MCP 服务器 / hooks 打包成可分发单元，统一安装/启用/卸载；订阅 marketplace 一键发现插件；Manifest 与 Claude Code 字节级兼容，可直接安装其生态的插件。详见 [docs/plugins.md](./docs/plugins.md)
+- **Hooks**：插件可注册 10 个生命周期事件回调（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` / `SubagentStart` / `SubagentStop` / `TurnComplete` / `SessionEnd`），用 shell 命令拦截/改写 agent 行为；支持 `commandWindows` / `commandDarwin` / `commandLinux` 跨平台命令覆盖、`${pluginDataDir}` 持久数据目录。详见 [docs/hooks.md](./docs/hooks.md)
 - **文件附件**：在提示词中以 `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
 - **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history`、`/memory`、`/review` 等
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/usage`、`/usage-history`、`/memory`、`/review`、`/skill`、`/mcp`、`/plugin` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **多行输入**：`Alt+Enter`（macOS 为 `Option+Enter`）或行尾 `\` 后 Enter 插入换行；普通 Enter 直接发送
 - **历史输入回溯**：输入框为空时按 `↑`/`↓` 召回已提交的提示词
 - **跨平台**：支持 Windows、macOS、Linux
-- **非交互模式**：`--print` 配合管道输入，可嵌入脚本与 CI
+- **非交互模式**：`--print` 配合管道输入，可嵌入脚本与 CI；`xc plugin <...>` 非交互管理插件
 
 ## 安装
 
@@ -176,28 +180,43 @@ xc [options] [prompt]
 --continue, -c        恢复当前项目最近一次会话（无选择器）
 --resume, -r [id]     恢复会话：无参数打开选择器，指定 ID 直达
 --max-turns <n>       Agent 循环每次提交的轮次上限（可选，默认无上限）
+--no-plugins          禁用插件系统（仅加载内置贡献，用于排障）
+--no-hooks            插件正常加载，但跳过所有 hook 执行
 --version, -v         显示版本号
 --help, -h            显示帮助信息
 ```
 
+### 非交互子命令
+
+```text
+xc plugin <subcommand>            管理插件（list / install / uninstall / enable / disable / search / update / info / doctor / marketplace）
+xc plugin install [--yes] <src>   安装插件；非 TTY 默认拒绝，--yes 跳过确认
+xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove / refresh / info）
+```
+
+完整用法见 [docs/plugins.md](./docs/plugins.md)。
+
 ## 斜杠命令
 
-| 命令                  | 说明                                                         |
-| --------------------- | ------------------------------------------------------------ |
-| `/help`               | 查看所有可用命令                                             |
-| `/model [alias]`      | 切换模型或查看可用模型列表                                   |
-| `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                    |
-| `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮 |
-| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                |
-| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）                      |
-| `/usage-history`      | 列出当前项目历史会话，可交互选择查看详情                     |
-| `/clear`              | 清空当前会话                                                 |
-| `/compact`            | 手动压缩上下文                                               |
-| `/resume`             | 从当前项目的历史会话中选择一个恢复                           |
-| `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                   |
-| `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）         |
-| `/memory`             | 查看当前自动记忆条目（project + global,按类目分组）          |
-| `/exit`               | 保存会话并退出                                               |
+| 命令                  | 说明                                                                            |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `/help`               | 查看所有可用命令                                                                |
+| `/model [alias]`      | 切换模型或查看可用模型列表                                                      |
+| `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                                       |
+| `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                    |
+| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                   |
+| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）                                         |
+| `/usage-history`      | 列出当前项目历史会话，可交互选择查看详情                                        |
+| `/clear`              | 清空当前会话                                                                    |
+| `/compact`            | 手动压缩上下文                                                                  |
+| `/resume`             | 从当前项目的历史会话中选择一个恢复                                              |
+| `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                                      |
+| `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）                            |
+| `/memory`             | 查看当前自动记忆条目（project + global,按类目分组）                             |
+| `/skill <sub>`        | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `remove`） |
+| `/mcp <sub>`          | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）  |
+| `/plugin <sub>`       | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）             |
+| `/exit`               | 保存会话并退出                                                                  |
 
 ### 思考模式说明
 
@@ -260,6 +279,23 @@ X-Code CLI 支持的 8 家厂商对思考 / 推理模式的默认行为存在差
 - 辅助模型仅返回**文字描述**，并非真正的多模态对话；DeepSeek 无法基于图片进行追问（例如询问"左上角按钮的颜色"无法识别）
 - 复杂 UI 还原、像素级布局校验等场景下，文字描述可能丢失细节
 - 此类场景建议通过 `/model` 切换至 Claude、Gemini、GLM-4V 等多模态模型直接处理
+
+## 详细使用文档
+
+README 是入门视图，每个功能的完整用法在 [`docs/`](./docs/) 下（中英对照，中文为 `*.md`，英文为 `*.en.md`）：
+
+| 文档                                                     | 你想做什么                                                          |
+| -------------------------------------------------------- | ------------------------------------------------------------------- |
+| [`docs/skills.md`](./docs/skills.md)                     | 写复用工作流模板，`/<name>` 触发                                    |
+| [`docs/sub-agents.md`](./docs/sub-agents.md)             | 用内置 / 自定义子 agent 委派子任务（`task` 工具）                   |
+| [`docs/mcp.md`](./docs/mcp.md)                           | 配 MCP 服务器（stdio / HTTP / OAuth）+ `/mcp` 命令                  |
+| [`docs/knowledge.md`](./docs/knowledge.md)               | 知识库（`AGENTS.md` / `CLAUDE.md` 5 层加载）与自动记忆              |
+| [`docs/plugins.md`](./docs/plugins.md)                   | 安装/管理插件、`/plugin` 命令、`xc plugin` 子命令                   |
+| [`docs/marketplace.md`](./docs/marketplace.md)           | 订阅 / 自建 plugin marketplace                                      |
+| [`docs/hooks.md`](./docs/hooks.md)                       | 插件挂 agent 生命周期 hook（10 个事件、决策协议、跨平台命令、示例） |
+| [`docs/plugin-authoring.md`](./docs/plugin-authoring.md) | 自己写插件（完整 manifest schema、目录约定、迭代流程）              |
+
+**Claude Code 兼容**：插件 manifest 同时识别 `.x-code-plugin/plugin.json` 与 `.claude-plugin/plugin.json`，Claude Code / Codex 生态的插件可直接安装；MCP 配置文件与 Claude Code 完全一致。首次启动自动订阅 `anthropic-marketplace`。
 
 ## 故障排查
 

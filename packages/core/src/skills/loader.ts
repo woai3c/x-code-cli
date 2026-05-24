@@ -5,7 +5,7 @@
 // mirrors all major competitors (Gemini CLI, Opencode, Codex) and allows
 // future support files alongside SKILL.md.
 //
-// Priority: project-level skills override global skills of the same name.
+// Priority: project-level skills override user-level skills of the same name.
 // Bad files are skipped with a warning — one broken SKILL.md must never
 // crash the CLI.
 import fs from 'node:fs/promises'
@@ -125,7 +125,11 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   return { data, body }
 }
 
-async function loadSkillsFromDir(dir: string, source: SkillDefinition['source']): Promise<SkillDefinition[]> {
+async function loadSkillsFromDir(
+  dir: string,
+  source: SkillDefinition['source'],
+  pluginId?: string,
+): Promise<SkillDefinition[]> {
   const skills: SkillDefinition[] = []
 
   let entries: string[]
@@ -170,6 +174,7 @@ async function loadSkillsFromDir(dir: string, source: SkillDefinition['source'])
         source,
         dir: skillDir,
         files,
+        ...(pluginId ? { pluginId } : {}),
       })
     } catch (err) {
       console.error(`[skills] Skipping ${skillFile}: ${err instanceof Error ? err.message : String(err)}`)
@@ -179,21 +184,49 @@ async function loadSkillsFromDir(dir: string, source: SkillDefinition['source'])
   return skills
 }
 
-/** Load skills from global + project directories.
- *  Environment variable `XC_SKILLS_DIR` overrides both paths (testing only). */
-export async function loadSkills(): Promise<SkillDefinition[]> {
+export interface LoadSkillsOptions {
+  /** Extra skill directories to scan after the built-in user + project
+   *  paths. Used to fold plugin-contributed `skills/` directories into
+   *  the same registry — see packages/core/src/plugins/integration.ts.
+   *  Order matters: later entries win on name collision. Plugin skills
+   *  are scanned BEFORE project skills (so a user-authored project skill
+   *  can override a plugin skill of the same name). */
+  extraDirs?: ReadonlyArray<{ dir: string; pluginId: string }>
+}
+
+/** Load skills from user + project directories, plus any extra dirs
+ *  passed in (used by the plugin system to fold in plugin-contributed
+ *  skill directories). Environment variable `XC_SKILLS_DIR` overrides
+ *  the built-in paths for testing (extras are still honoured). */
+export async function loadSkills(opts: LoadSkillsOptions = {}): Promise<SkillDefinition[]> {
   const override = process.env.XC_SKILLS_DIR
   if (override) {
-    return loadSkillsFromDir(override, 'project')
+    const overrideSkills = await loadSkillsFromDir(override, 'project')
+    return [...overrideSkills, ...(await loadFromExtras(opts.extraDirs))]
   }
 
-  const globalDir = path.join(GLOBAL_XCODE_DIR, 'skills')
+  const userDir = path.join(GLOBAL_XCODE_DIR, 'skills')
   const projectDir = path.join(process.cwd(), XCODE_DIR, 'skills')
 
-  const globalSkills = await loadSkillsFromDir(globalDir, 'global')
+  const userSkills = await loadSkillsFromDir(userDir, 'user')
+  const pluginSkills = await loadFromExtras(opts.extraDirs)
   const projectSkills = await loadSkillsFromDir(projectDir, 'project')
 
-  // Project skills come last so their names win over global skills
-  // when the registry deduplicates by name.
-  return [...globalSkills, ...projectSkills]
+  // Merge order — last-wins in the registry (project overrides plugin
+  // overrides user builtin). This matches the precedence we tell users:
+  // a project-level skill always overrides anything from a plugin.
+  return [...userSkills, ...pluginSkills, ...projectSkills]
+}
+
+async function loadFromExtras(extras: LoadSkillsOptions['extraDirs']): Promise<SkillDefinition[]> {
+  if (!extras || extras.length === 0) return []
+  const out: SkillDefinition[] = []
+  for (const { dir, pluginId } of extras) {
+    // Plugin-provided skills' filesystem source is technically the cache
+    // dir under ~/.x-code/plugins/cache/..., which makes 'user' the
+    // closest fit (it's installed user-wide, not per-project). `pluginId`
+    // carries the real provenance for the UI.
+    out.push(...(await loadSkillsFromDir(dir, 'user', pluginId)))
+  }
+  return out
 }

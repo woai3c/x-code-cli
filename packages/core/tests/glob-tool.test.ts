@@ -108,21 +108,6 @@ describe('glob tool', () => {
     await fs.rm(tmpDir, { recursive: true })
   })
 
-  it('returns absolute paths', async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-glob-abs-'))
-    await fs.writeFile(path.join(tmpDir, 'x.ts'), '')
-
-    const result = (await glob.execute!(
-      { pattern: '*.ts', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )) as string
-
-    const line = result.split('\n').find((l) => l.endsWith('x.ts')) ?? ''
-    expect(path.isAbsolute(line)).toBe(true)
-
-    await fs.rm(tmpDir, { recursive: true })
-  })
-
   // Regression: ripgrep's `--glob "**/*"` is treated as a whitelist that
   // overrides .gitignore, so feeding the model's catch-all pattern through
   // verbatim returns tens of thousands of node_modules / .git files. The

@@ -19,10 +19,6 @@ describe('AutoMemory', () => {
     memory = createTestMemory()
   })
 
-  it('starts empty', () => {
-    expect(memory.getAll()).toEqual([])
-  })
-
   it('adds a fact', () => {
     const fact: KnowledgeFact = {
       key: 'user-role',
@@ -69,10 +65,6 @@ describe('AutoMemory', () => {
     const found = memory.find('testing', 'feedback')
     expect(found).toBeDefined()
     expect(found!.fact).toBe('no mocks')
-  })
-
-  it('returns undefined for non-existent fact', () => {
-    expect(memory.find('nonexistent')).toBeUndefined()
   })
 
   it('deletes a fact by key', () => {

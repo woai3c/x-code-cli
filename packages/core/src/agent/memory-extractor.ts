@@ -46,7 +46,7 @@ let inflight: Promise<void> = Promise.resolve()
 
 const MemoryItemSchema = z.object({
   category: z.enum(['user', 'feedback', 'project', 'reference']),
-  scope: z.enum(['project', 'global']),
+  scope: z.enum(['project', 'user']),
   key: z.string().min(1).describe('Short slug. Same key under same category overwrites the previous fact.'),
   fact: z.string().min(1).describe('The fact itself. Lead with the rule; for feedback include a one-line reason.'),
 })
@@ -64,10 +64,10 @@ const MemorySchema = z.object({
  *  only catches exact key collisions, not semantic overlap, so the
  *  prevention has to happen in the extractor's prompt. */
 function renderExistingMemory(): string {
-  const global = getAutoMemory('global').getPromptContent().trim()
+  const user = getAutoMemory('user').getPromptContent().trim()
   const project = getAutoMemory('project').getPromptContent().trim()
   const sections: string[] = []
-  sections.push(`## Global (~/.x-code/memory/auto.md)\n${global || '(empty)'}`)
+  sections.push(`## User (~/.x-code/memory/auto.md)\n${user || '(empty)'}`)
   sections.push(`## Project (.x-code/memory/auto.md)\n${project || '(empty)'}`)
   return sections.join('\n\n')
 }
@@ -132,7 +132,7 @@ The main agent has just finished replying to the user. Scan the recent transcrip
 **user** — durable facts about who the human is, changing how you'd talk to them next session.
   Trigger: role, expertise, working environment, language preferences, long-term constraints.
   Example: User says "I've been writing Go for ten years but this is my first time touching the React side."
-  → \`{ category: "user", scope: "global", key: "user-stack", fact: "Ten years of Go; first time touching React in this repo." }\`
+  → \`{ category: "user", scope: "user", key: "user-stack", fact: "Ten years of Go; first time touching React in this repo." }\`
   (Note: the fact is a direct paraphrase. Do NOT add "explain by analogy" or any other prescriptive action — that's inference, not what the user said.)
 
 **feedback** — corrections OR validated approaches. Both count. Lead with the rule, include a one-line reason.
@@ -164,7 +164,7 @@ The main agent has just finished replying to the user. Scan the recent transcrip
 # Scope rule
 
 - Project-specific facts (this repo / team / release): \`scope: "project"\`.
-- Cross-project facts about the user themselves (stack expertise, OS, name): \`scope: "global"\`.
+- Cross-project facts about the user themselves (stack expertise, OS, name): \`scope: "user"\`.
 
 When in doubt, prefer empty array. The user can always type the durable fact again next session if it really matters.`
 

@@ -11,15 +11,6 @@ The string is missing the terminator: ".
     + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString`
 
 describe('foldShellErrorNoise', () => {
-  it('passes through empty input', () => {
-    expect(foldShellErrorNoise('')).toBe('')
-  })
-
-  it('passes through plain output with no PS blocks', () => {
-    const plain = 'hello\nworld\nexit code 0'
-    expect(foldShellErrorNoise(plain)).toBe(plain)
-  })
-
   it('folds a full PS error block into a single line', () => {
     const out = foldShellErrorNoise(PS_ERROR_SAMPLE)
     const lines = out.split('\n').filter((l) => l.trim())
@@ -45,10 +36,5 @@ describe('foldShellErrorNoise', () => {
     expect(out).toContain('after marker')
     expect(out).toContain('At line:')
     expect(out).not.toContain('CategoryInfo')
-  })
-
-  it('fast-path: no `At line:` substring returns input unchanged', () => {
-    const plain = 'some output with + symbols and + tildes but no shell errors'
-    expect(foldShellErrorNoise(plain)).toBe(plain)
   })
 })

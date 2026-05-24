@@ -64,7 +64,7 @@ export { loadPersistedRules, persistRule } from './permissions/index.js'
 export type { AllowRule } from './permissions/session-store.js'
 
 // Utils
-export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog } from './utils.js'
+export { GLOBAL_XCODE_DIR, XCODE_DIR, debugLog, setPluginDebugMirror } from './utils.js'
 export { LruCache } from './utils/lru-cache.js'
 export { mediaTypeFor } from './utils/media-type.js'
 export { extractText } from './utils/message-helpers.js'
@@ -77,6 +77,104 @@ export { generateSessionSummary } from './knowledge/session.js'
 // Sub-agents
 export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from './agent/sub-agents/index.js'
 export type { SubAgentDefinition, SubAgentEvent, SubAgentTrace } from './agent/sub-agents/index.js'
+
+// File-based slash commands (plugin-contributed `commands/*.md`).
+export { CommandRegistry, createCommandRegistry, loadPluginCommands, expandCommandBody } from './commands/index.js'
+export type { CommandDefinition, LoadCommandsOptions } from './commands/index.js'
+
+// Hooks — agent lifecycle event subsystem driven by plugin contributions.
+export {
+  HookBus,
+  emptyHookBus,
+  aggregatePreToolUse,
+  aggregatePostToolUse,
+  aggregateUserPromptSubmit,
+} from './hooks/bus.js'
+export type { EmitOptions as HookEmitOptions, PreToolEffect, PostToolEffect, UserPromptEffect } from './hooks/bus.js'
+export { HookRegistry, buildHookRegistry, emptyHookRegistry } from './hooks/registry.js'
+export { executeHook } from './hooks/executor.js'
+export type { ExecuteHookOptions } from './hooks/executor.js'
+export { hookConfigSchema, parseHookConfig, HookConfigParseError } from './hooks/config-schema.js'
+export { buildVariableContext, expandVariables } from './hooks/variables.js'
+export type { VariableContext } from './hooks/variables.js'
+export type {
+  DecisionEvent,
+  HookConfig,
+  HookConfigEntry,
+  HookDecision,
+  HookEvent,
+  HookEventName,
+  RegisteredHook,
+  SessionContext as HookSessionContext,
+} from './hooks/types.js'
+
+// Plugins — discovery, install, marketplace, registry.
+export { loadAllPlugins, resolveContributions } from './plugins/loader.js'
+export type {
+  LoadOptions as PluginLoadOptions,
+  LoadResult as PluginLoadResult,
+  ResolvedContributions,
+} from './plugins/loader.js'
+export { PluginRegistry, emptyPluginRegistry } from './plugins/registry.js'
+export type { PluginReloadSummary } from './plugins/registry.js'
+export { buildPluginIntegration, debugLogIntegrationDiagnostics } from './plugins/integration.js'
+export type { PluginIntegrationOutput } from './plugins/integration.js'
+export { refreshPluginContributions } from './plugins/refresh.js'
+export type { PluginRefreshSummary, PluginRefreshTargets } from './plugins/refresh.js'
+export {
+  installPlugin,
+  uninstallPlugin,
+  listInstalledPlugins,
+  findInstalledPlugin,
+  InstallError,
+} from './plugins/installer.js'
+export type { InstallRequest, InstallResult, UninstallResult } from './plugins/installer.js'
+export { buildConsentPreview } from './plugins/consent.js'
+export type { ConsentPreview, BuildPreviewInput } from './plugins/consent.js'
+export {
+  getPluginUserConfig,
+  setPluginUserConfig,
+  clearPluginUserConfig,
+  getPluginUserConfigEnv,
+} from './plugins/user-config.js'
+export type { UserConfigValue, PluginUserConfig } from './plugins/user-config.js'
+export {
+  parseMarketplace,
+  readKnownMarketplaces,
+  addKnownMarketplace,
+  removeKnownMarketplace,
+  ensureDefaultMarketplaces,
+  fetchMarketplace,
+  readAllCachedMarketplaces,
+  lookupPlugin,
+  resolveCloneUrl,
+  RESERVED_MARKETPLACE_NAMES,
+  MarketplaceParseError,
+} from './plugins/marketplace.js'
+export {
+  EnableState,
+  setPluginEnabled,
+  clearPluginEntry,
+  settingsPathForScope as pluginSettingsPathForScope,
+} from './plugins/enable-state.js'
+export type { ResolvedEnableState } from './plugins/enable-state.js'
+export type {
+  LoadedPlugin,
+  PluginManifest,
+  PluginAuthor,
+  UserConfigItem,
+  PluginSource,
+  PluginScope,
+  ManifestFormat,
+  PluginLoadError,
+  Marketplace,
+  MarketplaceEntry,
+  KnownMarketplace,
+  KnownMarketplaces,
+  InstalledPluginRecord,
+  InstalledPlugins,
+} from './plugins/types.js'
+export { discoverManifest, parseManifest, ManifestParseError } from './plugins/manifest.js'
 
 // Skills
 export {

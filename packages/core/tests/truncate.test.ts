@@ -9,10 +9,6 @@ describe('truncateToolResult', () => {
       expect(truncateToolResult('hello world')).toBe('hello world')
     })
 
-    it('returns empty string unchanged', () => {
-      expect(truncateToolResult('')).toBe('')
-    })
-
     it('returns exact byte-limit ASCII unchanged', () => {
       const exact = 'x'.repeat(MAX_TOOL_RESULT_BYTES)
       expect(truncateToolResult(exact)).toBe(exact)

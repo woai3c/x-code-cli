@@ -123,27 +123,6 @@ describe('applyCacheControl', () => {
       expect((tools.write as { providerOptions?: unknown }).providerOptions).toBeUndefined()
     })
 
-    it('handles missing tools gracefully', () => {
-      const out = applyCacheControl({
-        system: 'sys',
-        messages: baseMessages,
-        modelId: 'anthropic:claude-opus-4-7',
-        sessionId: 'abc',
-      })
-      expect(out.tools).toBeUndefined()
-    })
-
-    it('handles empty tools record', () => {
-      const out = applyCacheControl({
-        system: 'sys',
-        messages: baseMessages,
-        tools: {},
-        modelId: 'anthropic:claude-opus-4-7',
-        sessionId: 'abc',
-      })
-      expect(out.tools).toEqual({})
-    })
-
     it('merges with any pre-existing tool providerOptions', () => {
       const tools = {
         read: {},

@@ -89,10 +89,10 @@ export async function buildKnowledgeContext(options?: { sessionContext?: string 
     sections.push(`### Global Preferences (~/.x-code/${globalKnowledge.fileName})\n${globalKnowledge.content}`)
   }
 
-  const globalMemory = getAutoMemory('global')
-  const globalMemoryContent = globalMemory.getPromptContent()
-  if (globalMemoryContent) {
-    sections.push('### Global Auto Memory\n' + globalMemoryContent)
+  const userMemory = getAutoMemory('user')
+  const userMemoryContent = userMemory.getPromptContent()
+  if (userMemoryContent) {
+    sections.push('### Global Auto Memory\n' + userMemoryContent)
   }
 
   const cwd = process.cwd()

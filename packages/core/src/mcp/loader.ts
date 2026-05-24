@@ -34,6 +34,12 @@ export interface LoadOptions {
   userServers: Record<string, McpServerConfig> | undefined
   /** mcpServers from <project>/.x-code/config.json. Requires consent. */
   projectServers: Record<string, McpServerConfig> | undefined
+  /** mcpServers contributed by enabled plugins. Trusted implicitly —
+   *  the user already consented to the plugin at install time, so
+   *  re-running the project-MCP trust dialog for plugin servers would
+   *  be a duplicate prompt. Merged at the same precedence as
+   *  `userServers` (project entries still override on name collision). */
+  extraServers?: Record<string, McpServerConfig>
   /** Absolute project path (cwd at CLI start). Used as the trust key. */
   projectPath: string
   /** Renders the trust dialog. Same shape as `AgentCallbacks.onAskUser`. */
@@ -66,12 +72,17 @@ export async function loadMcpFromDisk(opts: {
   askUser: LoadOptions['askUser']
   oauthProviderFor?: OAuthProviderFactory
   onExitRequested?: () => void
+  /** Plugin-contributed mcpServers — already-trusted, merged into the
+   *  effective config alongside user-level servers. Built by
+   *  packages/core/src/plugins/integration.ts. */
+  extraServers?: Record<string, McpServerConfig>
 }): Promise<LoadResult> {
   const userServers = await readMcpServersFromFile(getUserConfigPath())
   const projectServers = await readMcpServersFromFile(path.join(opts.cwd, XCODE_DIR, 'config.json'))
   return loadMcpServers({
     userServers,
     projectServers,
+    extraServers: opts.extraServers,
     projectPath: opts.cwd,
     askUser: opts.askUser,
     oauthProviderFor: opts.oauthProviderFor,
@@ -176,9 +187,19 @@ export async function loadMcpServers(options: LoadOptions): Promise<LoadResult> 
     }
   }
 
-  // Merge user + project. Project-level entries shadow user-level entries
-  // on name conflict (project wins by design — user explicitly trusted it).
-  const merged: Record<string, McpServerConfig> = { ...userParsed.servers, ...projectServersToUse }
+  // Merge order: user → plugin → project. Plugin-contributed servers
+  // (`extraServers`) sit between user and project on purpose:
+  //   - They're already-trusted (consent happened at plugin install) so
+  //     they don't need to pass the trust dialog above, but
+  //   - A name collision with a project-level entry still gives the
+  //     project entry the win (project config is authored by the same
+  //     person whose CLI is running and they may want to override a
+  //     plugin's server choice).
+  const merged: Record<string, McpServerConfig> = {
+    ...userParsed.servers,
+    ...(options.extraServers ?? {}),
+    ...projectServersToUse,
+  }
 
   // No servers configured anywhere → fast-path with an empty registry.
   // We still pass the oauthFactory so a later /mcp refresh (after the

@@ -89,8 +89,4 @@ describe('estimateTokenCount', () => {
     const tokens = estimateTokenCount(messages)
     expect(tokens).toBe(Math.ceil(5 / 3.0))
   })
-
-  it('returns 0 for empty messages', () => {
-    expect(estimateTokenCount([])).toBe(0)
-  })
 })

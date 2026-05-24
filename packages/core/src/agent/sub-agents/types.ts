@@ -17,7 +17,10 @@ export interface SubAgentDefinition {
   /** Shell commands to deny (keyword matching). Only relevant when shell is in tools */
   shellRestrictions?: string[]
   /** Where this definition came from */
-  source: 'built-in' | 'global' | 'project'
+  source: 'built-in' | 'user' | 'project'
+  /** When this sub-agent comes from a plugin contribution, the owning
+   *  plugin's id (`name@marketplace`). */
+  pluginId?: string
 }
 
 export interface SubAgentTrace {

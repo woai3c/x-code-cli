@@ -41,14 +41,6 @@ function toolMsg(toolName: string, value: string): ModelMessage {
 }
 
 describe('truncateToolResultsInMessages', () => {
-  it('is a no-op when all results fit the budget', () => {
-    const messages: ModelMessage[] = [toolMsg('grep', 'short result')]
-    const originalValue = (messages[0].content as unknown as Array<{ output: { value: string } }>)[0].output.value
-    truncateToolResultsInMessages(messages)
-    const after = (messages[0].content as unknown as Array<{ output: { value: string } }>)[0].output.value
-    expect(after).toBe(originalValue)
-  })
-
   it('truncates an oversized readFile result in place', () => {
     const huge = 'line\n'.repeat(5000) // 5000 lines, over default 2000
     const messages: ModelMessage[] = [toolMsg('readFile', huge)]

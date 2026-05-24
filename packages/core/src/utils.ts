@@ -108,8 +108,29 @@ function truncateForLog(s: string, maxBytes: number): string {
   return `${truncated}…<+${dropped}c truncated>`
 }
 
+/** Narrow opt-in: when set by the CLI's `--plugin-debug` flag (or
+ *  `XC_PLUGIN_DEBUG=1`), debugLog also mirrors lines tagged with one of
+ *  the plugin-related prefixes to stderr, so the user can watch plugin
+ *  / hook / marketplace activity live without `DEBUG_STDOUT=1`'s firehose.
+ *  Kept as module state instead of an arg to debugLog so existing call
+ *  sites don't need touching. */
+let pluginDebugMirror = false
+const PLUGIN_DEBUG_TAG_PREFIXES = ['plugins.', 'plugin.', 'hooks.', 'marketplace.']
+
+export function setPluginDebugMirror(enabled: boolean): void {
+  pluginDebugMirror = enabled
+}
+
+function isPluginRelatedTag(tag: string): boolean {
+  for (const p of PLUGIN_DEBUG_TAG_PREFIXES) {
+    if (tag.startsWith(p)) return true
+  }
+  return false
+}
+
 export function debugLog(tag: string, content: string): void {
-  if (!DEBUG) return
+  const mirrorToStderr = pluginDebugMirror && isPluginRelatedTag(tag)
+  if (!DEBUG && !mirrorToStderr) return
   try {
     const safeContent = truncateForLog(content, MAX_LINE_BYTES)
     const ts = new Date().toISOString()
@@ -117,12 +138,23 @@ export function debugLog(tag: string, content: string): void {
     // lands on ONE line in the log — much easier to grep across turns,
     // and multi-line text-deltas don't visually merge with neighbours.
     const line = `[${ts}] ${tag} ${JSON.stringify(safeContent)}\n`
-    const bytes = Buffer.byteLength(line, 'utf8')
-    rotateIfNeeded(bytes)
-    ensureLogReady()
-    if (logFd !== null) {
-      fsSync.writeSync(logFd, line)
-      currentLogBytes += bytes
+    if (DEBUG) {
+      const bytes = Buffer.byteLength(line, 'utf8')
+      rotateIfNeeded(bytes)
+      ensureLogReady()
+      if (logFd !== null) {
+        fsSync.writeSync(logFd, line)
+        currentLogBytes += bytes
+      }
+    }
+    if (mirrorToStderr) {
+      // Use the raw fd to avoid Node's stderr stream buffering — we want
+      // each line to appear immediately even if the agent loop is busy.
+      try {
+        fsSync.writeSync(2, line)
+      } catch {
+        // stderr write failure shouldn't crash the agent
+      }
     }
   } catch {
     // best effort — never crash the agent just because we can't log

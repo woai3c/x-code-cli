@@ -1,12 +1,12 @@
 // Skill settings — disabledSkills list per scope.
 //
-// Global scope:   ~/.x-code/settings.json
+// User scope:     ~/.x-code/settings.json
 // Project scope:  <repo-root>/.x-code/settings.local.json (gitignored)
 //
 // Both files share the shape `{ disabledSkills?: string[] }`. A skill is
 // effectively disabled when its name appears in EITHER scope's list — we
-// take the union, not an override. To re-enable from a global disable
-// while keeping it disabled elsewhere, remove the name from the global
+// take the union, not an override. To re-enable from a user-scope disable
+// while keeping it disabled elsewhere, remove the name from the user-scope
 // list. The settings files are session-immutable: SkillRegistry filters
 // on this list at startup, so toggle/remove takes effect on next launch.
 import fs from 'node:fs/promises'
@@ -14,14 +14,14 @@ import path from 'node:path'
 
 import { GLOBAL_XCODE_DIR, XCODE_DIR } from '../utils.js'
 
-export type SkillSettingsScope = 'global' | 'project'
+export type SkillSettingsScope = 'user' | 'project'
 
 export interface SkillSettings {
   disabledSkills?: string[]
 }
 
 export function skillSettingsPath(scope: SkillSettingsScope): string {
-  if (scope === 'global') return path.join(GLOBAL_XCODE_DIR, 'settings.json')
+  if (scope === 'user') return path.join(GLOBAL_XCODE_DIR, 'settings.json')
   return path.join(process.cwd(), XCODE_DIR, 'settings.local.json')
 }
 
@@ -68,9 +68,9 @@ async function writeSettings(scope: SkillSettingsScope, settings: SkillSettings)
 }
 
 export async function loadDisabledSkillsSet(): Promise<Set<string>> {
-  const [g, p] = await Promise.all([readSettings('global'), readSettings('project')])
+  const [u, p] = await Promise.all([readSettings('user'), readSettings('project')])
   const merged = new Set<string>()
-  for (const name of g.disabledSkills ?? []) merged.add(name)
+  for (const name of u.disabledSkills ?? []) merged.add(name)
   for (const name of p.disabledSkills ?? []) merged.add(name)
   return merged
 }

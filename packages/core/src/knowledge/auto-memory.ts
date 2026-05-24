@@ -183,13 +183,13 @@ function parseMemoryFile(content: string): KnowledgeFact[] {
 // GLOBAL_XCODE_DIR.
 
 const projectMemories = new Map<string, AutoMemory>()
-let globalMemory: AutoMemory | null = null
+let userMemory: AutoMemory | null = null
 
 function projectMemoryPath(cwd: string): string {
   return path.join(cwd, XCODE_DIR, 'memory', 'auto.md')
 }
 
-export function getAutoMemory(scope: 'project' | 'global'): AutoMemory {
+export function getAutoMemory(scope: 'project' | 'user'): AutoMemory {
   if (scope === 'project') {
     const filePath = projectMemoryPath(process.cwd())
     let mem = projectMemories.get(filePath)
@@ -199,19 +199,19 @@ export function getAutoMemory(scope: 'project' | 'global'): AutoMemory {
     }
     return mem
   }
-  if (!globalMemory) {
-    globalMemory = new AutoMemory(path.join(GLOBAL_XCODE_DIR, 'memory', 'auto.md'))
+  if (!userMemory) {
+    userMemory = new AutoMemory(path.join(GLOBAL_XCODE_DIR, 'memory', 'auto.md'))
   }
-  return globalMemory
+  return userMemory
 }
 
 /** Initialize memories (load from disk + evict old entries) */
 export async function initMemories(): Promise<void> {
   const project = getAutoMemory('project')
-  const global = getAutoMemory('global')
-  await Promise.all([project.load(), global.load()])
+  const user = getAutoMemory('user')
+  await Promise.all([project.load(), user.load()])
   project.evict(90)
-  global.evict(90)
+  user.evict(90)
 }
 
 export { AutoMemory }

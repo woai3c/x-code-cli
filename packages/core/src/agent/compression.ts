@@ -13,12 +13,24 @@
 import { generateText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
 
+import type { HookBus } from '../hooks/bus.js'
 import { generateSessionSummary } from '../knowledge/session.js'
 import type { AgentCallbacks } from '../types/index.js'
+import { debugLog } from '../utils.js'
 import { estimateTokenCount } from './context-window.js'
 import { lightCompactMessages } from './light-compact.js'
 import type { LoopState } from './loop-state.js'
 import { markBoundaryAndReflush } from './session-store.js'
+
+/** Optional hook surface threaded through both compression paths. Lets
+ *  plugins observe (PreCompact) and react to (PostCompact) the act of
+ *  trimming context — useful for checkpoint persistence or audit. */
+export interface CompactionHookContext {
+  hookBus?: HookBus
+  modelId: string
+  cwd: string
+  abortSignal?: AbortSignal
+}
 
 /** Number of recent messages to keep verbatim when compressing. */
 export const KEEP_RECENT = 6
@@ -62,9 +74,22 @@ export async function checkAndCompressContext(
   model: LanguageModel,
   threshold: number,
   callbacks: AgentCallbacks,
+  hookCtx?: CompactionHookContext,
 ): Promise<void> {
   const needsCompression = state.lastInputTokens > threshold || estimateTokenCount(state.messages) > threshold
   if (!needsCompression || state.messages.length <= KEEP_RECENT) return
+
+  // PreCompact — fires before either compaction path runs. We don't
+  // wait for hook decisions to influence behaviour (compaction is
+  // mandatory once we cross the threshold), so this is fire-and-forget.
+  const messageCountBefore = state.messages.length
+  const tokenEstimateBefore = estimateTokenCount(state.messages)
+  emitCompactionHook(hookCtx, {
+    name: 'PreCompact',
+    trigger: 'proactive',
+    messageCount: messageCountBefore,
+    tokenEstimate: tokenEstimateBefore,
+  })
 
   const light = lightCompactMessages(state.messages)
   if (light.dropped > 0) {
@@ -79,6 +104,12 @@ export async function checkAndCompressContext(
       // pre-boundary, but the loader cuts at the latest boundary). The
       // boundary carries no summary text since nothing was summarised.
       void markBoundaryAndReflush(state)
+      emitCompactionHook(hookCtx, {
+        name: 'PostCompact',
+        trigger: 'proactive',
+        messageCount: state.messages.length,
+        summary: '',
+      })
       return
     }
   }
@@ -101,6 +132,12 @@ export async function checkAndCompressContext(
   // the post-boundary jsonl content equals the new in-memory state.
   void markBoundaryAndReflush(state, summaryText)
   callbacks.onContextCompressed('Context compressed to fit context window.')
+  emitCompactionHook(hookCtx, {
+    name: 'PostCompact',
+    trigger: 'proactive',
+    messageCount: state.messages.length,
+    summary: summaryText,
+  })
 }
 
 /**
@@ -112,8 +149,15 @@ export async function handleContextTooLong(
   state: LoopState,
   model: LanguageModel,
   callbacks: AgentCallbacks,
+  hookCtx?: CompactionHookContext,
 ): Promise<boolean> {
   if (state.messages.length <= KEEP_RECENT) return false
+  emitCompactionHook(hookCtx, {
+    name: 'PreCompact',
+    trigger: 'reactive',
+    messageCount: state.messages.length,
+    tokenEstimate: estimateTokenCount(state.messages),
+  })
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
   // Same boundary discipline as the proactive path — reactive compact
@@ -121,5 +165,32 @@ export async function handleContextTooLong(
   // compact-boundary marker to keep loader semantics consistent.
   void markBoundaryAndReflush(state)
   callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
+  emitCompactionHook(hookCtx, {
+    name: 'PostCompact',
+    trigger: 'reactive',
+    messageCount: state.messages.length,
+    summary: '',
+  })
   return true
+}
+
+/** Fire a PreCompact / PostCompact hook with the session context. Best
+ *  effort — compaction has already happened (or is committed to happen),
+ *  so hook failures and aborts must not bubble. */
+function emitCompactionHook(
+  ctx: CompactionHookContext | undefined,
+  partial:
+    | { name: 'PreCompact'; trigger: 'proactive' | 'reactive'; messageCount: number; tokenEstimate: number }
+    | { name: 'PostCompact'; trigger: 'proactive' | 'reactive'; messageCount: number; summary: string },
+): void {
+  if (!ctx?.hookBus?.has(partial.name)) return
+  void ctx.hookBus
+    .emit(
+      {
+        ...partial,
+        session: { cwd: ctx.cwd, modelId: ctx.modelId },
+      },
+      { signal: ctx.abortSignal },
+    )
+    .catch((err) => debugLog(`agent.hook-${partial.name.toLowerCase()}-error`, String(err)))
 }

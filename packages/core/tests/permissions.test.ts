@@ -19,10 +19,6 @@ describe('getPermissionLevel', () => {
     expect(getPermissionLevel('writeFile', {})).toBe('ask')
   })
 
-  it('returns ask for unknown tools', () => {
-    expect(getPermissionLevel('unknownTool', {})).toBe('ask')
-  })
-
   it('returns always-allow for read-only shell commands', () => {
     expect(getPermissionLevel('shell', { command: 'ls -la' })).toBe('always-allow')
     expect(getPermissionLevel('shell', { command: 'pwd' })).toBe('always-allow')

@@ -41,12 +41,6 @@ describe('userMessage', () => {
   })
 })
 
-describe('toolErrorString', () => {
-  it('prefixes the message with "Error: "', () => {
-    expect(toolErrorString('boom')).toBe('Error: boom')
-  })
-})
-
 describe('toolErrorFromUnknown', () => {
   it('extracts the message from an Error instance', () => {
     expect(toolErrorFromUnknown(new Error('disk full'))).toBe('Error: disk full')

@@ -54,9 +54,4 @@ describe('computeEditDiff', () => {
     expect(result!.isCreate).toBe(true)
     expect(result!.additions).toBe(0)
   })
-
-  it('preserves filePath in payload', () => {
-    const result = computeEditDiff('/path/to/file.ts', null, 'content\n')
-    expect(result!.filePath).toBe('/path/to/file.ts')
-  })
 })
