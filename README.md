@@ -67,6 +67,8 @@ yarn global add @x-code-cli/cli
 | `ZHIPU_API_KEY`                | 智谱（GLM）         | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
 | `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)       |
 
+**OpenAI 兼容接入**（自托管 vLLM / OpenRouter / 各种代理 / 公司内网网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，xc 会注册一个名为 `custom` 的 provider，模型 id 写成 `custom:<your-model-id>` 使用。
+
 ### 网页搜索 Key（可选）
 
 启用网页搜索（`web_search` 工具）需要从下表中**任选一项**配置。两家服务均提供免费额度：
@@ -182,6 +184,7 @@ xc [options] [prompt]
 --max-turns <n>       Agent 循环每次提交的轮次上限（可选，默认无上限）
 --no-plugins          禁用插件系统（仅加载内置贡献，用于排障）
 --no-hooks            插件正常加载，但跳过所有 hook 执行
+--plugin-debug        把 plugin / hook / marketplace 调试日志实时镜像到 stderr
 --version, -v         显示版本号
 --help, -h            显示帮助信息
 ```
@@ -198,25 +201,25 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 
 ## 斜杠命令
 
-| 命令                  | 说明                                                                            |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `/help`               | 查看所有可用命令                                                                |
-| `/model [alias]`      | 切换模型或查看可用模型列表                                                      |
-| `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                                       |
-| `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                    |
-| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                   |
-| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）                                         |
-| `/usage-history`      | 列出当前项目历史会话，可交互选择查看详情                                        |
-| `/clear`              | 清空当前会话                                                                    |
-| `/compact`            | 手动压缩上下文                                                                  |
-| `/resume`             | 从当前项目的历史会话中选择一个恢复                                              |
-| `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                                      |
-| `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）                            |
-| `/memory`             | 查看当前自动记忆条目（project + user,按类目分组）                               |
-| `/skill <sub>`        | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `remove`） |
-| `/mcp <sub>`          | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）  |
-| `/plugin <sub>`       | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）             |
-| `/exit`               | 保存会话并退出                                                                  |
+| 命令                  | 说明                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| `/help`               | 查看所有可用命令                                                                   |
+| `/model [alias]`      | 切换模型或查看可用模型列表                                                         |
+| `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                                          |
+| `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                       |
+| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                      |
+| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）                                            |
+| `/usage-history`      | 列出当前项目历史会话，可交互选择查看详情                                           |
+| `/clear`              | 清空当前会话                                                                       |
+| `/compact`            | 手动压缩上下文                                                                     |
+| `/resume`             | 从当前项目的历史会话中选择一个恢复                                                 |
+| `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                                         |
+| `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）                               |
+| `/memory`             | 查看当前自动记忆条目（project + user,按类目分组）                                  |
+| `/skill <sub>`        | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`） |
+| `/mcp <sub>`          | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）     |
+| `/plugin <sub>`       | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）                |
+| `/exit`               | 保存会话并退出                                                                     |
 
 ### 思考模式说明
 

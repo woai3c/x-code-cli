@@ -67,6 +67,8 @@ At least one provider key is required:
 | `ZHIPU_API_KEY`                | Zhipu (GLM)        | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
 | `MOONSHOT_API_KEY`             | Moonshot (Kimi)    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)       |
 
+**OpenAI-compatible escape hatch** (self-hosted vLLM, OpenRouter, internal gateways, etc.): set BOTH `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`. `xc` then registers a provider named `custom`; address its models as `custom:<your-model-id>`.
+
 ### Web Search Keys (optional)
 
 To enable web search (the `web_search` tool), configure **either** of the following. Both providers offer a free tier sufficient for everyday use:
@@ -182,6 +184,7 @@ xc [options] [prompt]
 --max-turns <n>       Cap on agent loop turns per submit (optional; default: unlimited)
 --no-plugins          Disable the plugin system entirely (only built-in contributions; useful for triage)
 --no-hooks            Plugins still load, but skip all hook execution
+--plugin-debug        Mirror plugin / hook / marketplace debug log lines to stderr in real time
 --version, -v         Show version
 --help, -h            Show help
 ```
@@ -213,7 +216,7 @@ Full usage: [docs/plugins.md](./docs/plugins.md).
 | `/init`               | Analyze the codebase and create or update `AGENTS.md` at the project root                         |
 | `/review [PR#]`       | Review a GitHub PR (no argument lists open PRs); requires `gh` to be installed locally            |
 | `/memory`             | List auto-memory entries (project + user, grouped by category)                                    |
-| `/skill <sub>`        | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `remove`)                  |
+| `/skill <sub>`        | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`)               |
 | `/mcp <sub>`          | Manage MCP servers (`list` / `tools` / `add` / `remove` / `auth` / `refresh`, etc.)               |
 | `/plugin <sub>`       | Manage plugins and marketplaces — see [docs/plugins.md](./docs/plugins.md)                        |
 | `/exit`               | Save the session and exit                                                                         |

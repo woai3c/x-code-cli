@@ -86,9 +86,9 @@ unsupported parts just don't activate.
 
   "skills": "./skills", // directory of <name>/SKILL.md
   "agents": "./agents", // directory of <name>.md
-  "commands": "./commands", // declared but not yet wired
-  // (no file-based slash command
-  // loader yet)
+  "commands": "./commands", // each .md becomes a /<name> slash command;
+  // body is a prompt template that
+  // supports $ARGUMENTS and ${CLAUDE_PLUGIN_ROOT}
 
   // mcpServers: either a path to a JSON file shaped
   // `{ "mcpServers": { ... } }` (same as ~/.x-code/config.json),
@@ -152,7 +152,9 @@ unsupported parts just don't activate.
   respective directories. **Most Claude Code plugins omit these
   fields**; the loader auto-detects `skills/` / `agents/` / `commands/`
   subdirs by convention. Only set explicitly when using a non-standard
-  layout. `commands` is accepted but not wired at runtime today.
+  layout. Each `.md` inside `commands/` becomes a `/<name>` slash
+  command — its body is a prompt template and supports both
+  `$ARGUMENTS` and `${CLAUDE_PLUGIN_ROOT}` substitution.
 - **`mcpServers`** — path or inline object. When unset, the loader
   auto-detects `.mcp.json` (Claude Code convention) or `mcp.json`.
   Per-server schema matches `~/.x-code/config.json`; variables
@@ -176,7 +178,7 @@ my-plugin/
 │           └── api.md
 ├── agents/
 │   └── triage.md               # sub-agent definition
-├── commands/                   # (declared but not yet loaded)
+├── commands/                   # each .md = one /<name> slash command
 │   └── linear.md
 ├── mcp.json                    # if you split mcpServers into a file
 ├── hooks/

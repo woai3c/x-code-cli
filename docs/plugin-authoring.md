@@ -76,8 +76,8 @@ xc plugin install ./my-plugin
 
   "skills": "./skills", // <name>/SKILL.md 子目录的目录
   "agents": "./agents", // <name>.md 文件的目录
-  "commands": "./commands", // 声明但暂未生效
-  // （还没有基于文件的 slash 命令加载器）
+  "commands": "./commands", // 目录里每个 .md 文件成为一个 /<name> slash 命令
+  // 支持 $ARGUMENTS / ${CLAUDE_PLUGIN_ROOT} 等替换变量
 
   // mcpServers: 既可以是路径，指向形如
   // `{ "mcpServers": { ... } }` 的 JSON 文件（同 ~/.x-code/config.json），
@@ -132,7 +132,7 @@ xc plugin install ./my-plugin
 ### 字段细节
 
 - **`name`** — 小写字母、数字、短横线。必须字母或数字开头。Claude Code / Codex 同规则。
-- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands` 当前只是声明被接受，运行时还没有 slash 命令加载器。
+- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS` 与 `${CLAUDE_PLUGIN_ROOT}` 替换。
 - **`mcpServers`** — 路径或 inline 对象。不声明时自动探测 `.mcp.json`（Claude Code 约定）或 `mcp.json`。每个 server 的 schema 同 `~/.x-code/config.json`，变量展开（`${pluginDir}`、`${env:NAME}` 等）在 server 启动时进行。
 - **`hooks`** — 路径或 inline 对象。不声明时自动探测 `hooks/hooks.json`。详见 [hooks.md](./hooks.md)。
 
@@ -151,7 +151,7 @@ my-plugin/
 │           └── api.md
 ├── agents/
 │   └── triage.md               # sub-agent 定义
-├── commands/                   # 暂未加载
+├── commands/                   # 每个 .md = 一个 /<name> slash 命令
 │   └── linear.md
 ├── mcp.json                    # 如果把 mcpServers 拆到独立文件
 ├── hooks/
