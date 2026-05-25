@@ -248,7 +248,14 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
     const stat = await fs.stat(resolved).catch(() => null)
     if (!stat || !stat.isDirectory()) {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
-      throw new InstallError(`local source is not a directory: ${resolved}`)
+      // Surface cwd in the error: relative paths get resolved against
+      // process.cwd(), and when xc is launched via `pnpm dev` the cwd
+      // is `packages/cli/`, not the repo root — that mismatch confuses
+      // users typing `./foo` in the slash command. Showing both the
+      // resolved absolute path and the cwd makes the cause obvious.
+      const isRelative = !path.isAbsolute(source.path)
+      const cwdHint = isRelative ? ` (resolved relative to cwd: ${process.cwd()})` : ''
+      throw new InstallError(`local source is not a directory: ${resolved}${cwdHint}`)
     }
     await copyDirFiltered(resolved, tempDir, signal)
     return tempDir

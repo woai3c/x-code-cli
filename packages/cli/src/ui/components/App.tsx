@@ -1495,14 +1495,15 @@ export function App({
   // for the `marketplace` token's own sub-tree (add / remove / list /
   // refresh / info).
   //
-  // A note on `/plugin refresh`: in v1 the plugin contributions
-  // (skills / agents / mcp / hooks) are folded into their respective
-  // registries at startup. We have no in-process pathway today to
-  // re-fold them without rebuilding the agentOptions-level registries
-  // — so `/plugin install|enable|disable` print a "restart xc" hint.
-  // The metadata view (`/plugin list`, `/plugin info`) does reflect
-  // in-memory state from startup, which is the source of truth for
-  // "what's actually active right now".
+  // A note on `/plugin refresh`: plugin contributions (skills / agents /
+  // commands / hooks) get folded into their respective long-lived
+  // registries at startup. `/plugin refresh` re-scans installed plugins
+  // and folds the new state into those same registry instances in
+  // place — that's why `/plugin install|enable|disable` slash messages
+  // tell the user to run it. MCP servers are the one exception: their
+  // child-process lifecycle is owned by `/mcp refresh`. The metadata
+  // view (`/plugin list`, `/plugin info`) reflects in-memory state, so
+  // it's accurate the moment refresh completes.
 
   function formatPluginSource(s: PluginSource | undefined): string {
     if (!s) return '(unknown)'
@@ -1646,6 +1647,24 @@ export function App({
       return
     }
 
+    // Slash-command args arrive as a single rest-of-line string; split
+    // them so a stray `--yes` (carried over from the CLI subcommand
+    // habit) doesn't get glued onto the path. `--yes` is implicit in
+    // the slash form anyway — the TUI install path skips the consent
+    // prompt because the modal flow isn't wired up yet. Anything else
+    // unrecognised is surfaced rather than silently swallowed.
+    const tokens = raw.trim().split(/\s+/)
+    const source_str = tokens[0]!
+    const extras = tokens.slice(1).filter((t) => t !== '--yes' && t !== '-y')
+    if (extras.length > 0) {
+      addCommandMessage(
+        text,
+        `Unrecognised arguments to \`/plugin install\`: ${extras.map((e) => `\`${e}\``).join(', ')}`,
+      )
+      return
+    }
+    raw = source_str
+
     let source: PluginSource
     let marketplace: string
     let expectedName: string | undefined
@@ -1700,7 +1719,8 @@ export function App({
         text,
         `Installed **${result.pluginId}** v${result.manifest.version}\n` +
           `Cache: \`${result.rootDir}\`\n` +
-          `Restart xc to load this plugin's contributions (skills / agents / mcp / hooks).`,
+          `Run \`/plugin refresh\` to load this plugin's contributions now (skills / agents / commands / hooks). ` +
+          `MCP servers need \`/mcp refresh\` separately.`,
       )
     } catch (err) {
       addCommandMessage(text, `Install failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1728,7 +1748,7 @@ export function App({
         text,
         `Uninstalled **${id}** (removed ${verCount} cached version${verCount === 1 ? '' : 's'}).\n` +
           `Plugin data dir preserved — reinstall will keep user state.\n` +
-          `Restart xc to drop this plugin's contributions from active registries.`,
+          `Run \`/plugin refresh\` to drop its contributions from active registries.`,
       )
     } catch (err) {
       addCommandMessage(text, `Uninstall failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1767,10 +1787,7 @@ export function App({
       if (result === 'noop') {
         addCommandMessage(text, `Plugin \`${id}\` already ${verb} (${scope} scope).`)
       } else {
-        addCommandMessage(
-          text,
-          `Plugin **${id}** ${verb} in ${scope} scope. Restart xc to apply (contributions are bound at startup).`,
-        )
+        addCommandMessage(text, `Plugin **${id}** ${verb} in ${scope} scope. Run \`/plugin refresh\` to apply now.`)
       }
     } catch (err) {
       addCommandMessage(text, `Failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1846,7 +1863,7 @@ export function App({
         result.manifest.version === rec.version
           ? `Reinstalled at the same version (${rec.version}).`
           : `Updated ${rec.version} → ${result.manifest.version}.`
-      addCommandMessage(text, `${versionMsg} Restart xc to load the new version.`)
+      addCommandMessage(text, `${versionMsg} Run \`/plugin refresh\` to load the new version.`)
     } catch (err) {
       addCommandMessage(text, `Update failed: ${err instanceof Error ? err.message : String(err)}`)
     }

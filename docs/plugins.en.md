@@ -28,8 +28,11 @@ xc plugin list
 xc plugin uninstall linear@anthropic-marketplace
 ```
 
-After install or uninstall, **restart `xc`** for the contributions
-(skills / agents / MCP / hooks) to take effect.
+**Inside an interactive CLI session**, after install / uninstall /
+enable / disable, run `/plugin refresh` to apply the new
+contributions (skills / agents / commands / hooks) immediately — no
+restart needed. MCP servers are the exception: `/plugin refresh`
+does not restart them, run `/mcp refresh` separately or restart xc.
 
 ---
 
@@ -105,10 +108,31 @@ defaults to **no**. Pass `--yes` to opt out:
 xc plugin install --yes linear@anthropic-marketplace
 ```
 
-The slash-command flow (`/plugin install`) does not currently show this
-prompt — typing the command in the chat is treated as explicit intent.
-We may add an inline confirmation modal later; track this as a known
-limitation today.
+### Limitations of the `/plugin install` slash command
+
+`/plugin install` **always runs in `--yes` mode** — typing the command
+in the chat is treated as explicit consent. Concretely it does **not**
+show:
+
+- **the consent preview** — you can't see what the plugin will
+  contribute (commands / agents / MCP / hooks) before it lands
+- **userConfig prompts** — plugins with `userConfig` fields install
+  with empty values, and the hook subprocess sees `env` entries set
+  to `<unset>`
+
+**If the plugin has userConfig, or you want to review the consent
+preview, use the CLI form instead:**
+
+```bash
+# In another terminal (omit --yes to walk the prompts)
+xc plugin install <source>
+```
+
+Then back in the interactive CLI run `/plugin refresh` to pick up the
+new plugin without restarting.
+
+We may add an inline modal later so the slash form can prompt too;
+track this as a known limitation today.
 
 ---
 
@@ -261,7 +285,10 @@ plan storage accordingly.
 
 `--yes` installs skip the prompt; values stay unset. To pre-seed values
 for CI, hand-write `~/.x-code/plugins/user-config.json` before the
-install.
+install. **The `/plugin install` slash command also skips this**
+(it runs as if `--yes` were passed), so install userConfig-bearing
+plugins with `xc plugin install` instead — see "Limitations of the
+`/plugin install` slash command" above.
 
 ---
 
@@ -283,14 +310,14 @@ would dump every debug tag, far noisier).
 
 ## Troubleshooting
 
-| Symptom                                 | First thing to try                                                                                       |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Plugin doesn't appear after install     | Restart `xc`. Contributions are bound at startup.                                                        |
-| `/plugin doctor` shows load errors      | Check the file path it reports — usually a manifest typo.                                                |
-| MCP server from a plugin won't connect  | Run `/mcp list` — plugin-contributed servers appear there too.                                           |
-| Hook fires unexpectedly                 | Set `DEBUG_STDOUT=1`, restart, then `tail ~/.x-code/logs/debug.log` and grep `hooks.`.                   |
-| Suspect a plugin is breaking everything | Launch with `xc --no-plugins`. If the problem disappears, isolate with `/plugin disable <id>` + restart. |
-| Hook is slow / hangs                    | Launch with `xc --no-hooks`. Each hook also has a 5s default timeout.                                    |
+| Symptom                                 | First thing to try                                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Plugin doesn't appear after install     | Run `/plugin refresh` (inside an interactive session) or restart `xc`. Contributions bind on the registry. |
+| `/plugin doctor` shows load errors      | Check the file path it reports — usually a manifest typo.                                                  |
+| MCP server from a plugin won't connect  | Run `/mcp list` — plugin-contributed servers appear there too.                                             |
+| Hook fires unexpectedly                 | Set `DEBUG_STDOUT=1`, restart, then `tail ~/.x-code/logs/debug.log` and grep `hooks.`.                     |
+| Suspect a plugin is breaking everything | Launch with `xc --no-plugins`. If the problem disappears, isolate with `/plugin disable <id>` + refresh.   |
+| Hook is slow / hangs                    | Launch with `xc --no-hooks`. Each hook also has a 5s default timeout.                                      |
 
 ---
 

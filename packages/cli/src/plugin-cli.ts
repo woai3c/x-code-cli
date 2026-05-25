@@ -227,7 +227,9 @@ async function cliInstall(args: string[]): Promise<number> {
     })
     console.log(chalk.green(`Installed ${result.pluginId} v${result.manifest.version}`))
     console.log(`Cache: ${result.rootDir}`)
-    console.log("Restart xc to load this plugin's contributions.")
+    // No "restart xc" hint — this subcommand is a one-shot from the
+    // shell, not running inside a live session. A user with an active
+    // xc TUI elsewhere can run `/plugin refresh` there to pick this up.
     return 0
   } catch (err) {
     console.error(chalk.red(`Install failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -450,7 +452,7 @@ async function cliUninstall(args: string[]): Promise<number> {
       `Uninstalled ${id} (removed ${result.removedVersions.length} cached version${result.removedVersions.length === 1 ? '' : 's'})`,
     ),
   )
-  console.log('Data dir preserved. Restart xc to drop contributions from active registries.')
+  console.log('Data dir preserved.')
   return 0
 }
 
@@ -479,7 +481,6 @@ async function cliToggle(args: string[], enable: boolean): Promise<number> {
     console.log(`Plugin '${id}' already ${verb} (${scope} scope).`)
   } else {
     console.log(chalk.green(`Plugin ${id} ${verb} in ${scope} scope.`))
-    console.log('Restart xc to apply (contributions are bound at startup).')
   }
   return 0
 }

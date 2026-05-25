@@ -215,6 +215,14 @@ export function getToolResultSummary(toolName: string, output: string | undefine
   if (status === 'denied') return 'Denied by user'
   if (!output) return 'Done'
 
+  // Per-tool success summaries below are written for the happy path
+  // (e.g. "Wrote file", "Applied changes"). When the tool errored —
+  // permission denial, hook deny, exception — those cheery messages
+  // are misleading; the bullet is rendered red but the text still
+  // reads success. Surface a short error label instead and let the
+  // markdown body underneath carry the actual error text.
+  if (status === 'error') return 'Failed'
+
   const n = normalizeToolName(toolName)
 
   if (n === 'writefile' || n === 'write') {

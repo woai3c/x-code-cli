@@ -25,7 +25,7 @@ xc plugin list
 xc plugin uninstall linear@anthropic-marketplace
 ```
 
-**安装/卸载后请重启 `xc`** 让贡献的 skill / agent / MCP / hooks 生效。
+**在交互式 CLI 里**做完安装/卸载/启用/禁用，跑 `/plugin refresh` 让贡献的 skill / agent / 命令 / hooks 立即生效（无需重启）。MCP server 是例外——`/plugin refresh` 不会重启它们，需要单独 `/mcp refresh` 或重启 xc。
 
 ---
 
@@ -89,7 +89,23 @@ Proceed with install? [y/N]
 xc plugin install --yes linear@anthropic-marketplace
 ```
 
-Slash 命令版 `/plugin install` 暂时不弹此提示——交互内打命令本身视为同意。未来可能改成内联确认，目前算已知限制。
+### Slash 命令 `/plugin install` 的限制
+
+`/plugin install` **永远以 `--yes` 模式运行**——交互内打命令本身视为同意。具体说，它**不弹**：
+
+- **consent 预览**：装之前看不到 plugin 会贡献什么（commands / agents / MCP / hooks）
+- **userConfig prompt**：带 `userConfig` 字段的插件装上去后值是空的，hook 子进程拿到的 env 全是 `<unset>`
+
+**如果插件有 userConfig，或者你想看 consent 预览，请用命令行版**：
+
+```bash
+# 在另一个终端跑（不加 --yes，会逐项问值）
+xc plugin install <source>
+```
+
+装完后回到交互式 CLI 跑 `/plugin refresh` 让新插件立即生效（无需重启）。
+
+未来可能改成内联 modal 让 slash 也能弹 prompt，目前算已知限制。
 
 ---
 
@@ -220,7 +236,7 @@ Note: next message rebuilds the system prompt, so prompt-cache will miss once.
 
 ⚠️ 当前 v1：`sensitive: true` 只控制**输入时的回显**，存储是 `0600` 文件不是系统 keychain。真正的 keychain 集成（macOS Keychain / Windows Credential Manager / Linux libsecret）规划在 followup。Windows 上 `0600` 实际是 no-op，注意场景。
 
-`--yes` 安装跳过 prompt，user-config 留空。需要 CI 装的话，提前手写 `~/.x-code/plugins/user-config.json` 即可。
+`--yes` 安装跳过 prompt，user-config 留空。需要 CI 装的话，提前手写 `~/.x-code/plugins/user-config.json` 即可。**`/plugin install` slash 命令也跳过**（等同 `--yes`），所以 userConfig 类插件请用 `xc plugin install` 命令行版安装——详见上文"Slash 命令 `/plugin install` 的限制"。
 
 ## `--plugin-debug` 排查
 
@@ -238,11 +254,11 @@ XC_PLUGIN_DEBUG=1 xc
 
 | 症状                            | 先试                                                                         |
 | ------------------------------- | ---------------------------------------------------------------------------- |
-| 安装后插件不出现                | 重启 `xc`。贡献在启动时绑定                                                  |
+| 安装后插件不出现                | 跑 `/plugin refresh`（在交互内）或重启 `xc`。贡献绑定在 registry 上          |
 | `/plugin doctor` 报 load errors | 看它打印的路径——通常是 manifest 拼写错                                       |
 | 插件的 MCP 服务连不上           | `/mcp list`——插件提供的 server 也会列在那里                                  |
 | Hook 触发意外                   | `DEBUG_STDOUT=1` 重启 → `tail ~/.x-code/logs/debug.log` 搜 `hooks.`          |
-| 怀疑某插件搞砸                  | `xc --no-plugins` 启动；若问题消失就用 `/plugin disable <id>` + 重启逐个排查 |
+| 怀疑某插件搞砸                  | `xc --no-plugins` 启动；若问题消失就用 `/plugin disable <id>` + refresh 排查 |
 | Hook 跑得慢 / 卡住              | `xc --no-hooks` 启动；每个 hook 默认 5s 超时                                 |
 
 ---
