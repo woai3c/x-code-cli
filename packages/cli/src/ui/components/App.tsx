@@ -1855,11 +1855,64 @@ export function App({
   }
 
   async function pluginUpdate(text: string, raw: string) {
-    const id = raw.trim()
-    if (!id) {
-      addCommandMessage(text, 'Usage: `/plugin update <id>` (whole-list update not yet implemented)')
+    // Symmetric with the CLI: `<id>` updates one, `--all` updates every
+    // installed plugin (sequential, skip-on-error). Bare invocation is
+    // rejected so a typo doesn't accidentally re-clone everything.
+    const tokens = raw.trim().split(/\s+/).filter(Boolean)
+    const all = tokens.includes('--all') || tokens.includes('-a')
+    const positional = tokens.filter((t) => t !== '--all' && t !== '-a')
+
+    if (all && positional.length > 0) {
+      addCommandMessage(text, '`/plugin update`: pass either `--all` or a plugin id, not both.')
       return
     }
+    if (!all && positional.length === 0) {
+      addCommandMessage(
+        text,
+        'Usage: `/plugin update <id>` · `/plugin update --all`\n' +
+          '  `<id>`: a `name@marketplace` from `/plugin list`\n' +
+          '  `--all`: update every installed plugin (sequential, skip-on-error)',
+      )
+      return
+    }
+
+    if (all) {
+      const records = await listInstalledPlugins()
+      if (records.length === 0) {
+        addCommandMessage(text, 'No plugins installed.')
+        return
+      }
+      addCommandMessage(text, `Updating ${records.length} plugin${records.length === 1 ? '' : 's'} …`)
+      const lines: string[] = []
+      let updated = 0
+      let unchanged = 0
+      let failed = 0
+      for (const rec of records) {
+        try {
+          const result = await installPlugin({
+            source: rec.source,
+            marketplace: rec.marketplace,
+            expectedName: rec.name,
+          })
+          if (result.manifest.version === rec.version) {
+            lines.push(`  ${rec.id}: reinstalled at ${rec.version}`)
+            unchanged++
+          } else {
+            lines.push(`  ${rec.id}: ${rec.version} → ${result.manifest.version}`)
+            updated++
+          }
+        } catch (err) {
+          lines.push(`  ${rec.id}: failed — ${err instanceof Error ? err.message : String(err)}`)
+          failed++
+        }
+      }
+      lines.push('', `Summary: ${updated} updated, ${unchanged} unchanged, ${failed} failed.`)
+      if (updated > 0) lines.push('Run `/plugin refresh` to load the new versions.')
+      addCommandMessage(text, lines.join('\n'))
+      return
+    }
+
+    const id = positional[0]!
     const records = await listInstalledPlugins()
     const rec = records.find((r) => r.id === id)
     if (!rec) {

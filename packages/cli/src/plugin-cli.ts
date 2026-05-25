@@ -257,7 +257,7 @@ async function promptConsent(preview: ConsentPreview): Promise<boolean> {
   lines.push('  Will contribute:')
   if (preview.hasSkillsDir) lines.push('    - skills (added to /skill list)')
   if (preview.hasAgentsDir) lines.push('    - sub-agents (callable via the `task` tool)')
-  if (preview.hasCommandsDir) lines.push('    - slash commands (declared but not yet wired — no file-based loader)')
+  if (preview.hasCommandsDir) lines.push('    - slash commands (each `.md` file becomes a `/<name>` command)')
   if (preview.inlineMcpServerNames.length > 0) {
     lines.push(
       `    - ${chalk.red('MCP servers')} (will be spawned as subprocesses): ${preview.inlineMcpServerNames.join(', ')}`,
@@ -493,11 +493,52 @@ async function cliToggle(args: string[], enable: boolean): Promise<number> {
 }
 
 async function cliUpdate(args: string[]): Promise<number> {
-  const id = args[0]
-  if (!id) {
-    console.error('Usage: xc plugin update <id>')
+  // Two modes — explicit:
+  //   xc plugin update <id>   single plugin (existing behavior)
+  //   xc plugin update --all  every installed plugin, sequential, skip-on-error
+  //
+  // Bare `xc plugin update` is rejected on purpose. npm makes bare = all but
+  // that's exactly what bites users on typo / mid-session experimentation;
+  // Gemini CLI takes the same defensive stance. The error message offers
+  // both forms so the right choice is one keypress away.
+  const all = args.includes('--all') || args.includes('-a')
+  const positional = args.filter((a) => a !== '--all' && a !== '-a')
+
+  if (all && positional.length > 0) {
+    console.error('xc plugin update: pass either `--all` or a plugin id, not both.')
     return 1
   }
+  if (!all && positional.length === 0) {
+    console.error('Usage: xc plugin update <id> | --all')
+    console.error('  <id>: a name@marketplace from `xc plugin list`')
+    console.error('  --all: update every installed plugin (sequential, skip-on-error)')
+    return 1
+  }
+
+  if (all) {
+    const records = await listInstalledPlugins()
+    if (records.length === 0) {
+      console.log('No plugins installed.')
+      return 0
+    }
+    console.log(`Updating ${records.length} plugin${records.length === 1 ? '' : 's'} …`)
+    let updated = 0
+    let unchanged = 0
+    let failed = 0
+    for (const rec of records) {
+      const outcome = await updateOnePlugin(rec)
+      if (outcome === 'updated') updated++
+      else if (outcome === 'unchanged') unchanged++
+      else failed++
+    }
+    console.log('')
+    console.log(
+      `Summary: ${chalk.green(updated)} updated, ${unchanged} unchanged, ${failed > 0 ? chalk.red(failed) : failed} failed.`,
+    )
+    return failed > 0 ? 1 : 0
+  }
+
+  const id = positional[0]!
   const records = await listInstalledPlugins()
   const rec = records.find((r) => r.id === id)
   if (!rec) {
@@ -505,6 +546,18 @@ async function cliUpdate(args: string[]): Promise<number> {
     return 1
   }
   console.log(`Reinstalling ${id} from ${formatSource(rec.source)} ...`)
+  const outcome = await updateOnePlugin(rec)
+  return outcome === 'failed' ? 1 : 0
+}
+
+type UpdateOutcome = 'updated' | 'unchanged' | 'failed'
+
+/** Reinstall one plugin from its recorded source and report what happened.
+ *  Designed to be called from both single-id and `--all` paths; per-line
+ *  output is concise (just the outcome) so a bulk update reads as a clean
+ *  list. Never throws — failures become `'failed'` so the caller's loop
+ *  can keep going. */
+async function updateOnePlugin(rec: Awaited<ReturnType<typeof listInstalledPlugins>>[number]): Promise<UpdateOutcome> {
   try {
     const result = await installPlugin({
       source: rec.source,
@@ -512,14 +565,14 @@ async function cliUpdate(args: string[]): Promise<number> {
       expectedName: rec.name,
     })
     if (result.manifest.version === rec.version) {
-      console.log(`Reinstalled at the same version (${rec.version}).`)
-    } else {
-      console.log(chalk.green(`Updated ${rec.version} → ${result.manifest.version}`))
+      console.log(`  ${rec.id}: reinstalled at ${rec.version}`)
+      return 'unchanged'
     }
-    return 0
+    console.log(chalk.green(`  ${rec.id}: ${rec.version} → ${result.manifest.version}`))
+    return 'updated'
   } catch (err) {
-    console.error(chalk.red(`Update failed: ${err instanceof Error ? err.message : String(err)}`))
-    return 1
+    console.error(chalk.red(`  ${rec.id}: failed — ${err instanceof Error ? err.message : String(err)}`))
+    return 'failed'
   }
 }
 

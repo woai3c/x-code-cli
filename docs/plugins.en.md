@@ -48,7 +48,7 @@ The same operations exist in both surfaces — pick whichever you're in:
 | Uninstall           | `/plugin uninstall <id>`       | `xc plugin uninstall <id>`           |
 | Enable / disable    | `/plugin enable\|disable <id>` | `xc plugin enable\|disable <id>`     |
 | Search marketplaces | `/plugin search <keyword>`     | `xc plugin search <keyword>`         |
-| Update              | `/plugin update <id>`          | `xc plugin update <id>`              |
+| Update              | `/plugin update <id\|--all>`   | `xc plugin update <id\|--all>`       |
 | Diagnose problems   | `/plugin doctor`               | `xc plugin doctor`                   |
 | Manage marketplaces | `/plugin marketplace …`        | `xc plugin marketplace …`            |
 
@@ -246,6 +246,27 @@ removing a plugin with MCP, follow up with `/mcp refresh`.
 `/plugin list` and `/plugin info` always reflect the live state.
 
 ---
+
+## Updating plugins — `update`
+
+```bash
+# update one
+xc plugin update linear@anthropic-marketplace
+
+# update every installed plugin
+xc plugin update --all
+```
+
+`--all` runs sequentially, skip-on-error: one failing plugin doesn't
+abort the rest. At the end you get a one-line summary
+`Summary: N updated, M unchanged, K failed.` Bare `xc plugin update`
+is **rejected** — you must explicitly pass either an `<id>` or
+`--all`, so a typo can't accidentally re-clone every plugin. (Same
+defensive stance as Gemini CLI's `extensions update --all`.)
+
+The slash form `/plugin update <id|--all>` mirrors the CLI. After
+updating, run `/plugin refresh` so the new versions' skills, agents,
+commands and hooks fold back into their registries.
 
 ## `userConfig`: prompt at install time
 

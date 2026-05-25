@@ -39,7 +39,7 @@ xc plugin uninstall linear@anthropic-marketplace
 | 卸载             | `/plugin uninstall <id>`       | `xc plugin uninstall <id>`           |
 | 启用 / 禁用      | `/plugin enable\|disable <id>` | `xc plugin enable\|disable <id>`     |
 | 搜索 marketplace | `/plugin search <keyword>`     | `xc plugin search <keyword>`         |
-| 升级             | `/plugin update <id>`          | `xc plugin update <id>`              |
+| 升级             | `/plugin update <id\|--all>`   | `xc plugin update <id\|--all>`       |
 | 诊断             | `/plugin doctor`               | `xc plugin doctor`                   |
 | 管理 marketplace | `/plugin marketplace …`        | `xc plugin marketplace …`            |
 
@@ -208,6 +208,22 @@ Note: next message rebuilds the system prompt, so prompt-cache will miss once.
 **MCP 服务器例外**：plugin 贡献的 MCP server 在第一次启动时就 spawn 了子进程，hot reload 不会重启它们。装/卸有 MCP 的插件后**额外**跑一次 `/mcp refresh`。
 
 `/plugin list` 与 `/plugin info` 始终展示当前真正在跑的状态。
+
+---
+
+## 升级插件 `update`
+
+```bash
+# 升一个
+xc plugin update linear@anthropic-marketplace
+
+# 升全部已装
+xc plugin update --all
+```
+
+`--all` 顺序跑、单条失败不影响其它（skip-on-error），结束打印汇总：`Summary: N updated, M unchanged, K failed.`。**裸跑 `xc plugin update` 会被拒**——必须显式 `<id>` 或 `--all`，避免误操作把所有插件重克隆一遍（行业惯例同 Gemini CLI 的 `extensions update --all`）。
+
+slash 形式 `/plugin update <id|--all>` 同语义。升完跑 `/plugin refresh` 把新版本的 skill / agent / 命令 / hooks 折回 registry。
 
 ---
 
