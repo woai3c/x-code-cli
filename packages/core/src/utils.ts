@@ -87,25 +87,41 @@ function rotateIfNeeded(nextWriteBytes: number): void {
       /* no previous rotation — fine */
     }
     fsSync.renameSync(LOG_FILE, LOG_FILE_OLD)
+    // Rename succeeded — the active file is gone, the new one will be
+    // freshly opened by ensureLogReady() with byte count 0.
+    currentLogBytes = 0
   } catch {
-    // Rotation failed (file locked, FS full, etc.) — reset and let the
-    // next ensureLogReady() reopen fresh. We'd rather lose history than
-    // spam errors.
+    // Rotation failed (file locked on Windows, FS full, permission
+    // error, etc.). The active file is still on disk at its old size —
+    // resetting `currentLogBytes = 0` here would desync the in-memory
+    // counter from reality and the next rotation wouldn't fire until
+    // ANOTHER MAX_LOG_BYTES had been appended (file ~2× cap before
+    // we try again). Use the -1 sentinel so ensureLogReady() re-stats
+    // the file and resumes accurate accounting.
+    currentLogBytes = -1
   }
-  currentLogBytes = 0
 }
 
 /** Truncate `s` to at most `maxBytes` UTF-8 bytes, appending a marker noting
  *  how many bytes were dropped. The cheap `length * 4` upper bound short-
  *  circuits the common ASCII case (most debug content) without paying for
- *  Buffer.byteLength on every line. */
-function truncateForLog(s: string, maxBytes: number): string {
+ *  Buffer.byteLength on every line.
+ *
+ *  Slicing happens in BYTES, not JS chars: `s.slice(0, n)` would walk
+ *  UTF-16 code units, so for CJK / emoji content it'd return ~3-4× the
+ *  intended byte budget — debug lines mixing Chinese / Japanese / emoji
+ *  would routinely overflow MAX_LINE_BYTES. We encode once, byte-slice,
+ *  then re-decode (TextDecoder turns a cut-mid-codepoint tail into U+FFFD
+ *  which the truncation marker absorbs).
+ */
+export function truncateForLog(s: string, maxBytes: number): string {
   if (s.length * 4 <= maxBytes) return s
-  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s
+  const buf = Buffer.from(s, 'utf8')
+  if (buf.length <= maxBytes) return s
   const sliceLen = Math.max(0, maxBytes - 64)
-  const truncated = s.slice(0, sliceLen)
-  const dropped = s.length - sliceLen
-  return `${truncated}…<+${dropped}c truncated>`
+  const truncated = new TextDecoder('utf-8').decode(buf.subarray(0, sliceLen))
+  const droppedBytes = buf.length - sliceLen
+  return `${truncated}…<+${droppedBytes}b truncated>`
 }
 
 /** Narrow opt-in: when set by the CLI's `--plugin-debug` flag (or
