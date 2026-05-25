@@ -265,9 +265,17 @@ export function parseMarketplace(raw: string, sourceLabel: string, ctx: ParseMar
     debugLog('plugins.marketplace-source-errors', `${sourceLabel}: ${sourceErrors.join(' | ')}`)
   }
 
+  // `name` is the subscription alias the caller passed (sourceLabel),
+  // not the upstream marketplace.json `name` field. Storage paths, install
+  // ids, and lookups all key off the alias — having `parseMarketplace`
+  // leak the upstream name through here is what caused `plugin marketplace
+  // info <alias>` to fail and `plugin search` to tag plugins with the
+  // wrong marketplace. We preserve the upstream name on `upstreamName` so
+  // `info` can still show it when it differs.
   return {
     schemaVersion: result.data.schemaVersion ?? '1',
-    name: result.data.name,
+    name: sourceLabel,
+    upstreamName: result.data.name !== sourceLabel ? result.data.name : undefined,
     displayName: result.data.displayName,
     description: result.data.description,
     owner: result.data.owner ? { name: result.data.owner.name, url: result.data.owner.url } : undefined,

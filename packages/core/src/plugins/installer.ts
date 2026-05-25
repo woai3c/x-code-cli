@@ -148,11 +148,18 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
     // policy check: blockedPlugins from known_marketplaces.json. This
     // is an admin-style force-disable list — an install attempt for
     // a blocked id is rejected regardless of marketplace / consent.
+    // Two match forms are accepted:
+    //   - Fully-qualified id `name@marketplace` — precise (admin can
+    //     block one marketplace's variant without affecting forks)
+    //   - Bare name `name` — broad (admin can block every marketplace's
+    //     plugin with that name in one shot; matches the npm `--ignore`
+    //     style some admins expect)
     const earlyId = `${manifest.name}@${req.marketplace}`
-    if (km.blockedPlugins?.includes(earlyId)) {
+    const blocked = km.blockedPlugins?.find((b) => b === earlyId || b === manifest.name)
+    if (blocked) {
       throw new InstallError(
-        `plugin "${earlyId}" is on the blockedPlugins list in known_marketplaces.json — ` +
-          `remove it from that list (or use a different plugin) to install.`,
+        `plugin "${earlyId}" is on the blockedPlugins list in known_marketplaces.json ` +
+          `(matched entry: "${blocked}") — remove it from that list (or use a different plugin) to install.`,
       )
     }
 

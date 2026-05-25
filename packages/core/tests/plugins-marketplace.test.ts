@@ -133,6 +133,33 @@ describe('parseMarketplace', () => {
       expect((err as Error).message).toContain('plugins.0.source')
     }
   })
+
+  it('Marketplace.name is the subscription alias (sourceLabel), not the upstream `name`', () => {
+    // Regression: the v0.x bug where `parseMarketplace` returned the
+    // upstream marketplace.json `name` as `Marketplace.name`, which
+    // broke `plugin marketplace info <subscription-alias>` and tagged
+    // `plugin search` results with the upstream name instead of the
+    // alias the user typed. Storage paths, install ids, and lookups
+    // all key off the subscription alias, so the returned Marketplace
+    // must do the same.
+    const raw = JSON.stringify({
+      name: 'claude-plugins-official',
+      plugins: [{ name: 'linear', source: 'github:foo/linear' }],
+    })
+    const m = parseMarketplace(raw, 'anthropic-marketplace')
+    expect(m.name).toBe('anthropic-marketplace')
+    expect(m.upstreamName).toBe('claude-plugins-official')
+  })
+
+  it('upstreamName is undefined when subscription alias matches upstream name', () => {
+    const raw = JSON.stringify({
+      name: 'community',
+      plugins: [{ name: 'foo', source: 'github:foo/bar' }],
+    })
+    const m = parseMarketplace(raw, 'community')
+    expect(m.name).toBe('community')
+    expect(m.upstreamName).toBeUndefined()
+  })
 })
 
 describe('addKnownMarketplace + removeKnownMarketplace', () => {

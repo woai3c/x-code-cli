@@ -2022,6 +2022,7 @@ export function App({
         return
       }
       const lines: string[] = [`**${m.displayName ?? m.name}** (${m.name})`]
+      if (m.upstreamName) lines.push(`Upstream name: ${m.upstreamName}`)
       if (m.description) lines.push(m.description)
       if (m.owner?.name) lines.push(`Owner: ${m.owner.name}${m.owner.url ? ` (${m.owner.url})` : ''}`)
       lines.push('', `${m.plugins.length} plugin${m.plugins.length === 1 ? '' : 's'}:`)

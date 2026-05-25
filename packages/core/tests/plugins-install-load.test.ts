@@ -173,6 +173,32 @@ describe('install policy gates (strictKnownMarketplaces + blockedPlugins)', () =
       /blockedPlugins/,
     )
   })
+
+  it('blockedPlugins also matches bare plugin name (block-everywhere shortcut)', async () => {
+    // Admins reasonably expect `blockedPlugins: ['demo']` to block
+    // every marketplace's "demo" plugin in one shot, npm-ignore style.
+    // The fully-qualified form is still accepted for precision.
+    const file = path.join(process.env.XC_PLUGINS_DIR!, 'known_marketplaces.json')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({ marketplaces: [], blockedPlugins: ['demo'] }))
+
+    const src = await makeTempPlugin({ name: 'demo', version: '1.0.0' })
+    await expect(
+      installPlugin({ source: { kind: 'local', path: src }, marketplace: 'some-other-marketplace' }),
+    ).rejects.toThrow(/blockedPlugins/)
+  })
+
+  it('blockedPlugins does not match a different plugin sharing a prefix', async () => {
+    // Make sure the bare-name match is strict equality, not substring —
+    // blocking "demo" should not block "demo-extra".
+    const file = path.join(process.env.XC_PLUGINS_DIR!, 'known_marketplaces.json')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({ marketplaces: [], blockedPlugins: ['demo'] }))
+
+    const src = await makeTempPlugin({ name: 'demo-extra', version: '1.0.0' })
+    const result = await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
+    expect(result.pluginId).toBe('demo-extra@local')
+  })
 })
 
 describe('uninstallPlugin', () => {

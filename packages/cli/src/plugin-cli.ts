@@ -14,6 +14,8 @@ import { Chalk } from 'chalk'
 import {
   addKnownMarketplace,
   clearPluginEntry,
+  debugLog,
+  ensureDefaultMarketplaces,
   fetchMarketplace,
   installPlugin,
   listInstalledPlugins,
@@ -32,6 +34,16 @@ const chalk = new Chalk()
 export async function runPluginCli(args: string[]): Promise<number> {
   const sub = (args[0] ?? '').toLowerCase()
   const rest = args.slice(1)
+
+  // First-run seed: identical to the main interactive entry in
+  // packages/cli/src/index.ts. Without this, a fresh user running
+  // `xc plugin marketplace list` (or `search`) before ever launching
+  // the interactive CLI sees an empty subscription list — the product
+  // promise of "first run has the Anthropic marketplace ready" needs
+  // to hold on every first-contact surface, not just the TUI entry.
+  // Idempotent — a user who explicitly removed the default stays
+  // unsubscribed.
+  await ensureDefaultMarketplaces().catch((err) => debugLog('plugins.ensure-defaults-failed', String(err)))
 
   try {
     switch (sub) {
@@ -650,6 +662,7 @@ async function cliMarketplace(args: string[]): Promise<number> {
       return 1
     }
     console.log(`${m.displayName ?? m.name} (${m.name})`)
+    if (m.upstreamName) console.log(`Upstream name: ${m.upstreamName}`)
     if (m.description) console.log(m.description)
     if (m.owner?.name) console.log(`Owner: ${m.owner.name}${m.owner.url ? ` (${m.owner.url})` : ''}`)
     console.log()

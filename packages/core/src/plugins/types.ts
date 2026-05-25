@@ -178,7 +178,16 @@ export interface MarketplaceEntry {
 
 export interface Marketplace {
   schemaVersion: string
+  /** The user-facing canonical identity of this marketplace — the
+   *  subscription alias the user typed (e.g. `anthropic-marketplace`).
+   *  Storage paths, install ids (`<plugin>@<name>`), and lookups all key
+   *  off this. */
   name: string
+  /** The marketplace's own self-declared `name` from its `marketplace.json`
+   *  (e.g. `claude-plugins-official`). Kept so `info` can show users what
+   *  the upstream calls itself when it differs from their subscription
+   *  alias. Never used as an identity for lookup. */
+  upstreamName?: string
   displayName?: string
   description?: string
   owner?: { name?: string; url?: string }
