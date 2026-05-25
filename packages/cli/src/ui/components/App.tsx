@@ -1566,7 +1566,10 @@ export function App({
       filter === 'all'
         ? `**Installed plugins** (${filtered.length}):`
         : `**Installed plugins** (${filter}, ${filtered.length} of ${all.length}):`
-    const lines = [header, '']
+    // Match /skill list and /mcp list shape: header directly followed by
+    // rows, no blank line in between. Sub-sections (e.g. the errors
+    // footer below) keep their separator since they're a real visual break.
+    const lines = [header]
     const namePad = Math.max(...filtered.map((p) => p.id.length), 8) + 2
     for (const p of filtered) {
       const badge = p.enabled ? '[on] ' : '[off]'
@@ -1941,7 +1944,7 @@ export function App({
     }
     const errors = reg.loadErrors()
     const all = reg.listAll()
-    const lines: string[] = ['**Plugin doctor**', '']
+    const lines: string[] = ['**Plugin doctor**']
     lines.push(`- Total loaded: ${all.length}`)
     lines.push(`- Enabled:      ${all.filter((p) => p.enabled).length}`)
     lines.push(`- Disabled:     ${all.filter((p) => !p.enabled).length}`)
@@ -1971,7 +1974,7 @@ export function App({
         addCommandMessage(text, 'No marketplaces subscribed. Add one with `/plugin marketplace add <name> <source>`.')
         return
       }
-      const lines = [`**Subscribed marketplaces** (${km.marketplaces.length}):`, '']
+      const lines = [`**Subscribed marketplaces** (${km.marketplaces.length}):`]
       const namePad = Math.max(...km.marketplaces.map((m) => m.name.length), 8) + 2
       for (const m of km.marketplaces) {
         const tag = m.reservedName ? ' [official]' : ''
