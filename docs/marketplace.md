@@ -131,7 +131,7 @@ x-code 接受 Anthropic Claude Code 的全部 wire 形式（见 anthropics/claud
 | `"./plugins/foo"` 或 `"../shared/x"`                                                                      | **字符串相对路径**——指代订阅此 marketplace 的 git repo 内的子目录。最常见，适合 monorepo 集中托管多个插件（Anthropic 自家用这个） |
 | `"github:owner/repo[#ref]"`                                                                               | **字符串 GitHub 简写**                                                                                                            |
 | `"https://..."` 或 `"git@..."`                                                                            | **字符串 git URL**                                                                                                                |
-| `{ source: "git-subdir", url, path, ref?, sha? }`                                                         | **对象 git-subdir**——其他 git repo 的子目录。`sha` 当前被忽略（未来做完整性校验）                                                 |
+| `{ source: "git-subdir", url, path, ref?, sha? }`                                                         | **对象 git-subdir**——其他 git repo 的子目录。`sha` 可选；填了就走完整性校验，clone 后 HEAD 不匹配硬失败                           |
 | `{ source: "url", url, sha? }`                                                                            | **对象 git URL**                                                                                                                  |
 | `{ source: "github", owner, repo, ref?, subdir? }` 或 `{ source: "github", repo: "owner/repo", commit? }` | **对象 GitHub**——owner/repo 可分开也可合并；`commit` 等价于 `ref`                                                                 |
 | `{ source: "git", url, ref?, subdir? }`                                                                   | **对象 git**                                                                                                                      |
@@ -140,8 +140,8 @@ x-code 接受 Anthropic Claude Code 的全部 wire 形式（见 anthropics/claud
 约束：
 
 - 字符串相对路径只有当 marketplace 通过 git clone 拉取时才有意义——订阅 raw HTTPS JSON URL 的 marketplace 不能用相对路径
-- 完整性校验（`sha`）暂未实现
-- 内部统一归一化成 `{ kind: 'git'|'github'|'local', ..., subdir? }`；wire 格式只在 marketplace.json 这层暴露
+- **完整性校验（`sha`）已生效**：git/github/git-subdir/url 形态可选填 `sha` 字段（≥7 字符 hex commit hash）。installer clone 完会跑 `git rev-parse HEAD` 跟 `sha` 对比，**不匹配硬失败**——防御上游 force-push 或 repo 被入侵的供应链攻击。未声明则跳过校验（向后兼容老 marketplace）。短 sha 走前缀匹配，跟 `git checkout <short>` 一个语义
+- 内部统一归一化成 `{ kind: 'git'|'github'|'local', ..., subdir?, expectedSha? }`；wire 格式只在 marketplace.json 这层暴露
 
 ---
 

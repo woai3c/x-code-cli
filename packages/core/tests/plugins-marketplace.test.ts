@@ -87,6 +87,7 @@ describe('parseMarketplace', () => {
       url: 'https://github.com/42Crunch-AI/claude-plugins.git',
       subdir: 'plugins/api',
       ref: 'v1.5.5',
+      expectedSha: 'a175b24',
     })
     expect(m.plugins[6]!.source).toEqual({
       kind: 'github',
@@ -132,6 +133,54 @@ describe('parseMarketplace', () => {
       expect(err).toBeInstanceOf(MarketplaceParseError)
       expect((err as Error).message).toContain('plugins.0.source')
     }
+  })
+
+  it('captures the optional `sha` integrity pin from every git source shape', () => {
+    const raw = JSON.stringify({
+      name: 'mixed-sha',
+      plugins: [
+        {
+          name: 'p-git-subdir',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/foo/bar.git',
+            path: 'plugins/p',
+            ref: 'v1',
+            sha: 'a175b24f7b34852b70c78c21545cce8037eb3112',
+          },
+        },
+        {
+          name: 'p-git',
+          source: { source: 'git', url: 'https://example.com/x.git', sha: '5ddccc3aa1' },
+        },
+        {
+          name: 'p-github',
+          source: { source: 'github', owner: 'foo', repo: 'bar', ref: 'main', sha: '1ec5865abc' },
+        },
+        // No sha — must remain undefined, not coerced to anything
+        { name: 'p-no-sha', source: 'github:foo/baz' },
+        // Garbage sha — must be dropped, not silently passed to installer
+        { name: 'p-bad-sha', source: { source: 'github', owner: 'foo', repo: 'qux', sha: 'not-a-hash' } },
+      ],
+    })
+    const m = parseMarketplace(raw, 'mixed-sha')
+    expect(m.plugins).toHaveLength(5)
+    expect(m.plugins.find((p) => p.name === 'p-git-subdir')!.source).toMatchObject({
+      kind: 'git',
+      expectedSha: 'a175b24f7b34852b70c78c21545cce8037eb3112',
+    })
+    expect(m.plugins.find((p) => p.name === 'p-git')!.source).toMatchObject({
+      kind: 'git',
+      expectedSha: '5ddccc3aa1',
+    })
+    expect(m.plugins.find((p) => p.name === 'p-github')!.source).toMatchObject({
+      kind: 'github',
+      expectedSha: '1ec5865abc',
+    })
+    const noSha = m.plugins.find((p) => p.name === 'p-no-sha')!.source as { expectedSha?: string }
+    expect(noSha.expectedSha).toBeUndefined()
+    const badSha = m.plugins.find((p) => p.name === 'p-bad-sha')!.source as { expectedSha?: string }
+    expect(badSha.expectedSha).toBeUndefined()
   })
 
   it('Marketplace.name is the subscription alias (sourceLabel), not the upstream `name`', () => {

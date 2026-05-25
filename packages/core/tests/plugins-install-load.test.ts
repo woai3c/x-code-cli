@@ -1,4 +1,5 @@
 // Tests for installer (local source path) + loader integration
+import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import fs from 'node:fs/promises'
@@ -476,5 +477,63 @@ describe('refreshPluginContributions', () => {
     expect(skillRegistry.get('world')).toBeDefined()
     // Existing plugin still loaded.
     expect(skillRegistry.get('hello')).toBeDefined()
+  })
+})
+
+/** Spin up a local git repo with one commit and return both its path
+ *  (usable as a `kind: 'git'` source URL — `git clone /path` works) and
+ *  the resulting HEAD sha. Lets us test sha verification without needing
+ *  network or a real GitHub repo. */
+async function makeLocalGitRepo(manifest: Record<string, unknown>): Promise<{ url: string; sha: string }> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-git-src-'))
+  await execa('git', ['init', '-q', '-b', 'main'], { cwd: root })
+  await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root })
+  await execa('git', ['config', 'user.name', 'test'], { cwd: root })
+  await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: root })
+  await fs.writeFile(path.join(root, 'plugin.json'), JSON.stringify(manifest))
+  await execa('git', ['add', '-A'], { cwd: root })
+  await execa('git', ['commit', '-q', '-m', 'init'], { cwd: root })
+  const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+  return { url: root, sha }
+}
+
+describe('install sha integrity check (marketplace.json `sha` field)', () => {
+  it('accepts an install when the declared sha matches the cloned HEAD', async () => {
+    const { url, sha } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
+    const result = await installPlugin({
+      source: { kind: 'git', url, expectedSha: sha },
+      marketplace: 'local',
+    })
+    expect(result.pluginId).toBe('demo@local')
+  })
+
+  it('rejects an install when the declared sha does not match', async () => {
+    const { url } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
+    const fakeSha = '0000000000000000000000000000000000000000'
+    await expect(
+      installPlugin({
+        source: { kind: 'git', url, expectedSha: fakeSha },
+        marketplace: 'local',
+      }),
+    ).rejects.toThrow(/sha integrity check failed/)
+  })
+
+  it('skips the check entirely when no sha is declared (back-compat with sha-less marketplaces)', async () => {
+    const { url } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
+    const result = await installPlugin({
+      source: { kind: 'git', url }, // no expectedSha
+      marketplace: 'local',
+    })
+    expect(result.pluginId).toBe('demo@local')
+  })
+
+  it('accepts a short (≥7 char) sha that prefix-matches the full HEAD — same tolerance as `git checkout <short>`', async () => {
+    const { url, sha } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
+    const shortSha = sha.slice(0, 7)
+    const result = await installPlugin({
+      source: { kind: 'git', url, expectedSha: shortSha },
+      marketplace: 'local',
+    })
+    expect(result.pluginId).toBe('demo@local')
   })
 })

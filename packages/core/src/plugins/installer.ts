@@ -278,6 +278,49 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
       throw new InstallError(`git clone failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+
+    // Integrity check: when the marketplace.json pinned a `sha`, verify
+    // that the commit we actually cloned matches it. Defends against the
+    // upstream ref being force-pushed or the repo being compromised
+    // between marketplace review and end-user install. Must run BEFORE
+    // we drop `.git` below (rev-parse needs the repo metadata).
+    //
+    // Prefix-match semantics: declared sha can be a short sha (≥7 hex)
+    // and still validate against the full 40-char HEAD — same tolerance
+    // as `git checkout <short-sha>` and what real marketplaces produce
+    // (anthropics/claude-plugins-official sometimes ships 7-char shas).
+    //
+    // Why hard fail and not warn: a sha mismatch is by definition either
+    // a misconfigured marketplace.json (author bug) or a real
+    // supply-chain anomaly. Either way the user shouldn't end up with
+    // unreviewed code on disk. Better to surface a loud error pointing
+    // at the marketplace author than to silently install whatever HEAD
+    // happens to be.
+    if (source.expectedSha) {
+      try {
+        const result = await execa('git', ['rev-parse', 'HEAD'], { cwd: tempDir, stdio: 'pipe', signal })
+        const actualSha = result.stdout.trim().toLowerCase()
+        const expected = source.expectedSha.toLowerCase()
+        if (!actualSha.startsWith(expected)) {
+          await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
+          throw new InstallError(
+            `sha integrity check failed for ${cloneUrl}${source.ref ? `@${source.ref}` : ''}: ` +
+              `marketplace.json declared sha=${expected}, actual HEAD=${actualSha}. ` +
+              `The upstream ref may have been force-pushed or the repo compromised. ` +
+              `Contact the marketplace author or pin to a different version.`,
+          )
+        }
+      } catch (err) {
+        if (err instanceof InstallError) throw err
+        // rev-parse failed (shouldn't happen on a fresh clone) — treat
+        // as integrity failure so we don't silently install unchecked.
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
+        throw new InstallError(
+          `failed to verify sha for ${cloneUrl}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    }
+
     // Drop the .git dir — we never need it after install and it would
     // bloat the cache significantly for large-history repos.
     await fs.rm(path.join(tempDir, '.git'), { recursive: true, force: true }).catch(() => {})

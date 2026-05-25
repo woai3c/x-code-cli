@@ -103,6 +103,13 @@ export function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceClone
     const o = raw as Record<string, unknown>
     const disc = (typeof o.source === 'string' ? o.source : (o.kind as string | undefined)) as string | undefined
 
+    // Capture the optional `sha` integrity pin. We accept it as a hex
+    // string ≥7 chars (matches Git's short-sha tolerance; the installer
+    // does a prefix compare so a short sha still works). Reject non-hex
+    // shapes early — a typo'd value would otherwise mask a real attack.
+    const rawSha = typeof o.sha === 'string' ? o.sha.trim().toLowerCase() : undefined
+    const expectedSha = rawSha && /^[0-9a-f]{7,40}$/.test(rawSha) ? rawSha : undefined
+
     if (disc === 'git-subdir') {
       if (typeof o.url !== 'string' || typeof o.path !== 'string') {
         throw new Error('git-subdir source requires `url` and `path`')
@@ -112,11 +119,12 @@ export function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceClone
         url: o.url,
         subdir: o.path,
         ref: typeof o.ref === 'string' ? o.ref : undefined,
+        expectedSha,
       }
     }
     if (disc === 'url') {
       if (typeof o.url !== 'string') throw new Error('url source requires `url`')
-      return { kind: 'git', url: o.url }
+      return { kind: 'git', url: o.url, expectedSha }
     }
     if (disc === 'git') {
       if (typeof o.url !== 'string') throw new Error('git source requires `url`')
@@ -125,6 +133,7 @@ export function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceClone
         url: o.url,
         ref: typeof o.ref === 'string' ? o.ref : undefined,
         subdir: typeof o.subdir === 'string' ? o.subdir : undefined,
+        expectedSha,
       }
     }
     if (disc === 'github') {
@@ -149,6 +158,7 @@ export function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceClone
         repo,
         ref,
         subdir: typeof o.subdir === 'string' ? o.subdir : undefined,
+        expectedSha,
       }
     }
     if (disc === 'local') {

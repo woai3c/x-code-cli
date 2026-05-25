@@ -151,22 +151,22 @@ Reference real-world examples: `anthropics/claude-code` and
 `xc` accepts every wire form Claude Code marketplaces use (sampled
 from `anthropics/claude-code` and `anthropics/claude-plugins-official`):
 
-| Shape                                                                                                     | Notes                                                                                                                            |
-| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `"./plugins/foo"` / `"../shared/x"`                                                                       | **String relative path** — subdir of the marketplace's own repo. Most common; suits monorepo hosting (Anthropic's own uses this) |
-| `"github:owner/repo[#ref]"`                                                                               | **String GitHub shortcut**                                                                                                       |
-| `"https://..."` / `"git@..."`                                                                             | **String git URL**                                                                                                               |
-| `{ source: "git-subdir", url, path, ref?, sha? }`                                                         | **Object git-subdir** — subdir of a different git repo. `sha` currently ignored (reserved for integrity check)                   |
-| `{ source: "url", url, sha? }`                                                                            | **Object full git URL**                                                                                                          |
-| `{ source: "github", owner, repo, ref?, subdir? }` or `{ source: "github", repo: "owner/repo", commit? }` | **Object GitHub** — owner/repo can be separate or combined; `commit` is an alias for `ref`                                       |
-| `{ source: "git", url, ref?, subdir? }`                                                                   | **Object git**                                                                                                                   |
-| `{ source: "local", path }`                                                                               | **Local path** — dev only, not portable                                                                                          |
+| Shape                                                                                                     | Notes                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"./plugins/foo"` / `"../shared/x"`                                                                       | **String relative path** — subdir of the marketplace's own repo. Most common; suits monorepo hosting (Anthropic's own uses this)                          |
+| `"github:owner/repo[#ref]"`                                                                               | **String GitHub shortcut**                                                                                                                                |
+| `"https://..."` / `"git@..."`                                                                             | **String git URL**                                                                                                                                        |
+| `{ source: "git-subdir", url, path, ref?, sha? }`                                                         | **Object git-subdir** — subdir of a different git repo. `sha` is optional; when present, the installer verifies it after clone and hard-fails on mismatch |
+| `{ source: "url", url, sha? }`                                                                            | **Object full git URL**                                                                                                                                   |
+| `{ source: "github", owner, repo, ref?, subdir? }` or `{ source: "github", repo: "owner/repo", commit? }` | **Object GitHub** — owner/repo can be separate or combined; `commit` is an alias for `ref`                                                                |
+| `{ source: "git", url, ref?, subdir? }`                                                                   | **Object git**                                                                                                                                            |
+| `{ source: "local", path }`                                                                               | **Local path** — dev only, not portable                                                                                                                   |
 
 Constraints:
 
 - String relative paths (`"./plugins/foo"`) only make sense when the marketplace was fetched via git clone — marketplaces subscribed by a raw HTTPS JSON URL can't reference relative subdirs (no repo to subdir into)
-- Integrity check (`sha`) not yet implemented
-- Internally normalised to `{ kind: 'git'|'github'|'local', ..., subdir? }`; the wire format only surfaces in marketplace.json
+- **Integrity check (`sha`) is enforced**: the git/github/git-subdir/url shapes accept an optional `sha` (≥7-char hex commit hash). After clone the installer runs `git rev-parse HEAD` and compares — **mismatch is a hard install failure**, defending against the upstream ref being force-pushed or the repo being compromised between marketplace review and end-user install. When unset, the check is skipped (back-compat with sha-less marketplaces). Short shas prefix-match the full HEAD, same as `git checkout <short>`
+- Internally normalised to `{ kind: 'git'|'github'|'local', ..., subdir?, expectedSha? }`; the wire format only surfaces in marketplace.json
 
 ---
 

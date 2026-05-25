@@ -22,10 +22,19 @@
  *  [[normalizeMarketplaceSource]]. `subdir` is supported on both git and
  *  github so monorepo-published plugins (common in real Claude Code
  *  marketplaces like `anthropics/claude-plugins-official`) install
- *  correctly. */
+ *  correctly.
+ *
+ *  `expectedSha` is an optional integrity pin propagated from the
+ *  marketplace.json's `sha` field on git-backed sources. When set, the
+ *  installer clones, runs `git rev-parse HEAD`, and aborts with
+ *  `InstallError` on mismatch. Defends against the upstream ref being
+ *  force-pushed or the repo being compromised between when the
+ *  marketplace author reviewed it and when a user installs. Absent
+ *  field skips the check (so marketplaces that haven't pinned shas
+ *  still install). */
 export type PluginSource =
-  | { kind: 'git'; url: string; ref?: string; subdir?: string }
-  | { kind: 'github'; owner: string; repo: string; ref?: string; subdir?: string }
+  | { kind: 'git'; url: string; ref?: string; subdir?: string; expectedSha?: string }
+  | { kind: 'github'; owner: string; repo: string; ref?: string; subdir?: string; expectedSha?: string }
   | { kind: 'local'; path: string }
 
 /** Two-scope plugin enablement, mirroring the convention used by mcp and
