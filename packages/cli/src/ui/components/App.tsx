@@ -151,7 +151,7 @@ export const SLASH_COMMANDS = [
       { name: 'install', description: 'Fetch and install a skill from a URL' },
       { name: 'list', description: 'List installed skills (with on/off state)' },
       { name: 'refresh', description: 'Re-scan skills dirs and apply changes without restart' },
-      { name: 'disable', description: 'Disable a skill (kept on disk, takes effect after restart)' },
+      { name: 'disable', description: 'Disable a skill (kept on disk; run /skill refresh to apply now)' },
       { name: 'enable', description: 'Re-enable a previously disabled skill' },
       { name: 'remove', description: 'Delete a skill directory from disk' },
     ],
