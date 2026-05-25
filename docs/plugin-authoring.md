@@ -106,17 +106,22 @@ xc plugin install ./my-plugin
     ],
   },
 
-  // ── 用户提供的配置项（安装时弹询问，未来版本） ─────────────────
+  // ── 用户提供的配置项（装时逐项询问 + 注入 hook/MCP env） ─────────
   "userConfig": [
     {
       "key": "LINEAR_API_KEY",
       "type": "string",
-      "sensitive": true, // 未来：走系统 keyring
-      // 当前：解析了但尚未实际询问 / 存储
+      "sensitive": true, // 输入时不回显（git 风格密码）；当前 v1 仍存 0600 文件
+      // 未来 followup PR 接 keytar 走系统 keyring
       "prompt": "输入你的 Linear API key",
       "required": true,
     },
   ],
+  // 装时（`xc plugin install <src>`，非 `--yes`）CLI 逐项问值并写入
+  // ~/.x-code/plugins/user-config.json（0600）。运行时这些值自动注入到 hook
+  // 子进程和 plugin 贡献的 MCP server 的 env，key 名就是 `key` 字段。
+  // 注意：slash 形式 `/plugin install` 永远以 --yes 模式运行，不弹此 prompt
+  // ——带 userConfig 的插件请用命令行版安装，详见 plugins.md 的 slash 限制章节。
 
   // ── 依赖与运行时兼容性 ──────────────────────────────────────
   "dependencies": ["base-skills@anthropic-marketplace"],
@@ -186,7 +191,7 @@ my-plugin/
 | 坑                          | 处理                                                                                                                                                                                             |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `name` 报 regex 错          | 只能用小写字母、数字、短横线。不能有下划线和大写                                                                                                                                                 |
-| Hook 不触发                 | 装完 `xc` 重启——hook 在启动时注册。看 `DEBUG_STDOUT=1` + `~/.x-code/logs/debug.log`                                                                                                              |
+| Hook 不触发                 | 装完跑 `/plugin refresh`（in-session 热加载，无需重启），或重启 `xc`。验证：`xc --plugin-debug` 后看 `hooks.exec-ran` 日志条目                                                                   |
 | `${pluginDir}` 没展开       | 只在 hook command 和 slash command 模板里展开。MCP server 的 args / env 走 MCP 自己的 `${VAR}` 展开（仅 env 变量，见 `packages/core/src/mcp/expand-env.ts`）                                     |
 | `${pluginDataDir}` 写入失败 | 自动创建在 `~/.x-code/plugins/data/<sanitised-plugin-id>/`，跨版本保留。第一次替换时 `mkdir -p`，权限错误会让 shell 报错。**别**把可持久化数据写到 `${pluginDir}` —— 它会在重装/升级时整个被擦掉 |
 | 插件装上了贡献不出现        | `/plugin info <id>` 确认 manifest 解析成功，且贡献路径在磁盘上存在                                                                                                                               |

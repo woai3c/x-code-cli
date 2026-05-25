@@ -140,7 +140,7 @@ Example `/mcp list` output:
 ```
 MCP servers:
   filesystem    connected — 11 tools, 0 resources
-  github        needs auth — run /mcp logout github and restart to retry
+  github        needs auth — run /mcp auth github to log in
   internal      failed — connect ECONNREFUSED 127.0.0.1:8080
 ```
 

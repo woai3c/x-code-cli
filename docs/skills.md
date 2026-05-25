@@ -111,14 +111,14 @@ description: 用于检查 React Hook 调用是否符合 rules-of-hooks
 
 ## `/skill` 命令族
 
-| 命令                                            | 说明                                                           |
-| ----------------------------------------------- | -------------------------------------------------------------- |
-| `/skill list`                                   | 列出所有已加载 skill，含 on/off 状态 + 来源（user / project）  |
-| `/skill install <url>`                          | 从 URL 下载一个 SKILL.md 装到用户级（直接 HTTP fetch，无 git） |
-| `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                           |
-| `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                         |
-| `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，下次启动生效）                       |
-| `/skill remove <name>`                          | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）             |
+| 命令                                            | 说明                                                                 |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| `/skill list`                                   | 列出所有已加载 skill，含 on/off 状态 + 来源（user / project）        |
+| `/skill install <url>`                          | 从 URL 下载一个 SKILL.md 装到用户级（直接 HTTP fetch，无 git）       |
+| `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                                 |
+| `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                               |
+| `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，跑 `/skill refresh` 立即生效，或下次启动） |
+| `/skill remove <name>`                          | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）                   |
 
 启用状态写到对应 scope 的 settings：
 

@@ -23,18 +23,18 @@ runtime — just spawns a child, pipes JSON, reads the answer.
 
 ## The ten events
 
-| Event              | Fires                                                                        | Can decide                        | Typical use                                       |
-| ------------------ | ---------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------- |
-| `SessionStart`     | After CLI startup, before the first user prompt                              | no                                | warm up state, prep env                           |
-| `UserPromptSubmit` | Just before the user's message hits the model                                | **allow / deny / inject context** | inject sprint info, redact secrets, gate by topic |
-| `PreToolUse`       | Before any tool is dispatched (writeFile, shell, MCP, sub-agent, …)          | **allow / deny / modify args**    | block dangerous paths, rewrite args, audit gate   |
-| `PostToolUse`      | After a tool produces a result                                               | **modify output**                 | rewrite tool result, append audit metadata        |
-| `PreCompact`       | Before context compression runs (proactive threshold or reactive "too long") | no                                | checkpoint / persist state before messages trim   |
-| `PostCompact`      | After compression finishes                                                   | no                                | notify, log what was reclaimed                    |
-| `SubagentStart`    | When the `task` tool spawns a sub-agent                                      | no                                | audit which sub-agents fire, record start time    |
-| `SubagentStop`     | When a sub-agent finishes (`completed` / `aborted` / `failed`)               | no                                | measure sub-agent duration and token usage        |
-| `TurnComplete`     | After each round of LLM streaming completes                                  | no                                | notifications, metrics                            |
-| `SessionEnd`       | On CLI shutdown                                                              | no                                | flush logs, post a "session done" message         |
+| Event              | Fires                                                                                                 | Can decide                        | Typical use                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------- |
+| `SessionStart`     | At CLI launch (before the UI mounts) — fires once per session even if the user never submits a prompt | no                                | warm up state, prep env                           |
+| `UserPromptSubmit` | Just before the user's message hits the model                                                         | **allow / deny / inject context** | inject sprint info, redact secrets, gate by topic |
+| `PreToolUse`       | Before any tool is dispatched (writeFile, shell, MCP, sub-agent, …)                                   | **allow / deny / modify args**    | block dangerous paths, rewrite args, audit gate   |
+| `PostToolUse`      | After a tool produces a result                                                                        | **modify output**                 | rewrite tool result, append audit metadata        |
+| `PreCompact`       | Before context compression runs (proactive threshold or reactive "too long")                          | no                                | checkpoint / persist state before messages trim   |
+| `PostCompact`      | After compression finishes                                                                            | no                                | notify, log what was reclaimed                    |
+| `SubagentStart`    | When the `task` tool spawns a sub-agent                                                               | no                                | audit which sub-agents fire, record start time    |
+| `SubagentStop`     | When a sub-agent finishes (`completed` / `aborted` / `failed`)                                        | no                                | measure sub-agent duration and token usage        |
+| `TurnComplete`     | After each round of LLM streaming completes                                                           | no                                | notifications, metrics                            |
+| `SessionEnd`       | On CLI shutdown                                                                                       | no                                | flush logs, post a "session done" message         |
 
 `SessionEnd` is fire-and-forget — the CLI exits without waiting for
 hooks to complete. Don't put critical operations there; use
@@ -215,7 +215,9 @@ When multiple hooks match the same event:
 
 A hook that crashes, times out, or exits non-zero is treated as `allow`
 by default and a warning lands in `~/.x-code/logs/debug.log` (set
-`DEBUG_STDOUT=1` to enable that log).
+`DEBUG_STDOUT=1` to enable that log, or use `xc --plugin-debug` which
+mirrors only `plugins.` / `hooks.` / `marketplace.` tagged lines to
+stderr — much quieter than the firehose).
 
 Set `"failurePolicy": "block"` on the entry to flip that for one hook —
 non-zero exit then becomes a `deny`. Use this only for gating hooks
@@ -225,6 +227,27 @@ ensure a broken hook never wedges the agent.
 The 30-second timeout cap is a hard ceiling, not a default. Default is
 5 seconds. Authors who need longer should split work into background
 processes that the hook kicks off and returns immediately.
+
+### Confirming a hook actually ran
+
+The hook subprocess is spawned with `stdio: 'pipe'` — execa parses its
+stdout as the decision JSON, and stderr is consumed for error reporting
+— so anything the hook writes via `console.log` / `process.stderr.write`
+is invisible to you. The way to verify is the debug log:
+
+- **`hooks.exec-ran <pluginId> <event>: decision=<allow|deny|modify>`** —
+  emitted once per successful hook run, regardless of decision
+- `hooks.exec-timeout` / `hooks.exec-nonzero` / `hooks.exec-error` —
+  the failure paths
+- `hooks.bus-error` — orchestration-layer errors
+- `hooks.matcher-invalid` — bad matcher regex
+
+`xc --plugin-debug` mirrors these to stderr in real time; alternately
+run a session and grep `~/.x-code/logs/debug.log` afterwards. Most
+common reasons a hook doesn't fire: (a) plugin not enabled (`/plugin
+list`), (b) you didn't refresh after install (`/plugin refresh`), (c)
+matcher regex doesn't match the tool name (tools are camelCase, e.g.
+`writeFile`, `edit`).
 
 ---
 

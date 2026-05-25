@@ -17,7 +17,7 @@ See also: [Plugins user guide](plugins.md) ·
 
 ## What ships by default
 
-The first time `xc` starts up, it writes a single subscription:
+The first time `xc` starts up **or you run any `xc plugin …` subcommand**, it writes a single subscription:
 
 | Name                    | Source                                      | Notes                                                                      |
 | ----------------------- | ------------------------------------------- | -------------------------------------------------------------------------- |
@@ -134,6 +134,18 @@ Reference real-world examples: `anthropics/claude-code` and
 }
 ```
 
+> **`name` vs subscription alias**: the `name` inside `marketplace.json`
+> (e.g. `claude-plugins-official` for the Anthropic one) is what the
+> upstream author calls their catalog. The `<alias>` you pick when
+> running `xc plugin marketplace add <alias> <source>` is what x-code
+> treats as the canonical identity (cache paths, the `<plugin>@<alias>`
+> install id, what `/plugin marketplace list` shows, etc.). When they
+> differ, `/plugin marketplace info <alias>` prints an extra
+> `Upstream name: <upstream-name>` line so you can see both. That's
+> why you can subscribe to Anthropic's catalog as the easier-to-type
+> `anthropic-marketplace` instead of typing `claude-plugins-official`
+> every time.
+
 ### Accepted `source` shapes
 
 `xc` accepts every wire form Claude Code marketplaces use (sampled
@@ -229,7 +241,8 @@ The plugins themselves live wherever you point at.
 ## Idempotency
 
 `ensureDefaultMarketplaces()` (the function that writes the default
-`anthropic-marketplace` subscription on first run) checks
+`anthropic-marketplace` subscription on first CLI launch — or on the
+first `xc plugin …` subcommand invocation) checks
 `known_marketplaces.json` and skips if any entry is present. **Once
 the file exists, it's never overwritten** — so removing the default
 subscription sticks across restarts.

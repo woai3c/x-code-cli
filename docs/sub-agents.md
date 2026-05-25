@@ -10,12 +10,18 @@ X-Code CLI 通过 `task` 工具支持子 agent 委派：模型可以把某个独
 
 CLI 自带 4 个：
 
-| 名字              | 适合                                                      | 工具白名单                                                         |
-| ----------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
-| `explore`         | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `glob`、`grep`、`read_file`、`list_dir`、`web_fetch`、`web_search` |
-| `general-purpose` | 不归类的杂项研究 / 多步骤任务                             | 默认完整工具集（task 除外）                                        |
-| `plan`            | 制定方案；进入 plan 模式 + 写 plan 文件                   | 含 `enter_plan_mode`                                               |
-| `code-reviewer`   | 审查改动 / PR / diff                                      | 偏 read，含 grep / read_file 等                                    |
+| 名字              | 适合                                                      | 工具白名单                                             |
+| ----------------- | --------------------------------------------------------- | ------------------------------------------------------ |
+| `explore`         | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限） |
+| `general-purpose` | 不归类的杂项研究 / 多步骤任务                             | 默认完整工具集（task 除外）                            |
+| `plan`            | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）          |
+| `code-reviewer`   | 审查改动 / PR / diff                                      | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限） |
+
+> 工具名是 **camelCase**（跟代码里 `toolRegistry` 的 key 一致）——`read_file`、`write_file` 这种 snake_case 写法**不会匹配**，会让子 agent 拿到一个空工具集。
+>
+> `shell（受限）` 表示 `shell` 工具仍可用，但 `shellRestrictions` 默认拦截破坏性命令（`rm`、`mv`、`git push`、`> redirect` 等，完整列表见 `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`）。
+>
+> `plan` 内置 sub-agent **不含** `enterPlanMode` ——它的产出是 Markdown 计划文本而不是切换主会话的权限模式。`/plan` 这个 CLI flag 跟 `plan` sub-agent 是两件事。
 
 主 agent 通过 `task` 工具调用它们：
 
@@ -38,7 +44,7 @@ task(subagent_type="explore", description="find all callers of formatDate",
 | 用户  | `~/.x-code/agents/<name>.md`      |
 | 项目  | `<repo>/.x-code/agents/<name>.md` |
 
-启动期自动扫描。项目级同名覆盖用户级；同名再覆盖内置。
+启动期自动扫描，运行中跑 `/plugin refresh` 也会重新加载（跟插件贡献的 sub-agent 一起）。项目级同名覆盖用户级；同名再覆盖内置。
 
 > **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`。
 
@@ -48,7 +54,7 @@ task(subagent_type="explore", description="find all callers of formatDate",
 ---
 name: my-agent # 必需，模型在 task() 里用这个名字调用
 description: 一句话说清何时该用，模型会读这个做决定。 # 必需
-tools: [read_file, grep, glob] # 可选，限定允许的工具白名单
+tools: [readFile, grep, glob] # 可选，限定允许的工具白名单（注意 camelCase）
 disallowedTools: [shell] # 可选，在白名单之上再禁
 model: anthropic:claude-haiku-4-5 # 可选，覆盖父 model（用更便宜的）
 maxTurns: 15 # 可选，硬上限轮次，默认 30
@@ -71,7 +77,7 @@ frontmatter 字段都不存在 `required` 的运行时检查（除了 name 和 d
 ---
 name: bench-runner
 description: 在隔离环境跑一次基准测试，返回数字 + 是否回归
-tools: [shell, read_file]
+tools: [shell, readFile]
 model: anthropic:claude-haiku-4-5
 maxTurns: 8
 shellRestrictions: [rm, sudo, npm publish]
@@ -120,15 +126,17 @@ shellRestrictions: [rm, sudo, npm publish]
 只读 agent 的常见组合：
 
 ```yaml
-tools: [read_file, glob, grep, list_dir, web_fetch, web_search]
+tools: [readFile, glob, grep, listDir, webFetch, webSearch]
 ```
 
 需要 shell 但想拦截危险操作：
 
 ```yaml
-tools: [read_file, shell, glob]
+tools: [readFile, shell, glob]
 shellRestrictions: [rm, sudo, npm publish, git push]
 ```
+
+可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`enterPlanMode`、`exitPlanMode`、`todoWrite`。**`task` 工具永远禁用**（防递归）。
 
 ---
 

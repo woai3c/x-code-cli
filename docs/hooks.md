@@ -16,7 +16,7 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 
 | Event              | 触发时机                                                                     | 能决策                           | 典型用途                                  |
 | ------------------ | ---------------------------------------------------------------------------- | -------------------------------- | ----------------------------------------- |
-| `SessionStart`     | CLI 启动后，第一次用户提示前                                                 | ❌                               | 预热状态、设置环境                        |
+| `SessionStart`     | CLI 启动时（UI 挂载前）就 fire 一次。即使用户从不发 prompt 也会触发          | ❌                               | 预热状态、设置环境                        |
 | `UserPromptSubmit` | 用户消息发给模型前                                                           | ✅ allow / deny / inject context | 注入 sprint 信息、敏感词拦截、按主题分流  |
 | `PreToolUse`       | 任何工具派发前（writeFile、shell、MCP、sub-agent…）                          | ✅ allow / deny / modify args    | 拦截危险路径、重写参数、审计 gate         |
 | `PostToolUse`      | 工具产出结果后                                                               | ✅ modify output                 | 改写工具返回值、追加审计元数据            |
@@ -183,11 +183,22 @@ Hook 用 stdout 回一行 JSON。stdout 为空 = 默认 `allow`（大部分 fire
 
 ## 失败处理
 
-Hook 崩溃、超时或非零退出，默认按 `allow` 处理，warning 写到 `~/.x-code/logs/debug.log`（要先 `DEBUG_STDOUT=1`）。
+Hook 崩溃、超时或非零退出，默认按 `allow` 处理，warning 写到 `~/.x-code/logs/debug.log`（要先 `DEBUG_STDOUT=1` 或 `xc --plugin-debug` —— 后者只镜像 `plugins.` / `hooks.` / `marketplace.` 标签的行，更安静）。
 
 某个 hook 设 `"failurePolicy": "block"` 才会把非零退出当 `deny`。只给真的想做严格 gate 的 hook 用——默认 allow 是为了保证坏 hook 不会卡死 agent。
 
 30s 是 timeout 的硬上限，不是默认值。默认 5s。需要长时间任务的话，hook 应该 spawn 后台进程然后立即返回。
+
+### 怎么确认 hook 真的跑了
+
+Hook 子进程的 `stdout` 被 `execa` 当成决策 JSON 解析，`stderr` 也被 pipe 吞掉——所以 hook 里 `console.log` / `process.stderr.write` 写的诊断信息看不到。可观测点是 debug 日志：
+
+- **`hooks.exec-ran <pluginId> <event>: decision=<allow|deny|modify>`** —— 每次 hook 成功跑完一行（不管返回啥决策）
+- `hooks.exec-timeout` / `hooks.exec-nonzero` / `hooks.exec-error` —— 失败路径
+- `hooks.bus-error` —— 编排层错误
+- `hooks.matcher-invalid` —— matcher 正则无效
+
+`xc --plugin-debug` 把这些行实时镜像到 stderr，跑一会儿 `/exit` 然后 grep `~/.x-code/logs/debug.log` 也行。Hook 不触发的最常见原因：(a) plugin 没启用（`/plugin list` 看），(b) 没 refresh（`/plugin refresh`），(c) `matcher` 正则不匹配工具名（工具名是 camelCase，如 `writeFile`、`edit`）。
 
 ---
 

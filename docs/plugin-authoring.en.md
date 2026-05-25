@@ -118,17 +118,25 @@ unsupported parts just don't activate.
     ],
   },
 
-  // ── User-supplied config items (prompted at install time) ──────
+  // ── User-supplied config items (prompted at install + injected into hook/MCP env) ──
   "userConfig": [
     {
       "key": "LINEAR_API_KEY",
       "type": "string",
-      "sensitive": true, // future: stored via system keyring
-      // (today: stored in settings)
+      "sensitive": true, // input echo suppressed (git-style password). v1
+      // stores values in a 0600 file; OS keychain (keytar) is a followup PR.
       "prompt": "Enter your Linear API key",
       "required": true,
     },
   ],
+  // At install time (`xc plugin install <src>` without `--yes`) the CLI
+  // walks each field and prompts for a value, writing the result to
+  // ~/.x-code/plugins/user-config.json (mode 0600). At runtime each value
+  // is injected into hook subprocess env AND plugin-contributed MCP server
+  // env, keyed by `key`. NOTE: the slash form `/plugin install` always
+  // runs implicit-yes and SKIPS this prompt — userConfig-bearing plugins
+  // must be installed via `xc plugin install`; see plugins.en.md's slash
+  // command limitations section.
 
   // ── Dependencies & engines ─────────────────────────────────────
   "dependencies": ["base-skills@anthropic-marketplace"],
@@ -222,7 +230,7 @@ crashing the CLI — your tests should cover that path too.
 | Pitfall                                     | Fix                                                                                                                                                                                                                                                                     |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name` rejected with regex error            | Use lowercase letters, digits, dashes only. No underscores, no uppercase.                                                                                                                                                                                               |
-| Hook never fires                            | Restart `xc` after install — hooks register at startup. Check `DEBUG_STDOUT=1` + `~/.x-code/logs/debug.log`.                                                                                                                                                            |
+| Hook never fires                            | Run `/plugin refresh` after install (in-session hot reload, no restart needed) — or restart `xc`. Verify via `xc --plugin-debug` and look for `hooks.exec-ran` entries in `~/.x-code/logs/debug.log`.                                                                   |
 | `${pluginDir}` not expanded                 | Only expanded inside hook commands and slash command templates. For MCP server args / env, the MCP loader does its own `${VAR}` expansion (env vars only — see `packages/core/src/mcp/expand-env.ts`).                                                                  |
 | `${pluginDataDir}` write fails              | Auto-created at `~/.x-code/plugins/data/<sanitised-plugin-id>/`, preserved across versions. First substitution does `mkdir -p`; permission errors surface in the shell. **Don't** write persistent data to `${pluginDir}` — it gets wiped on every reinstall / upgrade. |
 | Plugin loads but contributions don't appear | Run `/plugin info <id>` to confirm the manifest was parsed and the contribution paths exist on disk.                                                                                                                                                                    |

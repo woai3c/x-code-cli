@@ -15,12 +15,26 @@ doesn't pollute the main conversation.
 
 Four ship in the box:
 
-| Name              | Best for                                                                  | Tool whitelist                                                     |
-| ----------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `explore`         | Searching a large codebase for a symbol / keyword / call chain; read-only | `glob`, `grep`, `read_file`, `list_dir`, `web_fetch`, `web_search` |
-| `general-purpose` | Catch-all research / multi-step tasks that don't fit elsewhere            | default full tool set (minus `task`)                               |
-| `plan`            | Designing a plan; enters plan mode and writes a plan file                 | includes `enter_plan_mode`                                         |
-| `code-reviewer`   | Reviewing diffs / PRs                                                     | read-leaning (grep / read_file / etc.)                             |
+| Name              | Best for                                                                  | Tool whitelist                                              |
+| ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `explore`         | Searching a large codebase for a symbol / keyword / call chain; read-only | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted) |
+| `general-purpose` | Catch-all research / multi-step tasks that don't fit elsewhere            | default full tool set (minus `task`)                        |
+| `plan`            | Given a task, explore the code and produce an implementation plan         | `readFile`, `glob`, `grep`, `listDir` (read-only)           |
+| `code-reviewer`   | Reviewing diffs / PRs                                                     | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted) |
+
+> Tool names are **camelCase** — they match the keys in `toolRegistry`
+> (`packages/core/src/tools/index.ts`). The snake_case spellings
+> (`read_file`, `write_file`, etc.) **don't match anything** and silently
+> leave the sub-agent with an empty tool set.
+>
+> `shell (restricted)` means the `shell` tool is available but
+> `shellRestrictions` blocks destructive commands by default (`rm`, `mv`,
+> `git push`, output redirects, etc. — full list in
+> `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`).
+>
+> The `plan` built-in sub-agent does **not** include `enterPlanMode` —
+> its output is a Markdown plan, not a session-mode switch. The `/plan`
+> CLI flag and the `plan` sub-agent are different things.
 
 The main agent invokes them via the `task` tool:
 
@@ -45,8 +59,10 @@ Drop a `.md` file under either path:
 | User    | `~/.x-code/agents/<name>.md`      |
 | Project | `<repo>/.x-code/agents/<name>.md` |
 
-Loaded at startup. Project-level wins over user-scope of the same name; both
-override built-ins.
+Loaded at startup; `/plugin refresh` also re-scans them mid-session
+(custom sub-agents share the reload path with plugin-contributed ones).
+Project-level wins over user-scope of the same name; both override
+built-ins.
 
 > **Windows paths**: `~/.x-code` maps to `%USERPROFILE%\.x-code`.
 
@@ -56,7 +72,7 @@ override built-ins.
 ---
 name: my-agent # required; the model invokes this name in task()
 description: One sentence on when to use this agent. The model reads this to decide. # required
-tools: [read_file, grep, glob] # optional: whitelist of allowed tools
+tools: [readFile, grep, glob] # optional: whitelist of allowed tools (camelCase)
 disallowedTools: [shell] # optional: deny on top of the whitelist
 model: anthropic:claude-haiku-4-5 # optional: override the parent model (use a cheaper one)
 maxTurns: 15 # optional: hard turn cap (default 30)
@@ -81,7 +97,7 @@ No frontmatter field is checked at runtime besides `name` and
 ---
 name: bench-runner
 description: Run the benchmark suite once in isolation and report numbers + any regression
-tools: [shell, read_file]
+tools: [shell, readFile]
 model: anthropic:claude-haiku-4-5
 maxTurns: 8
 shellRestrictions: [rm, sudo, npm publish]
@@ -139,15 +155,21 @@ auto-dispatches via task:
 A common read-only combo:
 
 ```yaml
-tools: [read_file, glob, grep, list_dir, web_fetch, web_search]
+tools: [readFile, glob, grep, listDir, webFetch, webSearch]
 ```
 
 Shell access with dangerous-command guards:
 
 ```yaml
-tools: [read_file, shell, glob]
+tools: [readFile, shell, glob]
 shellRestrictions: [rm, sudo, npm publish, git push]
 ```
+
+The full set of tool names (**must be camelCase**, matches the
+`toolRegistry` keys in `packages/core/src/tools/index.ts`): `readFile`,
+`writeFile`, `edit`, `shell`, `glob`, `grep`, `listDir`, `webSearch`,
+`webFetch`, `askUser`, `enterPlanMode`, `exitPlanMode`, `todoWrite`.
+The `task` tool is always denied (recursion guard).
 
 ---
 

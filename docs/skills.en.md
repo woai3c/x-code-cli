@@ -129,7 +129,7 @@ activates. One clear sentence about _when_ to use it works best.
 | `/skill install <url>`                          | Download a SKILL.md from a URL into user scope (plain HTTP fetch, no git) |
 | `/skill refresh`                                | Re-scan skill directories + settings; takes effect immediately            |
 | `/skill enable <name> [--scope=user\|project]`  | Re-enable a disabled skill                                                |
-| `/skill disable <name> [--scope=user\|project]` | Disable a skill (file kept; effective after restart)                      |
+| `/skill disable <name> [--scope=user\|project]` | Disable a skill (file kept; effective after `/skill refresh`, or restart) |
 | `/skill remove <name>`                          | Delete the skill directory (rejected for plugin-sourced skills)           |
 
 Disabled state is persisted to the matching scope's settings:

@@ -10,7 +10,7 @@ x-code 不自己运营 marketplace。它只**订阅**别人的 marketplace。Mar
 
 ## 开箱默认有什么
 
-x-code 首次启动会自动写一条订阅：
+x-code 首次启动 CLI **或首次跑任何 `xc plugin …` 子命令时**自动写一条订阅：
 
 | 名字                    | 源                                          | 说明                                                        |
 | ----------------------- | ------------------------------------------- | ----------------------------------------------------------- |
@@ -120,6 +120,8 @@ x-code 用 Anthropic 公开的 Claude Code marketplace schema——你写的文�
 }
 ```
 
+> **`name` vs 订阅别名**：marketplace.json 里的 `name`（例如官方那个写 `claude-plugins-official`）是**作者自己声明的名字**；而你订阅时用 `xc plugin marketplace add <alias> <source>` 给的 `<alias>` 才是 x-code 内部使用的规范身份（cache 路径、`<plugin>@<alias>` install id、`/plugin marketplace list` 显示等都走 alias）。两者不一致时，`/plugin marketplace info <alias>` 会额外打一行 `Upstream name: <作者声明的 name>`。这样订阅 Anthropic 官方时你用方便记的 `anthropic-marketplace` 就好，不必每次都打 `claude-plugins-official`。
+
 ### 源（source）允许的形式
 
 x-code 接受 Anthropic Claude Code 的全部 wire 形式（见 anthropics/claude-code、anthropics/claude-plugins-official 真实 marketplace.json）：
@@ -195,7 +197,7 @@ CLI 用 `fetch()` 拉取。适合企业内部 marketplace——可按 VPN 服务
 
 ## 幂等性
 
-`ensureDefaultMarketplaces()`（首次启动写 `anthropic-marketplace` 默认订阅的函数）会先检查 `known_marketplaces.json`，任何条目存在就跳过。**文件一旦存在就不会被覆盖**——所以删掉默认订阅在重启间保留。
+`ensureDefaultMarketplaces()`（首次启动 CLI 或首次跑 `xc plugin …` 子命令时写 `anthropic-marketplace` 默认订阅的函数）会先检查 `known_marketplaces.json`，任何条目存在就跳过。**文件一旦存在就不会被覆盖**——所以删掉默认订阅在重启间保留。
 
 之后想要回来：`xc plugin marketplace add anthropic-marketplace github:anthropics/claude-plugins-official`。
 
