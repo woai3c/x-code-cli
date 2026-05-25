@@ -34,7 +34,7 @@ export interface SkillDefinition {
   files: string[]
   /** When this skill comes from a plugin contribution, the owning plugin's
    *  id (`name@marketplace`). UI shows this as "(from plugin: …)" and
-   *  `/skill remove` redirects to `/plugin uninstall`. */
+   *  `/skill uninstall` redirects to `/plugin uninstall`. */
   pluginId?: string
 }
 

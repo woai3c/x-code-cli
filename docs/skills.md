@@ -118,7 +118,7 @@ description: 用于检查 React Hook 调用是否符合 rules-of-hooks
 | `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                                 |
 | `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                               |
 | `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，跑 `/skill refresh` 立即生效，或下次启动） |
-| `/skill remove <name>`                          | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）                   |
+| `/skill uninstall <name>`                       | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）                   |
 
 启用状态写到对应 scope 的 settings：
 
@@ -213,7 +213,7 @@ xychart-beta
 
 Plugin 可以把 skills 打包发布：plugin 的 manifest 声明 `"skills": "./skills"`，里面的每个子目录就是一个 skill，加载方式与你手写的用户级 skill 完全一致，只是会带上 `pluginId` 标记。
 
-`/skill remove` 不能删 plugin skill——会提示你用 `/plugin uninstall` 卸载整个 plugin。
+`/skill uninstall` 不能删 plugin skill——会提示你用 `/plugin uninstall` 卸载整个 plugin。
 
 详情见 [plugins.md](./plugins.md) 与 [plugin-authoring.md](./plugin-authoring.md)。
 

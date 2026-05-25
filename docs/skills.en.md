@@ -130,7 +130,7 @@ activates. One clear sentence about _when_ to use it works best.
 | `/skill refresh`                                | Re-scan skill directories + settings; takes effect immediately            |
 | `/skill enable <name> [--scope=user\|project]`  | Re-enable a disabled skill                                                |
 | `/skill disable <name> [--scope=user\|project]` | Disable a skill (file kept; effective after `/skill refresh`, or restart) |
-| `/skill remove <name>`                          | Delete the skill directory (rejected for plugin-sourced skills)           |
+| `/skill uninstall <name>`                       | Delete the skill directory (rejected for plugin-sourced skills)           |
 
 Disabled state is persisted to the matching scope's settings:
 
@@ -227,7 +227,7 @@ Plugins can bundle skills: a plugin manifest declares `"skills": "./skills"`
 and each subdir under that path becomes a skill. They load identically to
 hand-authored user-scope skills, but carry a `pluginId` tag.
 
-`/skill remove` won't delete a plugin-sourced skill — it redirects to
+`/skill uninstall` won't delete a plugin-sourced skill — it redirects to
 `/plugin uninstall` for the owning plugin.
 
 See [plugins.en.md](./plugins.en.md) and [plugin-authoring.en.md](./plugin-authoring.en.md).

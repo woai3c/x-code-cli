@@ -153,7 +153,7 @@ export const SLASH_COMMANDS = [
       { name: 'refresh', description: 'Re-scan skills dirs and apply changes without restart' },
       { name: 'disable', description: 'Disable a skill (kept on disk; run /skill refresh to apply now)' },
       { name: 'enable', description: 'Re-enable a previously disabled skill' },
-      { name: 'remove', description: 'Delete a skill directory from disk' },
+      { name: 'uninstall', description: 'Delete a skill directory from disk' },
     ],
   },
   {
@@ -1430,10 +1430,10 @@ export function App({
       return
     }
 
-    if (sub === 'remove') {
+    if (sub === 'uninstall') {
       const name = subArg.trim()
       if (!name) {
-        addCommandMessage(text, 'Usage: `/skill remove <name>`')
+        addCommandMessage(text, 'Usage: `/skill uninstall <name>`')
         return
       }
       const entry = options.skillRegistry?.getEntry(name)
@@ -1442,13 +1442,13 @@ export function App({
         return
       }
       // Plugin-contributed skills live under the plugin's cache dir, not
-      // under <baseDir>/skills/. `/skill remove` here would compute the
+      // under <baseDir>/skills/. `/skill uninstall` here would compute the
       // wrong path and either no-op silently or remove an unrelated dir
       // — redirect the user to `/plugin uninstall` instead.
       if (entry.pluginId) {
         addCommandMessage(
           text,
-          `Skill **${name}** comes from plugin \`${entry.pluginId}\` — remove it with \`/plugin uninstall ${entry.pluginId}\` instead of \`/skill remove\`.`,
+          `Skill **${name}** comes from plugin \`${entry.pluginId}\` — uninstall it with \`/plugin uninstall ${entry.pluginId}\` instead of \`/skill uninstall\`.`,
         )
         return
       }
@@ -1461,7 +1461,7 @@ export function App({
         return
       }
       // Also clear any disable entries — leaving stale entries pointing
-      // at a removed skill would silently swallow a future re-install
+      // at an uninstalled skill would silently swallow a future re-install
       // with the same name (it'd come back disabled).
       try {
         await setSkillDisabled(name, 'user', false)
@@ -1471,14 +1471,14 @@ export function App({
       }
       addCommandMessage(
         text,
-        `Removed skill **${name}** from \`${skillDir}\`.\nRun \`/skill refresh\` to apply now, or restart xc.`,
+        `Uninstalled skill **${name}** from \`${skillDir}\`.\nRun \`/skill refresh\` to apply now, or restart xc.`,
       )
       return
     }
 
     addCommandMessage(
       text,
-      'Usage: `/skill install <url>` · `/skill list` · `/skill refresh` · `/skill disable <name>` · `/skill enable <name>` · `/skill remove <name>`',
+      'Usage: `/skill install <url>` · `/skill list` · `/skill refresh` · `/skill disable <name>` · `/skill enable <name>` · `/skill uninstall <name>`',
     )
   }
 
