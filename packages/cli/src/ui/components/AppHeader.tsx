@@ -103,6 +103,20 @@ export function printHeader(modelId: string): void {
   // history (still accessible by scrolling up in the terminal); `\x1b[H`
   // then homes the cursor so the banner writes at row 1, leaving all rows
   // below it blank for ChatInput to use as its pin-to-bottom territory.
+  //
+  // Two routes tried before this and rejected:
+  //   - `\x1b[2J\x1b[H` (clear-screen + home): cleaner conceptually but
+  //     several terminal/code-page combinations on Windows interpreted
+  //     CSI 2J as also clearing visible scrollback above; users lost
+  //     context (their typed command vanished).
+  //   - `fs.writeSync(1, ...)` to force synchronous write: bypasses Node's
+  //     UTF-16 conversion path for Windows TTYs and the box-drawing
+  //     characters in the logo were rendered as GBK byte pairs under
+  //     CP936 (zh-CN PowerShell default). Result was full mojibake plus
+  //     visible scrollback corruption.
+  //
+  // process.stdout.write through Node's tty layer remains the only path
+  // that handles Unicode correctly across Windows code pages.
   const rows = process.stdout.rows ?? 25
   if (process.stdout.isTTY && rows > 1) {
     process.stdout.write('\n'.repeat(rows - 1) + '\x1b[H')
