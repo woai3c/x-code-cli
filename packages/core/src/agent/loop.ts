@@ -415,19 +415,14 @@ export async function agentLoop(
   // ── Plugin hook: SessionStart ──
   // First-invocation-of-the-session marker. Fire-and-forget, but awaited
   // so hooks have a chance to inject session-scoped env / state before
-  // the user's prompt is processed. Skipped on subsequent calls within
-  // the same session (existingState !== undefined).
-  if (!existingState && options.hookBus?.has('SessionStart')) {
-    await options.hookBus
-      .emit(
-        { name: 'SessionStart', session: { cwd: process.cwd(), modelId: options.modelId } },
-        { signal: options.abortSignal },
-      )
-      .catch((err) => {
-        if (options.abortSignal?.aborted) throw err
-        debugLog('agent.hook-session-start-error', String(err))
-      })
-  }
+  // SessionStart used to fire here on the first agentLoop call. It now
+  // fires from the CLI startup path in packages/cli/src/index.ts so
+  // hooks can do session-level setup before the user interacts at all —
+  // a session that ends without any user message (e.g. user runs only
+  // slash commands, then exits) would otherwise silently skip the event.
+  // Sub-agent invocations always pass an existingState so they never
+  // triggered this branch anyway; library consumers calling agentLoop
+  // directly need to fire SessionStart themselves at session boundaries.
 
   // ── Plugin hook: UserPromptSubmit ──
   // Runs BEFORE the message is pushed into state.messages so a `deny`

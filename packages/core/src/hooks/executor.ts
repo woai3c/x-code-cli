@@ -112,7 +112,15 @@ export async function executeHook(
       return failurePolicyDecision(hook, `hook exited ${result.exitCode}`)
     }
 
-    return parseDecision(result.stdout ?? '', hook, event)
+    const decision = parseDecision(result.stdout ?? '', hook, event)
+    // Trace successful hook runs so plugin authors can confirm their
+    // hook actually fired without needing to add their own logging.
+    // Stdio is `pipe`d (we read the JSON decision out of stdout), so
+    // anything the hook writes to its own stderr is otherwise invisible
+    // — this breadcrumb is what `--plugin-debug` / `DEBUG_STDOUT=1`
+    // users grep for to verify the wiring.
+    debugLog('hooks.exec-ran', `${hook.pluginId} ${event.name}: decision=${decision.decision}`)
+    return decision
   } catch (err) {
     if (opts.signal?.aborted) throw err
     debugLog('hooks.exec-error', `${hook.pluginId} ${event.name}: ${String(err)}`)

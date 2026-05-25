@@ -328,11 +328,18 @@ async function promptUserConfig(
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true })
   try {
     for (const f of fields) {
-      const label = f.prompt ?? f.description ?? f.key
+      const label = f.prompt ?? f.description
       const required = f.required ? ' (required)' : ''
       const defaultNote = f.default !== undefined ? ` [default: ${f.default}]` : ''
       const sensitive = f.sensitive === true
-      const promptText = `  ${chalk.cyan(f.key)}: ${label}${required}${defaultNote}\n  > `
+      // When the manifest provides neither `prompt` nor `description`, the
+      // older code fell through to `f.key`, producing labels like
+      // `MY_URL: MY_URL [default: ...]` — the key duplicated as both the
+      // label *and* the human description. Just show the key alone in
+      // that case.
+      const promptText = label
+        ? `  ${chalk.cyan(f.key)}: ${label}${required}${defaultNote}\n  > `
+        : `  ${chalk.cyan(f.key)}${required}${defaultNote}\n  > `
 
       let answer: string
       if (sensitive) {

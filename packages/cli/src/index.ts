@@ -472,6 +472,20 @@ async function main() {
     hookBus: argv.hooks === false ? emptyHookBus() : pluginIntegration.hookBus,
   }
 
+  // Plugin SessionStart hooks. Fired at CLI launch so the hook can do
+  // setup (env validation, context warm-up, etc.) BEFORE the user starts
+  // interacting. Previously this lived in agentLoop's first-call branch,
+  // which meant a session ending without any user message (e.g. the user
+  // runs only slash commands then exits) never fired SessionStart, and
+  // sessions that did fire saw it lag behind the first prompt. Symmetric
+  // with the SessionEnd fire in `gracefulShutdown`. Fire-and-forget — a
+  // slow hook must not block startup.
+  if (options.hookBus?.has('SessionStart')) {
+    options.hookBus
+      .emit({ name: 'SessionStart', session: { cwd: process.cwd(), modelId } })
+      .catch((err) => debugLog('agent.hook-session-start-error', String(err)))
+  }
+
   // Resume / continue. Three resume entry points:
   //   1. `--continue` (-c): loads the most recent session synchronously
   //      here, no picker. Quick muscle-memory continuation.
