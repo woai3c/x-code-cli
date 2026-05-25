@@ -526,7 +526,18 @@ async function cliSearch(args: string[]): Promise<number> {
   }
   const marketplaces = await readAllCachedMarketplaces()
   if (marketplaces.length === 0) {
-    console.error('No subscribed marketplaces. Add one with `xc plugin marketplace add`.')
+    // Distinguish "you haven't subscribed to any marketplace yet" from
+    // "you're subscribed but the cached index file is missing / unreadable".
+    // The fix is different — one needs `add`, the other needs `refresh`.
+    const km = await readKnownMarketplaces()
+    if (km.marketplaces.length === 0) {
+      console.error('No subscribed marketplaces. Add one with `xc plugin marketplace add`.')
+    } else {
+      const names = km.marketplaces.map((m) => m.name).join(', ')
+      console.error(
+        `No cached marketplace index. You're subscribed to ${names} but the cache is empty — run \`xc plugin marketplace refresh\` to fetch.`,
+      )
+    }
     return 1
   }
   const matches: Array<{ marketplace: string; name: string; description?: string; verified?: boolean }> = []

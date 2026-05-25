@@ -458,7 +458,13 @@ async function main() {
     skillRegistry,
     mcpRegistry: mcpLoadResult.registry,
     mcpPermissionStore,
-    pluginRegistry: pluginLoad.registry,
+    // --no-plugins: leave pluginRegistry undefined so the /plugin slash
+    // commands can render "Plugin system is disabled..." instead of
+    // falling through to the generic empty-state ("No plugins installed").
+    // loadAllPlugins with disabled:true still returns a (non-null) empty
+    // registry, so we have to drop it here at the wire-up site rather
+    // than rely on the load result alone.
+    pluginRegistry: argv.plugins === false ? undefined : pluginLoad.registry,
     commandRegistry,
     // --no-hooks: swap in an empty bus so emit-sites are no-ops without
     // touching the rest of plugin loading (skills / agents / mcp still

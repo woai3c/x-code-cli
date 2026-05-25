@@ -1802,10 +1802,21 @@ export function App({
     }
     const marketplaces = await readAllCachedMarketplaces()
     if (marketplaces.length === 0) {
-      addCommandMessage(
-        text,
-        'No subscribed marketplaces. Add one with `/plugin marketplace add <name> <source>` and `refresh` it.',
-      )
+      // Distinguish "no subscriptions" from "subscribed but no cache" so
+      // the user can tell which fix to apply (add vs refresh).
+      const km = await readKnownMarketplaces()
+      if (km.marketplaces.length === 0) {
+        addCommandMessage(
+          text,
+          'No subscribed marketplaces. Add one with `/plugin marketplace add <name> <source>` and `refresh` it.',
+        )
+      } else {
+        const names = km.marketplaces.map((m) => m.name).join(', ')
+        addCommandMessage(
+          text,
+          `No cached marketplace index. You're subscribed to ${names} but the cache is empty — run \`/plugin marketplace refresh\` to fetch.`,
+        )
+      }
       return
     }
     const matches: Array<{ marketplace: string; name: string; description?: string; verified?: boolean }> = []
