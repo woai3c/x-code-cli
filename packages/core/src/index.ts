@@ -117,7 +117,11 @@ export type {
 } from './plugins/loader.js'
 export { PluginRegistry, emptyPluginRegistry } from './plugins/registry.js'
 export type { PluginReloadSummary } from './plugins/registry.js'
-export { buildPluginIntegration, debugLogIntegrationDiagnostics } from './plugins/integration.js'
+export {
+  buildPluginIntegration,
+  debugLogIntegrationDiagnostics,
+  getPluginMcpServersFromDisk,
+} from './plugins/integration.js'
 export type { PluginIntegrationOutput } from './plugins/integration.js'
 export { refreshPluginContributions } from './plugins/refresh.js'
 export type { PluginRefreshSummary, PluginRefreshTargets } from './plugins/refresh.js'

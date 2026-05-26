@@ -478,6 +478,62 @@ describe('refreshPluginContributions', () => {
     // Existing plugin still loaded.
     expect(skillRegistry.get('hello')).toBeDefined()
   })
+
+  it('restarts MCP servers when an mcpRegistry is wired (plugin install + refresh in one shot)', async () => {
+    const { refreshPluginContributions } = await import('../src/plugins/refresh.js')
+    const { McpRegistry } = await import('../src/mcp/registry.js')
+
+    // Install a plugin that declares an inline mcpServer. We use an
+    // unreachable stdio command so the server fails to connect — that's
+    // fine because we only need to verify that restartAll was called with
+    // the plugin's server in the merged map.
+    const src = await makeTempPlugin({
+      name: 'mcp-bringing-plugin',
+      version: '1.0.0',
+      mcpServers: {
+        'plugin-mcp': { command: 'node', args: ['-e', 'process.exit(0)'] },
+      },
+    })
+    await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
+
+    const initialLoad = await loadAllPlugins({ cwd: process.cwd() })
+    // Build a stub McpRegistry whose restartAll just records what it saw,
+    // so the test doesn't depend on real MCP child processes spawning.
+    const seenConfigs: Array<Map<string, unknown>> = []
+    const stub = Object.create(McpRegistry.prototype)
+    stub.restartAll = async (configs: Map<string, unknown>) => {
+      seenConfigs.push(configs)
+      return { added: [...configs.keys()], removed: [], changed: [], unchanged: [] }
+    }
+
+    const summary = await refreshPluginContributions({
+      pluginRegistry: initialLoad.registry,
+      mcpRegistry: stub,
+      // askUser never actually fires because the test has no project-level
+      // MCP config to trust. Provide a stub that throws if invoked.
+      askUser: async () => {
+        throw new Error('askUser should not be invoked when project mcpServers is empty')
+      },
+    })
+
+    expect(seenConfigs.length).toBe(1)
+    expect(seenConfigs[0]!.has('plugin-mcp')).toBe(true)
+    expect(summary.mcp).toBeDefined()
+    expect(summary.mcp!.added).toContain('plugin-mcp')
+  })
+
+  it('skips MCP restart when mcpRegistry is omitted (backwards-compatible default)', async () => {
+    const { refreshPluginContributions } = await import('../src/plugins/refresh.js')
+
+    const src = await makeTempPlugin({ name: 'no-mcp-pass', version: '1.0.0' })
+    await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
+
+    const initialLoad = await loadAllPlugins({ cwd: process.cwd() })
+    const summary = await refreshPluginContributions({
+      pluginRegistry: initialLoad.registry,
+    })
+    expect(summary.mcp).toBeUndefined()
+  })
 })
 
 /** Spin up a local git repo with one commit and return both its path

@@ -25,7 +25,7 @@ xc plugin list
 xc plugin uninstall linear@anthropic-marketplace
 ```
 
-**在交互式 CLI 里**做完安装/卸载/启用/禁用，跑 `/plugin refresh` 让贡献的 skill / agent / 命令 / hooks 立即生效（无需重启）。MCP server 是例外——`/plugin refresh` 不会重启它们，需要单独 `/mcp refresh` 或重启 xc。
+**在交互式 CLI 里**做完安装/卸载/启用/禁用，跑 `/plugin refresh` 让贡献的 skill / agent / 命令 / hooks / MCP server 全部立即生效（无需重启）。MCP server 重连会触发一次 prompt-cache miss，跟 `/mcp refresh` 同代价；如果只是想单独刷 MCP 配置（没动插件），用 `/mcp refresh` 即可。
 
 ---
 
@@ -188,13 +188,13 @@ xc --no-hooks      # 插件正常加载，但 hooks 全部不执行
 
 ## 改动何时生效 + `/plugin refresh`
 
-插件的贡献（skill / sub-agent / 命令 / hooks）在 CLI 启动时合入对应的 registry。会话期间安装/卸载/启用/禁用之后，可以用 **`/plugin refresh`** 在当前会话即时重新加载所有插件，无需重启：
+插件的贡献（skill / sub-agent / 命令 / hooks / MCP server）在 CLI 启动时合入对应的 registry。会话期间安装/卸载/启用/禁用之后，用 **`/plugin refresh`** 在当前会话一次性重新加载所有内容，无需重启：
 
 ```text
 > /plugin refresh
 Reloaded plugins — added: my-new-plugin@local; unchanged: linear@anthropic-marketplace, code-review@anthropic-marketplace.
 Downstream: 3 skill change(s), 1 command change(s).
-Note: plugin-contributed MCP servers are not restarted — run `/mcp refresh` if needed.
+MCP — added: my-new-mcp-server.
 Note: next message rebuilds the system prompt, so prompt-cache will miss once.
 ```
 
@@ -203,9 +203,10 @@ Note: next message rebuilds the system prompt, so prompt-cache will miss once.
 1. 重扫已安装插件 + 解析 manifest
 2. 重建 PluginRegistry（保留对象身份，所有 captured ref 仍然有效）
 3. 把新的 skill / sub-agent / 命令 / hook 折回各自的 registry
-4. 失效 `systemPromptCache` —— 下一条消息会重建系统 prompt（cache miss 一次，正常）
+4. 重读用户级 + 项目级 MCP 配置，跟新插件贡献的 MCP server 合并后调 `McpRegistry.restartAll(...)`——跟 `/mcp refresh` 走同一条 restart 路径
+5. 失效 `systemPromptCache` —— 下一条消息会重建系统 prompt（cache miss 一次，正常）
 
-**MCP 服务器例外**：plugin 贡献的 MCP server 在第一次启动时就 spawn 了子进程，hot reload 不会重启它们。装/卸有 MCP 的插件后**额外**跑一次 `/mcp refresh`。
+`/mcp refresh` 仍然独立可用：只想刷新 MCP 配置（没动插件）时跑它即可，会带上当前插件的 MCP 贡献一起重连，不会因此丢失它们。
 
 `/plugin list` 与 `/plugin info` 始终展示当前真正在跑的状态。
 

@@ -94,7 +94,15 @@ export async function loadMcpFromDisk(opts: {
  *  servers. Used by `/mcp refresh` so the caller can hand the resulting
  *  merged map to `registry.restartAll(...)` — that mutates the existing
  *  registry in place rather than allocating a parallel one. */
-export async function loadMergedConfigsFromDisk(opts: { cwd: string; askUser: LoadOptions['askUser'] }): Promise<{
+export async function loadMergedConfigsFromDisk(opts: {
+  cwd: string
+  askUser: LoadOptions['askUser']
+  /** Plugin-contributed mcpServers (from `buildPluginIntegration().mcpServers`).
+   *  Merged between user and project, matching the precedence in
+   *  [[loadMcpServers]]. Pass these on `/mcp refresh` and `/plugin refresh`
+   *  so plugin-contributed servers aren't silently dropped during a reload. */
+  extraServers?: Record<string, McpServerConfig>
+}): Promise<{
   configs: Map<string, McpServerConfig>
   configErrors: Array<{ name: string; message: string }>
   projectSkipped: boolean
@@ -142,7 +150,12 @@ export async function loadMergedConfigsFromDisk(opts: { cwd: string; askUser: Lo
     }
   }
 
-  const merged = new Map<string, McpServerConfig>(Object.entries({ ...userParsed.servers, ...projectServersToUse }))
+  // Merge order user → plugin → project, matching the precedence enforced by
+  // loadMcpServers (initial boot). Plugin-contributed entries sit between
+  // user and project so a project-level same-name entry still wins.
+  const merged = new Map<string, McpServerConfig>(
+    Object.entries({ ...userParsed.servers, ...(opts.extraServers ?? {}), ...projectServersToUse }),
+  )
   return { configs: merged, configErrors, projectSkipped }
 }
 

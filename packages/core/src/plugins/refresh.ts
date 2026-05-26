@@ -6,21 +6,25 @@
 //
 // Why this is its own module and not a method on PluginRegistry:
 // reloading the plugin registry itself is one line — the work is folding
-// the new contributions into the FOUR sub-registries the rest of the
-// agent loop captured at startup (skill / sub-agent / command / hook).
-// Each captured reference must stay stable, so each registry exposes a
-// reload-in-place method instead of returning a new instance.
+// the new contributions into the FIVE sub-registries the rest of the
+// agent loop captured at startup (skill / sub-agent / command / hook /
+// mcp). Each captured reference must stay stable, so each registry
+// exposes a reload-in-place method instead of returning a new instance.
 //
-// Not handled here: MCP servers. Plugin-contributed MCP servers spawn
-// child processes at startup; restarting them mid-session needs the
-// MCP-specific orchestration that already lives behind `/mcp refresh`.
-// The user can run that separately if they need MCP changes to land.
+// MCP servers are restarted here when the caller wires an mcpRegistry +
+// askUser callback (needed by the trust-gate check for project servers).
+// Plugin-contributed MCP servers are merged with user + project servers
+// and the whole set goes through `McpRegistry.restartAll(...)` — the same
+// path `/mcp refresh` uses. Callers that don't wire an mcpRegistry get
+// the pre-existing behaviour (only skill/agent/command/hook reload).
 import { reloadSubAgentRegistry } from '../agent/sub-agents/registry.js'
 import type { SubAgentRegistry, SubAgentReloadSummary } from '../agent/sub-agents/registry.js'
 import { reloadCommandRegistry } from '../commands/registry.js'
 import type { CommandRegistry, CommandReloadSummary } from '../commands/registry.js'
 import type { HookBus } from '../hooks/bus.js'
 import type { HookRegistry } from '../hooks/registry.js'
+import { type LoadOptions, loadMergedConfigsFromDisk } from '../mcp/loader.js'
+import type { McpRegistry, RestartSummary } from '../mcp/registry.js'
 import { reloadSkillRegistry } from '../skills/registry.js'
 import type { SkillRegistry, SkillReloadSummary } from '../skills/registry.js'
 import { buildPluginIntegration } from './integration.js'
@@ -42,6 +46,16 @@ export interface PluginRefreshSummary {
    *  don't have a stable identity (no name field); the count alone is
    *  enough to confirm "hooks reloaded". */
   hookCount: number
+  /** MCP restart summary when an mcpRegistry was wired. `undefined` when
+   *  the caller didn't pass one (tests / `--no-plugins` reload paths). */
+  mcp?: RestartSummary
+  /** Trust-gate decisions for project MCP servers, if any were skipped
+   *  during the merged-config load. Surfaced so the UI can warn the user. */
+  mcpProjectSkipped?: boolean
+  /** Per-server MCP config parse errors during the merged-config load.
+   *  These don't abort the refresh; they're shown alongside the summary
+   *  so the user knows which server entry was ignored. */
+  mcpConfigErrors?: Array<{ name: string; message: string }>
 }
 
 export interface PluginRefreshTargets {
@@ -52,6 +66,14 @@ export interface PluginRefreshTargets {
   subAgentRegistry?: SubAgentRegistry
   commandRegistry?: CommandRegistry
   hookBus?: HookBus
+  /** MCP registry to restart with the new merged config (user + plugin +
+   *  project). When set, `askUser` must also be supplied for the
+   *  project-trust gate; when omitted, MCP is left untouched (matches
+   *  the pre-existing behaviour). */
+  mcpRegistry?: McpRegistry
+  /** Required when `mcpRegistry` is set — used by the trust dialog inside
+   *  loadMergedConfigsFromDisk for new project-level MCP servers. */
+  askUser?: LoadOptions['askUser']
   /** cwd defaults to process.cwd(); overridable for tests. */
   cwd?: string
 }
@@ -93,6 +115,23 @@ export async function refreshPluginContributions(targets: PluginRefreshTargets):
     // Count by summing entry counts across the new registry's events.
     // Used for the user message — exact diff isn't worth the complexity.
     out.hookCount = countHooks(integration.hookRegistry)
+  }
+
+  // 5. MCP restart — only when both mcpRegistry AND askUser are wired.
+  //    Re-reads user + project config files from disk and merges in the
+  //    fresh plugin-contributed extraServers, then tears down + reconnects
+  //    the whole MCP set. Same code path as /mcp refresh. Doing this
+  //    inside /plugin refresh means installing a plugin with an MCP
+  //    server takes effect in one command instead of two.
+  if (targets.mcpRegistry && targets.askUser) {
+    const merged = await loadMergedConfigsFromDisk({
+      cwd,
+      askUser: targets.askUser,
+      extraServers: integration.mcpServers,
+    })
+    out.mcpProjectSkipped = merged.projectSkipped
+    out.mcpConfigErrors = merged.configErrors
+    out.mcp = await targets.mcpRegistry.restartAll(merged.configs)
   }
 
   return out

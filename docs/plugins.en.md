@@ -30,9 +30,11 @@ xc plugin uninstall linear@anthropic-marketplace
 
 **Inside an interactive CLI session**, after install / uninstall /
 enable / disable, run `/plugin refresh` to apply the new
-contributions (skills / agents / commands / hooks) immediately — no
-restart needed. MCP servers are the exception: `/plugin refresh`
-does not restart them, run `/mcp refresh` separately or restart xc.
+contributions (skills / agents / commands / hooks / MCP servers)
+in one shot — no restart needed. MCP servers reconnect as part of the
+same pass and incur the same prompt-cache miss `/mcp refresh` does.
+If you only want to reload MCP config without touching plugins, run
+`/mcp refresh` on its own.
 
 ---
 
@@ -219,16 +221,17 @@ active but mutes lifecycle hooks for a session.
 
 ## When changes take effect — `/plugin refresh`
 
-Plugin contributions (skills / sub-agents / commands / hooks) are folded
-into their respective registries at CLI startup. After installing,
-uninstalling, enabling, or disabling a plugin mid-session, run
-**`/plugin refresh`** to reload everything live without restarting:
+Plugin contributions (skills / sub-agents / commands / hooks / MCP
+servers) are folded into their respective registries at CLI startup.
+After installing, uninstalling, enabling, or disabling a plugin
+mid-session, run **`/plugin refresh`** to reload everything live
+without restarting:
 
 ```text
 > /plugin refresh
 Reloaded plugins — added: my-new-plugin@local; unchanged: linear@anthropic-marketplace.
 Downstream: 3 skill change(s), 1 command change(s).
-Note: plugin-contributed MCP servers are not restarted — run `/mcp refresh` if needed.
+MCP — added: my-new-mcp-server.
 Note: next message rebuilds the system prompt, so prompt-cache will miss once.
 ```
 
@@ -237,11 +240,13 @@ What happens internally:
 1. Re-scan installed plugins, re-parse every manifest.
 2. Rebuild PluginRegistry in place (object identity stays — every captured ref is still valid).
 3. Fold new skills / sub-agents / commands / hooks into their registries.
-4. Invalidate `systemPromptCache` so the next message rebuilds the prompt (one cache miss, expected).
+4. Re-read user + project MCP config files, merge in the new plugin-contributed servers, then `McpRegistry.restartAll(...)` — same restart path `/mcp refresh` uses.
+5. Invalidate `systemPromptCache` so the next message rebuilds the prompt (one cache miss, expected).
 
-**MCP exception**: plugin-contributed MCP servers spawned a child process
-at first launch — hot reload does not restart them. After installing or
-removing a plugin with MCP, follow up with `/mcp refresh`.
+`/mcp refresh` still works standalone: when you only want to reload
+MCP config without touching plugins, run it directly — it now also
+includes the current plugin-contributed servers in the merged map, so
+they aren't silently dropped on reload.
 
 `/plugin list` and `/plugin info` always reflect the live state.
 

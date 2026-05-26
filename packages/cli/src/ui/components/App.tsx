@@ -21,6 +21,7 @@ import {
   getAvailableProviders,
   getContextWindow,
   getMcpConfigPath,
+  getPluginMcpServersFromDisk,
   getScopedDisabledSkills,
   getTokenStorage,
   installPlugin,
@@ -176,7 +177,7 @@ export const SLASH_COMMANDS = [
       { name: 'disable', description: 'Disable a plugin without uninstalling (--scope=user|project)' },
       { name: 'search', description: 'Search subscribed marketplaces by keyword' },
       { name: 'update', description: 'Reinstall a plugin from its recorded source' },
-      { name: 'refresh', description: 'Live-reload plugins + skills/agents/commands/hooks (MCP needs /mcp refresh)' },
+      { name: 'refresh', description: 'Live-reload plugins + skills/agents/commands/hooks/MCP servers' },
       { name: 'doctor', description: 'Show plugin load errors and integration warnings' },
       { name: 'marketplace', description: 'Manage marketplace subscriptions (add | remove | list | refresh | info)' },
     ],
@@ -1496,14 +1497,15 @@ export function App({
   // refresh / info).
   //
   // A note on `/plugin refresh`: plugin contributions (skills / agents /
-  // commands / hooks) get folded into their respective long-lived
-  // registries at startup. `/plugin refresh` re-scans installed plugins
-  // and folds the new state into those same registry instances in
-  // place — that's why `/plugin install|enable|disable` slash messages
-  // tell the user to run it. MCP servers are the one exception: their
-  // child-process lifecycle is owned by `/mcp refresh`. The metadata
-  // view (`/plugin list`, `/plugin info`) reflects in-memory state, so
-  // it's accurate the moment refresh completes.
+  // commands / hooks / MCP servers) get folded into their respective
+  // long-lived registries at startup. `/plugin refresh` re-scans
+  // installed plugins and folds the new state into those same registry
+  // instances in place — that's why `/plugin install|enable|disable`
+  // slash messages tell the user to run it. MCP servers are restarted
+  // in the same pass via the shared restart path with `/mcp refresh`,
+  // so a single command takes effect for all five contribution types.
+  // The metadata view (`/plugin list`, `/plugin info`) reflects
+  // in-memory state, so it's accurate the moment refresh completes.
 
   function formatPluginSource(s: PluginSource | undefined): string {
     if (!s) return '(unknown)'
@@ -1949,6 +1951,12 @@ export function App({
         subAgentRegistry: options.subAgentRegistry,
         commandRegistry: options.commandRegistry,
         hookBus: options.hookBus,
+        // Pass mcpRegistry + askUser so plugin-contributed MCP servers
+        // are restarted in the same refresh pass — installing a plugin
+        // with an MCP server should take effect in one /plugin refresh,
+        // not require a follow-up /mcp refresh.
+        mcpRegistry: options.mcpRegistry,
+        askUser: (q, opts) => askQuestion(q, opts, { noOther: true }),
         cwd: process.cwd(),
       })
     } catch (err) {
@@ -1979,11 +1987,23 @@ export function App({
     if (summary.commands && (summary.commands.added.length || summary.commands.removed.length))
       subBits.push(`${summary.commands.added.length + summary.commands.removed.length} command change(s)`)
     if (subBits.length) lines.push(`Downstream: ${subBits.join(', ')}.`)
-    // Plugin-contributed MCP servers aren't restarted here — that needs
-    // /mcp refresh. Mention it only when this refresh actually touched
-    // a plugin that contributes MCP so the user knows to follow up.
-    if (p.added.length || p.removed.length) {
-      lines.push('Note: plugin-contributed MCP servers are not restarted — run `/mcp refresh` if needed.')
+    // MCP restart summary — same shape as /mcp refresh's output. Only
+    // shown when this refresh actually moved an MCP server (in / out /
+    // changed); the "all unchanged" case is silent to keep noise down.
+    if (summary.mcp) {
+      const m = summary.mcp
+      const mcpBits: string[] = []
+      if (m.added.length) mcpBits.push(`added: ${m.added.join(', ')}`)
+      if (m.removed.length) mcpBits.push(`removed: ${m.removed.join(', ')}`)
+      if (m.changed.length) mcpBits.push(`changed: ${m.changed.join(', ')}`)
+      if (mcpBits.length) lines.push(`MCP — ${mcpBits.join('; ')}.`)
+      else if (m.unchanged.length) lines.push(`MCP — ${m.unchanged.length} server(s) reconnected.`)
+    }
+    if (summary.mcpProjectSkipped) {
+      lines.push('Note: project-level MCP servers were skipped (trust dialog declined).')
+    }
+    for (const e of summary.mcpConfigErrors ?? []) {
+      lines.push(`MCP config error: ${e.name}: ${e.message}`)
     }
     lines.push('Note: next message rebuilds the system prompt, so prompt-cache will miss once.')
     addCommandMessage(text, lines.join('\n'))
@@ -2267,9 +2287,17 @@ export function App({
         }
         addCommandMessage(text, 'Re-reading MCP config and reconnecting servers...')
         try {
+          // Include plugin-contributed mcpServers in the merged map. Without
+          // this, a `/mcp refresh` run after a plugin install would silently
+          // drop every plugin-contributed server because the merged map only
+          // had user + project entries. The helper degrades to `{}` on any
+          // plugin-scan failure (logged to debug.log) so an MCP-only refresh
+          // doesn't fail because of an unrelated plugin-system hiccup.
+          const extraServers = options.pluginRegistry ? await getPluginMcpServersFromDisk(process.cwd()) : undefined
           const { configs, configErrors, projectSkipped } = await loadMergedConfigsFromDisk({
             cwd: process.cwd(),
             askUser: (q, opts) => askQuestion(q, opts, { noOther: true }),
+            extraServers,
           })
           const summary = await registry.restartAll(configs)
           // Invalidate prompt cache: the tool surface almost certainly

@@ -42,6 +42,7 @@ import { parseServersBlock } from '../mcp/config-schema.js'
 import { isStdioConfig } from '../mcp/types.js'
 import type { McpServerConfig } from '../mcp/types.js'
 import { debugLog } from '../utils.js'
+import { loadAllPlugins } from './loader.js'
 import type { LoadResult, ResolvedContributions } from './loader.js'
 import type { InlineMcpServers, LoadedPlugin } from './types.js'
 import { getPluginUserConfigEnv } from './user-config.js'
@@ -245,7 +246,26 @@ export function debugLogIntegrationDiagnostics(integration: PluginIntegrationOut
   }
 }
 
+/** Re-scan plugins from disk and return just the merged plugin-contributed
+ *  mcpServers block. Used by `/mcp refresh` to include plugin servers in
+ *  the merged map (so they aren't silently dropped on standalone MCP
+ *  refresh) and by `/plugin refresh` indirectly via buildPluginIntegration.
+ *
+ *  Returns `{}` (not undefined) so callers can spread it unconditionally.
+ *  Scan failures degrade to `{}` + debug log — callers shouldn't have an
+ *  MCP-only refresh fail because of a plugin-system hiccup. */
+export async function getPluginMcpServersFromDisk(cwd: string): Promise<Record<string, McpServerConfig>> {
+  try {
+    const load = await loadAllPlugins({ cwd })
+    const integration = await buildPluginIntegration(load)
+    return integration.mcpServers
+  } catch (err) {
+    debugLog('plugins.mcp-scan-failed', `getPluginMcpServersFromDisk: ${String(err)}`)
+    return {}
+  }
+}
+
 // Re-export commonly used pieces so a single import from this module is
 // enough for typical CLI startup wiring.
 export type { LoadResult, ResolvedContributions } from './loader.js'
-export { loadAllPlugins } from './loader.js'
+export { loadAllPlugins }
