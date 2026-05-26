@@ -74,8 +74,11 @@ export const RESERVED_MARKETPLACE_NAMES: Readonly<Record<string, string>> = {
  *  no context was provided (HTTPS-fetched marketplaces can't host
  *  relative-path plugins for obvious reasons).
  *
- *  The `sha` field from `git-subdir` / `url` is intentionally dropped
- *  today — we don't yet verify integrity. Reserved for a follow-up. */
+ *  The `sha` field from `git-subdir` / `url` / `github` is captured into
+ *  `PluginSource.expectedSha` (7-40 hex, format-validated below) and used
+ *  by the installer's post-clone `git rev-parse HEAD` integrity check —
+ *  see installer.ts's `fetchToTemp` sha check. Non-hex / malformed values
+ *  are silently dropped so a typo doesn't masquerade as a real mismatch. */
 export function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceCloneUrl?: string } = {}): PluginSource {
   if (typeof raw === 'string') {
     if (raw.startsWith('./') || raw.startsWith('../')) {
