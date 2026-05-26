@@ -18,16 +18,21 @@
 //   installed_plugins.json           — bookkeeping of installed plugins
 import path from 'node:path'
 
-import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { XCODE_DIR, userXcodeDir } from '../utils.js'
 
 const PLUGINS_DIR_NAME = 'plugins'
 
-/** Root of the plugin subsystem. Override via `XC_PLUGINS_DIR` (used by
- *  tests; works the same way as `XC_AGENTS_DIR` / `XC_SKILLS_DIR`). */
+/** Root of the plugin subsystem. Two override knobs, checked in order:
+ *  - `XC_PLUGINS_DIR` — plugin-specific override (parallels
+ *    `XC_AGENTS_DIR` / `XC_SKILLS_DIR`; preferred when tests want to
+ *    isolate JUST plugins without redirecting MCP / config / OAuth).
+ *  - `X_CODE_HOME` — broad override of the whole `~/.x-code/` root
+ *    (resolved via {@link userXcodeDir}). Reroutes plugins along with
+ *    config, MCP state, etc. */
 export function pluginsRoot(): string {
   const override = process.env.XC_PLUGINS_DIR
   if (override) return override
-  return path.join(USER_XCODE_DIR, PLUGINS_DIR_NAME)
+  return path.join(userXcodeDir(), PLUGINS_DIR_NAME)
 }
 
 /** ~/.x-code/plugins/known_marketplaces.json */

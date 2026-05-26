@@ -16,14 +16,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { USER_XCODE_DIR, debugLog } from '../utils.js'
+import { debugLog, userXcodeDir } from '../utils.js'
 
-/** Resolved at call time so tests can redirect via X_CODE_HOME. */
-function xcodeHome(): string {
-  return process.env.X_CODE_HOME ?? USER_XCODE_DIR
-}
 function permissionsFile(): string {
-  return path.join(xcodeHome(), 'mcp-permissions.json')
+  return path.join(userXcodeDir(), 'mcp-permissions.json')
 }
 
 interface StoreShape {
@@ -83,7 +79,7 @@ export class McpPermissionStore {
 
   private async writePersisted(): Promise<void> {
     if (!this.persisted) return
-    await fs.mkdir(xcodeHome(), { recursive: true })
+    await fs.mkdir(userXcodeDir(), { recursive: true })
     const tmp = permissionsFile() + '.tmp'
     const payload: StoreShape = { alwaysAllow: [...this.persisted].sort() }
     // 0600 — readable only by the user. Same posture as mcp-auth.json

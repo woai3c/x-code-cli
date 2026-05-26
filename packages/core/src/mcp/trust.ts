@@ -14,16 +14,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { USER_XCODE_DIR } from '../utils.js'
+import { userXcodeDir } from '../utils.js'
 
-/** Resolve `~/.x-code` (or its X_CODE_HOME override) at call time.
- *  USER_XCODE_DIR is fixed at module load, but tests redirect via
- *  the env var — same pattern config/index.ts uses for userConfigPath. */
-function xcodeHome(): string {
-  return process.env.X_CODE_HOME ?? USER_XCODE_DIR
-}
 function trustedFile(): string {
-  return path.join(xcodeHome(), 'trusted-projects.json')
+  return path.join(userXcodeDir(), 'trusted-projects.json')
 }
 
 interface TrustedEntry {
@@ -57,7 +51,7 @@ async function readStore(): Promise<TrustedStore> {
 }
 
 async function writeStore(store: TrustedStore): Promise<void> {
-  await fs.mkdir(xcodeHome(), { recursive: true })
+  await fs.mkdir(userXcodeDir(), { recursive: true })
   // Atomic write: tmp + rename. Avoids a half-written file if the process
   // is killed mid-write (the trust file is small but the principle holds —
   // we never want a corrupted JSON to lock the user out of MCP).

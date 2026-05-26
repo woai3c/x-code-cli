@@ -7,8 +7,18 @@ import path from 'node:path'
 /** Project-local config directory name */
 export const XCODE_DIR = '.x-code'
 
-/** User-scope config directory (~/.x-code) */
+/** User-scope config directory (~/.x-code). Frozen at module load — use
+ *  {@link userXcodeDir} when you want the `X_CODE_HOME` override applied. */
 export const USER_XCODE_DIR = path.join(os.homedir(), '.x-code')
+
+/** Resolve the user-scope config root at CALL TIME, honouring `X_CODE_HOME`.
+ *  Use this in path helpers across the codebase so a single env var can
+ *  reroute everything that lives under `~/.x-code/` for sandbox testing
+ *  or per-user isolation. Falling back to the frozen {@link USER_XCODE_DIR}
+ *  keeps the normal case allocation-free. */
+export function userXcodeDir(): string {
+  return process.env.X_CODE_HOME ?? USER_XCODE_DIR
+}
 
 // ── Debug log (shared by core + cli) ────────────────────────────────────
 // Turn on with `DEBUG_STDOUT=1`. Writes to ~/.x-code/logs/debug.log so a

@@ -22,7 +22,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { XCODE_DIR, userXcodeDir } from '../utils.js'
 import type { PluginScope } from './types.js'
 
 /** Highest precedence first. The first scope with an explicit entry wins. */
@@ -38,7 +38,7 @@ interface PluginSettingsFile {
 }
 
 export function settingsPathForScope(scope: PluginScope, cwd: string = process.cwd()): string {
-  if (scope === 'user') return path.join(USER_XCODE_DIR, 'settings.json')
+  if (scope === 'user') return path.join(userXcodeDir(), 'settings.json')
   return path.join(cwd, XCODE_DIR, 'settings.local.json')
 }
 
