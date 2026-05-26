@@ -5,7 +5,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { buildConsentPreview } from '../src/plugins/consent.js'
+import { buildConsentPreview, probePluginRoot } from '../src/plugins/consent.js'
 import { installPlugin } from '../src/plugins/installer.js'
 import { ensureDefaultMarketplaces, readKnownMarketplaces } from '../src/plugins/marketplace.js'
 
@@ -58,6 +58,62 @@ describe('buildConsentPreview', () => {
     })
     expect(preview.inlineMcpServerNames.sort()).toEqual(['gh', 'lin'])
     expect(preview.hasPathMcpServers).toBe(false)
+  })
+
+  it('surfaces auto-discovered root .mcp.json (flat shape) via rootProbe', async () => {
+    // Reproduce the linear@anthropic-marketplace layout: manifest with
+    // only metadata + a flat .mcp.json at root (no `mcpServers` wrapper).
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-consent-probe-flat-'))
+    await fs.writeFile(
+      path.join(root, '.mcp.json'),
+      JSON.stringify({ linear: { type: 'http', url: 'https://mcp.linear.app/mcp' } }),
+    )
+    const rootProbe = await probePluginRoot(root)
+
+    const preview = buildConsentPreview({
+      pluginId: 'linear@anthropic-marketplace',
+      marketplace: 'anthropic-marketplace',
+      source: { kind: 'local', path: root },
+      manifest: { schemaVersion: '1', name: 'linear', version: '0.0.0' },
+      rootProbe,
+    })
+    expect(preview.inlineMcpServerNames).toEqual(['linear'])
+    expect(preview.hasPathMcpServers).toBe(true)
+  })
+
+  it('surfaces auto-discovered root .mcp.json (wrapped shape) via rootProbe', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-consent-probe-wrapped-'))
+    await fs.writeFile(path.join(root, '.mcp.json'), JSON.stringify({ mcpServers: { gh: { command: 'gh-mcp' } } }))
+    const rootProbe = await probePluginRoot(root)
+
+    const preview = buildConsentPreview({
+      pluginId: 'gh@local',
+      marketplace: 'local',
+      source: { kind: 'local', path: root },
+      manifest: { schemaVersion: '1', name: 'gh', version: '1.0.0' },
+      rootProbe,
+    })
+    expect(preview.inlineMcpServerNames).toEqual(['gh'])
+    expect(preview.hasPathMcpServers).toBe(true)
+  })
+
+  it('surfaces auto-discovered skills/agents/commands dirs via rootProbe', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-consent-probe-dirs-'))
+    await fs.mkdir(path.join(root, 'skills'))
+    await fs.mkdir(path.join(root, 'agents'))
+    await fs.mkdir(path.join(root, 'commands'))
+    const rootProbe = await probePluginRoot(root)
+
+    const preview = buildConsentPreview({
+      pluginId: 'demo@local',
+      marketplace: 'local',
+      source: { kind: 'local', path: root },
+      manifest: { schemaVersion: '1', name: 'demo', version: '1.0.0' },
+      rootProbe,
+    })
+    expect(preview.hasSkillsDir).toBe(true)
+    expect(preview.hasAgentsDir).toBe(true)
+    expect(preview.hasCommandsDir).toBe(true)
   })
 })
 

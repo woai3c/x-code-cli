@@ -133,8 +133,8 @@ export {
   InstallError,
 } from './plugins/installer.js'
 export type { InstallRequest, InstallResult, UninstallResult } from './plugins/installer.js'
-export { buildConsentPreview } from './plugins/consent.js'
-export type { ConsentPreview, BuildPreviewInput } from './plugins/consent.js'
+export { buildConsentPreview, probePluginRoot } from './plugins/consent.js'
+export type { ConsentPreview, BuildPreviewInput, RootProbe } from './plugins/consent.js'
 export {
   getPluginUserConfig,
   setPluginUserConfig,

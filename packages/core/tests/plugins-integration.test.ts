@@ -127,6 +127,25 @@ describe('buildPluginIntegration', () => {
     expect((out.mcpServers.gh as { command?: string }).command).toBe('gh-mcp')
   })
 
+  it("accepts a flat `.mcp.json` (no `mcpServers` wrapper) — Claude Code's official plugin shape", async () => {
+    // linear@anthropic-marketplace ships .mcp.json as a flat `name → cfg`
+    // map without a `mcpServers` wrapper. We used to silently drop it.
+    const src = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-int-plugin-flat-mcp-'))
+    await writeFileAt(path.join(src, 'plugin.json'), JSON.stringify({ name: 'linearish', version: '1.0.0' }))
+    await writeFileAt(
+      path.join(src, '.mcp.json'),
+      JSON.stringify({ linear: { type: 'http', url: 'https://mcp.linear.app/mcp' } }),
+    )
+    await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
+
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-int-cwd-'))
+    const out = await buildPluginIntegration(await loadAllPlugins({ cwd }))
+
+    expect(out.mcpErrors).toEqual([])
+    expect(out.mcpServers.linear).toBeDefined()
+    expect((out.mcpServers.linear as { url?: string }).url).toBe('https://mcp.linear.app/mcp')
+  })
+
   it('resolves mcpServers name collisions first-wins + records the loser', async () => {
     // Two plugins both contribute a server named "gh"
     const srcA = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-int-plugin-srcA-'))

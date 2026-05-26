@@ -169,6 +169,25 @@ async function resolvePluginHooks(
   }
 }
 
+/** Extract the `name → cfg` block from the contents of a `.mcp.json`
+ *  file. Two shapes are accepted:
+ *
+ *    - Wrapped:  `{ "mcpServers": { "name": cfg, ... } }`
+ *    - Flat:     `{ "name": cfg, ... }`  (no wrapper key)
+ *
+ *  Claude Code's official plugins (e.g. linear@anthropic-marketplace)
+ *  ship the flat form; the wrapped form matches our own config.json
+ *  layout. The detection rule is: if the parsed object has a
+ *  `mcpServers` key at all, treat it as wrapped (and pass through the
+ *  value as-is so the schema parser produces a clean error on
+ *  misshape). Otherwise treat the whole object as the flat block. */
+export function extractMcpServersBlock(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  const obj = parsed as Record<string, unknown>
+  if ('mcpServers' in obj) return obj.mcpServers
+  return obj
+}
+
 async function resolvePluginMcpServers(
   plugin: LoadedPlugin,
   contrib: NonNullable<ResolvedContributions['mcpServers']>,
@@ -180,12 +199,8 @@ async function resolvePluginMcpServers(
   } else {
     try {
       const raw = await fs.readFile(contrib.path, 'utf-8')
-      const parsed = JSON.parse(raw) as { mcpServers?: unknown }
-      if (parsed && typeof parsed === 'object' && parsed.mcpServers) {
-        rawBlock = parsed.mcpServers
-      } else {
-        rawBlock = {}
-      }
+      const parsed = JSON.parse(raw)
+      rawBlock = extractMcpServersBlock(parsed)
     } catch (err) {
       out.mcpErrors.push({
         pluginId: plugin.id,

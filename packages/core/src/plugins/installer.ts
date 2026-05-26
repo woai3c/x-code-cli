@@ -32,7 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { debugLog } from '../utils.js'
-import { type ConsentPreview, buildConsentPreview } from './consent.js'
+import { type ConsentPreview, buildConsentPreview, probePluginRoot } from './consent.js'
 import { ManifestParseError, discoverManifest, parseManifest } from './manifest.js'
 import { RESERVED_MARKETPLACE_NAMES, readKnownMarketplaces, resolveCloneUrl } from './marketplace.js'
 import { installedPluginsPath, pluginCacheDir, pluginCacheParent } from './paths.js'
@@ -170,6 +170,7 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
     // absent) is intentional for non-interactive paths — the CLI
     // implements `--yes` by simply not passing `consent`.
     if (req.consent) {
+      const rootProbe = await probePluginRoot(tempDir)
       const preview = buildConsentPreview({
         pluginId: `${manifest.name}@${req.marketplace}`,
         manifest,
@@ -177,6 +178,7 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
         marketplace: req.marketplace,
         verified: req.verified,
         fromReservedMarketplace: req.marketplace in RESERVED_MARKETPLACE_NAMES,
+        rootProbe,
       })
       const accepted = await req.consent(preview)
       if (!accepted) {
