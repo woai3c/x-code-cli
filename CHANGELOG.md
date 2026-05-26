@@ -1,3 +1,34 @@
+## v0.3.0 (2026-05-26)
+
+### Features
+
+- /plugin refresh now restarts MCP servers in the same pass (80dfdbb)
+- enforce marketplace `sha` integrity pin on git installs (9da04f6)
+- bulk update via `--all`; fix stale consent preview note (52774fc)
+- plugin / marketplace / hooks system + bilingual docs (#13) (b310640)
+- inject base directory + bundled file list on activation (2e7aa69)
+- add skill support system (#12) (f605eb9)
+- two-stage slash-command completion with argument hints (efdfe56)
+- Model Context Protocol (MCP) client support (#11) (c7cffec)
+
+### Bug Fixes
+
+- cap grow-path LF scroll to real content rows above frame (2079723)
+- accept flat .mcp.json and probe root for consent preview (8e11893)
+- honor X_CODE_HOME for plugin paths and user-scope settings (da4f227)
+- harden MCP env passthrough and plugin symlink copy (b947744)
+- rename /skill remove to /skill uninstall (372414b)
+- /skill disable slash menu hint points at refresh, not restart (469ae5a)
+- fire SessionStart at CLI launch; add hook exec-ran log; dedupe userConfig label (10c1e8b)
+- drop blank line between header and rows in slash command lists (ca17c6a)
+- rotate-failure log counter sentinel; truncateForLog cuts bytes not chars (2338b95)
+- --no-plugins drops pluginRegistry; better empty-cache search error (bc9e6f5)
+- refresh-not-restart hints; slash arg parsing; cwd hint; document slash limitations (75c2b86)
+- consistent marketplace alias; seed defaults on subcommands; broader blockedPlugins (c7264f5)
+- tighten /mcp refresh and /mcp auth output blocks (f748d70)
+- align MCP tool permission dialog with shell/edit dialogs (3d1b6d0)
+- resolve package version at runtime instead of hardcoding (7a45cb0)
+
 ## v0.2.10 (2026-05-16)
 
 ### Bug Fixes
