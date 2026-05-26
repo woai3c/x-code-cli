@@ -22,6 +22,7 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 
 import { debugLog } from '../utils.js'
 import { McpClient } from './client.js'
+import { UnsafeEnvError, assertSafeEnv } from './env-safety.js'
 import { EnvExpansionError, expandEnvDeep } from './expand-env.js'
 import { buildCallableName } from './name-mangling.js'
 import {
@@ -31,6 +32,7 @@ import {
   type McpServerStatus,
   type McpToolEntry,
   isHttpConfig,
+  isStdioConfig,
 } from './types.js'
 
 /** Build an OAuth provider for one HTTP server. Stdio servers get
@@ -389,12 +391,22 @@ export async function connectOneServer(
     }
   }
 
-  // Expand ${VAR} references before constructing the client.
+  // Expand ${VAR} references before constructing the client. Then enforce
+  // the env safety check on stdio configs — this is the single chokepoint
+  // every env source (CLI flag, mcp.json, plugin manifest) flows through,
+  // so rejecting a bad key here covers them all. See env-safety.ts for the
+  // threat model.
   let expanded: McpServerConfig
   try {
     expanded = expandEnvDeep(rawConfig)
+    if (isStdioConfig(expanded)) assertSafeEnv(expanded.env)
   } catch (err) {
-    const msg = err instanceof EnvExpansionError ? err.message : err instanceof Error ? err.message : String(err)
+    const msg =
+      err instanceof EnvExpansionError || err instanceof UnsafeEnvError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err)
     const client = new McpClient(name, rawConfig)
     return {
       server: { name, client, status: { kind: 'failed', error: msg } },

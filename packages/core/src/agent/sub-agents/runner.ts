@@ -285,8 +285,11 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     )
 
     if (turnCount >= agentDef.maxTurns && !finalText) {
+      // finalText is guaranteed empty here (the !finalText branch) and the
+      // messages array hasn't been mutated since line 246's call, so the
+      // partial-output value can only ever be 'none' on this path.
       return {
-        resultText: `[Sub-agent reached max turns (${agentDef.maxTurns}) without finishing. Partial output: ${extractFinalText(finalSubState.messages) || 'none'}]`,
+        resultText: `[Sub-agent reached max turns (${agentDef.maxTurns}) without finishing. Partial output: none]`,
         tokenUsage: finalSubState.tokenUsage,
         turnCount,
         toolCallCount: toolUseCount,

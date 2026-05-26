@@ -361,7 +361,11 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
  *  plugin genuinely needs node_modules we'll revisit. */
 const COPY_SKIP = new Set(['.git', 'node_modules', '.DS_Store', 'Thumbs.db'])
 
-async function copyDirFiltered(src: string, dst: string, signal?: AbortSignal): Promise<void> {
+async function copyDirFiltered(src: string, dst: string, signal?: AbortSignal, root?: string): Promise<void> {
+  // `root` is captured on the first (non-recursive) call so the symlink
+  // escape check below validates against the original plugin source, not
+  // the current recursion's `src` (which moves with each subdir).
+  const rootDir = root ?? src
   await fs.mkdir(dst, { recursive: true })
   const entries = await fs.readdir(src, { withFileTypes: true })
   for (const entry of entries) {
@@ -370,11 +374,25 @@ async function copyDirFiltered(src: string, dst: string, signal?: AbortSignal): 
     const s = path.join(src, entry.name)
     const d = path.join(dst, entry.name)
     if (entry.isDirectory()) {
-      await copyDirFiltered(s, d, signal)
+      await copyDirFiltered(s, d, signal, rootDir)
     } else if (entry.isFile()) {
       await fs.copyFile(s, d)
     } else if (entry.isSymbolicLink()) {
+      // Resolve the symlink target relative to its containing directory.
+      // If the resolved target escapes the plugin source root, drop the
+      // symlink rather than preserve it: on POSIX a `evil -> /etc/passwd`
+      // in the plugin tree would put a host-file pointer in the cache for
+      // loader / hooks to deref at runtime; on Windows the fallback below
+      // would copy `/etc/passwd`-equivalents straight into the cache.
+      // We don't follow the symlink to validate that the target exists —
+      // a broken-but-in-bounds symlink is still safe to preserve.
       const target = await fs.readlink(s)
+      const resolved = path.resolve(path.dirname(s), target)
+      const rel = path.relative(rootDir, resolved)
+      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+        debugLog('plugins.copy-symlink-escape', `${s} -> ${target} (resolved ${resolved}, outside ${rootDir})`)
+        continue
+      }
       try {
         await fs.symlink(target, d)
       } catch {
