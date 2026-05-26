@@ -2675,13 +2675,31 @@ export function ChatInput({
         // to be scrolled into history.
         const fromBlankAbove = Math.min(deltaH - absorbed, pendingBlankRowsAbove)
         pendingBlankRowsAbove -= fromBlankAbove
-        const needsScroll = deltaH - absorbed - fromBlankAbove
+        const rawNeedsScroll = deltaH - absorbed - fromBlankAbove
+        // Cap LF count to the rows of REAL CONTENT actually sitting above
+        // the old frame. Without this cap, the slash menu's grow path
+        // (e.g. nextH=22 in an 18-row terminal) would emit `deltaH - absorbed`
+        // LFs at the bottom edge — but every LF beyond `oldTop - 1` is
+        // scrolling a phantom row (frame extends upward off-screen) and
+        // each phantom scroll pushes a BLANK row into terminal scrollback,
+        // leaving visible empty lines between each /command's output.
+        // The frame is allowed to clip at the top of the viewport (the
+        // computeFrameTop floor is row 1); we don't need to "make room"
+        // for the off-screen portion.
+        //
+        // We further subtract `blankRowsAboveFrameRef.current` because
+        // those rows are blank already (a prior shrink left them) and
+        // `fromBlankAbove` only consumed up to `deltaH - absorbed` of
+        // them; any leftover blank rows above the frame would otherwise
+        // be counted as "real content" by the `oldTop - 1` formula.
+        const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
+        const realContentAboveFrame = Math.max(0, oldTop - 1 - blankRowsAboveFrameRef.current)
+        const needsScroll = Math.min(rawNeedsScroll, realContentAboveFrame)
         if (needsScroll > 0) {
           // Erase the old frame before scrolling so that blank rows — not
           // stale prompt/separator cells — get pushed into terminal scrollback.
           // Without this, the `> ▊` prompt line becomes a permanent ghost in
           // scrollback after the select dialog closes.
-          const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
           for (let i = 0; i < oldFrameH; i++) {
             preBuf += `\x1b[${oldTop + i};1H\x1b[K`
           }
@@ -2696,7 +2714,7 @@ export function ChatInput({
         debugLog(
           'chatinput.geom.grow',
           `delta=${deltaH} absorbed=${absorbed} fromBlankAbove=${fromBlankAbove} ` +
-            `scrolled=${needsScroll} ` +
+            `scrolled=${needsScroll}${needsScroll !== rawNeedsScroll ? ` (capped from ${rawNeedsScroll}; realContent=${realContentAboveFrame})` : ''} ` +
             `blanks ${freeBlanksAboveFrameRef.current}->${pendingFreeBlanks} ` +
             `blankAbove ${blankRowsAboveFrameRef.current}->${pendingBlankRowsAbove} ` +
             `frameTop=${frameTop}`,
