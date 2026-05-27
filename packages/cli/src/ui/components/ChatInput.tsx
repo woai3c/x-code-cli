@@ -1052,21 +1052,21 @@ export function ChatInput({
         return
       }
       if (key === 'up') {
-        // While actively browsing history, keep routing Up to history nav.
-        // Otherwise a restored entry like `/model` auto-opens the slash
-        // suggestion menu, which would steal the next Up press into
-        // completion-cycling (single-item, so effectively a no-op) and
-        // trap the user mid-history.
+        // Suggestion menu wins over history nav when there's a real selection
+        // to make. The carve-out is the single-match-in-history-nav case: a
+        // restored `/model` entry auto-opens a 1-item slash menu, where
+        // cycling is a no-op — if we let the menu swallow Up the user is
+        // trapped with no way to keep scrolling back. With 2+ matches the
+        // menu's cycling is meaningful, so it wins even mid-history; with
+        // 0/1 matches we fall through to cursor + history nav.
         const inHistoryNav = historyIndexRef.current > 0
-        if (!inHistoryNav) {
-          if (activeMenu === 'at') {
-            if (atMatches.length > 0) setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
-            return
-          }
-          if (matches.length > 0) {
-            setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
-            return
-          }
+        if (activeMenu === 'at' && atMatches.length > 0 && (!inHistoryNav || atMatches.length > 1)) {
+          setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
+          return
+        }
+        if (activeMenu === 'slash' && matches.length > 0 && (!inHistoryNav || matches.length > 1)) {
+          setCompletionIndex((p) => (p - 1 + matches.length) % matches.length)
+          return
         }
         // Cursor first; fall through to history nav only when the cursor was
         // already on the logical first line (so multi-line drafts and recalled
@@ -1076,15 +1076,13 @@ export function ChatInput({
       }
       if (key === 'down') {
         const inHistoryNav = historyIndexRef.current > 0
-        if (!inHistoryNav) {
-          if (activeMenu === 'at') {
-            if (atMatches.length > 0) setAtCompletionIndex((p) => (p + 1) % atMatches.length)
-            return
-          }
-          if (matches.length > 0) {
-            setCompletionIndex((p) => (p + 1) % matches.length)
-            return
-          }
+        if (activeMenu === 'at' && atMatches.length > 0 && (!inHistoryNav || atMatches.length > 1)) {
+          setAtCompletionIndex((p) => (p + 1) % atMatches.length)
+          return
+        }
+        if (activeMenu === 'slash' && matches.length > 0 && (!inHistoryNav || matches.length > 1)) {
+          setCompletionIndex((p) => (p + 1) % matches.length)
+          return
         }
         if (!moveCursorVertically(1)) navigateHistoryDown()
         return
