@@ -340,6 +340,19 @@ set DEBUG_STDOUT=1 && xc
 
 日志文件仅在 `DEBUG_STDOUT=1` 启用时写入，默认状态下零开销。
 
+## 配套小册
+
+想深入理解 X-Code CLI 的实现原理（而不只是使用它），可以参考我在掘金写的配套小册：[**《从零打造一个 AI Agent CLI》**](https://juejin.cn/book/7639017024882278440?suid=1433418893103645&source=h5)。
+
+小册以本仓库源码为参照，逐章拆解：
+
+- Agent Loop 完整实现（流式输出、工具调用、上下文压缩、循环检测）
+- 多厂商 Provider 抽象与 prompt cache 适配
+- 终端 UI 渲染（为什么放弃 Ink 的 log-update、如何用单元格 diff 解决 CJK/IME 抖动）
+- 权限模型、子 Agent、Plan 模式等生产级特性的工程权衡
+
+适合想自己造一个 CLI 工具的开发者，以及想读懂本仓库源码的贡献者。
+
 ## 从源码运行
 
 ```bash

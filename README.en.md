@@ -340,6 +340,17 @@ The log is written under the user directory:
 
 The log file is written only when `DEBUG_STDOUT=1` is set; default runs incur zero overhead.
 
+## Companion Book
+
+If you want to understand X-Code CLI's internals (not just use it), I wrote a companion tutorial on Juejin: [**《从零打造一个 AI Agent CLI》 (Build an AI Agent CLI from Scratch)**](https://juejin.cn/book/7639017024882278440?suid=1433418893103645&source=h5). It walks through this repository chapter by chapter:
+
+- The full agent-loop implementation (streaming, tool use, context compression, loop-guard)
+- Multi-provider abstraction and prompt-cache adaptation across vendors
+- Terminal UI rendering (why we bypass Ink's log-update; how cell-grid diffing fixes CJK/IME jitter)
+- Engineering tradeoffs behind permissions, sub-agents, plan mode, and other production-grade features
+
+> The tutorial is written in Chinese, intended for developers who want to build their own CLI tool or contributors who want to read this repository's source in depth.
+
 ## Build From Source
 
 ```bash
