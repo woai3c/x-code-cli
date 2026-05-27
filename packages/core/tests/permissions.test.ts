@@ -2,7 +2,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { checkPermission, getPermissionLevel, isPathWithinProject } from '../src/permissions/index.js'
-import { buildAllowRule, extractCommandPrefix, suggestRuleLabel } from '../src/permissions/session-store.js'
+import {
+  addSessionAllowRule,
+  buildAllowRule,
+  clearSessionRules,
+  extractCommandPrefix,
+  extractCompoundRules,
+  sessionRulesMatch,
+  suggestRuleLabel,
+} from '../src/permissions/session-store.js'
 
 describe('getPermissionLevel', () => {
   it('returns always-allow for read-only tools', () => {
@@ -49,6 +57,46 @@ describe('getPermissionLevel', () => {
 
   it('handles compound commands — destructive', () => {
     expect(getPermissionLevel('shell', { command: 'ls && rm -rf /' })).toBe('deny')
+  })
+
+  // End-to-end against the three real complaints from the user:
+  // PS pipelines that should never have prompted, and a `cd && build`
+  // chain that should at least be derivable as a `npx tsc:*` rule.
+  it('auto-allows real PowerShell read-only pipelines', () => {
+    expect(
+      getPermissionLevel('shell', {
+        command:
+          "cd D:\\res\\x-code-cli\\packages\\core\\src; Get-ChildItem -Recurse -Filter *.ts | Group-Object Directory | Sort-Object Name | Select-Object @{N='Directory';E={$_.Name}},Count",
+      }),
+    ).toBe('always-allow')
+    expect(
+      getPermissionLevel('shell', {
+        command:
+          "Get-ChildItem -Recurse -Filter *.ts -Path D:\\res\\x-code-cli\\packages\\core\\src | Group-Object Directory | Sort-Object Name | Select-Object @{Name='Directory';Expression={$_.Name}},Count",
+      }),
+    ).toBe('always-allow')
+  })
+
+  it('asks for `cd && build | head` but derives a stable prefix', () => {
+    const cmd = 'cd d:\\isoform\\something\\wails-gui\\frontend && npx tsc --noEmit --pretty 2>&1 | head -40'
+    expect(getPermissionLevel('shell', { command: cmd })).toBe('ask')
+    // Importantly the rule we'd save is `npx tsc:*`, NOT `cd:*` or
+    // exact-match — so subsequent `cd <other-dir> && npx tsc <other-args>`
+    // invocations stop re-prompting.
+    expect(suggestRuleLabel('shell', { command: cmd })).toBe('npx tsc:*')
+  })
+
+  it('auto-allows `ls X; if (Test-Path X) { Get-Content X }` end-to-end', () => {
+    // The control-flow recognition feeds into the existing per-segment
+    // isReadOnly check, so a `ls`-then-conditional-Get-Content compound
+    // (the user's diagnostic command) drops to always-allow without
+    // prompting.
+    expect(
+      getPermissionLevel('shell', {
+        command:
+          'ls -Force D:\\res\\x-code-cli\\.x-code\\local\\permissions.json 2>&1; if (Test-Path D:\\res\\x-code-cli\\.x-code\\local\\permissions.json) { Get-Content D:\\res\\x-code-cli\\.x-code\\local\\permissions.json }',
+      }),
+    ).toBe('always-allow')
   })
 })
 
@@ -265,6 +313,181 @@ describe('extractCommandPrefix', () => {
   it('returns null when powershell has only flags (no command)', () => {
     expect(extractCommandPrefix('powershell -NoProfile -ExecutionPolicy Bypass')).toBeNull()
   })
+
+  // Verb-Noun cmdlet shape — the case the previous extractor missed.
+  // `Get-ChildItem -Recurse …` was returning null because `-Recurse`
+  // failed the lowercase SUBCOMMAND_RE, leaving the user with exact-match
+  // only (so any `-Path` / `-Filter` change re-prompted forever).
+  it('recognises bare PowerShell cmdlets as their own prefix', () => {
+    expect(extractCommandPrefix('Get-ChildItem -Recurse -Filter *.ts')).toBe('Get-ChildItem')
+    expect(extractCommandPrefix('Get-ChildItem -Recurse -Filter *.ts -Path D:\\res\\x-code-cli')).toBe('Get-ChildItem')
+    expect(extractCommandPrefix('Sort-Object Name')).toBe('Sort-Object')
+    expect(extractCommandPrefix('Invoke-WebRequest -Uri http://example.com')).toBe('Invoke-WebRequest')
+    expect(extractCommandPrefix('Set-Content -Path foo.txt -Value bar')).toBe('Set-Content')
+  })
+
+  it('does not mis-classify Unix commands with dashes as cmdlets', () => {
+    // `apt-get` looks vaguely cmdlet-shaped but the verb is lowercase.
+    // Must still go through the POSIX path (no subcommand → null).
+    expect(extractCommandPrefix('apt-get update')).toBe('apt-get update')
+    expect(extractCommandPrefix('docker-compose up')).toBe('docker-compose up')
+  })
+
+  // Compound commands: prefix must agree across every non-read-only,
+  // non-cd segment. Asymmetric agreement (`A && B` where B is different)
+  // returns null so we don't accidentally let an `A:*` rule approve B.
+  //
+  // Note: all-readonly compounds (`cd D:\… ; Get-ChildItem | Sort-Object`)
+  // don't appear here because evaluateShellPermission short-circuits them
+  // to `always-allow` upstream — extractCommandPrefix is never called.
+  // We only exercise the case where there's at least one non-readonly,
+  // non-cd-like segment to anchor a rule on.
+  it('strips leading cd/Set-Location segments before deriving the prefix', () => {
+    expect(extractCommandPrefix('cd /tmp && npm test')).toBe('npm test')
+    expect(extractCommandPrefix('Set-Location D:\\foo; Set-Content -Path x.txt -Value bar')).toBe('Set-Content')
+    expect(extractCommandPrefix('pushd /tmp && cargo build && popd')).toBe('cargo build')
+  })
+
+  it('strips read-only pipeline tails before deriving the prefix', () => {
+    // The user-reported example: only `npx tsc` is non-readonly; `cd`
+    // and `head` are both read-only setup/display, so the rule we save
+    // is `npx tsc:*` rather than `cd:*` or an over-specific exact match.
+    expect(extractCommandPrefix('cd d:\\isoform\\foo && npx tsc --noEmit --pretty 2>&1 | head -40')).toBe('npx tsc')
+    expect(extractCommandPrefix('npm run lint 2>&1 | tail -20')).toBe('npm run')
+  })
+
+  it('returns null when compound segments disagree on prefix', () => {
+    // Security gate: `git commit:*` must NOT auto-approve a trailing
+    // `git push`. Different segments → no shared prefix → exact-match.
+    expect(extractCommandPrefix('git commit -m fix && git push')).toBeNull()
+    // npm install + arbitrary curl: even though only `npm install` would
+    // be derived under the old logic, the second segment is a distinct
+    // command and must force exact-match.
+    expect(extractCommandPrefix('npm install && curl example.com')).toBeNull()
+  })
+
+  it('still derives a prefix when only one non-readonly segment exists', () => {
+    // Two readonly + one real command: anchor on the real command.
+    expect(extractCommandPrefix('cd /tmp && pnpm run build | head -20')).toBe('pnpm run')
+  })
+})
+
+// Direct tests for extractCompoundRules. The function is the engine
+// behind suggestRuleLabel + buildAllowRule for compound shells, so a
+// regression here surfaces in the user-visible "don't ask again" label
+// and in what ends up in .x-code/local/permissions.json. Indirect
+// coverage exists via the buildAllowRule tests below; spelling out the
+// rule shape directly is worth the redundancy.
+describe('extractCompoundRules', () => {
+  const ruleShape = (r: { type: string; pattern: string }) => `${r.type}:${r.pattern}`
+
+  it('single derivable command → one prefix rule', () => {
+    const rules = extractCompoundRules('git commit -m fix')
+    expect(rules?.map(ruleShape)).toEqual(['prefix:git commit'])
+  })
+
+  it('single Verb-Noun cmdlet → one prefix rule (cmdlet name on its own)', () => {
+    // Must pick a cmdlet NOT in the readonly set, otherwise the segment
+    // gets filtered out before reaching the prefix step (readonly
+    // compounds short-circuit to always-allow upstream and don't need
+    // rules). Set-Content writes a file, so it's a clean example.
+    const rules = extractCompoundRules('Set-Content -Path foo.txt -Value bar')
+    expect(rules?.map(ruleShape)).toEqual(['prefix:Set-Content'])
+  })
+
+  it('single command without a derivable prefix → one segment-exact rule', () => {
+    const rules = extractCompoundRules('findstr /n "any" file.txt')
+    expect(rules?.map(ruleShape)).toEqual(['exact:findstr /n "any" file.txt'])
+  })
+
+  it('compound with all distinct prefixes → one prefix rule per segment, order preserved', () => {
+    const rules = extractCompoundRules('git commit -m a && git push origin main')
+    expect(rules?.map(ruleShape)).toEqual(['prefix:git commit', 'prefix:git push'])
+  })
+
+  it('compound mixing prefix-able and not → prefix + segment-exact, order preserved', () => {
+    const rules = extractCompoundRules('git commit -m a && curl evil.com')
+    expect(rules?.map(ruleShape)).toEqual(['prefix:git commit', 'exact:curl evil.com'])
+  })
+
+  it('skips leading cd / Set-Location segments', () => {
+    expect(extractCompoundRules('cd /tmp && npm test')?.map(ruleShape)).toEqual(['prefix:npm test'])
+    expect(extractCompoundRules('Set-Location D:\\foo; Set-Content -Path x.txt -Value bar')?.map(ruleShape)).toEqual([
+      'prefix:Set-Content',
+    ])
+    expect(extractCompoundRules('pushd /tmp && cargo build && popd')?.map(ruleShape)).toEqual(['prefix:cargo build'])
+  })
+
+  it('skips read-only segments (pipeline tails, leading setup)', () => {
+    expect(extractCompoundRules('npm run lint 2>&1 | tail -20')?.map(ruleShape)).toEqual(['prefix:npm run'])
+    expect(extractCompoundRules('cd /foo && pnpm run build | head -20')?.map(ruleShape)).toEqual(['prefix:pnpm run'])
+  })
+
+  it('deduplicates repeated prefixes across segments', () => {
+    const rules = extractCompoundRules('git commit -m a && git commit --amend')
+    expect(rules?.map(ruleShape)).toEqual(['prefix:git commit'])
+  })
+
+  it('deduplicates repeated segment-exact patterns across segments', () => {
+    const rules = extractCompoundRules('curl evil.com && curl evil.com')
+    expect(rules?.map(ruleShape)).toEqual(['exact:curl evil.com'])
+  })
+
+  it('keeps both forms separately when prefix-able and non-prefix-able overlap by name', () => {
+    const rules = extractCompoundRules('git commit -m a && curl evil.com && git commit --amend && curl evil.com')
+    expect(rules?.map(ruleShape)).toEqual(['prefix:git commit', 'exact:curl evil.com'])
+  })
+
+  it('handles the PowerShell launcher path by returning a single inner-cmdlet prefix', () => {
+    // POWERSHELL_LAUNCHER_RE short-circuits to extractPowershellPrefix.
+    // The whole `powershell -Command "..."` is one rule regardless of
+    // what compound shape lives inside the quoted script.
+    expect(extractCompoundRules('powershell -Command "Get-CimInstance Win32_LogicalDisk"')?.map(ruleShape)).toEqual([
+      'prefix:Get-CimInstance',
+    ])
+    expect(extractCompoundRules('powershell -NoProfile -Command "& { Get-Process }"')?.map(ruleShape)).toEqual([
+      'prefix:Get-Process',
+    ])
+    expect(extractCompoundRules('powershell -File ./script.ps1')).toBeNull()
+  })
+
+  it('returns null when a non-whitelisted env-var prefixes a segment', () => {
+    // Same defence as extractSingleCommandPrefix: a `BACKDOOR=1 …`
+    // prefix poisons the segment so we can't safely turn it into a
+    // rule. Callers fall back to a single full-command exact via
+    // buildAllowRule's stripSafeEnvVars branch.
+    expect(extractCompoundRules('BACKDOOR=1 git status')).toBeNull()
+    expect(extractCompoundRules('git commit -m a && PATH=/evil:$PATH something')).toBeNull()
+  })
+
+  it('strips whitelisted env-var prefixes inside a segment-exact rule', () => {
+    // `NODE_ENV=prod` is in SAFE_ENV_VARS — it gets stripped before
+    // being saved so the matcher key (which also strips) stays canonical.
+    const rules = extractCompoundRules('NODE_ENV=prod findstr /v foo bar.txt')
+    expect(rules?.map(ruleShape)).toEqual(['exact:findstr /v foo bar.txt'])
+  })
+
+  it('returns null for empty / whitespace-only input', () => {
+    expect(extractCompoundRules('')).toBeNull()
+    expect(extractCompoundRules('   ')).toBeNull()
+  })
+
+  it('returns null for all-readonly compounds (auto-allowed upstream)', () => {
+    // `cd /tmp && ls -la` is all-readonly. Every segment gets filtered
+    // out as readonly, leaving nothing to derive. evaluateShellPermission
+    // short-circuits to always-allow before this branch is reached in
+    // practice — the null return is the defensive "no rule needed"
+    // signal.
+    expect(extractCompoundRules('cd /tmp && ls -la')).toBeNull()
+    expect(extractCompoundRules('Get-ChildItem -Recurse | Sort-Object Name | Select-Object Name')).toBeNull()
+  })
+
+  it('tags each rule with tool="shell"', () => {
+    // The AllowRule shape stored on disk lives or dies by this — a
+    // missing/wrong tool field means the matcher won't find the rule.
+    const rules = extractCompoundRules('git commit -m a && curl evil.com')
+    expect(rules?.every((r) => r.tool === 'shell')).toBe(true)
+  })
 })
 
 describe('isPathWithinProject', () => {
@@ -300,15 +523,17 @@ describe('suggestRuleLabel + buildAllowRule fallback for unrecognised shell comm
     const built = buildAllowRule('shell', input)
     expect(built).not.toBeNull()
     expect(built!.persist).toBe(true)
-    expect(built!.rule.type).toBe('exact')
-    expect(built!.rule.pattern).toBe(input.command)
+    expect(built!.rules).toHaveLength(1)
+    expect(built!.rules[0]!.type).toBe('exact')
+    expect(built!.rules[0]!.pattern).toBe(input.command)
   })
 
   it('still prefers the prefix rule when one is derivable', () => {
     expect(suggestRuleLabel('shell', { command: 'git commit -m fix' })).toBe('git commit:*')
     const built = buildAllowRule('shell', { command: 'git commit -m fix' })
-    expect(built!.rule.type).toBe('prefix')
-    expect(built!.rule.pattern).toBe('git commit')
+    expect(built!.rules).toHaveLength(1)
+    expect(built!.rules[0]!.type).toBe('prefix')
+    expect(built!.rules[0]!.pattern).toBe('git commit')
   })
 
   it('strips env-var prefixes before storing the exact-match pattern', () => {
@@ -316,8 +541,9 @@ describe('suggestRuleLabel + buildAllowRule fallback for unrecognised shell comm
     // against `stripEnvVars(cmd)`, so we must store the same stripped
     // shape in the rule pattern.
     const built = buildAllowRule('shell', { command: 'NODE_ENV=prod findstr /v foo bar.txt' })
-    expect(built!.rule.type).toBe('exact')
-    expect(built!.rule.pattern).toBe('findstr /v foo bar.txt')
+    expect(built!.rules).toHaveLength(1)
+    expect(built!.rules[0]!.type).toBe('exact')
+    expect(built!.rules[0]!.pattern).toBe('findstr /v foo bar.txt')
   })
 
   it('returns null label/rule for empty shell command', () => {
@@ -329,8 +555,70 @@ describe('suggestRuleLabel + buildAllowRule fallback for unrecognised shell comm
   it('keeps writeFile/edit on session-only tool-wide rules', () => {
     expect(suggestRuleLabel('writeFile', {})).toBe('all edits this session')
     const built = buildAllowRule('writeFile', {})
-    expect(built!.rule.type).toBe('tool')
+    expect(built!.rules).toHaveLength(1)
+    expect(built!.rules[0]!.type).toBe('tool')
     expect(built!.persist).toBe(false)
+  })
+
+  it('saves a rule per distinct prefix for compound shell commands', () => {
+    // The complaint case from the live CLI: `git commit && git push`
+    // used to show "this exact command" because the two segments
+    // disagree on prefix. We now surface BOTH prefixes in the label and
+    // save BOTH rules with one click, so subsequent
+    // `git commit -m foo && git push origin main` invocations stop
+    // prompting.
+    const cmd = 'git commit && git push'
+    expect(suggestRuleLabel('shell', { command: cmd })).toBe('git commit:*, git push:*')
+    const built = buildAllowRule('shell', { command: cmd })
+    expect(built!.persist).toBe(true)
+    expect(built!.rules.map((r) => `${r.type}:${r.pattern}`)).toEqual(['prefix:git commit', 'prefix:git push'])
+  })
+
+  it('deduplicates repeated prefixes in a compound', () => {
+    // `git commit -m a && git commit --amend` is the same prefix twice
+    // — saving it once is enough.
+    const built = buildAllowRule('shell', { command: 'git commit -m a && git commit --amend' })
+    expect(built!.rules).toHaveLength(1)
+    expect(built!.rules[0]!.pattern).toBe('git commit')
+  })
+
+  it('mixes prefix + segment-exact when only some segments have prefixes', () => {
+    // `git commit -m a && curl evil.com` — first segment has a clean
+    // prefix, second segment doesn't (`evil.com` fails SUBCOMMAND_RE).
+    // The earlier design collapsed this to a full-command exact rule,
+    // throwing away the derivable `git commit:*`. We now save BOTH
+    // (prefix for git commit, segment-exact for the curl), and the
+    // label shows both so the user knows what's being approved.
+    const cmd = 'git commit -m a && curl evil.com'
+    expect(suggestRuleLabel('shell', { command: cmd })).toBe('git commit:*, curl evil.com')
+    const built = buildAllowRule('shell', { command: cmd })
+    expect(built!.persist).toBe(true)
+    expect(built!.rules.map((r) => `${r.type}:${r.pattern}`)).toEqual(['prefix:git commit', 'exact:curl evil.com'])
+  })
+
+  // End-to-end: one click on a compound saves multiple rules; the
+  // matcher then auto-approves future compound variants AND each rule
+  // alone, but still refuses any compound containing an un-approved
+  // command.
+  it('compound approval covers future variants but not unrelated additions', () => {
+    clearSessionRules()
+    const built = buildAllowRule('shell', { command: 'git commit && git push' })!
+    for (const r of built.rules) addSessionAllowRule(r)
+
+    expect(sessionRulesMatch('shell', { command: 'git commit -m foo && git push' })).toBe(true)
+    expect(sessionRulesMatch('shell', { command: 'cd /tmp && git commit -m a && git push origin main' })).toBe(true)
+    expect(sessionRulesMatch('shell', { command: 'git commit --amend' })).toBe(true)
+    expect(sessionRulesMatch('shell', { command: 'git push -u origin main' })).toBe(true)
+
+    // `npm test` was never approved → re-prompt the whole compound.
+    // (`git tag` would have been a less surprising choice but its bare
+    // form is in the read-only git subcommand list, so it gets filtered
+    // out of the segments-to-check.)
+    expect(sessionRulesMatch('shell', { command: 'git commit -m a && git push && npm test' })).toBe(false)
+    // Defence in depth: a half-approved compound where the second
+    // segment has no derivable prefix must NOT auto-allow.
+    expect(sessionRulesMatch('shell', { command: 'git commit -m a && curl evil.com' })).toBe(false)
+    clearSessionRules()
   })
 
   it('returns null for enterPlanMode (no recurring action to remember)', () => {
