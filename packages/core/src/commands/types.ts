@@ -32,10 +32,10 @@ export interface CommandDefinition {
   description?: string
   /** The prompt template (everything after the frontmatter), trimmed. */
   body: string
-  /** Where this command came from. `'plugin'` is the only kind today
-   *  since we don't (yet) scan `~/.x-code/commands/` for user-authored
-   *  ones. Reserved for symmetry with SkillDefinition. */
-  source: 'plugin'
+  /** Where this command came from. `'user'` = `~/.x-code/commands/*.md`,
+   *  `'project'` = `<repo-root>/.x-code/commands/*.md`, `'plugin'` =
+   *  plugin-contributed `commands/*.md`. Mirrors SkillDefinition / SubAgentDefinition. */
+  source: 'user' | 'project' | 'plugin'
   /** When source === 'plugin', the owning plugin's id
    *  (`name@marketplace`). Used by `/plugin info` and to set
    *  `${CLAUDE_PLUGIN_ROOT}` correctly. */

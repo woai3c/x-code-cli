@@ -256,10 +256,16 @@ function formatRelativeTime(epochMs: number): string {
 // formatUsageHistory was replaced by the interactive handleUsageHistory
 // picker inside the component — see handleUsageHistory().
 
-function buildHelpText(skillCommands: readonly { name: string; description: string }[]): string {
+function buildHelpText(
+  skillCommands: readonly { name: string; description: string }[],
+  fileCommands: readonly { name: string; description?: string }[],
+): string {
   const allCommands = [
     ...SLASH_COMMANDS,
     ...skillCommands.map((s) => ({ name: `/${s.name}`, description: s.description })),
+    // User / project / plugin markdown commands. Description is optional
+    // for these (frontmatter-less command files are still valid).
+    ...fileCommands.map((c) => ({ name: `/${c.name}`, description: c.description ?? '' })),
   ]
   return (
     `X-Code CLI v${VERSION}\n\n` +
@@ -391,10 +397,24 @@ export function App({
     [skillRegistryVersion],
   )
 
-  // Combined command list: built-ins + loaded skills (for tab completion).
+  // File-based slash commands (user / project / plugin markdown files).
+  // Recomputed off the same version counter as skills — /plugin refresh
+  // bumps it after reloading both registries.
+  const fileCommands = useMemo(
+    () => (options.commandRegistry ? options.commandRegistry.list() : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [skillRegistryVersion],
+  )
+
+  // Combined command list: built-ins + loaded skills + file commands
+  // (for tab completion).
   const allCommands = useMemo(
-    () => [...SLASH_COMMANDS, ...skillCommands.map((s) => ({ name: `/${s.name}`, description: s.description }))],
-    [skillCommands],
+    () => [
+      ...SLASH_COMMANDS,
+      ...skillCommands.map((s) => ({ name: `/${s.name}`, description: s.description })),
+      ...fileCommands.map((c) => ({ name: `/${c.name}`, description: c.description ?? '' })),
+    ],
+    [skillCommands, fileCommands],
   )
 
   /** Skill pending injection: set when the user types `/skillname` with no
@@ -662,7 +682,7 @@ export function App({
       switch (command) {
         case 'help':
           echoCommand(text)
-          addInfoMessage(buildHelpText(skillCommands))
+          addInfoMessage(buildHelpText(skillCommands, fileCommands))
           return
 
         case 'model':

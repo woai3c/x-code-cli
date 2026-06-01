@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { XCODE_DIR, userXcodeDir } from '../utils.js'
 import type { CommandDefinition } from './types.js'
 
 /** Minimal YAML frontmatter parser. Same subset used by skills /
@@ -49,7 +50,12 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   return { data, body }
 }
 
-async function loadCommandsFromDir(dir: string, pluginId: string, pluginRoot: string): Promise<CommandDefinition[]> {
+async function loadCommandsFromDir(
+  dir: string,
+  source: CommandDefinition['source'],
+  pluginId?: string,
+  pluginRoot?: string,
+): Promise<CommandDefinition[]> {
   const out: CommandDefinition[] = []
   let entries: string[]
   try {
@@ -72,14 +78,18 @@ async function loadCommandsFromDir(dir: string, pluginId: string, pluginRoot: st
       const description = parsed?.data.description as string | undefined
       const body = (parsed ? parsed.body : raw).trim()
 
-      out.push({
+      const cmd: CommandDefinition = {
         name,
         description,
         body,
-        source: 'plugin',
-        pluginId,
-        pluginRoot,
-      })
+        source,
+      }
+      // pluginId / pluginRoot only meaningful for plugin-sourced commands.
+      // For user / project commands ${CLAUDE_PLUGIN_ROOT} falls back to ''
+      // via expandCommandBody — safe no-op.
+      if (pluginId) cmd.pluginId = pluginId
+      if (pluginRoot) cmd.pluginRoot = pluginRoot
+      out.push(cmd)
     } catch (err) {
       console.error(`[commands] Skipping ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -94,11 +104,22 @@ export interface LoadCommandsOptions {
   extraDirs?: ReadonlyArray<{ dir: string; pluginId: string; pluginRoot: string }>
 }
 
+/** Load slash commands from user (`~/.x-code/commands/*.md`) + plugin
+ *  (extraDirs) + project (`<cwd>/.x-code/commands/*.md`) sources.
+ *  Merge order is user → plugin → project so CommandRegistry's
+ *  last-write-wins yields the precedence **project > plugin > user** —
+ *  same as skills + sub-agents. `userXcodeDir()` is called at load time so
+ *  `X_CODE_HOME` (used by tests) redirects the user-scope path. */
 export async function loadPluginCommands(opts: LoadCommandsOptions = {}): Promise<CommandDefinition[]> {
-  const extras = opts.extraDirs ?? []
-  const out: CommandDefinition[] = []
-  for (const { dir, pluginId, pluginRoot } of extras) {
-    out.push(...(await loadCommandsFromDir(dir, pluginId, pluginRoot)))
+  const userDir = path.join(userXcodeDir(), 'commands')
+  const projectDir = path.join(process.cwd(), XCODE_DIR, 'commands')
+
+  const userCmds = await loadCommandsFromDir(userDir, 'user')
+  const pluginCmds: CommandDefinition[] = []
+  for (const { dir, pluginId, pluginRoot } of opts.extraDirs ?? []) {
+    pluginCmds.push(...(await loadCommandsFromDir(dir, 'plugin', pluginId, pluginRoot)))
   }
-  return out
+  const projectCmds = await loadCommandsFromDir(projectDir, 'project')
+
+  return [...userCmds, ...pluginCmds, ...projectCmds]
 }

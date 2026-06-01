@@ -3,7 +3,7 @@
 // `${CLAUDE_PLUGIN_ROOT}` substitution and frontmatter parsing of the
 // `allowed-tools:` form Claude Code uses (long, comma-separated, often
 // folded across lines).
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -15,6 +15,31 @@ async function writeCommand(dir: string, name: string, frontmatter: string, body
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(path.join(dir, `${name}.md`), `---\n${frontmatter}\n---\n${body}`, 'utf-8')
 }
+
+/** loadPluginCommands now also scans `${X_CODE_HOME}/commands` and
+ *  `<cwd>/.x-code/commands` — isolate every test under fresh empty dirs so
+ *  the developer's real `~/.x-code/commands/` doesn't leak into assertions. */
+let prevHome: string | undefined
+let prevCwd: string
+let isolatedHome: string
+let isolatedCwd: string
+
+beforeEach(async () => {
+  prevHome = process.env.X_CODE_HOME
+  prevCwd = process.cwd()
+  isolatedHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-cmds-home-'))
+  isolatedCwd = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-cmds-cwd-'))
+  process.env.X_CODE_HOME = isolatedHome
+  process.chdir(isolatedCwd)
+})
+
+afterEach(async () => {
+  if (prevHome === undefined) delete process.env.X_CODE_HOME
+  else process.env.X_CODE_HOME = prevHome
+  process.chdir(prevCwd)
+  await fs.rm(isolatedHome, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(isolatedCwd, { recursive: true, force: true }).catch(() => {})
+})
 
 describe('loadPluginCommands', () => {
   it('loads each commands/<name>.md as a CommandDefinition with name = basename', async () => {
@@ -75,6 +100,60 @@ describe('loadPluginCommands', () => {
       extraDirs: [{ dir: '/nonexistent', pluginId: 'ghost@local', pluginRoot: '/r' }],
     })
     expect(out).toEqual([])
+  })
+
+  it('scans user (~/.x-code/commands) and project (<cwd>/.x-code/commands) directories', async () => {
+    await writeCommand(path.join(isolatedHome, 'commands'), 'usercmd', 'description: from user', 'user body')
+    await writeCommand(
+      path.join(isolatedCwd, '.x-code', 'commands'),
+      'projcmd',
+      'description: from project',
+      'proj body',
+    )
+
+    const out = await loadPluginCommands()
+
+    const byName = new Map(out.map((c) => [c.name, c]))
+    expect(byName.get('usercmd')?.source).toBe('user')
+    expect(byName.get('usercmd')?.description).toBe('from user')
+    expect(byName.get('usercmd')?.pluginId).toBeUndefined()
+    expect(byName.get('projcmd')?.source).toBe('project')
+    expect(byName.get('projcmd')?.description).toBe('from project')
+  })
+
+  it('precedence: project overrides plugin overrides user on name conflict', async () => {
+    // All three sources define `dup` — registry's last-write-wins should
+    // surface the project version.
+    await writeCommand(path.join(isolatedHome, 'commands'), 'dup', 'description: user', 'user-body')
+    const pluginDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-cmds-plugin-'))
+    await writeCommand(pluginDir, 'dup', 'description: plugin', 'plugin-body')
+    await writeCommand(path.join(isolatedCwd, '.x-code', 'commands'), 'dup', 'description: project', 'project-body')
+
+    const out = await loadPluginCommands({
+      extraDirs: [{ dir: pluginDir, pluginId: 'p@m', pluginRoot: '/r' }],
+    })
+    const reg = new CommandRegistry(out)
+    const winner = reg.get('dup')!
+    expect(winner.source).toBe('project')
+    expect(winner.body).toBe('project-body')
+
+    await fs.rm(pluginDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('user / project commands have no pluginId, and ${CLAUDE_PLUGIN_ROOT} expands to empty', async () => {
+    await writeCommand(
+      path.join(isolatedHome, 'commands'),
+      'echo',
+      'description: echo it',
+      'cd ${CLAUDE_PLUGIN_ROOT} && say $ARGUMENTS',
+    )
+
+    const out = await loadPluginCommands()
+    const echo = out.find((c) => c.name === 'echo')!
+    expect(echo.source).toBe('user')
+    expect(echo.pluginId).toBeUndefined()
+    expect(echo.pluginRoot).toBeUndefined()
+    expect(expandCommandBody(echo, 'hi')).toBe('cd  && say hi')
   })
 })
 
