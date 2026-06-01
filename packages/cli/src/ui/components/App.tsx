@@ -124,6 +124,11 @@ export const SLASH_COMMANDS = [
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
   { name: '/resume', description: 'Pick a past session in this project to resume', argumentHint: '[id]' },
+  {
+    name: '/rewind',
+    description: 'Roll back files + conversation to a previous user message (no-arg = picker)',
+    argumentHint: '[checkpoint-id]',
+  },
   { name: '/init', description: 'Initialize project knowledge' },
   { name: '/review', description: 'Review a pull request (no-arg = list open PRs)', argumentHint: '[PR]' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
@@ -368,6 +373,8 @@ export function App({
     clear,
     compact,
     resume,
+    rewind,
+    getCheckpoints,
     getSessionInfo,
     switchModel,
     setThinking,
@@ -549,6 +556,80 @@ export function App({
     )
   }, [addInfoMessage, askQuestion, resume])
 
+  /** Picker + executor for `/rewind`. With an arg, jumps straight to the
+   *  named checkpoint (full or sha1-style prefix). Without, lists every
+   *  checkpoint in this session newest-first with the user prompt that
+   *  triggered it as the preview. The picker silently no-ops when nothing
+   *  has been checkpointed (e.g. on the first turn before any user
+   *  message has landed). */
+  const handleRewind = useCallback(
+    async (arg: string) => {
+      const checkpoints = getCheckpoints()
+      if (checkpoints.length === 0) {
+        addInfoMessage(
+          '**No rewind points yet.** A checkpoint is taken at the start of every user message — type something first, then `/rewind` will offer it.',
+        )
+        return
+      }
+
+      // Direct arg: exact ckptId match, then prefix. No fuzzy match —
+      // ambiguous prefixes would silently roll back the wrong point.
+      let pickedId: string | null = null
+      if (arg) {
+        const exact = checkpoints.find((c) => c.ckptId === arg)
+        if (exact) pickedId = exact.ckptId
+        else {
+          const prefixed = checkpoints.filter((c) => c.ckptId.startsWith(arg))
+          if (prefixed.length === 1) pickedId = prefixed[0]!.ckptId
+          else if (prefixed.length > 1) {
+            addInfoMessage(
+              `Ambiguous checkpoint prefix \`${arg}\` (${prefixed.length} matches). Run \`/rewind\` and pick.`,
+            )
+            return
+          } else {
+            addInfoMessage(`No checkpoint matches \`${arg}\`. Run \`/rewind\` and pick.`)
+            return
+          }
+        }
+      }
+
+      if (!pickedId) {
+        // Newest first matches what users intuit when they think "go back
+        // a step or two" — the freshest decision points are at the top.
+        const ordered = [...checkpoints].reverse()
+        const choices = ordered.slice(0, 30).map((c) => {
+          const preview = (c.userPrompt || '(empty prompt)').slice(0, 60).replace(/\s+/g, ' ').trim()
+          const ago = formatRelativeTime(new Date(c.ts).getTime())
+          return {
+            label: `${preview}  ·  ${ago}`,
+            description: `${c.ckptId}  ·  message #${c.messageCount}`,
+            ckptId: c.ckptId,
+          }
+        })
+        const answer = await askQuestion(
+          `Pick a checkpoint to rewind to (${ordered.length} total in this session):`,
+          choices.map((c) => ({ label: c.label, description: c.description })),
+        )
+        const picked = choices.find((c) => c.label === answer)
+        if (!picked) {
+          addInfoMessage('Rewind cancelled.')
+          return
+        }
+        pickedId = picked.ckptId
+      }
+
+      const result = await rewind(pickedId)
+      if (!result.ok) {
+        addInfoMessage(`**Rewind failed:** ${result.reason}`)
+        return
+      }
+      addInfoMessage(
+        `**Rewound to:** ${result.preview || '(empty prompt)'}\n\nFiles and conversation restored. Continue from here.`,
+      )
+    },
+    [addInfoMessage, askQuestion, getCheckpoints, rewind],
+  )
+
   /** Resolve a ThemeName back to its display label. */
   function themeLabel(name: ThemeName): string {
     return THEMES.find((t) => t.name === name)?.label ?? name
@@ -720,6 +801,11 @@ export function App({
         case 'resume':
           echoCommand(text)
           await handleResume()
+          return
+
+        case 'rewind':
+          echoCommand(text)
+          await handleRewind(arg)
           return
 
         case 'init':

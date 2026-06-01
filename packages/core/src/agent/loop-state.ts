@@ -2,6 +2,7 @@
 import type { ModelMessage } from 'ai'
 
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
+import type { CheckpointEntry } from './snapshot.js'
 
 export interface LoopState {
   messages: ModelMessage[]
@@ -47,6 +48,15 @@ export interface LoopState {
    *  fresh with []); preserved across `/compact` so a multi-step
    *  task survives history summarisation. */
   todos: TodoItem[]
+  /** Per-user-message snapshots backing the `/rewind` command. Pushed by
+   *  `createCheckpoint` (snapshot.ts) right after each user message lands
+   *  in `messages`. In-memory: ring-buffered at 100 entries. Cleared by
+   *  `markBoundaryAndReflush` — compaction rewrites the message array
+   *  in place, invalidating every prior `messageCount` anchor. Persisted
+   *  to the jsonl as `meta:checkpoint` lines; the loader's
+   *  "everything-after-last-boundary wins" rule naturally drops pre-
+   *  compaction entries on resume. */
+  checkpoints: CheckpointEntry[]
   /** Number of messages already persisted to the session jsonl file.
    *  The agent loop calls `flushPendingMessages` at turn boundaries,
    *  which appends `state.messages.slice(persistedMessageCount)` and
@@ -107,6 +117,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     currentPlanPath: null,
     taskSlug: '',
     todos: [],
+    checkpoints: [],
     persistedMessageCount: 0,
   }
 }

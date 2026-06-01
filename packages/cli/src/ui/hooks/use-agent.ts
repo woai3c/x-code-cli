@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   agentLoop,
+  appendCheckpoint,
   appendInterrupted,
   buildUserContent,
   capabilitiesOf,
@@ -12,12 +13,15 @@ import {
   hydrateLoopState,
   initMemories,
   loadPersistedRules,
+  markBoundaryAndReflush,
+  restoreCheckpoint,
   saveSession,
 } from '@x-code-cli/core'
 import { extractText } from '@x-code-cli/core'
 import type {
   AgentCallbacks,
   AgentOptions,
+  CheckpointEntry,
   DisplayMessage,
   DisplayToolCall,
   LanguageModel,
@@ -789,6 +793,94 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     [resetBuffer],
   )
 
+  /** Read the live list of /rewind checkpoints for the current session.
+   *  Empty when no session exists yet or when nothing has been
+   *  checkpointed (the very first turn has no preceding state to
+   *  rewind to). Returned as a fresh array so callers can build picker
+   *  choices without aliasing the in-memory list. */
+  const getCheckpoints = useCallback((): CheckpointEntry[] => {
+    return loopStateRef.current?.checkpoints.slice() ?? []
+  }, [])
+
+  /** Rewind to a previous checkpoint: restore the working tree to that
+   *  point and truncate the message history past it. Caller (App.tsx)
+   *  is responsible for picking `ckptId` from `getCheckpoints()` and
+   *  surfacing the result message.
+   *
+   *  Returns ok=false with a human-readable `reason` on any precondition
+   *  failure (no session, unknown id, manifest missing) — callers should
+   *  surface those via addInfoMessage rather than throwing in the UI.
+   *
+   *  Side effects on success:
+   *    - working tree rolled back per checkpoint manifest
+   *    - state.messages truncated to messageCount-1 (drops the user
+   *      message that triggered the snapshot AND everything after)
+   *    - session jsonl gains a compact-boundary so /resume sees the
+   *      same truncated history
+   *    - display messages array shrinks → ChatInput's shrink-detection
+   *      wipes the scrollback and repaints with the truncated view */
+  const rewind = useCallback(
+    async (
+      ckptId: string,
+    ): Promise<{ ok: true; preview: string; messageCount: number } | { ok: false; reason: string }> => {
+      const ls = loopStateRef.current
+      if (!ls) return { ok: false, reason: 'No active session to rewind.' }
+      // Refuse mid-turn: a write tool could be executing concurrently and
+      // race us into a half-restored tree. Telling the user to Esc first
+      // is cleaner than asking the FS scheduler to interleave it for us.
+      if (state.isLoading) {
+        return { ok: false, reason: 'A turn is in progress. Press Esc to cancel it, then run /rewind.' }
+      }
+      const target = ls.checkpoints.find((c) => c.ckptId === ckptId)
+      if (!target) return { ok: false, reason: `Checkpoint not found: ${ckptId}` }
+
+      // Restore working tree + trim state.checkpoints in place to the
+      // prefix ending at the target. Partial-failure path leaves disk
+      // half-restored; we surface the error rather than masking it.
+      const ok = await restoreCheckpoint(ls, ckptId)
+      if (!ok) {
+        return { ok: false, reason: 'Failed to read checkpoint manifest — backups may have been cleaned up.' }
+      }
+
+      // Drop the user message that triggered this snapshot, plus every
+      // assistant / tool entry the model emitted after it.
+      const newLen = Math.max(0, target.messageCount - 1)
+      ls.messages = ls.messages.slice(0, newLen)
+      ls.persistedMessageCount = ls.messages.length
+
+      // markBoundaryAndReflush writes a compact-boundary + reflushes the
+      // (now-truncated) messages, so /resume on this jsonl reconstructs
+      // the same state. It also clears state.checkpoints (compaction
+      // semantics) — snapshot the surviving prefix beforehand and
+      // re-append after, so the picker still offers them.
+      const survivingCheckpoints = ls.checkpoints.slice()
+      await markBoundaryAndReflush(ls)
+      ls.checkpoints = survivingCheckpoints
+      for (const c of survivingCheckpoints) {
+        await appendCheckpoint(ls, c)
+      }
+
+      // Replace UI messages with the converted truncated view. ChatInput
+      // sees length shrink below `writtenMessageCountRef` and wipes the
+      // terminal + scrollback before repainting — matches the visual
+      // semantics of /clear, only stopping at the rewind point.
+      pendingToolsRef.current.clear()
+      resetBuffer()
+      const converted = modelMessagesToDisplay(ls.messages)
+      setState((prev) => ({
+        ...prev,
+        activeToolCalls: [],
+        shellOutput: '',
+        error: null,
+        todos: [],
+        messages: converted,
+      }))
+
+      return { ok: true, preview: target.userPrompt, messageCount: newLen }
+    },
+    [resetBuffer, state.isLoading],
+  )
+
   /** Manual context compression */
   const compact = useCallback(async () => {
     if (!loopStateRef.current) return
@@ -934,6 +1026,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     clear,
     compact,
     resume,
+    rewind,
+    getCheckpoints,
     getSessionInfo,
     switchModel,
     setThinking,

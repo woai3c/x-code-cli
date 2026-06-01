@@ -28,6 +28,7 @@ import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
+import type { CheckpointEntry } from './snapshot.js'
 
 const SESSIONS_SUBDIR = 'sessions'
 
@@ -95,7 +96,19 @@ interface InterruptedEntry {
   ts: string
 }
 
-type Entry = HeaderEntry | MsgEntry | UsageEntry | CompactBoundaryEntry | InterruptedEntry
+/** Rewind checkpoint pointer. Surfaced by `loadSession` so /resume picks
+ *  up the same /rewind history. The actual file backups live separately
+ *  under `.x-code/file-history/<sessionId>/`. */
+interface CheckpointJsonlEntry {
+  t: 'meta'
+  kind: 'checkpoint'
+  ckptId: string
+  messageCount: number
+  ts: string
+  userPrompt: string
+}
+
+type Entry = HeaderEntry | MsgEntry | UsageEntry | CompactBoundaryEntry | InterruptedEntry | CheckpointJsonlEntry
 
 // ── Append helpers (fire-and-forget; never throw) ───────────────────────
 
@@ -229,9 +242,34 @@ export async function markBoundaryAndReflush(state: LoopState, summary?: string)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
     state.persistedMessageCount = state.messages.length
+    // Compaction shrinks/rewrites the messages array — every prior
+    // checkpoint's `messageCount` now points past the end. Clear the
+    // in-memory list to mirror the loader's behaviour (which drops
+    // pre-boundary checkpoint lines on resume).
+    state.checkpoints = []
   } catch {
     // best-effort
   }
+}
+
+/** Append a rewind checkpoint marker. Fire-and-forget, like the other
+ *  append helpers. On resume, `loadSession` collects these into
+ *  `LoadedSession.checkpoints` so the picker can offer the same rewind
+ *  points across CLI restarts. The "everything-after-last-boundary wins"
+ *  loader rule naturally drops checkpoints whose `messageCount` was
+ *  invalidated by a compaction. */
+export async function appendCheckpoint(state: LoopState, entry: CheckpointEntry): Promise<void> {
+  if (!state.sessionId) return
+  const filePath = getSessionFilePath(state)
+  const jsonl: CheckpointJsonlEntry = {
+    t: 'meta',
+    kind: 'checkpoint',
+    ckptId: entry.ckptId,
+    messageCount: entry.messageCount,
+    ts: entry.ts,
+    userPrompt: entry.userPrompt,
+  }
+  await appendLine(filePath, jsonl)
 }
 
 /** Append an `interrupted` marker. Purely informational — the loader
@@ -257,6 +295,9 @@ export interface LoadedSession {
   firstPrompt: string
   messages: ModelMessage[]
   tokenUsage: TokenUsage
+  /** Rewind checkpoints surviving the last compact-boundary (if any).
+   *  The backing file manifests live under `.x-code/file-history/<sid>/`. */
+  checkpoints: CheckpointEntry[]
   /** Path of the jsonl file so the agent loop can keep appending to the
    *  same file when the user resumes. */
   filePath: string
@@ -292,6 +333,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   let header: HeaderEntry | null = null
   let lastUsage: UsageEntry | null = null
   let messages: ModelMessage[] = []
+  let checkpoints: CheckpointEntry[] = []
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -308,6 +350,16 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         lastUsage = entry
       } else if (entry.kind === 'compact-boundary') {
         messages = []
+        // Checkpoints anchored to pre-compaction message counts are now
+        // meaningless — the array shrank under them. Drop along with msgs.
+        checkpoints = []
+      } else if (entry.kind === 'checkpoint') {
+        checkpoints.push({
+          ckptId: entry.ckptId,
+          messageCount: entry.messageCount,
+          ts: entry.ts,
+          userPrompt: entry.userPrompt,
+        })
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg') {
@@ -326,6 +378,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     firstPrompt: header.firstPrompt,
     messages: sanitizeMessageTail(messages),
     tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
+    checkpoints,
     filePath,
   }
 }
@@ -500,5 +553,6 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.tokenUsage = { ...loaded.tokenUsage }
   state.lastInputTokens = loaded.tokenUsage.inputTokens
   state.persistedMessageCount = loaded.messages.length
+  state.checkpoints = loaded.checkpoints.slice()
   return state
 }

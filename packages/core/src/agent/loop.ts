@@ -29,7 +29,8 @@ import type { LoopState } from './loop-state.js'
 import { runMemoryExtractor } from './memory-extractor.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
-import { appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
+import { appendCheckpoint, appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
+import { createCheckpoint } from './snapshot.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
@@ -462,6 +463,28 @@ export async function agentLoop(
   }
 
   state.messages.push({ role: 'user', content: effectiveUserMessage })
+
+  // ── Rewind checkpoint ──
+  // Snapshot the working tree for every file in `state.filesModified`
+  // and record the message-index anchor, so a later `/rewind` can roll
+  // both the file state and the conversation back to this point.
+  //
+  // Skipped for sub-agent invocations: those run with their own ephemeral
+  // LoopState that the user never sees in the picker — disk churn with
+  // no surfacing value. `subAgentRegistry` is set only on the main loop
+  // (cli/src/index.ts) and explicitly cleared by `runSubAgent`.
+  //
+  // Awaited so a quick follow-up tool can't race the snapshot read — the
+  // overhead is one mkdir + N small reads (typically <30ms even with a
+  // few dozen tracked files, since content-addressed dedup skips
+  // already-written blobs). createCheckpoint never throws and returns
+  // null on FS failure, in which case rewind to this point isn't
+  // available — UI degrades gracefully.
+  if (options.subAgentRegistry) {
+    const promptPreview = userContentToText(effectiveUserMessage).slice(0, 200)
+    const ckpt = await createCheckpoint(state, promptPreview)
+    if (ckpt) void appendCheckpoint(state, ckpt)
+  }
 
   // Per-invocation turn counter. Scoped to this single `agentLoop` call
   // — re-entering the function (next user submit) starts at 0 again.

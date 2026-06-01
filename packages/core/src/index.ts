@@ -200,15 +200,21 @@ export type { SkillSettingsScope } from './skills/settings.js'
 // Session store (per-session jsonl transcript — used by /resume,
 // /usage history, and the CLI startup --resume / --continue flags).
 export {
+  appendCheckpoint,
   appendInterrupted,
   flushPendingMessages,
   getSessionFilePath,
   hydrateLoopState,
   listSessions,
   loadSession,
+  markBoundaryAndReflush,
   pickLatestSession,
 } from './agent/session-store.js'
 export type { LoadedSession, SessionListEntry } from './agent/session-store.js'
+
+// Rewind snapshots — file-history backing for /rewind.
+export { createCheckpoint, restoreCheckpoint } from './agent/snapshot.js'
+export type { CheckpointEntry } from './agent/snapshot.js'
 
 // MCP — Model Context Protocol client support.
 export { McpRegistry, emptyRegistry } from './mcp/registry.js'
