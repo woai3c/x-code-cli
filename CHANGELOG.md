@@ -1,3 +1,15 @@
+## v0.3.1 (2026-06-01)
+
+### Features
+
+- load user + project slash commands from .x-code/commands (59f429d)
+- smarter shell matching for PowerShell and compound commands (87b8586)
+
+### Bug Fixes
+
+- erase ghost frame when commit moves frame up via blankAbove (1dbf116)
+- let multi-match suggestion menu win over history nav (f1bef22)
+
 ## v0.3.0 (2026-05-26)
 
 ### Features
