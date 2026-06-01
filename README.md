@@ -22,6 +22,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **知识库系统**：分层加载（用户级 AGENTS.md / 用户级自动记忆 / 项目 AGENTS.md chain / 项目自动记忆 / 项目根 `AGENTS.local.md`），项目子包可覆盖根级约定；每个目录优先读 `AGENTS.md`，缺失时回退到 `CLAUDE.md`（Claude Code 兼容,只读不写,`/init` 只读写 `AGENTS.md`）
 - **自动记忆**：每轮对话结束后自动从最近转录里筛选值得长期记住的事实(用户偏好、纠正反馈、项目状态、外部资源指针),下次会话作为上下文加载;`/memory` 查看当前条目,直接编辑 `auto.md` 修改
 - **Skills**：以 `SKILL.md` 描述可复用工作流模板（如代码审查清单、PR 评审范式），交互中通过 `/<skill-name>` 触发；`/skill` 管理
+- **自定义斜杠命令**：把 markdown 文件放进 `~/.x-code/commands/<name>.md`（用户级）或 `<repo>/.x-code/commands/<name>.md`（项目级），输入 `/<name>` 即把文件内容作为 prompt 发给 agent；支持 `$ARGUMENTS` 占位符与可选的 YAML frontmatter `description`；优先级为 project > plugin > user，`/plugin refresh` 后即时生效（与 Skills 的区别：commands 是确定性模板每次都发同一段，skills 由 agent 按场景自主激活）
 - **MCP 集成**：支持 Model Context Protocol 服务器（stdio + HTTP，含 OAuth），由 `/mcp` 管理；服务器工具自动并入 agent 工具集
 - **插件系统**：将 skill / sub-agent / MCP 服务器 / hooks 打包成可分发单元，统一安装/启用/卸载；订阅 marketplace 一键发现插件；Manifest 与 Claude Code 字节级兼容，可直接安装其生态的插件。详见 [docs/plugins.md](./docs/plugins.md)
 - **Hooks**：插件可注册 10 个生命周期事件回调（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` / `SubagentStart` / `SubagentStop` / `TurnComplete` / `SessionEnd`），用 shell 命令拦截/改写 agent 行为；支持 `commandWindows` / `commandDarwin` / `commandLinux` 跨平台命令覆盖、`${pluginDataDir}` 持久数据目录。详见 [docs/hooks.md](./docs/hooks.md)

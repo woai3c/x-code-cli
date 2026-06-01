@@ -154,7 +154,12 @@ unsupported parts just don't activate.
   subdirs by convention. Only set explicitly when using a non-standard
   layout. Each `.md` inside `commands/` becomes a `/<name>` slash
   command — its body is a prompt template and supports both
-  `$ARGUMENTS` and `${CLAUDE_PLUGIN_ROOT}` substitution.
+  `$ARGUMENTS` and `${CLAUDE_PLUGIN_ROOT}` substitution. The same
+  `/<name>` slash command can also be defined directly in
+  `~/.x-code/commands/<name>.md` (user scope) or
+  `<repo>/.x-code/commands/<name>.md` (project scope) — precedence is
+  **project > plugin > user** (see the "Custom slash commands"
+  feature bullet in the README).
 - **`mcpServers`** — path or inline object. When unset, the loader
   auto-detects `.mcp.json` (Claude Code convention) or `mcp.json`.
   Per-server schema matches `~/.x-code/config.json`; variables

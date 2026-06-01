@@ -132,7 +132,7 @@ xc plugin install ./my-plugin
 ### 字段细节
 
 - **`name`** — 小写字母、数字、短横线。必须字母或数字开头。Claude Code / Codex 同规则。
-- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS` 与 `${CLAUDE_PLUGIN_ROOT}` 替换。
+- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS` 与 `${CLAUDE_PLUGIN_ROOT}` 替换。同名命令同时也能从 `~/.x-code/commands/<name>.md`（用户级）和 `<repo>/.x-code/commands/<name>.md`（项目级）加载，优先级 **project > plugin > user**（参见 README 的「自定义斜杠命令」）。
 - **`mcpServers`** — 路径或 inline 对象。不声明时自动探测 `.mcp.json`（Claude Code 约定）或 `mcp.json`。每个 server 的 schema 同 `~/.x-code/config.json`，变量展开（`${pluginDir}`、`${env:NAME}` 等）在 server 启动时进行。
 - **`hooks`** — 路径或 inline 对象。不声明时自动探测 `hooks/hooks.json`。详见 [hooks.md](./hooks.md)。
 
