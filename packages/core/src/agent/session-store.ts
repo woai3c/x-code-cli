@@ -113,11 +113,22 @@ type Entry = HeaderEntry | MsgEntry | UsageEntry | CompactBoundaryEntry | Interr
 // ── Append helpers (fire-and-forget; never throw) ───────────────────────
 
 async function appendLine(filePath: string, entry: Entry): Promise<void> {
+  await appendRawLines(filePath, [JSON.stringify(entry)])
+}
+
+/** Batch-append pre-serialised jsonl rows. Returns true on success so
+ *  callers can keep "only advance state when disk write succeeded" — e.g.
+ *  markBoundaryAndReflush mustn't clear the in-memory checkpoint list
+ *  unless the boundary actually landed on disk. */
+async function appendRawLines(filePath: string, lines: string[]): Promise<boolean> {
+  if (lines.length === 0) return true
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.appendFile(filePath, JSON.stringify(entry) + '\n', 'utf-8')
+    await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
+    return true
   } catch {
     // Persistence is best-effort — never block the agent loop on FS errors.
+    return false
   }
 }
 
@@ -187,13 +198,13 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
     const entry: MsgEntry = { t: 'msg', message, ts }
     lines.push(JSON.stringify(entry))
   }
+  // Preserve the pre-refactor early-bail: when the loop produces nothing
+  // (every unpersisted slot was a defensive `!message` skip), leave
+  // persistedMessageCount alone so a future repeat-with-real-messages
+  // doesn't think it already covered the range.
   if (lines.length === 0) return
-  try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
+  if (await appendRawLines(filePath, lines)) {
     state.persistedMessageCount = state.messages.length
-  } catch {
-    // best-effort
   }
 }
 
@@ -238,18 +249,13 @@ export async function markBoundaryAndReflush(state: LoopState, summary?: string)
     const entry: MsgEntry = { t: 'msg', message, ts }
     lines.push(JSON.stringify(entry))
   }
-  try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
-    state.persistedMessageCount = state.messages.length
-    // Compaction shrinks/rewrites the messages array — every prior
-    // checkpoint's `messageCount` now points past the end. Clear the
-    // in-memory list to mirror the loader's behaviour (which drops
-    // pre-boundary checkpoint lines on resume).
-    state.checkpoints = []
-  } catch {
-    // best-effort
-  }
+  if (!(await appendRawLines(filePath, lines))) return
+  state.persistedMessageCount = state.messages.length
+  // Compaction shrinks/rewrites the messages array — every prior
+  // checkpoint's `messageCount` now points past the end. Clear the
+  // in-memory list to mirror the loader's behaviour (which drops
+  // pre-boundary checkpoint lines on resume).
+  state.checkpoints = []
 }
 
 /** Append a rewind checkpoint marker. Fire-and-forget, like the other
