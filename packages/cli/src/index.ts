@@ -1,6 +1,5 @@
 // @x-code-cli/cli — CLI entry point
 import { Chalk } from 'chalk'
-import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 
 import fs from 'node:fs'
@@ -9,7 +8,6 @@ import path from 'node:path'
 import {
   McpPermissionStore,
   PROVIDER_DETECTION_ORDER,
-  PROVIDER_KEY_URLS,
   buildPluginIntegration,
   createCommandRegistry,
   createModelRegistry,
@@ -34,13 +32,12 @@ import {
 } from '@x-code-cli/core'
 import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-cli/core'
 
-import { getCleanupFn, getSessionExitInfo, startApp } from './app.js'
+import { getCleanupFn, startApp } from './app.js'
+import { parseCliArgs } from './cli-args.js'
 import { runPluginCli } from './plugin-cli.js'
-import { detectShell, formatPersistCommand } from './shell.js'
-import type { ShellType } from './shell.js'
+import { printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
-import { VERSION } from './version.js'
 
 // Route AI SDK warnings to debugLog instead of letting them blast straight
 // to stderr. The default `console.warn` path bypasses ChatInput's
@@ -182,92 +179,7 @@ async function main() {
   }
 
   // Parse CLI arguments
-  const argv = await yargs(hideBin(process.argv))
-    .scriptName('x-code')
-    .usage('$0 [options] [prompt]')
-    .option('model', {
-      alias: 'm',
-      type: 'string',
-      describe: 'Model to use (e.g. sonnet, deepseek, openai:gpt-4.1)',
-    })
-    .option('trust', {
-      alias: 't',
-      type: 'boolean',
-      default: false,
-      describe: 'Trust mode: skip write operation confirmations',
-    })
-    .option('print', {
-      alias: 'p',
-      type: 'boolean',
-      default: false,
-      describe: 'Non-interactive mode: output result and exit',
-    })
-    .option('max-turns', {
-      type: 'number',
-      // No default — interactive mode runs without a cap (the user presses
-      // Esc to stop). Pass a value to enforce a cap; mainly useful with
-      // `--print` where there's no human in the loop.
-      describe: 'Cap on agent loop iterations per submission (default: unlimited)',
-    })
-    .option('plan', {
-      type: 'boolean',
-      default: false,
-      // No short alias — `-p` is already `--print`. Plan mode constrains the
-      // model to read-only exploration + a plan file until the user approves.
-      describe: 'Start the session in plan mode (read-only exploration; user must approve before code edits)',
-    })
-    .option('plugins', {
-      type: 'boolean',
-      default: true,
-      // Declared as positive `--plugins` (default on) so yargs auto-derives
-      // the `--no-plugins` negation. The flag is an escape hatch for
-      // diagnosing whether a misbehaving plugin (broken skill, runaway
-      // hook, etc.) is the cause of a problem — `--no-plugins` skips
-      // loadAllPlugins entirely so only built-in contributions are active.
-      describe: 'Enable plugin discovery (default true). `--no-plugins` to disable for one session.',
-    })
-    .option('hooks', {
-      type: 'boolean',
-      default: true,
-      // Same `--no-hooks` negation pattern as `--plugins`. Plugins still
-      // load (skills / agents / mcp contributions still register), only
-      // the hook subsystem is skipped — wires `emptyHookBus()` instead
-      // of the integration-built one. Use when a slow / runaway hook
-      // is suspected, without losing the rest of a plugin's content.
-      describe: 'Enable plugin hooks (default true). `--no-hooks` to skip hook execution for one session.',
-    })
-    .option('plugin-debug', {
-      type: 'boolean',
-      default: false,
-      // Targeted debug output for plugin / hook / marketplace activity.
-      // Mirrors the matching debugLog() lines to stderr in addition to the
-      // log file, so you can see them live without tailing ~/.x-code/logs/.
-      // Equivalent to setting `XC_PLUGIN_DEBUG=1`. Doesn't change behaviour
-      // — only changes where the breadcrumbs go.
-      describe: 'Mirror plugin / hook / marketplace debug breadcrumbs to stderr (also XC_PLUGIN_DEBUG=1).',
-    })
-    .option('continue', {
-      alias: 'c',
-      type: 'boolean',
-      default: false,
-      describe: 'Resume the most recent session in this project (no picker)',
-    })
-    .option('resume', {
-      alias: 'r',
-      type: 'string',
-      // Optional value: `xc --resume` (no value) opens the picker; `xc
-      // --resume <id-or-slug>` jumps directly to the session whose
-      // filename matches. Yargs treats this as a string-typed flag, so
-      // `argv.resume === undefined` means "flag not given", `''` means
-      // "given without a value", and any other string is the user's
-      // lookup key.
-      describe: 'Resume a session: `--resume` opens the picker; `--resume <id>` jumps directly',
-    })
-    .version(VERSION)
-    .alias('v', 'version')
-    .help()
-    .alias('h', 'help')
-    .parse()
+  const argv = await parseCliArgs()
 
   const prompt = (argv._ as string[]).join(' ') || undefined
 
@@ -585,25 +497,6 @@ async function findSessionFile(input: string): Promise<string | null> {
   return null
 }
 
-/** Print a copy-pasteable resume hint after Ink has unmounted and the
- *  terminal has been reset. Mirrors Claude Code's exit behavior so a
- *  user closing the chat sees exactly how to come back to the same
- *  thread. We prefer the slug-prefixed id when available because it's
- *  human-skimmable in `ls` output; we fall back to the bare sessionId
- *  for slug-less sessions (CJK-only first messages).
- *
- *  Suppressed in --print mode (no Ink) and when the session has no
- *  messages yet (user launched but never submitted) — we'd be pointing
- *  at an empty jsonl. */
-function printResumeHint(): void {
-  const info = getSessionExitInfo()
-  if (!info) return
-  const key = info.taskSlug ? `${info.taskSlug}-${info.sessionId}` : info.sessionId
-  const cmd = chalk.cyan(`xc --resume ${key}`)
-  const dim = chalk.gray
-  process.stdout.write(`${dim('Resume this session:')} ${cmd}\n`)
-}
-
 /** Load .env file from cwd (walk up to find it, like dotenv convention) */
 function loadEnvFile(): void {
   let dir = process.cwd()
@@ -621,60 +514,6 @@ function loadEnvFile(): void {
     if (parent === dir) break // reached root
     dir = parent
   }
-}
-
-function printNoApiKeyMessage() {
-  const code = (s: string) => chalk.cyan(s)
-  const comment = (s: string) => chalk.gray(s)
-  const envName = (s: string) => chalk.yellow(s)
-
-  console.error(chalk.red.bold('Error: No API key found.') + '\n')
-  console.error('Set at least one provider API key via environment variable:\n')
-  for (const { envKey } of PROVIDER_DETECTION_ORDER) {
-    const provider = envKey
-      .replace(/_API_KEY$/, '')
-      .replace('GOOGLE_GENERATIVE_AI', 'google')
-      .replace('MOONSHOT', 'moonshotai')
-      .toLowerCase()
-    const url = PROVIDER_KEY_URLS[provider] ?? ''
-    console.error(`  ${envName(envKey.padEnd(32))} ${chalk.dim(url)}`)
-  }
-  console.error(
-    `\n  ${envName('OPENAI_COMPATIBLE_API_KEY'.padEnd(32))} ${chalk.dim('(custom OpenAI-compatible endpoint)')}`,
-  )
-
-  const shell = detectShell()
-  const restartHint: Record<ShellType, string> = {
-    powershell: '# restart PowerShell, then run:',
-    cmd: ':: restart CMD, then run:',
-    zsh: '',
-    bash: '',
-    fish: '',
-    sh: '',
-  }
-  console.error(`\nDetected shell: ${chalk.bold(shell)}`)
-  console.error('Persist it so you do not need to set it every session:\n')
-  console.error(`  ${code(formatPersistCommand('ANTHROPIC_API_KEY', 'sk-ant-...', shell))}`)
-  const hint = restartHint[shell]
-  if (hint) console.error(`  ${comment(hint)}  ${code('xc')}`)
-  console.error(`\nAlternatively, put keys in a project-local ${chalk.bold('.env')} file (loaded from cwd upward).`)
-}
-
-function printNoWebSearchKeyHint(): void {
-  const shell = detectShell()
-  const yellow = chalk.yellow
-  const bold = chalk.bold
-  const dim = chalk.gray
-  const code = chalk.cyan
-
-  console.error(yellow('Note:') + ' WebSearch is disabled — no search API key configured.')
-  console.error(dim('  (WebFetch still works key-less; the hint is only for web search.)'))
-  console.error('  Pick either (both free, signup only):')
-  console.error(`    ${bold('TAVILY_API_KEY')}  ${dim('1000/month — https://tavily.com')}`)
-  console.error(`    ${bold('BRAVE_API_KEY')}   ${dim('2000/month — https://api.search.brave.com')}`)
-
-  const cmd = formatPersistCommand('TAVILY_API_KEY', 'tvly-...', shell)
-  console.error(`  ${dim(`(${shell})`)}  ${code(cmd)}\n`)
 }
 
 /** Plain-terminal prompt used during startup, before Ink mounts.
