@@ -2446,15 +2446,32 @@ export function ChatInput({
       //     of the spinner / separator / input rows on every commit.
       const frameSizeChanged = oldFrameH !== nextH
       // Floating-frame model: any commit that moves the frame's top row
-      // (i.e. freeBlanks was non-zero before this commit) MUST go
-      // through FULL-REDRAW. The cell-diff loop further down assumes
-      // the on-screen frame still matches prevFrameRef.current — true
-      // when frame stayed put, false when it just moved. Without this
-      // guard, after a commit the cell-diff would write the new frame
-      // at the new (lower) frameTop while the old frame's cells are
-      // still painted at the old (higher) position — leaving stale
-      // rows above the new frame.
-      const frameMoved = freeBlanksAboveFrameRef.current > 0
+      // MUST go through FULL-REDRAW. The cell-diff loop further down
+      // assumes the on-screen frame still matches prevFrameRef.current
+      // — true when frame stayed put, false when it just moved. Without
+      // this guard, after a commit the cell-diff would write the new
+      // frame at the new frameTop while the old frame's cells are still
+      // painted at the old position — leaving a phantom input box at
+      // the old row.
+      //
+      // Two ways the frame can move on commit:
+      //   (a) DOWN — freeBlanks (blank rows BELOW frame) was non-zero,
+      //       gets partially consumed by `scrollRows`, frame floats
+      //       toward the bottom.
+      //   (b) UP — frame was bottom-anchored with blankAbove > 0 (e.g.
+      //       a slash menu just shrunk), the commit writes scrollback
+      //       INTO that blankAbove region (`startRow` shifts up), and
+      //       the new frameTop ends up higher than where the frame
+      //       currently sits.
+      // The older check (`freeBlanks > 0`) only caught case (a). Case (b)
+      // fell through to MINIMAL-WRITE, the old bottom-anchored frame was
+      // never erased, and the user saw two stacked input boxes. We now
+      // compare the just-computed `frameTop` to where the frame was
+      // actually painted last (`lastFrameTopRef`) so both directions are
+      // covered.
+      const oldFrameTopForMoveCheck =
+        lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, termRows - oldFrameH + 1)
+      const frameMoved = freeBlanksAboveFrameRef.current > 0 || oldFrameTopForMoveCheck !== frameTop
       if (preScrollRows > 0 || frameSizeChanged || frameMoved) {
         // FULL-REDRAW PATH.
         const oldFrameTopForClear =
