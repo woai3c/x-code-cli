@@ -29,7 +29,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **文件附件**：在提示词中以 `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
 - **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/rewind`、`/usage`、`/usage-history`、`/memory`、`/review`、`/skill`、`/mcp`、`/plugin` 等
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/rewind`、`/usage`、`/usage-history`、`/memory`、`/review`、`/doctor`、`/skill`、`/mcp`、`/plugin` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **多行输入**：`Alt+Enter`（macOS 为 `Option+Enter`）或行尾 `\` 后 Enter 插入换行；普通 Enter 直接发送
 - **历史输入回溯**：输入框为空时按 `↑`/`↓` 召回已提交的提示词
@@ -221,6 +221,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/skill <sub>`        | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`）  |
 | `/mcp <sub>`          | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）      |
 | `/plugin <sub>`       | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）                 |
+| `/doctor`             | 一键诊断运行环境（版本、API Key、MCP 连通性、插件、子 Agent、Skills）               |
 | `/exit`               | 保存会话并退出                                                                      |
 
 ### 思考模式说明

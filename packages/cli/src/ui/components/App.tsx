@@ -30,6 +30,7 @@ import type {
 } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
+import { createDoctorCommandHandler } from '../commands/doctor.js'
 import { createMcpCommandHandler } from '../commands/mcp.js'
 import { createPluginCommandHandler } from '../commands/plugin.js'
 import { createSkillCommandHandler } from '../commands/skill.js'
@@ -153,6 +154,7 @@ export const SLASH_COMMANDS = [
       { name: 'marketplace', description: 'Manage marketplace subscriptions (add | remove | list | refresh | info)' },
     ],
   },
+  { name: '/doctor', description: 'Diagnose environment, API keys, MCP servers, plugins, and agents' },
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
@@ -811,6 +813,10 @@ export function App({
           await handlePlugin(text, arg)
           return
 
+        case 'doctor':
+          handleDoctor(text)
+          return
+
         case 'exit':
           await cleanup()
           exit()
@@ -1329,6 +1335,13 @@ export function App({
     addCommandResult,
     askQuestion,
     invalidateSystemPromptCache,
+  })
+
+  const handleDoctor = createDoctorCommandHandler({
+    options,
+    modelId: state.modelId,
+    addInfoMessage,
+    echoCommand,
   })
 
   // RENDERING ARCHITECTURE
