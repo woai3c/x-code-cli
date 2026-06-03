@@ -42,7 +42,7 @@ export const builtInAgents: SubAgentDefinition[] = [
   {
     name: 'explore',
     description:
-      'Read-only codebase exploration. Use for "where is X defined", "find all callers of Y", or any pure-read research question.',
+      'Read-only codebase exploration. Use when broad, multi-directory search is needed (4+ searches). For targeted lookups ("where is X", "callers of Y"), prefer grep directly — it\'s faster.',
     prompt: `You are a read-only codebase explorer. Your job is to find information, trace code paths, and report findings clearly.
 
 Guidelines:

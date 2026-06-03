@@ -18,7 +18,7 @@ import { generateSessionSummary } from '../knowledge/session.js'
 import type { AgentCallbacks } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { estimateTokenCount } from './context-window.js'
-import { lightCompactMessages } from './light-compact.js'
+import { lightCompactMessages, truncateOldToolResults } from './light-compact.js'
 import type { LoopState } from './loop-state.js'
 import { markBoundaryAndReflush } from './session-store.js'
 
@@ -114,6 +114,27 @@ export async function checkAndCompressContext(
     }
   }
 
+  // Second pass: truncate old, large tool_result payloads to compact stubs.
+  // Cheaper than an LLM summary and preserves message structure (no cache
+  // invalidation beyond the truncated content itself).
+  const trunc = truncateOldToolResults(state.messages)
+  if (trunc.truncatedCount > 0) {
+    const stillOver = estimateTokenCount(state.messages) > threshold
+    callbacks.onContextCompressed(
+      `Truncated ${trunc.truncatedCount} old tool result(s), saved ~${Math.round(trunc.charsSaved / 3)} tokens${stillOver ? ' — still over threshold, summarising' : ''}.`,
+    )
+    if (!stillOver) {
+      void markBoundaryAndReflush(state)
+      emitCompactionHook(hookCtx, {
+        name: 'PostCompact',
+        trigger: 'proactive',
+        messageCount: state.messages.length,
+        summary: '',
+      })
+      return
+    }
+  }
+
   let summaryText = ''
   try {
     const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
@@ -128,6 +149,7 @@ export async function checkAndCompressContext(
   }
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
+  state.expectCacheMiss = true
   // Write a compact-boundary line + re-flush the trimmed messages so
   // the post-boundary jsonl content equals the new in-memory state.
   void markBoundaryAndReflush(state, summaryText)
@@ -160,6 +182,7 @@ export async function handleContextTooLong(
   })
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
+  state.expectCacheMiss = true
   // Same boundary discipline as the proactive path — reactive compact
   // also shrinks state.messages in place, so the jsonl needs a
   // compact-boundary marker to keep loader semantics consistent.

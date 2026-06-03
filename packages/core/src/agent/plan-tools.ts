@@ -111,6 +111,7 @@ export async function handleEnterPlanMode(
   }
   state.permissionMode = 'plan'
   state.systemPromptCache = null
+  state.expectCacheMiss = true
   if (!state.currentPlanPath) {
     const topic = (input.topic as string | undefined)?.trim()
     const fallbackText = lastUserMessageText(state.messages)
@@ -195,6 +196,7 @@ export async function handleExitPlanMode(
   if (approved) {
     state.permissionMode = 'acceptEdits'
     state.systemPromptCache = null
+    state.expectCacheMiss = true
     const persisted = savedPath ?? state.currentPlanPath
     state.currentPlanPath = null
     callbacks.onPlanModeChange('acceptEdits')

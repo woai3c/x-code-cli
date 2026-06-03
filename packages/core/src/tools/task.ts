@@ -19,31 +19,39 @@ export function buildTaskToolDescription(registry: SubAgentRegistry): string {
   const agents = registry.list()
   const agentList = agents.map((a) => `  - ${a.name}: ${a.description}`).join('\n')
 
-  return `Launch a new agent to handle complex, multi-step tasks autonomously.
+  return `Launch a sub-agent to handle tasks that genuinely require extensive, multi-step work.
 
-The task tool launches specialized sub-agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it. The sub-agent runs with its own message history and returns only its final conclusion — its intermediate tool calls never enter your context window, keeping the main conversation lean.
+Sub-agents run with their own message history and return only their final conclusion — intermediate tool calls never enter your context window, keeping the main conversation lean. However, each sub-agent invocation has significant overhead (fresh context, separate cache, extra system prompt tokens). A task completable with 2-3 direct tool calls is always faster and cheaper than delegating.
 
 Available sub-agents:
 ${agentList}
 
 When using the task tool, specify a subagent_type parameter to select which agent type to use.
 
-When NOT to use the task tool:
-- If you want to read a specific file path, use the readFile or glob tool instead of the task tool, to find the match more quickly
-- If you are searching for a specific class definition like "class Foo", use the grep tool instead of the task tool, to find the match more quickly
-- If you are searching for code within a specific file or set of 2-3 files, use the readFile tool instead of the task tool, to find the match more quickly
-- Other tasks that are not related to the agent descriptions above
+## When NOT to use the task tool
+- Tasks completable in 3 or fewer tool calls — just do them directly
+- Reading a specific file — use readFile directly
+- Searching for a known symbol like "class Foo" — use grep directly
+- Searching within 1-3 known files — use readFile directly
+- Questions answerable from files you've already read in this conversation
+- Direct questions you can answer from your own knowledge
+- Single-file edits, trivial fixes, or any task with an obvious direct path
 
-Usage notes:
+## When to use the task tool
+- Broad codebase exploration requiring 4+ searches across many directories, AFTER direct search proved insufficient
+- Code review of pending changes (structured reviewer output)
+- Implementation planning requiring 5+ files to read
+- Multi-step investigation where only the conclusion matters
+
+## Usage notes
 - Always include a short description (3-5 words) summarizing what the agent will do
-- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses
-- When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result.
-- Each task invocation starts fresh — provide a complete task description.
+- Launch multiple agents concurrently when their tasks are genuinely independent; use a single message with multiple tool uses
+- The result is not visible to the user — summarize it back in a text message
+- Each task invocation starts fresh — provide a complete task description
 - The agent's outputs should generally be trusted
-- Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent
-- If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple task tool use content blocks. For example, if you need to launch both a code-reviewer agent and an explore agent in parallel, send a single message with both tool calls.
-- NEVER launch multiple sub-agents in one turn if they could modify the same files or resources. Only run multiple sub-agents in parallel when their tasks are genuinely independent.
+- Clearly tell the agent whether you expect it to write code or just to do research
+- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple task tool use content blocks
+- NEVER launch multiple sub-agents in one turn if they could modify the same files or resources
 
 ## Writing the prompt
 
@@ -68,6 +76,11 @@ task({
   subagent_type: "code-reviewer",
   prompt: "Review the authentication module for security issues. The main auth code lives in src/auth/. Focus on: JWT token handling in src/auth/jwt.ts, session management in src/auth/session.ts, and the login endpoint in src/routes/login.ts. Check for: token expiration handling, secret storage, injection vulnerabilities, and missing input validation. Report a numbered punch list with severity and file:line references."
 })
+</example>
+
+<example>
+user: "Where is the database connection configured?"
+<commentary>Do NOT use task — a single grep for "database" or "connection" will find it. Use grep directly.</commentary>
 </example>
 
 <example>

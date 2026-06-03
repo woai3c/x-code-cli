@@ -177,6 +177,19 @@ async function collectTurnResponse(
     state.tokenUsage.currentContextTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
     if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
     callbacks.onUsageUpdate(state.tokenUsage)
+
+    // ── Cache break detection ──
+    const turnCacheRead = usage.inputTokenDetails?.cacheReadTokens ?? 0
+    if (state.expectCacheMiss) {
+      state.expectCacheMiss = false
+    } else if (state.prevTurnCacheRead > 2000 && turnCacheRead < state.prevTurnCacheRead * 0.5) {
+      debugLog(
+        'cache-break',
+        `Cache read dropped ${state.prevTurnCacheRead} → ${turnCacheRead} (${Math.round((1 - turnCacheRead / state.prevTurnCacheRead) * 100)}% drop). Possible unintended cache invalidation.`,
+      )
+    }
+    state.prevTurnCacheRead = turnCacheRead
+
     // Persist a usage snapshot inline with the jsonl transcript. Per-turn
     // cadence: the picker's tail-scan only ever needs the LATEST entry, but
     // we write every turn so a crashed process doesn't lose its final

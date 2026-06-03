@@ -67,6 +67,17 @@ export interface LoopState {
    *  in-memory state on resume. See `agent/session-store.ts`. */
   persistedMessageCount: number
 
+  // ── Cache break detection ──
+
+  /** Per-turn cache-read token count from the previous turn. Used to
+   *  detect unexpected cache misses (e.g. a code change that broke
+   *  system prompt byte-stability). */
+  prevTurnCacheRead: number
+  /** When true, the next turn's cache-read drop is expected (e.g. after
+   *  compaction or permissionMode change) and should not trigger a
+   *  warning. Automatically cleared after one turn. */
+  expectCacheMiss: boolean
+
   // ── Sub-agent support (set once in agentLoop, read by tool-execution) ──
 
   /** Cached knowledge context for sub-agent system prompts. Set once in
@@ -119,5 +130,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     todos: [],
     checkpoints: [],
     persistedMessageCount: 0,
+    prevTurnCacheRead: 0,
+    expectCacheMiss: false,
   }
 }
