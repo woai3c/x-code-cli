@@ -35,7 +35,7 @@ import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-
 import { getCleanupFn, startApp } from './app.js'
 import { parseCliArgs } from './cli-args.js'
 import { runPluginCli } from './plugin-cli.js'
-import { printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
+import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
 
@@ -167,6 +167,11 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
 async function main() {
   checkNodeVersion()
   loadEnvFile()
+
+  // Fire-and-forget update check — queries npm registry (with 24h disk
+  // cache) and prints a one-line hint if a newer version exists. Never
+  // blocks startup or throws. Suppressed for --print and non-TTY.
+  void checkForUpdate().catch(() => undefined)
 
   // Non-interactive plugin management subcommand. Routed BEFORE yargs
   // parses the rest of argv — otherwise `xc plugin install ./foo`
