@@ -1,3 +1,12 @@
+## v0.3.2 (2026-06-03)
+
+### Features
+
+- reduce sub-agent overuse, add cache break detection, and smart tool_result truncation (fd2e45f)
+- add /doctor slash command for environment diagnostics (b3defb6)
+- startup version check with 24h disk cache (6eb68d6)
+- per-message file snapshots backing /rewind (6951cf9)
+
 ## v0.3.1 (2026-06-01)
 
 ### Features
