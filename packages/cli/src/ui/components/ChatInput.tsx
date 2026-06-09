@@ -97,7 +97,8 @@ export type { PermissionRequest, SelectRequest, SlashCommand, SpinnerState } fro
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
 const MAX_VISIBLE_LINES = 10
-const MAX_AT_COMPLETIONS = 8
+const MAX_AT_RESULTS = 50
+const MAX_VISIBLE_MENU_ITEMS = 8
 
 interface ChatInputProps {
   /** All scrollback messages. New entries are committed to the terminal
@@ -522,7 +523,7 @@ export function ChatInput({
   const atTrigger = useMemo(() => detectAtToken(text, cursor), [text, cursor])
   const atMatches = useMemo(() => {
     if (!atTrigger.active) return [] as FileEntry[]
-    return scoreAndRank(fileEntries as FileEntry[], atTrigger.query).slice(0, MAX_AT_COMPLETIONS)
+    return scoreAndRank(fileEntries as FileEntry[], atTrigger.query).slice(0, MAX_AT_RESULTS)
   }, [atTrigger, fileEntries])
   const safeAtIndex = atMatches.length > 0 ? atCompletionIndex % atMatches.length : 0
   const atDismissedKey = `${atTrigger.atIdx}:${atTrigger.query}`
@@ -2075,7 +2076,27 @@ export function ChatInput({
       const maxRowWidth = Math.max(20, termWidth - 1)
       const descCol = labelWidth + 4 // 2-space gutter + label area (labelWidth + 2-space pad)
       const descWidth = Math.max(10, maxRowWidth - descCol)
-      for (let i = 0; i < matches.length; i++) {
+      // Windowed rendering: show at most MAX_VISIBLE_MENU_ITEMS items
+      // at a time, sliding the window to keep safeIndex visible. This
+      // caps the frame height so the menu never pushes scrollback
+      // content out of the viewport (the root cause of the streaming-
+      // corruption bug where `/` during an AI reply overwrote committed
+      // scrollback and froze the display).
+      const total = matches.length
+      const cap = MAX_VISIBLE_MENU_ITEMS
+      let winStart: number
+      let winEnd: number
+      if (total <= cap) {
+        winStart = 0
+        winEnd = total
+      } else {
+        winStart = Math.max(0, Math.min(safeIndex - Math.floor(cap / 2), total - cap))
+        winEnd = winStart + cap
+      }
+      if (winStart > 0) {
+        frame.push(textToCells(`  ▲ ${winStart} more`, S_DIM))
+      }
+      for (let i = winStart; i < winEnd; i++) {
         const cmd = matches[i]
         const sel = i === safeIndex
         const labelLen = cmd.name.length + (cmd.argumentHint ? cmd.argumentHint.length + 1 : 0)
@@ -2102,6 +2123,9 @@ export function ChatInput({
           frame.push(truncateCellRow([...indent, ...descRows[1]!], maxRowWidth))
         }
       }
+      if (winEnd < total) {
+        frame.push(textToCells(`  ▼ ${total - winEnd} more`, S_DIM))
+      }
     } else if (activeMenu === 'at') {
       if (atMatches.length === 0) {
         // No-matches placeholder — keeps the user oriented when
@@ -2115,7 +2139,21 @@ export function ChatInput({
         frame.push(cells)
       } else {
         const maxColWidth = Math.max(10, termWidth - 4)
-        for (let i = 0; i < atMatches.length; i++) {
+        const atTotal = atMatches.length
+        const atCap = MAX_VISIBLE_MENU_ITEMS
+        let atWinStart: number
+        let atWinEnd: number
+        if (atTotal <= atCap) {
+          atWinStart = 0
+          atWinEnd = atTotal
+        } else {
+          atWinStart = Math.max(0, Math.min(safeAtIndex - Math.floor(atCap / 2), atTotal - atCap))
+          atWinEnd = atWinStart + atCap
+        }
+        if (atWinStart > 0) {
+          frame.push(textToCells(`  ▲ ${atWinStart} more`, S_DIM))
+        }
+        for (let i = atWinStart; i < atWinEnd; i++) {
           const entry = atMatches[i]
           const sel = i === safeAtIndex
           const cells: Cell[] = []
@@ -2125,6 +2163,9 @@ export function ChatInput({
           const truncated = truncatePathFromStart(display, maxColWidth)
           cells.push(...textToCells(truncated, sel ? S_BLUE_PURPLE_BOLD : S_DIM))
           frame.push(cells)
+        }
+        if (atWinEnd < atTotal) {
+          frame.push(textToCells(`  ▼ ${atTotal - atWinEnd} more`, S_DIM))
         }
       }
     }
