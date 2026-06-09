@@ -91,6 +91,7 @@ export async function checkAndCompressContext(
     tokenEstimate: tokenEstimateBefore,
   })
 
+  callbacks.onCompressionProgress?.('Removing duplicate tool calls...')
   const light = lightCompactMessages(state.messages)
   if (light.dropped > 0) {
     state.messages = light.messages
@@ -114,9 +115,7 @@ export async function checkAndCompressContext(
     }
   }
 
-  // Second pass: truncate old, large tool_result payloads to compact stubs.
-  // Cheaper than an LLM summary and preserves message structure (no cache
-  // invalidation beyond the truncated content itself).
+  callbacks.onCompressionProgress?.('Truncating old tool results...')
   const trunc = truncateOldToolResults(state.messages)
   if (trunc.truncatedCount > 0) {
     const stillOver = estimateTokenCount(state.messages) > threshold
@@ -135,6 +134,7 @@ export async function checkAndCompressContext(
     }
   }
 
+  callbacks.onCompressionProgress?.('Generating session summary...')
   let summaryText = ''
   try {
     const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
@@ -147,13 +147,18 @@ export async function checkAndCompressContext(
     // so context still shrinks; we just lose the structured summary
     // that would have ridden along on the boundary line for picker UX.
   }
+  callbacks.onCompressionProgress?.('Summarizing conversation...')
+  const tokensBefore = estimateTokenCount(state.messages)
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
   state.expectCacheMiss = true
+  const tokensAfter = estimateTokenCount(state.messages)
   // Write a compact-boundary line + re-flush the trimmed messages so
   // the post-boundary jsonl content equals the new in-memory state.
   void markBoundaryAndReflush(state, summaryText)
-  callbacks.onContextCompressed('Context compressed to fit context window.')
+  const beforeK = Math.round(tokensBefore / 1000)
+  const afterK = Math.round(tokensAfter / 1000)
+  callbacks.onContextCompressed(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
   emitCompactionHook(hookCtx, {
     name: 'PostCompact',
     trigger: 'proactive',
@@ -180,14 +185,19 @@ export async function handleContextTooLong(
     messageCount: state.messages.length,
     tokenEstimate: estimateTokenCount(state.messages),
   })
+  callbacks.onCompressionProgress?.('Summarizing conversation...')
+  const tokensBefore = estimateTokenCount(state.messages)
   state.messages = await compressMessages(state.messages, model)
   state.lastInputTokens = 0
   state.expectCacheMiss = true
+  const tokensAfter = estimateTokenCount(state.messages)
   // Same boundary discipline as the proactive path — reactive compact
   // also shrinks state.messages in place, so the jsonl needs a
   // compact-boundary marker to keep loader semantics consistent.
   void markBoundaryAndReflush(state)
-  callbacks.onContextCompressed('Context too long — automatically compressed. Retrying...')
+  const beforeK = Math.round(tokensBefore / 1000)
+  const afterK = Math.round(tokensAfter / 1000)
+  callbacks.onContextCompressed(`Context too long — compressed (~${beforeK}k → ~${afterK}k tokens). Retrying...`)
   emitCompactionHook(hookCtx, {
     name: 'PostCompact',
     trigger: 'reactive',

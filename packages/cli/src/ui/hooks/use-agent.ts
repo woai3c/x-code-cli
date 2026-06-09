@@ -120,6 +120,10 @@ export interface AgentState {
    *  any non-read tool runs, the model emits text, the loop ends, or
    *  the user aborts. */
   bufferingReads: boolean
+  /** Non-null while context compression is in progress. Drives the
+   *  spinner label so the user sees which compression phase is active
+   *  instead of a generic "Thinking…". Cleared when compression ends. */
+  compressionLabel: string | null
 }
 
 const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
@@ -140,6 +144,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   error: null,
   todos: [],
   bufferingReads: false,
+  compressionLabel: null,
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
@@ -489,8 +494,18 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         onUsageUpdate: (usage) => {
           setState((prev) => ({ ...prev, usage }))
         },
-        onContextCompressed: () => {
-          // Could show a notification
+        onCompressionProgress: (description) => {
+          setState((prev) => ({ ...prev, compressionLabel: description }))
+        },
+        onContextCompressed: (summary) => {
+          setState((prev) => ({ ...prev, compressionLabel: null }))
+          appendMessage({
+            id: `compress-${Date.now()}`,
+            role: 'assistant',
+            content: summary,
+            timestamp: Date.now(),
+            kind: 'command-result',
+          })
         },
         onError: (error) => {
           setState((prev) => ({ ...prev, error: error.message }))
@@ -572,7 +587,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           }
         }
         pendingToolsRef.current.clear()
-        setState((prev) => ({ ...prev, isLoading: false, activeToolCalls: [], bufferingReads: false }))
+        setState((prev) => ({
+          ...prev,
+          isLoading: false,
+          activeToolCalls: [],
+          bufferingReads: false,
+          compressionLabel: null,
+        }))
       } catch (err) {
         pendingToolsRef.current.clear()
         // User-cancel path: agentLoop swallows AbortError into a clean
@@ -588,6 +609,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           isLoading: false,
           activeToolCalls: [],
           bufferingReads: false,
+          compressionLabel: null,
           error: wasAborted ? null : classifyApiError(err).message,
         }))
       }
@@ -883,9 +905,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   )
 
   /** Manual context compression */
-  const compact = useCallback(async () => {
-    if (!loopStateRef.current) return
+  const compact = useCallback(async (onProgress?: (description: string) => void) => {
+    if (!loopStateRef.current) return null
+    const { estimateTokenCount, KEEP_RECENT } = await import('@x-code-cli/core')
+    if (loopStateRef.current.messages.length <= KEEP_RECENT) return null
+    const before = estimateTokenCount(loopStateRef.current.messages)
+    onProgress?.('Summarizing conversation...')
     loopStateRef.current.messages = await compressMessages(loopStateRef.current.messages, modelRef.current)
+    const after = estimateTokenCount(loopStateRef.current.messages)
+    return { beforeTokens: before, afterTokens: after }
   }, [])
 
   /** Switch model at runtime */
@@ -947,7 +975,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setState((prev) => ({ ...prev, permissionMode: next }))
   }, [])
 
-  const { addInfoMessage, addUserMessage, addCommandMessage, addCommandResult } = useAgentDisplayHelpers(appendMessage)
+  const { addInfoMessage, addUserMessage, echoCommand, addCommandMessage, addCommandResult } =
+    useAgentDisplayHelpers(appendMessage)
 
   return {
     state,
@@ -969,6 +998,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setPermissionMode,
     addInfoMessage,
     addUserMessage,
+    echoCommand,
     addCommandMessage,
     addCommandResult,
     askQuestion,

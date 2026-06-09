@@ -30,6 +30,7 @@ export { createModelRegistry } from './providers/registry.js'
 
 // Agent
 export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
+export { KEEP_RECENT } from './agent/compression.js'
 export type { LoopState } from './agent/loop.js'
 export { computeEditDiff } from './agent/diff.js'
 export type { EditDiffHunk, EditDiffPayload } from './agent/diff.js'

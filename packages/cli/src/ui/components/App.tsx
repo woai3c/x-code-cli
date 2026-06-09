@@ -350,6 +350,7 @@ export function App({
     invalidateSystemPromptCache,
     addInfoMessage,
     addUserMessage,
+    echoCommand,
     addCommandMessage,
     addCommandResult,
     askQuestion,
@@ -716,10 +717,6 @@ export function App({
   // would hang until a keypress or terminal resize.
 
   /** Echo a slash command to the message history (so the user can see what they typed) */
-  function echoCommand(text: string) {
-    addUserMessage(text)
-  }
-
   /** Handle user input (including slash commands) */
   async function handleSubmit(text: string) {
     // Slash commands
@@ -1196,9 +1193,14 @@ export function App({
   }
 
   async function handleCompact() {
-    addInfoMessage('Compressing context...')
-    await compact()
-    addInfoMessage('Context compressed.')
+    const result = await compact()
+    if (!result) {
+      addCommandResult('Nothing to compress — conversation is too short.')
+      return
+    }
+    const beforeK = Math.round(result.beforeTokens / 1000)
+    const afterK = Math.round(result.afterTokens / 1000)
+    addCommandResult(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
   }
 
   async function handleUsage() {
@@ -1392,7 +1394,11 @@ export function App({
               // the label would flicker Reading-Thinking-Reading on
               // every tool. Updated by useAgent on tool-call /
               // text-delta / loop-end / abort.
-              label: state.bufferingReads ? 'Reading' : 'Thinking',
+              label: state.compressionLabel
+                ? `Compressing — ${state.compressionLabel}`
+                : state.bufferingReads
+                  ? 'Reading'
+                  : 'Thinking',
               mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
             }
           : null

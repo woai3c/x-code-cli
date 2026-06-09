@@ -167,6 +167,9 @@ export interface AgentCallbacks {
   onShellOutput: (chunk: string) => void
   onUsageUpdate: (usage: TokenUsage) => void
   onContextCompressed: (summary: string) => void
+  /** Fired at each phase boundary during context compression so the UI
+   *  can show a spinner label that tracks progress. */
+  onCompressionProgress?: (description: string) => void
   onError: (error: Error) => void
   /** Fired by the sub-agent runner to stream progress from child agent loops.
    *  The CLI UI uses these events to build the collapsed/expanded task block. */
