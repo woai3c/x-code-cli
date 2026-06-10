@@ -123,7 +123,6 @@ export async function checkPermission(
   cwd?: string,
 ): Promise<boolean> {
   const level = getPermissionLevel(toolCall.toolName, toolCall.input)
-  if (level === 'deny') return false
   if (level === 'always-allow' || trustMode) return true
   if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
     const filePath = (toolCall.input.filePath as string) ?? ''

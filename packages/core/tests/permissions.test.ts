@@ -108,14 +108,36 @@ describe('checkPermission', () => {
     expect(askFn).not.toHaveBeenCalled()
   })
 
-  it('returns false for denied tools without asking', async () => {
-    const askFn = vi.fn()
+  it('prompts user for destructive shell commands (deny level)', async () => {
+    const askFn = vi.fn().mockResolvedValue('yes')
     const result = await checkPermission(
       { toolCallId: '2', toolName: 'shell', input: { command: 'rm -rf /' } },
       false,
       askFn,
     )
+    expect(result).toBe(true)
+    expect(askFn).toHaveBeenCalled()
+  })
+
+  it('user can reject destructive shell commands', async () => {
+    const askFn = vi.fn().mockResolvedValue('no')
+    const result = await checkPermission(
+      { toolCallId: '2b', toolName: 'shell', input: { command: 'rm -rf /' } },
+      false,
+      askFn,
+    )
     expect(result).toBe(false)
+    expect(askFn).toHaveBeenCalled()
+  })
+
+  it('trust mode auto-approves destructive shell commands', async () => {
+    const askFn = vi.fn()
+    const result = await checkPermission(
+      { toolCallId: '2c', toolName: 'shell', input: { command: 'rm -rf /' } },
+      true,
+      askFn,
+    )
+    expect(result).toBe(true)
     expect(askFn).not.toHaveBeenCalled()
   })
 
