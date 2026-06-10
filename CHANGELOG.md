@@ -1,3 +1,14 @@
+## v0.3.3 (2026-06-10)
+
+### Features
+
+- replace hard deny with [dangerous] warning dialog for destructive commands (7516271)
+- show compression progress in spinner and token stats on completion (a2cd0c3)
+
+### Bug Fixes
+
+- cap slash and @-mention menus to 8 visible rows with scroll indicators (5489e79)
+
 ## v0.3.2 (2026-06-03)
 
 ### Features
