@@ -56,7 +56,7 @@ describe('resolveModelId', () => {
 
   it('resolves alias from CLI argument', () => {
     expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-4-6')
-    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-4-7')
+    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-4-8')
     expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-v4-flash')
   })
 
@@ -82,7 +82,7 @@ describe('resolveModelId', () => {
 
   it('follows provider detection order', () => {
     process.env.OPENAI_API_KEY = 'test-key'
-    expect(resolveModelId()).toBe('openai:gpt-4.1')
+    expect(resolveModelId()).toBe('openai:gpt-5.5')
   })
 
   it('returns null when no providers configured', () => {

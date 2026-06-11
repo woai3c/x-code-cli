@@ -13,34 +13,49 @@ export const DEFAULT_MODEL = 'deepseek:deepseek-v4-flash'
  *  Keep aligned with `packages/core/src/types/index.ts::PROVIDER_DETECTION_ORDER`. */
 const PROVIDER_MODELS: Record<string, string[]> = {
   DEEPSEEK_API_KEY: ['deepseek:deepseek-v4-flash', 'deepseek:deepseek-v4-pro'],
-  ANTHROPIC_API_KEY: ['anthropic:claude-sonnet-4-6', 'anthropic:claude-opus-4-7', 'anthropic:claude-haiku-4-5'],
-  OPENAI_API_KEY: ['openai:gpt-4.1', 'openai:gpt-4.1-mini', 'openai:o3', 'openai:o4-mini'],
-  GOOGLE_GENERATIVE_AI_API_KEY: ['google:gemini-2.5-pro', 'google:gemini-2.5-flash'],
-  XAI_API_KEY: ['xai:grok-3', 'xai:grok-3-mini'],
+  ANTHROPIC_API_KEY: [
+    'anthropic:claude-fable-5',
+    'anthropic:claude-opus-4-8',
+    'anthropic:claude-sonnet-4-6',
+    'anthropic:claude-haiku-4-5',
+  ],
+  OPENAI_API_KEY: [
+    'openai:gpt-5.5',
+    'openai:gpt-5.4-mini',
+    'openai:gpt-4.1',
+    'openai:gpt-4.1-mini',
+    'openai:o3',
+    'openai:o4-mini',
+  ],
+  GOOGLE_GENERATIVE_AI_API_KEY: ['google:gemini-3.5-flash', 'google:gemini-2.5-pro', 'google:gemini-2.5-flash'],
+  XAI_API_KEY: ['xai:grok-4.3', 'xai:grok-3'],
   ALIBABA_API_KEY: [
-    'alibaba:qwen-max',
+    'alibaba:qwen3.7-max',
+    'alibaba:qwen3-coder-plus',
+    'alibaba:qwq-plus',
+    'alibaba:qwen3-max',
     'alibaba:qwen-plus',
     'alibaba:qwen-turbo',
-    'alibaba:qwen3-coder-plus',
-    'alibaba:qwen3-max',
   ],
-  ZHIPU_API_KEY: ['zhipu:glm-4-plus'],
-  MOONSHOT_API_KEY: ['moonshotai:kimi-k2.5'],
+  ZHIPU_API_KEY: ['zhipu:glm-5.1', 'zhipu:glm-5', 'zhipu:glm-4-plus'],
+  MOONSHOT_API_KEY: ['moonshotai:kimi-k2.6', 'moonshotai:kimi-k2.5'],
 }
 
 /** Short aliases — accepted on CLI `--model` flag. Aligns with product's
  *  `MODEL_ALIASES` table; keep them in sync. */
 export const ALIASES: Record<string, string> = {
+  fable: 'anthropic:claude-fable-5',
   sonnet: 'anthropic:claude-sonnet-4-6',
-  opus: 'anthropic:claude-opus-4-7',
+  opus: 'anthropic:claude-opus-4-8',
   haiku: 'anthropic:claude-haiku-4-5',
+  gpt5: 'openai:gpt-5.5',
   gpt4: 'openai:gpt-4.1',
-  gemini: 'google:gemini-2.5-pro',
+  gemini: 'google:gemini-3.5-flash',
   deepseek: 'deepseek:deepseek-v4-flash',
   'deepseek-pro': 'deepseek:deepseek-v4-pro',
-  qwen: 'alibaba:qwen-max',
-  glm: 'zhipu:glm-4-plus',
-  kimi: 'moonshotai:kimi-k2.5',
+  qwen: 'alibaba:qwen3.7-max',
+  glm: 'zhipu:glm-5.1',
+  kimi: 'moonshotai:kimi-k2.6',
 }
 
 export function resolveModelArg(input: string): string {

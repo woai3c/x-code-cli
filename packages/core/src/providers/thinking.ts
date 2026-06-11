@@ -2,11 +2,11 @@
 //
 // Each provider exposes a different switch for "spend extra tokens reasoning
 // before producing output". The defaults across the eight providers we
-// support are inconsistent: Gemini 2.5 Pro and Kimi K2.5 default ON; Claude
-// Sonnet, DeepSeek V4, Qwen Max, and most others default OFF; GPT-4.1,
-// Grok-3, and GLM-4-Plus have no thinking concept at all on those exact
-// model ids. The user-facing `/thinking on|off` toggle is meant to give one
-// uniform knob across all of them.
+// support are inconsistent: Gemini and Kimi default ON; Claude Sonnet,
+// DeepSeek V4, Qwen, and most others default OFF; GPT-4.1/5.5 and
+// Grok-4.3 have no thinking concept at all on those exact model ids.
+// The user-facing `/thinking on|off` toggle is meant to give one uniform
+// knob across all of them.
 //
 // We map the toggle to the closest equivalent in each provider's AI SDK:
 //
@@ -93,6 +93,11 @@ export function getThinkingProviderOptions(modelId: string, enabled: boolean): R
       return enabled ? { openai: { reasoningEffort: 'high' } } : { openai: { reasoningEffort: 'minimal' } }
 
     case 'zhipu':
+      // GLM-5/5.1 support thinking via the same pattern as DeepSeek;
+      // GLM-4-Plus does not. Sending the option is harmless on the
+      // non-supporting models — the API silently ignores it.
+      return enabled ? { zhipu: { thinking: { type: 'enabled' } } } : { zhipu: { thinking: { type: 'disabled' } } }
+
     case 'custom':
     default:
       return {}

@@ -319,16 +319,18 @@ export interface SessionSummary {
 // ─── Model aliases ───
 
 export const MODEL_ALIASES: Record<string, string> = {
+  fable: 'anthropic:claude-fable-5',
   sonnet: 'anthropic:claude-sonnet-4-6',
-  opus: 'anthropic:claude-opus-4-7',
+  opus: 'anthropic:claude-opus-4-8',
   haiku: 'anthropic:claude-haiku-4-5',
+  gpt5: 'openai:gpt-5.5',
   gpt4: 'openai:gpt-4.1',
-  gemini: 'google:gemini-2.5-pro',
+  gemini: 'google:gemini-3.5-flash',
   deepseek: 'deepseek:deepseek-v4-flash',
   'deepseek-pro': 'deepseek:deepseek-v4-pro',
-  qwen: 'alibaba:qwen-max',
-  glm: 'zhipu:glm-4-plus',
-  kimi: 'moonshotai:kimi-k2.5',
+  qwen: 'alibaba:qwen3.7-max',
+  glm: 'zhipu:glm-5.1',
+  kimi: 'moonshotai:kimi-k2.6',
 }
 
 // ─── Provider detection order (for smart defaults) ───
@@ -336,12 +338,12 @@ export const MODEL_ALIASES: Record<string, string> = {
 export const PROVIDER_DETECTION_ORDER = [
   { envKey: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek:deepseek-v4-flash' },
   { envKey: 'ANTHROPIC_API_KEY', defaultModel: 'anthropic:claude-sonnet-4-6' },
-  { envKey: 'OPENAI_API_KEY', defaultModel: 'openai:gpt-4.1' },
-  { envKey: 'ALIBABA_API_KEY', defaultModel: 'alibaba:qwen-max' },
-  { envKey: 'GOOGLE_GENERATIVE_AI_API_KEY', defaultModel: 'google:gemini-2.5-pro' },
-  { envKey: 'XAI_API_KEY', defaultModel: 'xai:grok-3' },
-  { envKey: 'ZHIPU_API_KEY', defaultModel: 'zhipu:glm-4-plus' },
-  { envKey: 'MOONSHOT_API_KEY', defaultModel: 'moonshotai:kimi-k2.5' },
+  { envKey: 'OPENAI_API_KEY', defaultModel: 'openai:gpt-5.5' },
+  { envKey: 'ALIBABA_API_KEY', defaultModel: 'alibaba:qwen3.7-max' },
+  { envKey: 'GOOGLE_GENERATIVE_AI_API_KEY', defaultModel: 'google:gemini-3.5-flash' },
+  { envKey: 'XAI_API_KEY', defaultModel: 'xai:grok-4.3' },
+  { envKey: 'ZHIPU_API_KEY', defaultModel: 'zhipu:glm-5.1' },
+  { envKey: 'MOONSHOT_API_KEY', defaultModel: 'moonshotai:kimi-k2.6' },
 ] as const
 
 // ─── Curated model catalog per provider (for interactive /model picker) ───
@@ -365,21 +367,28 @@ export interface ProviderModel {
 export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
   anthropic: [
     {
-      id: 'anthropic:claude-sonnet-4-6',
-      label: 'Sonnet 4.6',
-      description: 'Balanced default — good for coding + reasoning, 1M context',
+      id: 'anthropic:claude-fable-5',
+      label: 'Fable 5',
+      description: 'Most capable model, strongest reasoning + agentic, 1M context',
     },
     {
-      id: 'anthropic:claude-opus-4-7',
-      label: 'Opus 4.7',
-      description: 'Most capable, strongest at agentic coding, 1M context',
+      id: 'anthropic:claude-opus-4-8',
+      label: 'Opus 4.8',
+      description: 'Top Opus-tier, complex reasoning + agentic coding, 1M context',
+    },
+    {
+      id: 'anthropic:claude-sonnet-4-6',
+      label: 'Sonnet 4.6',
+      description: 'Balanced speed + intelligence, 1M context',
     },
     { id: 'anthropic:claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest, cheapest — shorter replies' },
   ],
   openai: [
+    { id: 'openai:gpt-5.5', label: 'GPT-5.5', description: 'Flagship, complex reasoning + coding' },
+    { id: 'openai:gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Strong mini model, coding + agents' },
     { id: 'openai:gpt-4.1', label: 'GPT-4.1', description: 'General-purpose, 1M context window' },
     { id: 'openai:gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Cheaper tier of 4.1, 1M context' },
-    { id: 'openai:o3', label: 'o3', description: 'Reasoning model — slower, stronger on hard problems' },
+    { id: 'openai:o3', label: 'o3', description: 'Reasoning model — retiring Aug 2026' },
     { id: 'openai:o4-mini', label: 'o4-mini', description: 'Smaller reasoning model' },
   ],
   deepseek: [
@@ -395,23 +404,31 @@ export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
     },
   ],
   alibaba: [
-    { id: 'alibaba:qwen-max', label: 'Qwen Max', description: 'Strongest general Qwen, 128k context' },
-    { id: 'alibaba:qwen-plus', label: 'Qwen Plus', description: 'Balanced cost/quality' },
-    { id: 'alibaba:qwen-turbo', label: 'Qwen Turbo', description: 'Cheapest, fast' },
-    { id: 'alibaba:qwen3-max', label: 'Qwen3 Max', description: 'Latest flagship' },
-    { id: 'alibaba:qwen3-coder-plus', label: 'Qwen3 Coder Plus', description: 'Tuned for coding tasks' },
+    { id: 'alibaba:qwen3.7-max', label: 'Qwen3.7 Max', description: 'Latest flagship, strongest Qwen' },
+    { id: 'alibaba:qwen3-coder-plus', label: 'Qwen3 Coder Plus', description: 'Tuned for coding tasks, 1M context' },
     { id: 'alibaba:qwq-plus', label: 'QwQ Plus', description: 'Reasoning model' },
+    { id: 'alibaba:qwen3-max', label: 'Qwen3 Max', description: 'Previous flagship, 256k context' },
+    { id: 'alibaba:qwen-plus', label: 'Qwen Plus', description: 'Balanced cost/quality' },
+    { id: 'alibaba:qwen-turbo', label: 'Qwen Turbo', description: 'Cheapest, fast, 1M context' },
   ],
   google: [
+    { id: 'google:gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: 'Latest flagship, agentic + coding' },
     { id: 'google:gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '1M context, strong long-doc handling' },
-    { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Cheaper/faster tier' },
+    { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Cheaper/faster tier, 1M context' },
   ],
   xai: [
-    { id: 'xai:grok-3', label: 'Grok 3', description: '131k context' },
-    { id: 'xai:grok-3-mini', label: 'Grok 3 Mini', description: 'Smaller/cheaper variant' },
+    { id: 'xai:grok-4.3', label: 'Grok 4.3', description: 'Latest flagship, 1M context' },
+    { id: 'xai:grok-3', label: 'Grok 3', description: 'Previous gen (alias → grok-4.3)' },
   ],
-  zhipu: [{ id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: '128k context' }],
-  moonshotai: [{ id: 'moonshotai:kimi-k2.5', label: 'Kimi K2.5', description: '131k context' }],
+  zhipu: [
+    { id: 'zhipu:glm-5.1', label: 'GLM-5.1', description: 'Latest flagship, 200k context, strong coding' },
+    { id: 'zhipu:glm-5', label: 'GLM-5', description: 'Agentic engineering model, 200k context' },
+    { id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: 'Previous gen, 128k context' },
+  ],
+  moonshotai: [
+    { id: 'moonshotai:kimi-k2.6', label: 'Kimi K2.6', description: 'Latest, strongest coding + agents' },
+    { id: 'moonshotai:kimi-k2.5', label: 'Kimi K2.5', description: 'Previous gen, 131k context' },
+  ],
 }
 
 // ─── Provider API key URLs ───

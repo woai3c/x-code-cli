@@ -176,7 +176,7 @@ xc -p "为该仓库生成 CHANGELOG"
 ```text
 xc [options] [prompt]
 
---model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-4.1）
+--model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-5.5）
 --trust, -t           信任模式：跳过写操作确认
 --print, -p           非交互模式：输出结果后退出
 --plan                以 Plan 模式启动（只读探索，用户批准后才执行修改）

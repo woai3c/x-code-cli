@@ -176,7 +176,7 @@ xc -p "Generate a CHANGELOG for this repository"
 ```text
 xc [options] [prompt]
 
---model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-4.1)
+--model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-5.5)
 --trust, -t           Trust mode: skip write-operation confirmations
 --print, -p           Non-interactive mode: print result and exit
 --plan                Start in plan mode (read-only exploration; user must approve before code edits)

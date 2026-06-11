@@ -27,16 +27,21 @@ const DEFAULT_CONTEXT_WINDOW = 128000
 /** Context window sizes per model (tokens). */
 const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // Anthropic
+  ['anthropic:claude-fable-5', 1000000],
+  ['anthropic:claude-opus-4-8', 1000000],
   ['anthropic:claude-opus-4-7', 1000000],
   ['anthropic:claude-sonnet-4-6', 1000000],
   ['anthropic:claude-haiku-4-5', 200000],
   // OpenAI
+  ['openai:gpt-5.5', 1047576],
+  ['openai:gpt-5.4-mini', 1047576],
   ['openai:gpt-4.1', 1047576],
   ['openai:gpt-4.1-mini', 1047576],
   ['openai:gpt-4.1-nano', 1047576],
   ['openai:o3', 200000],
   ['openai:o4-mini', 200000],
   // Google
+  ['google:gemini-3.5-flash', 1000000],
   ['google:gemini-2.5-pro', 1000000],
   ['google:gemini-2.5-flash', 1000000],
   // DeepSeek
@@ -45,6 +50,7 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // Alibaba — per DashScope docs: qwen-turbo and qwen3-coder-plus extend to 1M;
   // qwen-max still caps at 32k (use qwen3-max for 256k). Values verified against
   // https://help.aliyun.com/zh/model-studio/models.
+  ['alibaba:qwen3.7-max', 131072],
   ['alibaba:qwen-turbo', 1000000],
   ['alibaba:qwen-plus', 131072],
   ['alibaba:qwen-max', 32768],
@@ -52,11 +58,15 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   ['alibaba:qwen3-coder-plus', 1000000],
   ['alibaba:qwq-plus', 131072],
   // xAI
+  ['xai:grok-4.3', 1000000],
   ['xai:grok-3', 131072],
   ['xai:grok-3-mini', 131072],
   // Zhipu
+  ['zhipu:glm-5.1', 200000],
+  ['zhipu:glm-5', 200000],
   ['zhipu:glm-4-plus', 128000],
   // Moonshot
+  ['moonshotai:kimi-k2.6', 131072],
   ['moonshotai:kimi-k2.5', 131072],
 ])
 

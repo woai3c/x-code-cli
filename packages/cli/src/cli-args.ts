@@ -17,7 +17,7 @@ export async function parseCliArgs() {
     .option('model', {
       alias: 'm',
       type: 'string',
-      describe: 'Model to use (e.g. sonnet, deepseek, openai:gpt-4.1)',
+      describe: 'Model to use (e.g. sonnet, deepseek, openai:gpt-5.5)',
     })
     .option('trust', {
       alias: 't',

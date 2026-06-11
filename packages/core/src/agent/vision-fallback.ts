@@ -46,7 +46,7 @@ const VISION_MODELS: Record<string, { modelId: string; label: string }> = {
     modelId: 'moonshotai:moonshot-v1-32k-vision-preview',
     label: 'Moonshot Vision Preview',
   },
-  xai: { modelId: 'xai:grok-2-vision-1212', label: 'Grok 2 Vision' },
+  xai: { modelId: 'xai:grok-4.3', label: 'Grok 4.3' },
 }
 
 /** Order in which we try providers when picking a vision sub-agent.
