@@ -17,9 +17,8 @@
 //   google      thinkingConfig: { thinkingBudget: -1 (dynamic) | 0 (off) }
 //   xai         reasoningEffort: 'high' | 'low'         (grok-3-mini only)
 //   openai      reasoningEffort: 'high' | 'minimal'      (o-series only)
-//   zhipu       — not exposed per-call; chat-setting on model creation.
-//                 GLM-4-Plus (our default) has no thinking; would need
-//                 model-time wiring for GLM-4.5+. Skipped.
+//   zhipu       thinking: { type: 'enabled' | 'disabled' } (GLM-5/5.1;
+//                 GLM-4-Plus ignores it silently)
 //
 // The numeric budget for Anthropic is set generous-but-not-unbounded:
 // 8000 reasoning tokens covers everything short of the longest agent loops
