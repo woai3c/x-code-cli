@@ -99,5 +99,12 @@ export async function runPrintMode(
     return 1
   } finally {
     process.off('SIGINT', onSigint)
+    // Flush stdout/stderr before returning so the caller's process.exit()
+    // doesn't race the pipe drain. On Windows, pipe writes are non-blocking —
+    // without this, error messages written via process.stderr.write() can be
+    // silently lost when the process exits immediately after.
+    await new Promise<void>((resolve) => {
+      process.stdout.write('', () => process.stderr.write('', () => resolve()))
+    })
   }
 }
