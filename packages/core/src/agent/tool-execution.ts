@@ -367,6 +367,57 @@ async function handleReadMcpResource(ctx: HandlerCtx): Promise<void> {
   }
 }
 
+/** ── shellOutput ──
+ *  Reads output produced since the last poll from a background shell on this
+ *  agent's LoopState. `block: true` waits for the shell to exit (polling its
+ *  status), interruptible via the turn's abortSignal. Bypasses the loop guard
+ *  because polling the same shell repeatedly is the normal usage pattern. */
+async function handleShellOutput(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, options, callbacks } = ctx
+  const id = (input.shellId as string | undefined) ?? ''
+  const entry = state.bgShells.get(id)
+  if (!entry) {
+    const ids = state.bgShells.list().map((s) => s.id)
+    const hint = ids.length ? ` Active background shells: ${ids.join(', ')}.` : ' No background shells are running.'
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString(`No background shell "${id}".${hint}`), true)
+    return
+  }
+  if (((input.block as boolean | undefined) ?? false) && entry.status === 'running') {
+    const deadline = Date.now() + ((input.timeout as number | undefined) ?? 30000)
+    while (entry.status === 'running' && Date.now() < deadline) {
+      if (options.abortSignal?.aborted) break
+      await new Promise<void>((resolve) => setTimeout(resolve, 200))
+    }
+  }
+  const fresh = state.bgShells.drain(id).trimEnd()
+  // A killed shell has a null exit code — render "[shell bg_1 exited]" rather
+  // than a bare "code null". The drain can be up to the 1 MB ring cap, so
+  // truncate the body (never the short status line) before it hits state.messages.
+  const statusLine =
+    entry.status === 'exited'
+      ? `[shell ${id} exited${entry.exitCode != null ? `, code ${entry.exitCode}` : ''}]`
+      : `[shell ${id} running]`
+  pushToolResult(
+    state,
+    callbacks,
+    toolCallId,
+    toolName,
+    fresh ? `${statusLine}\n${truncateToolResult(fresh)}` : `${statusLine}\n(no new output)`,
+  )
+}
+
+/** ── killShell ──
+ *  Terminates a background shell on this agent's LoopState. */
+async function handleKillShell(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, callbacks } = ctx
+  const id = (input.shellId as string | undefined) ?? ''
+  if (!state.bgShells.kill(id)) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString(`No background shell "${id}".`), true)
+    return
+  }
+  pushToolResult(state, callbacks, toolCallId, toolName, `Killed background shell ${id}.`)
+}
+
 /** Manual tools that bypass the loop guard and the writeFile/edit/shell
  *  permission + execution pipeline below. Each handler owns its own
  *  pushToolResult call. Adding a new bypass tool is a one-line entry here. */
@@ -381,6 +432,8 @@ const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
     handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult),
   listMcpResources: handleListMcpResources,
   readMcpResource: handleReadMcpResource,
+  shellOutput: handleShellOutput,
+  killShell: handleKillShell,
 }
 
 /** Run the loop-guard machinery for a non-bypass tool. Returns true if the
@@ -475,6 +528,18 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
       return { output, isError }
     }
     if (toolName === 'shell') {
+      // Background mode: spawn detached, register on LoopState, return an id
+      // immediately. The model polls via shellOutput / stops via killShell.
+      if ((input.runInBackground as boolean | undefined) ?? false) {
+        const command = input.command as string
+        const id = state.bgShells.start(command)
+        return {
+          output:
+            `Started background shell \`${id}\`: ${command}\n` +
+            `Read its output with shellOutput({ shellId: "${id}" }) or stop it with killShell({ shellId: "${id}" }).`,
+          isError: false,
+        }
+      }
       const timeout = (input.timeout as number) ?? 30000
       const shellResult = await executeShell(
         input.command as string,

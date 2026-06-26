@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { readFile } from '../src/tools/read-file.js'
+import { type ReadFileCache, createReadFileTool, readFile } from '../src/tools/read-file.js'
 
 const exec = (input: Record<string, unknown>) =>
   readFile.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined as any })
@@ -92,5 +92,133 @@ describe('readFile tool', () => {
   it('returns error for non-existent file', async () => {
     const result = (await exec({ filePath: '/tmp/nonexistent-xc-test-file.ts' })) as string
     expect(result).toContain('Error')
+  })
+})
+
+describe('readFile — Jupyter notebooks', () => {
+  it('renders cells with text outputs and omits binary outputs', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-nb-'))
+    const filePath = path.join(tmpDir, 'nb.ipynb')
+    const nb = {
+      cells: [
+        { cell_type: 'markdown', source: ['# Title\n', 'intro line'] },
+        {
+          cell_type: 'code',
+          execution_count: 1,
+          source: 'print("hi")',
+          outputs: [
+            { output_type: 'stream', text: ['hi\n'] },
+            { output_type: 'display_data', data: { 'text/plain': '<Figure>', 'image/png': 'BASE64DATA' } },
+          ],
+        },
+      ],
+      nbformat: 4,
+    }
+    await fs.writeFile(filePath, JSON.stringify(nb))
+
+    const result = (await exec({ filePath })) as string
+    expect(result).toContain('# Title')
+    expect(result).toContain('Cell 1 [markdown]')
+    expect(result).toContain('Cell 2 [code] (exec 1)')
+    expect(result).toContain('print("hi")')
+    expect(result).toContain('<Figure>')
+    expect(result).toContain('[image/png output omitted]')
+    // The base64 image payload must NOT reach the model.
+    expect(result).not.toContain('BASE64DATA')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('falls back to raw text for a malformed .ipynb', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-nb-'))
+    const filePath = path.join(tmpDir, 'broken.ipynb')
+    await fs.writeFile(filePath, 'not json {')
+    const result = (await exec({ filePath })) as string
+    expect(result).toContain('not json {')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+})
+
+describe('readFile — read de-dup cache', () => {
+  const execWith = (tool: ReturnType<typeof createReadFileTool>, input: Record<string, unknown>) =>
+    tool.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined as any })
+
+  it('returns a stub when re-reading an unchanged file', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-'))
+    const filePath = path.join(tmpDir, 'a.txt')
+    await fs.writeFile(filePath, 'line one\nline two\n')
+    const cache: ReadFileCache = new Map()
+    const tool = createReadFileTool(cache)
+
+    const first = (await execWith(tool, { filePath })) as string
+    expect(first).toContain('line one')
+
+    const second = (await execWith(tool, { filePath })) as string
+    expect(second).toContain('unchanged since you last read it')
+    expect(second).not.toContain('line two')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('does NOT cache a head-truncated read (large file stays re-readable)', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-'))
+    const filePath = path.join(tmpDir, 'big.txt')
+    // 2500 lines triggers head-truncation: the full content is NOT in context,
+    // so a second read must return content again, not a misleading stub.
+    await fs.writeFile(filePath, Array.from({ length: 2500 }, (_, i) => `line ${i + 1}`).join('\n'))
+    const cache: ReadFileCache = new Map()
+    const tool = createReadFileTool(cache)
+
+    const first = (await execWith(tool, { filePath })) as string
+    expect(first).toContain('showing first 2000')
+
+    const second = (await execWith(tool, { filePath })) as string
+    expect(second).toContain('showing first 2000')
+    expect(second).not.toContain('unchanged since')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('re-reads in full after the file changes', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-'))
+    const filePath = path.join(tmpDir, 'a.txt')
+    await fs.writeFile(filePath, 'line one\nline two\n')
+    const cache: ReadFileCache = new Map()
+    const tool = createReadFileTool(cache)
+
+    await execWith(tool, { filePath })
+    await fs.writeFile(filePath, 'changed\n')
+    const out = (await execWith(tool, { filePath })) as string
+    expect(out).toContain('changed')
+    expect(out).not.toContain('unchanged since')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('an explicit offset/limit read bypasses de-dup', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-'))
+    const filePath = path.join(tmpDir, 'a.txt')
+    await fs.writeFile(filePath, 'l1\nl2\nl3\n')
+    const cache: ReadFileCache = new Map()
+    const tool = createReadFileTool(cache)
+
+    await execWith(tool, { filePath }) // whole-file read populates the cache
+    const ranged = (await execWith(tool, { filePath, offset: 1, limit: 1 })) as string
+    expect(ranged).toContain('l1')
+    expect(ranged).not.toContain('unchanged since')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('does not de-dup without a cache (default readFile export)', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-'))
+    const filePath = path.join(tmpDir, 'a.txt')
+    await fs.writeFile(filePath, 'hello\n')
+    const first = (await exec({ filePath })) as string
+    const second = (await exec({ filePath })) as string
+    expect(first).toContain('hello')
+    expect(second).toContain('hello')
+    expect(second).not.toContain('unchanged since')
+    await fs.rm(tmpDir, { recursive: true })
   })
 })

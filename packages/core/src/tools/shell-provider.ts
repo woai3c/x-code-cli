@@ -24,6 +24,11 @@ export interface ShellSpawnOptions {
    *  honor user Esc / Ctrl+C cancellation mid-command without waiting for
    *  the timeout. */
   signal?: AbortSignal
+  /** Collect the child's full stdout/stderr in memory (execa default: true).
+   *  Set false for a long-lived background shell that streams its own output
+   *  via the child streams — otherwise execa SIGTERMs it once total output
+   *  passes MAX_SHELL_BUFFER, which would kill a noisy dev server. */
+  buffer?: boolean
 }
 
 export interface ShellProvider {
@@ -38,6 +43,7 @@ function createPosixProvider(executable: string, type: 'bash' | 'zsh'): ShellPro
       return execa(executable, ['-c', command], {
         timeout: opts.timeout,
         maxBuffer: MAX_SHELL_BUFFER,
+        buffer: opts.buffer ?? true,
         cwd: opts.cwd,
         reject: false,
         cancelSignal: opts.signal,
@@ -81,6 +87,7 @@ function createPowerShellProvider(executable: string): ShellProvider {
       return execa(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(wrapped)], {
         timeout: opts.timeout,
         maxBuffer: MAX_SHELL_BUFFER,
+        buffer: opts.buffer ?? true,
         cwd: opts.cwd,
         reject: false,
         cancelSignal: opts.signal,

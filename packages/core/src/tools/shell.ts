@@ -18,10 +18,22 @@ Instructions:
 - Always quote file paths that contain spaces with double quotes.
 - When issuing multiple commands: if they are independent, make multiple shell tool calls in a single message for parallelism. If they depend on each other, use '&&' to chain them. Use ';' only when you need sequential execution but don't care if earlier commands fail. Do NOT use newlines to separate commands.
 - For git commands: prefer creating a new commit rather than amending. Never skip hooks (--no-verify) unless the user explicitly asks. Before running destructive operations (git reset --hard, git push --force), consider safer alternatives.
-- Do not sleep between commands that can run immediately.`,
+- Do not sleep between commands that can run immediately.
+- For long-running processes (dev servers, file watchers, long builds/tests you want to monitor), set runInBackground: true. This returns a shell id immediately; read its output later with shellOutput and stop it with killShell.`,
   inputSchema: z.object({
     command: z.string().describe('The command to execute'),
-    timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
+    timeout: z
+      .number()
+      .optional()
+      .describe('Timeout in milliseconds (default: 30000). Ignored when runInBackground is true.'),
+    runInBackground: z
+      .boolean()
+      .optional()
+      .describe(
+        'Run the command in the background and return a shell id immediately instead of waiting for it to finish. ' +
+          'Use for long-running processes (dev servers, watchers, long builds). ' +
+          'Read its output later with shellOutput and stop it with killShell.',
+      ),
   }),
   // No execute — handled manually in agent loop for permission check + cross-platform shell + streaming
 })

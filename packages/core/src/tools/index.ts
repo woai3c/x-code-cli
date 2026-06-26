@@ -9,6 +9,7 @@
 // via the generic Write tool, with UI collapse), but that requires a
 // separate collapse path we'd rather not maintain.
 import { askUser } from './ask-user.js'
+import { killShell, shellOutput } from './background-shell.js'
 import { edit } from './edit.js'
 import { enterPlanMode } from './enter-plan-mode.js'
 import { exitPlanMode } from './exit-plan-mode.js'
@@ -36,6 +37,8 @@ export const toolRegistry = {
   enterPlanMode,
   exitPlanMode,
   todoWrite,
+  shellOutput,
+  killShell,
 }
 
 export {
@@ -52,7 +55,12 @@ export {
   enterPlanMode,
   exitPlanMode,
   todoWrite,
+  shellOutput,
+  killShell,
 }
+
+export { BackgroundShellRegistry } from './background-shell.js'
+export type { BackgroundShell } from './background-shell.js'
 
 export { MAX_TOOL_RESULT_LINES, MAX_TOOL_RESULT_BYTES, truncateToolResult } from './truncate.js'
 export type { TruncateOptions } from './truncate.js'

@@ -1,6 +1,8 @@
 // @x-code-cli/core — Shared agent loop state
 import type { ModelMessage } from 'ai'
 
+import { BackgroundShellRegistry } from '../tools/background-shell.js'
+import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
 import type { CheckpointEntry } from './snapshot.js'
 
@@ -86,6 +88,17 @@ export interface LoopState {
   knowledgeContext?: string
   /** Whether cwd is a git repo. Cached for sub-agent system prompts. */
   isGitRepo?: boolean
+
+  /** Session-scoped read de-dup cache (absolute path → last-read mtime+size).
+   *  readFile returns a short stub instead of re-sending full content when a
+   *  file is re-read unchanged, saving context tokens. Sub-agents get their
+   *  own (fresh LoopState) so caches never cross agents. In-memory only. */
+  readFileCache: ReadFileCache
+
+  /** Background shells started via shell({ runInBackground: true }). Per-agent
+   *  (sub-agents get a fresh LoopState). In-memory only; execa's default
+   *  cleanup kills any survivors when the CLI process exits. */
+  bgShells: BackgroundShellRegistry
 }
 
 /** Generate a human-skimmable session id: `YYYYMMDD-HHMMSS-mmm` (local
@@ -132,5 +145,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     persistedMessageCount: 0,
     prevTurnCacheRead: 0,
     expectCacheMiss: false,
+    readFileCache: new Map(),
+    bgShells: new BackgroundShellRegistry(),
   }
 }

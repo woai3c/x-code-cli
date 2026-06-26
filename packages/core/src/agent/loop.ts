@@ -18,6 +18,7 @@ import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/t
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
+import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
@@ -231,9 +232,15 @@ function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
  *
  *  Computed once per session and cached — the tool set is stable within
  *  a session (registry doesn't change, filter doesn't change). */
-function buildTools(options: AgentOptions) {
+function buildTools(options: AgentOptions, state: LoopState) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = { ...toolRegistry }
+
+  // Override readFile with a cache-backed instance so re-reading an unchanged
+  // file returns a stub instead of re-sending its content. Re-assigning an
+  // existing key keeps key order stable, so the cached tool-schema prefix
+  // stays byte-stable (see cache-control.ts).
+  tools.readFile = createReadFileTool(state.readFileCache)
 
   if (options.subAgentRegistry) {
     tools.task = createTaskTool(options.subAgentRegistry)
@@ -573,7 +580,7 @@ export async function agentLoop(
   // Build the effective tool set once per session — includes the task
   // tool when a subAgentRegistry is available, and applies toolFilter
   // for sub-agent loops. Stable for the session lifetime.
-  const effectiveTools = buildTools(options)
+  const effectiveTools = buildTools(options, state)
 
   // Auto-continuation on `length` finish. Reasoning models can exhaust the
   // output token budget before the user-visible reply completes — the old
