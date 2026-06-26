@@ -1,3 +1,15 @@
+## v0.3.4 (2026-06-26)
+
+### Features
+
+- add opt-in browser sub-agent (browser use) (4b551ff)
+- expand grep, readFile, and add background shell tools (6b64639)
+- update model catalog to June 2026 across all providers (0c3ef0d)
+
+### Bug Fixes
+
+- flush stdout/stderr before exit in print mode (2c56b54)
+
 ## v0.3.3 (2026-06-10)
 
 ### Features
