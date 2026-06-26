@@ -144,6 +144,10 @@ vite.config.ts.timestamp-*
 # Each contributor's conversations/prefs differ; never share these.
 .x-code/
 
+# @playwright/mcp runtime artifacts (page snapshots / saved output) from the
+# browser sub-agent. Written under the CLI's working dir; never source.
+.playwright-mcp/
+
 # e2e suite runtime state (last-run.json + stashed failure jsonl).
 packages/cli/tests/e2e/.state/
 

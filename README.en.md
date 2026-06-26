@@ -28,8 +28,9 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Hooks** — plugins can register ten lifecycle event callbacks (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` / `SubagentStart` / `SubagentStop` / `TurnComplete` / `SessionEnd`) as shell commands that intercept or rewrite agent behaviour; supports `commandWindows` / `commandDarwin` / `commandLinux` per-platform overrides and a persistent `${pluginDataDir}` variable. See [docs/hooks.md](./docs/hooks.md)
 - **File attachments** — `@path` mentions or bare absolute paths in the prompt auto-ingest text / code / PDF / docx / xlsx / pptx / images
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
+- **Browser automation (opt-in)** — `/browser on` enables the built-in `browser` sub-agent, which drives a real browser (powered by @playwright/mcp) for tasks webFetch can't do: logged-in sessions, JS-rendered pages, multi-step flows. Accessibility-tree based, works across providers. Off by default — see [docs/sub-agents.md](./docs/sub-agents.md)
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/rewind`, `/usage`, `/usage-history`, `/memory`, `/review`, `/doctor`, `/skill`, `/mcp`, `/plugin`, and more
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/rewind`, `/usage`, `/usage-history`, `/memory`, `/review`, `/doctor`, `/skill`, `/mcp`, `/plugin`, `/browser`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
 - **Input history recall** — press `↑` / `↓` on an empty prompt to walk through previously submitted messages
@@ -221,6 +222,7 @@ Full usage: [docs/plugins.md](./docs/plugins.md).
 | `/skill <sub>`        | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`)                                            |
 | `/mcp <sub>`          | Manage MCP servers (`list` / `tools` / `add` / `remove` / `auth` / `refresh`, etc.)                                            |
 | `/plugin <sub>`       | Manage plugins and marketplaces — see [docs/plugins.md](./docs/plugins.md)                                                     |
+| `/browser [on\|off]`  | Toggle the browser sub-agent (no argument shows status) — enables real-browser automation; off by default                      |
 | `/doctor`             | Diagnose the runtime environment (version, API keys, MCP connectivity, plugins, sub-agents, skills)                            |
 | `/exit`               | Save the session and exit                                                                                                      |
 

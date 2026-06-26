@@ -127,7 +127,11 @@ export class McpClient {
         serverName: this.serverName,
       }))
     } catch (err) {
-      debugLog('mcp.listResources-failed', `${this.serverName}: ${String(err)}`)
+      // JSON-RPC -32601 (Method not found) just means the server doesn't
+      // implement the resources capability — normal for tools-only servers
+      // (e.g. @playwright/mcp), not a failure worth logging. Anything else is.
+      const code = (err as { code?: number } | null)?.code
+      if (code !== -32601) debugLog('mcp.listResources-failed', `${this.serverName}: ${String(err)}`)
       this.cachedResources = []
     }
 
@@ -283,6 +287,15 @@ export class McpClient {
 
   async close(): Promise<void> {
     await this.safeClose()
+  }
+
+  /** Register a handler fired when the connection drops (stdio subprocess
+   *  exit, transport close). The browser registry uses this to invalidate a
+   *  cached connection when the user closes the browser or the server dies,
+   *  so the next acquire reconnects instead of reusing a dead client.
+   *  No-op if called before connect (the browser registry calls it after). */
+  onClose(handler: () => void): void {
+    if (this.client) this.client.onclose = handler
   }
 
   // ── internals ──────────────────────────────────────────────────────────

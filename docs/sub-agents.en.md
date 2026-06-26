@@ -50,6 +50,52 @@ session.
 
 ---
 
+## Browser sub-agent (opt-in)
+
+`browser` is a fifth built-in sub-agent, but it is **not registered by
+default**. It drives a real browser (powered by
+[@playwright/mcp](https://github.com/microsoft/playwright-mcp)) for tasks that
+`webFetch` / `webSearch` can't handle: logged-in pages, JS-rendered SPAs, form
+filling, multi-step flows. It works from the **accessibility tree** (text-based,
+so it works across every provider, including non-multimodal models).
+
+**Enable** (either way):
+
+- At runtime: `/browser on` (hot — no restart; `/browser off` disables it and
+  closes the browser)
+- Config: `"browser": { "enabled": true }` in `~/.x-code/config.json`
+
+**Prerequisites**: Node and a browser (Chrome) installed locally; the first use
+launches the browser MCP via `npx -y @playwright/mcp@latest` (tens of seconds).
+Optional config:
+
+```json
+{
+  "browser": {
+    "enabled": true,
+    "headless": false,
+    "browser": "chrome"
+  }
+}
+```
+
+> `headless` defaults to `false` (a visible window, so you can watch); `browser`
+> defaults to `chrome` (your installed Google Chrome) and also accepts
+> `chromium` / `msedge` / `firefox` / `webkit`.
+
+Once enabled, the **main agent delegates automatically** — just describe a task
+that needs a browser; you don't have to say "use the browser".
+
+**Isolation**: the browser tools (navigate / snapshot / click …) are injected
+only into the `browser` sub-agent's private context — they never enter the main
+loop's tool set or system prompt, so they neither pollute the main conversation
+nor break OpenAI-compatible providers' prefix cache. The browser is kept alive
+for the session (repeat browser tasks reuse it) and closed on CLI exit or
+`/browser off`; if you close the browser yourself, the next task reconnects
+automatically.
+
+---
+
 ## Writing custom sub-agents
 
 Drop a `.md` file under either path:

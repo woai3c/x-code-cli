@@ -10,6 +10,7 @@ import type { HookBus } from '../../hooks/bus.js'
 import type { HookEvent } from '../../hooks/types.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog } from '../../utils.js'
+import { type BrowserMcp, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
 import { agentLoop } from '../loop.js'
@@ -149,6 +150,26 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     }
   }
 
+  // The `browser` agent gets a PRIVATE mcp registry (the @playwright/mcp
+  // server) in place of the parent's, so its browser tools never enter the
+  // main loop's tool surface or any other agent. Connect lazily; if the
+  // browser can't start, bail with a helpful message BEFORE announcing a
+  // start, rather than running a "browser" agent that has no browser.
+  let browserMcp: BrowserMcp | undefined
+  if (agentDef.name === 'browser') {
+    browserMcp = await getBrowserMcp()
+    if (!browserMcp.ok) {
+      return {
+        resultText: browserUnavailableMessage(browserMcp.error),
+        tokenUsage: zeroUsage(),
+        turnCount: 0,
+        toolCallCount: 0,
+        durationMs: Date.now() - startTime,
+        aborted: false,
+      }
+    }
+  }
+
   // Notify UI
   callbacks.onSubAgentEvent?.({
     kind: 'start',
@@ -194,6 +215,9 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     printMode: false,
     // Sub-agents don't get their own sub-agent registry — recursion is forbidden
     subAgentRegistry: undefined,
+    // The browser agent swaps in its private registry (connected above); every
+    // other agent inherits the parent's MCP surface via the spread.
+    ...(browserMcp ? { mcpRegistry: browserMcp.registry, mcpPermissionStore: browserMcp.permissions } : {}),
   }
 
   // Build sub-agent callbacks: forward events to the parent UI via onSubAgentEvent,
@@ -432,4 +456,12 @@ function previewInput(input: Record<string, unknown>): string {
     (input.dirPath as string) ??
     ''
   return val.length > 80 ? val.slice(0, 77) + '...' : val
+}
+
+function browserUnavailableMessage(error: string | undefined): string {
+  return (
+    `[browser agent unavailable: ${error ?? 'could not start the browser'}.\n` +
+    'Set "browser": { "enabled": true } in ~/.x-code/config.json, ensure Node can run ' +
+    '`npx -y @playwright/mcp@latest`, and that Google Chrome (or the configured browser) is installed.]'
+  )
 }

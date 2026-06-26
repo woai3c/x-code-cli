@@ -88,6 +88,25 @@ export function resolveModelId(input?: string): string | null {
 // API keys are deliberately NOT stored here (env-var only, see header
 // comment).
 
+/** Browser-automation settings for the `browser` sub-agent. Default-off: the
+ *  agent is only registered when `enabled` is true (see createSubAgentRegistry),
+ *  so users who don't opt in see no change to the agent list or the byte-stable
+ *  system prompt. The engine is the @playwright/mcp server, spawned on first
+ *  browser-agent use. */
+export interface BrowserConfig {
+  enabled?: boolean
+  /** Run headless (no visible window). Default: visible, so the user can watch
+   *  the agent drive the browser. */
+  headless?: boolean
+  /** Browser channel @playwright/mcp drives. Default 'chrome' — the user's
+   *  installed Google Chrome (no Chromium download). */
+  browser?: 'chrome' | 'chromium' | 'msedge' | 'firefox' | 'webkit'
+  /** Override the launch command entirely (advanced: offline, pinned version,
+   *  custom server). When set, `args` is passed verbatim. */
+  command?: string
+  args?: string[]
+}
+
 export interface UserConfig {
   model?: string
   thinking?: boolean
@@ -102,6 +121,9 @@ export interface UserConfig {
    *  type into the config module's surface. Loader uses
    *  `parseServersBlock` to validate before constructing clients. */
   mcpServers?: Record<string, unknown>
+  /** Browser sub-agent settings. Absent / `enabled !== true` ⇒ the browser
+   *  agent is not registered (the default). */
+  browser?: BrowserConfig
 }
 
 /** Path to the user config file. Exposed so other modules that want to

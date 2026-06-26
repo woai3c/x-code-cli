@@ -83,6 +83,8 @@ export { generateSessionSummary } from './knowledge/session.js'
 // Sub-agents
 export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from './agent/sub-agents/index.js'
 export type { SubAgentDefinition, SubAgentEvent, SubAgentTrace } from './agent/sub-agents/index.js'
+// Browser sub-agent — private MCP lifecycle (gracefulShutdown closes the browser).
+export { shutdownBrowserMcp } from './agent/browser/registry.js'
 
 // File-based slash commands (plugin-contributed `commands/*.md`).
 export { CommandRegistry, createCommandRegistry, loadPluginCommands, expandCommandBody } from './commands/index.js'

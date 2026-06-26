@@ -35,6 +35,35 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 ---
 
+## 浏览器子 agent（可选，需启用）
+
+`browser` 是第 5 个内置子 agent，但**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）。
+
+**启用**（二选一）：
+
+- 运行中：`/browser on`（热生效，无需重启；`/browser off` 关闭并退出浏览器）
+- 配置：`~/.x-code/config.json` 里 `"browser": { "enabled": true }`
+
+**前置条件**：本机装了 Node 与 Chrome；首次调用会用 `npx -y @playwright/mcp@latest` 拉起浏览器 MCP（几十秒）。可选配置：
+
+```json
+{
+  "browser": {
+    "enabled": true,
+    "headless": false,
+    "browser": "chrome"
+  }
+}
+```
+
+> `headless` 默认 `false`（可见窗口，方便观察）；`browser` 默认 `chrome`（用系统 Chrome），也可填 `chromium` / `msedge` / `firefox` / `webkit`。
+
+启用后，**主 agent 会按需自动委派**——你正常描述需要浏览器的任务即可，不必显式说"用 browser"。
+
+**隔离设计**：浏览器的那批工具（navigate / snapshot / click …）只注入给 `browser` 子 agent 的私有上下文，**不进主 loop 的工具表或系统提示**——既不污染主对话，也不破坏 OpenAI 兼容厂商的前缀缓存。浏览器会话级保活（多个浏览器任务复用同一个浏览器），退出 CLI 或 `/browser off` 时关闭；若你手动关掉浏览器，下次任务会自动重连。
+
+---
+
 ## 自定义子 agent
 
 把 `.md` 文件放到下面任一目录即可：

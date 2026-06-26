@@ -29,6 +29,7 @@ import {
   pickLatestSession,
   resolveModelId,
   setPluginDebugMirror,
+  shutdownBrowserMcp,
 } from '@x-code-cli/core'
 import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-cli/core'
 
@@ -145,6 +146,9 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   if (mcpRegistryForShutdown) {
     mcpRegistryForShutdown.shutdown().catch(() => undefined)
   }
+  // The browser sub-agent's MCP server lives in a private registry outside
+  // mcpRegistryForShutdown — close it too so the spawned browser exits.
+  shutdownBrowserMcp().catch(() => undefined)
 
   // Plugin SessionEnd hooks. Fire-and-forget — we don't await because
   // a slow hook would block the user's shell prompt from returning,

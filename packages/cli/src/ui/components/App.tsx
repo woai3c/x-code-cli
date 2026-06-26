@@ -30,6 +30,7 @@ import type {
 } from '@x-code-cli/core'
 
 import { VERSION } from '../../version.js'
+import { createBrowserCommandHandler } from '../commands/browser.js'
 import { createDoctorCommandHandler } from '../commands/doctor.js'
 import { createMcpCommandHandler } from '../commands/mcp.js'
 import { createPluginCommandHandler } from '../commands/plugin.js'
@@ -152,6 +153,14 @@ export const SLASH_COMMANDS = [
       { name: 'refresh', description: 'Live-reload plugins + skills/agents/commands/hooks/MCP servers' },
       { name: 'doctor', description: 'Show plugin load errors and integration warnings' },
       { name: 'marketplace', description: 'Manage marketplace subscriptions (add | remove | list | refresh | info)' },
+    ],
+  },
+  {
+    name: '/browser',
+    description: 'Toggle the browser sub-agent on/off (no-arg = status) — opt-in, saved',
+    subcommands: [
+      { name: 'on', description: 'Enable the browser agent (live web automation via @playwright/mcp)' },
+      { name: 'off', description: 'Disable the browser agent and close any running browser' },
     ],
   },
   { name: '/doctor', description: 'Diagnose environment, API keys, MCP servers, plugins, and agents' },
@@ -810,6 +819,10 @@ export function App({
           await handlePlugin(text, arg)
           return
 
+        case 'browser':
+          await handleBrowser(text, arg)
+          return
+
         case 'doctor':
           handleDoctor(text)
           return
@@ -1336,6 +1349,13 @@ export function App({
     addCommandMessage,
     addCommandResult,
     askQuestion,
+    invalidateSystemPromptCache,
+  })
+
+  const { handleBrowser } = createBrowserCommandHandler({
+    options,
+    addCommandMessage,
+    addCommandResult,
     invalidateSystemPromptCache,
   })
 
