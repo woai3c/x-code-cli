@@ -31,16 +31,16 @@ import { debugLog } from '../../utils.js'
 const EXCLUDED_BROWSER_TOOLS = new Set(['browser_run_code_unsafe'])
 
 /** Browser tools that stay available but are NOT pre-approved, so each call
- *  prompts the user. Currently EMPTY: enabling the browser agent (/browser on,
- *  or config.browser.enabled) is itself the consent, and a per-call prompt for a
- *  tool the agent reaches for mid-flow — `browser_evaluate` was the case —
- *  stalls the whole autonomous sub-agent waiting on the user (observed: a
- *  multi-minute hang while the parent loop blocked on approval). page-script
- *  execution stays available and unprompted; the one genuinely dangerous tool,
- *  `browser_run_code_unsafe` (raw Node/fs, sandbox escape), is EXCLUDED entirely
- *  rather than gated. The set is kept so a future tool can be re-gated without
- *  reworking the approval loop below. */
-const SENSITIVE_BROWSER_TOOLS = new Set<string>()
+ *  prompts the user. `browser_evaluate` runs arbitrary JavaScript in the
+ *  (untrusted) page: it can read cookies / localStorage and issue requests as
+ *  the logged-in page, so a page-injected instruction could turn it into a data
+ *  exfiltration step. That's worth a per-call confirmation even though the
+ *  browser agent is opt-in — routine navigate/click/snapshot/screenshot stay
+ *  pre-approved, so only this one prompts. (The flailing-stall we saw came from
+ *  the agent over-using evaluate on a vague task; the "match effort to the task"
+ *  prompt guidance curbs that, so the prompt fires rarely.) The truly dangerous
+ *  `browser_run_code_unsafe` — raw Node/fs — is EXCLUDED entirely, not gated. */
+const SENSITIVE_BROWSER_TOOLS = new Set(['browser_evaluate'])
 
 /** Build the stdio config that launches the browser MCP. A `command` override
  *  wins (advanced: offline / pinned version / custom server). Otherwise default
@@ -159,10 +159,10 @@ async function connectBrowser(vision: boolean): Promise<BrowserMcp> {
     configs: new Map([['browser', config]]),
   })
   // Enabling the browser agent (/browser on, or config.browser.enabled) IS the
-  // consent — pre-approve every browser tool so routine navigate/click/snapshot/
-  // evaluate calls don't each hit a per-tool permission prompt that stalls the
-  // autonomous sub-agent. Anything in SENSITIVE_BROWSER_TOOLS (currently empty)
-  // would still prompt per call.
+  // consent for routine navigation — pre-approve every browser tool so
+  // navigate/click/snapshot/screenshot calls don't each hit a per-tool prompt.
+  // Genuinely sensitive tools (SENSITIVE_BROWSER_TOOLS — page-script evaluation)
+  // are left unapproved so they still prompt per call.
   const permissions = new McpPermissionStore()
   for (const t of tools) {
     if (SENSITIVE_BROWSER_TOOLS.has(t.rawName)) continue
