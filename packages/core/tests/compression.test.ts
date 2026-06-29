@@ -188,4 +188,31 @@ describe('handleContextTooLong', () => {
     expect(state.lastInputTokens).toBe(0)
     expect(state.expectCacheMiss).toBe(true)
   })
+
+  it('bails (no retry) when compression cannot shrink the kept recent messages', async () => {
+    // Anti-spin guard: tiny old history that summarizes to almost nothing, but
+    // a huge message inside the KEEP_RECENT window that compression keeps
+    // verbatim (mirrors a giant tool-result the provider rejected). Token count
+    // barely drops → retrying would loop forever → must return false.
+    vi.mocked(generateText).mockResolvedValue({ text: 'tiny summary' } as any)
+    const state = createLoopState()
+    const huge = 'z'.repeat(200_000)
+    state.messages = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: 'b' },
+      { role: 'user', content: 'c' },
+      { role: 'assistant', content: 'd' },
+      { role: 'user', content: 'e' },
+      { role: 'assistant', content: 'f' },
+      { role: 'user', content: 'g' },
+      { role: 'assistant', content: huge }, // kept verbatim — the unshrinkable bloat
+    ]
+
+    const cb = makeCallbacks()
+    const result = await handleContextTooLong(state, fakeModel, cb)
+
+    expect(result).toBe(false)
+    // Bailed before announcing a retry.
+    expect(cb.onContextCompressed).not.toHaveBeenCalled()
+  })
 })

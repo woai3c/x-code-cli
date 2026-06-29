@@ -5,9 +5,10 @@
 // tool calls and messages stay inside the child loop.
 import type { LanguageModel } from 'ai'
 
-import { resolveModelId } from '../../config/index.js'
+import { loadUserConfig, resolveModelId } from '../../config/index.js'
 import type { HookBus } from '../../hooks/bus.js'
 import type { HookEvent } from '../../hooks/types.js'
+import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog } from '../../utils.js'
 import { type BrowserMcp, getBrowserMcp } from '../browser/registry.js'
@@ -15,6 +16,7 @@ import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
 import { agentLoop } from '../loop.js'
 import { buildSubAgentSystemPrompt } from '../system-prompt.js'
+import { BROWSER_TREE_ONLY_NOTE, BROWSER_VISION_ADDENDUM, BROWSER_VISION_CAPTION_ADDENDUM } from './built-in.js'
 import type { SubAgentRegistry } from './registry.js'
 import type { SubAgentDefinition } from './types.js'
 
@@ -155,9 +157,26 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
   // main loop's tool surface or any other agent. Connect lazily; if the
   // browser can't start, bail with a helpful message BEFORE announcing a
   // start, rather than running a "browser" agent that has no browser.
+  //
+  // Visual browsing (screenshot + coordinate clicks) needs a model that can
+  // SEE the screenshot. We enable it ONLY when the active MODEL is itself
+  // vision-capable (modelSupportsVision — per-model, not per-provider, so a
+  // text-only Qwen-Max on the image-capable alibaba provider still stays
+  // tree-only). A model that can't see images gets no `--caps vision` and is
+  // told not to screenshot, so a tree-only browser task keeps working with no
+  // dependency on any other provider.
+  //
+  // (We do NOT borrow a separate vision model to run the whole browser loop:
+  // that made the entire browser agent hard-depend on the borrowed provider
+  // being funded — a 402 there killed even tree-only tasks — and silently ran
+  // every browser task on a cheaper model. Serving text-only models means
+  // captioning just the screenshot, with an OCR fallback; tracked separately.)
   let browserMcp: BrowserMcp | undefined
+  let browserVision = false
   if (agentDef.name === 'browser') {
-    browserMcp = await getBrowserMcp()
+    browserVision = loadUserConfig().browser?.vision !== false && modelSupportsVision(parentOptions.modelId)
+    debugLog('browser.vision', browserVision ? `enabled on active model ${parentOptions.modelId}` : 'tree-only')
+    browserMcp = await getBrowserMcp(browserVision)
     if (!browserMcp.ok) {
       return {
         resultText: browserUnavailableMessage(browserMcp.error),
@@ -194,8 +213,22 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
   const subModel = resolveSubModel(agentDef, parentOptions, parentModel)
   const subModelId = agentDef.model ? (resolveModelId(agentDef.model) ?? parentOptions.modelId) : parentOptions.modelId
 
+  // Browser prompt is model-aware. A text-only model can't screenshot at all
+  // (explicit "don't screenshot" note). A vision model gets screenshot
+  // guidance — but HOW the shot comes back differs by provider: Anthropic
+  // returns the image inline, everyone else gets a text description (see
+  // tool-execution `deliverToolImages`), so they need the caption-mode
+  // addendum. Non-browser agents get their prompt verbatim.
+  const browserPromptSuffix =
+    agentDef.name !== 'browser'
+      ? ''
+      : !browserVision
+        ? BROWSER_TREE_ONLY_NOTE
+        : capabilitiesOf(subModelId).toolResultImage
+          ? BROWSER_VISION_ADDENDUM
+          : BROWSER_VISION_CAPTION_ADDENDUM
   const subSystemPrompt = buildSubAgentSystemPrompt({
-    agentPrompt: agentDef.prompt,
+    agentPrompt: agentDef.prompt + browserPromptSuffix,
     knowledgeContext,
     isGitRepo,
   })
@@ -215,6 +248,9 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     printMode: false,
     // Sub-agents don't get their own sub-agent registry — recursion is forbidden
     subAgentRegistry: undefined,
+    // The browser agent re-snapshots and re-screenshots across many turns; keep
+    // only the latest of each in context so the superseded ones stop re-billing.
+    collapseStaleToolResults: agentDef.name === 'browser' ? ['browser_snapshot', 'browser_take_screenshot'] : undefined,
     // The browser agent swaps in its private registry (connected above); every
     // other agent inherits the parent's MCP surface via the spread.
     ...(browserMcp ? { mcpRegistry: browserMcp.registry, mcpPermissionStore: browserMcp.permissions } : {}),

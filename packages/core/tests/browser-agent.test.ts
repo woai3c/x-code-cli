@@ -32,6 +32,24 @@ describe('buildBrowserServerConfig', () => {
     const c = buildBrowserServerConfig({ command: 'my-server', args: ['--port', '7'] })
     expect(c).toMatchObject({ command: 'my-server', args: ['--port', '7'] })
   })
+
+  it('redirects saved output off the repo via --output-dir (npx path only)', () => {
+    const def = buildBrowserServerConfig({}) as { command: string; args: string[] }
+    expect(def.args).toContain('--output-dir')
+
+    // A full command override owns its argv — we do not inject --output-dir.
+    const override = buildBrowserServerConfig({ command: 'my-server', args: ['--port', '7'] })
+    expect(override.args).not.toContain('--output-dir')
+  })
+
+  it('appends --caps vision only when vision is requested', () => {
+    const off = buildBrowserServerConfig({}) as { command: string; args: string[] }
+    expect([off.command, ...off.args].join(' ')).not.toContain('--caps vision')
+
+    const on = buildBrowserServerConfig({}, true) as { command: string; args: string[] }
+    // adjacent args, surviving the cmd /c wrapper on win32
+    expect([on.command, ...on.args].join(' ')).toContain('--caps vision')
+  })
 })
 
 describe('browser sub-agent registration gating', () => {

@@ -49,7 +49,7 @@ export { captionImage, pickVisionProvider } from './agent/vision-fallback.js'
 export type { VisionProvider } from './agent/vision-fallback.js'
 
 // Provider capabilities
-export { capabilitiesOf, providerOf } from './providers/capabilities.js'
+export { capabilitiesOf, modelSupportsVision, providerOf } from './providers/capabilities.js'
 export type { ProviderCapabilities } from './providers/capabilities.js'
 
 // Tools

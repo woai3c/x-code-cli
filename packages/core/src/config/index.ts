@@ -101,6 +101,19 @@ export interface BrowserConfig {
   /** Browser channel @playwright/mcp drives. Default 'chrome' — the user's
    *  installed Google Chrome (no Chromium download). */
   browser?: 'chrome' | 'chromium' | 'msedge' | 'firefox' | 'webkit'
+  /** Browser viewport size as "width,height" (px). Default '1280,800'. Caps
+   *  screenshot resolution — vision token cost scales with image dimensions, so
+   *  a smaller viewport means cheaper screenshots. Raise it only if a site needs
+   *  a wider layout to render correctly. */
+  viewport?: string
+  /** Visual (screenshot + coordinate-click) browsing. Adds `--caps vision` to
+   *  the @playwright/mcp launch so the agent can screenshot a page and act by
+   *  pixel coordinates — the only way to drive canvas / WebGL / chart content
+   *  the accessibility tree can't represent. Default (undefined) is AUTO: on
+   *  whenever a vision-capable model is reachable (the active model, or any
+   *  other configured provider the browser agent can borrow). Set `false` to
+   *  force tree-only; `true` to force it on. */
+  vision?: boolean
   /** Override the launch command entirely (advanced: offline, pinned version,
    *  custom server). When set, `args` is passed verbatim. */
   command?: string

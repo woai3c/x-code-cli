@@ -71,6 +71,13 @@ At least one provider key is required:
 
 **OpenAI-compatible escape hatch** (self-hosted vLLM, OpenRouter, internal gateways, etc.): set BOTH `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`. `xc` then registers a provider named `custom`; address its models as `custom:<your-model-id>`.
 
+**Moonshot (Kimi) China vs. international endpoint**: Moonshot runs region-separated platforms, and **a key is bound to the endpoint it was created on — they are not interchangeable**:
+
+- International: [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) → endpoint `https://api.moonshot.ai/v1` (the SDK default, nothing to configure)
+- China: [platform.moonshot.cn](https://platform.moonshot.cn) / [platform.kimi.com](https://platform.kimi.com) → endpoint `https://api.moonshot.cn/v1`
+
+A key minted on a China platform fails with `Invalid Authentication` (401) against the default endpoint because it only authenticates against `api.moonshot.cn`. Set `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` to point at it; international keys need nothing.
+
 ### Web Search Keys (optional)
 
 To enable web search (the `web_search` tool), configure **either** of the following. Both providers offer a free tier sufficient for everyday use:

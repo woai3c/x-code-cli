@@ -220,6 +220,14 @@ export interface AgentOptions {
    *  which tools the child can call. `task` is always in `deny`. */
   toolFilter?: { allow?: string[]; deny?: string[] }
 
+  /** Tool-name suffixes whose older results get collapsed to a placeholder
+   *  before each request (keeping only the latest), to stop large
+   *  fully-superseding payloads — browser accessibility snapshots and
+   *  screenshots — from re-billing every turn. Set by the browser sub-agent;
+   *  unset (the default) means no collapsing. Matched as a suffix so a raw MCP
+   *  name like 'browser_snapshot' hits the mangled callable name. */
+  collapseStaleToolResults?: readonly string[]
+
   // ── Skill support ──
 
   /** Skill registry, populated at CLI startup by createSkillRegistry.
@@ -355,14 +363,28 @@ export interface ProviderModel {
   label: string
   /** One-line description shown under the label */
   description: string
+  /** True if this specific model can natively SEE images (multimodal), not
+   *  just whether its provider's API accepts image parts. Drives the browser
+   *  agent's visual gating (modelSupportsVision) so a text-only model never
+   *  gets `--caps vision` / screenshots. Set per-model because providers mix
+   *  vision and text-only models under one id namespace (e.g. Qwen-VL vs
+   *  Qwen-Max, GLM-4V vs GLM-5). */
+  vision: boolean
 }
 
 /**
- * Hand-curated models per provider. Only models we've tested or that are
- * advertised as production-stable make the list — agents tend to pick
- * whatever is visible, so we don't dump every experimental variant here.
- * Users who need something exotic can still type the full id into
- * `/model <provider>:<model>` or pass it via `--model`.
+ * Hand-curated models per provider, shown in the interactive `/model` picker.
+ * Every entry carries a `vision` flag (does this model natively see images),
+ * which `modelSupportsVision` reads to gate the browser agent's visual mode.
+ * Vision-language variants are listed alongside the text flagships rather than
+ * omitted, so picking a vision model is one keystroke. Users can still type any
+ * full id into `/model <provider>:<model>` for variants not listed here.
+ *
+ * Vision flags reflect model FAMILY: Claude / GPT / Gemini / Grok flagships and
+ * Kimi K2.x are multimodal; DeepSeek and the Qwen-Max / GLM text flagships are
+ * text-only; the dedicated *-VL / GLM-4V / *-vision-preview models see images.
+ * (GLM text-flagship vision is marked conservatively as false — they could not
+ * be verified live; the GLM-4V entries cover the confirmed-vision path.)
  */
 export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
   anthropic: [
@@ -370,64 +392,162 @@ export const PROVIDER_MODELS: Record<string, readonly ProviderModel[]> = {
       id: 'anthropic:claude-fable-5',
       label: 'Fable 5',
       description: 'Most capable model, strongest reasoning + agentic, 1M context',
+      vision: true,
     },
     {
       id: 'anthropic:claude-opus-4-8',
       label: 'Opus 4.8',
       description: 'Top Opus-tier, complex reasoning + agentic coding, 1M context',
+      vision: true,
     },
     {
       id: 'anthropic:claude-sonnet-4-6',
       label: 'Sonnet 4.6',
       description: 'Balanced speed + intelligence, 1M context',
+      vision: true,
     },
-    { id: 'anthropic:claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest, cheapest — shorter replies' },
+    {
+      id: 'anthropic:claude-haiku-4-5',
+      label: 'Haiku 4.5',
+      description: 'Fastest, cheapest — shorter replies',
+      vision: true,
+    },
   ],
   openai: [
-    { id: 'openai:gpt-5.5', label: 'GPT-5.5', description: 'Flagship, complex reasoning + coding' },
-    { id: 'openai:gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Strong mini model, coding + agents' },
-    { id: 'openai:gpt-4.1', label: 'GPT-4.1', description: 'General-purpose, 1M context window' },
-    { id: 'openai:gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Cheaper tier of 4.1, 1M context' },
-    { id: 'openai:o3', label: 'o3', description: 'Reasoning model — retiring Aug 2026' },
-    { id: 'openai:o4-mini', label: 'o4-mini', description: 'Smaller reasoning model' },
+    { id: 'openai:gpt-5.5', label: 'GPT-5.5', description: 'Flagship, complex reasoning + coding', vision: true },
+    {
+      id: 'openai:gpt-5.4-mini',
+      label: 'GPT-5.4 Mini',
+      description: 'Strong mini model, coding + agents',
+      vision: true,
+    },
+    { id: 'openai:gpt-4.1', label: 'GPT-4.1', description: 'General-purpose, 1M context window', vision: true },
+    { id: 'openai:gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Cheaper tier of 4.1, 1M context', vision: true },
+    { id: 'openai:o3', label: 'o3', description: 'Reasoning model — retiring Aug 2026', vision: true },
+    { id: 'openai:o4-mini', label: 'o4-mini', description: 'Smaller reasoning model', vision: true },
   ],
   deepseek: [
     {
       id: 'deepseek:deepseek-v4-flash',
       label: 'DeepSeek V4 Flash',
-      description: 'Fast, efficient general-purpose, 1M context',
+      description: 'Fast, efficient general-purpose, 1M context (text-only)',
+      vision: false,
     },
     {
       id: 'deepseek:deepseek-v4-pro',
       label: 'DeepSeek V4 Pro',
-      description: 'Flagship, stronger reasoning, 1M context',
+      description: 'Flagship, stronger reasoning, 1M context (text-only)',
+      vision: false,
     },
   ],
   alibaba: [
-    { id: 'alibaba:qwen3.7-max', label: 'Qwen3.7 Max', description: 'Latest flagship, strongest Qwen' },
-    { id: 'alibaba:qwen3-coder-plus', label: 'Qwen3 Coder Plus', description: 'Tuned for coding tasks, 1M context' },
-    { id: 'alibaba:qwq-plus', label: 'QwQ Plus', description: 'Reasoning model' },
-    { id: 'alibaba:qwen3-max', label: 'Qwen3 Max', description: 'Previous flagship, 256k context' },
-    { id: 'alibaba:qwen-plus', label: 'Qwen Plus', description: 'Balanced cost/quality' },
-    { id: 'alibaba:qwen-turbo', label: 'Qwen Turbo', description: 'Cheapest, fast, 1M context' },
+    { id: 'alibaba:qwen3.7-max', label: 'Qwen3.7 Max', description: 'Latest flagship, strongest Qwen', vision: false },
+    {
+      id: 'alibaba:qwen3-coder-plus',
+      label: 'Qwen3 Coder Plus',
+      description: 'Tuned for coding tasks, 1M context',
+      vision: false,
+    },
+    { id: 'alibaba:qwq-plus', label: 'QwQ Plus', description: 'Reasoning model', vision: false },
+    { id: 'alibaba:qwen3-max', label: 'Qwen3 Max', description: 'Previous flagship, 256k context', vision: false },
+    { id: 'alibaba:qwen-plus', label: 'Qwen Plus', description: 'Balanced cost/quality', vision: false },
+    { id: 'alibaba:qwen-turbo', label: 'Qwen Turbo', description: 'Cheapest, fast, 1M context', vision: false },
+    {
+      id: 'alibaba:qwen3-vl-plus',
+      label: 'Qwen3-VL Plus',
+      description: 'Vision-language flagship — reads images + text',
+      vision: true,
+    },
+    {
+      id: 'alibaba:qwen3-vl-flash',
+      label: 'Qwen3-VL Flash',
+      description: 'Cheap/fast vision-language model',
+      vision: true,
+    },
+    {
+      id: 'alibaba:qwen-vl-max',
+      label: 'Qwen-VL Max',
+      description: 'Strongest prev-gen vision-language model',
+      vision: true,
+    },
+    {
+      id: 'alibaba:qwen-vl-plus',
+      label: 'Qwen-VL Plus',
+      description: 'Balanced cost vision-language model',
+      vision: true,
+    },
   ],
   google: [
-    { id: 'google:gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: 'Latest flagship, agentic + coding' },
-    { id: 'google:gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '1M context, strong long-doc handling' },
-    { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Cheaper/faster tier, 1M context' },
+    {
+      id: 'google:gemini-3.5-flash',
+      label: 'Gemini 3.5 Flash',
+      description: 'Latest flagship, agentic + coding',
+      vision: true,
+    },
+    {
+      id: 'google:gemini-2.5-pro',
+      label: 'Gemini 2.5 Pro',
+      description: '1M context, strong long-doc handling',
+      vision: true,
+    },
+    {
+      id: 'google:gemini-2.5-flash',
+      label: 'Gemini 2.5 Flash',
+      description: 'Cheaper/faster tier, 1M context',
+      vision: true,
+    },
   ],
   xai: [
-    { id: 'xai:grok-4.3', label: 'Grok 4.3', description: 'Latest flagship, 1M context' },
-    { id: 'xai:grok-3', label: 'Grok 3', description: 'Previous gen (alias → grok-4.3)' },
+    { id: 'xai:grok-4.3', label: 'Grok 4.3', description: 'Latest flagship, 1M context', vision: true },
+    { id: 'xai:grok-3', label: 'Grok 3', description: 'Previous gen (alias → grok-4.3)', vision: true },
   ],
   zhipu: [
-    { id: 'zhipu:glm-5.1', label: 'GLM-5.1', description: 'Latest flagship, 200k context, strong coding' },
-    { id: 'zhipu:glm-5', label: 'GLM-5', description: 'Agentic engineering model, 200k context' },
-    { id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: 'Previous gen, 128k context' },
+    {
+      id: 'zhipu:glm-5.1',
+      label: 'GLM-5.1',
+      description: 'Latest flagship, 200k context, strong coding',
+      vision: false,
+    },
+    { id: 'zhipu:glm-5', label: 'GLM-5', description: 'Agentic engineering model, 200k context', vision: false },
+    { id: 'zhipu:glm-4-plus', label: 'GLM-4 Plus', description: 'Previous gen, 128k context', vision: false },
+    {
+      id: 'zhipu:glm-4v-plus',
+      label: 'GLM-4V Plus',
+      description: 'Vision model — reads images, charts, UI',
+      vision: true,
+    },
+    {
+      id: 'zhipu:glm-4v-flash',
+      label: 'GLM-4V Flash',
+      description: 'Free vision model, reachable from China',
+      vision: true,
+    },
   ],
   moonshotai: [
-    { id: 'moonshotai:kimi-k2.6', label: 'Kimi K2.6', description: 'Latest, strongest coding + agents' },
-    { id: 'moonshotai:kimi-k2.5', label: 'Kimi K2.5', description: 'Previous gen, 131k context' },
+    {
+      id: 'moonshotai:kimi-k2.6',
+      label: 'Kimi K2.6',
+      description: 'Latest, strongest coding + agents, native multimodal (sees images)',
+      vision: true,
+    },
+    {
+      id: 'moonshotai:kimi-k2.5',
+      label: 'Kimi K2.5',
+      description: 'Previous gen, 131k context, multimodal',
+      vision: true,
+    },
+    {
+      id: 'moonshotai:moonshot-v1-32k-vision-preview',
+      label: 'Moonshot v1 32k Vision',
+      description: 'Dedicated vision model, 32k context',
+      vision: true,
+    },
+    {
+      id: 'moonshotai:moonshot-v1-128k-vision-preview',
+      label: 'Moonshot v1 128k Vision',
+      description: 'Dedicated vision model, 128k context',
+      vision: true,
+    },
   ],
 }
 

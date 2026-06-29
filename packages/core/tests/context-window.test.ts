@@ -48,6 +48,12 @@ describe('getMaxOutputTokens', () => {
     expect(getMaxOutputTokens('alibaba:qwen-max')).toBe(8192)
   })
 
+  it('caps GLM-4V vision models at their low 1024 reply ceiling', () => {
+    // glm-4v-flash rejects max_tokens above 1024; the default 16384 would 400.
+    expect(getMaxOutputTokens('zhipu:glm-4v-flash')).toBe(1024)
+    expect(getMaxOutputTokens('zhipu:glm-4v-plus')).toBe(1024)
+  })
+
   it('returns default for unknown models', () => {
     expect(getMaxOutputTokens('openai:gpt-4.1')).toBe(16384)
     expect(getMaxOutputTokens('unknownprovider:model')).toBe(16384)

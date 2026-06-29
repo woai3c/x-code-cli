@@ -169,7 +169,14 @@ export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], 
           text?: string
           filename?: string
         }>) {
-          if (entry.type === 'image-data' && !caps.image) {
+          // In a ModelMessage tool-result the image part is `{ type: 'media',
+          // data, mediaType }` (AI SDK lowers it to provider-level
+          // `image-data` only when building the request). We run on
+          // state.messages, before that lowering — so match 'media' (and keep
+          // 'image-data' as a belt-and-suspenders guard) and OCR for
+          // text-only providers so they don't 400 on the binary.
+          const isImageEntry = entry.type === 'media' || entry.type === 'image-data'
+          if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true) && !caps.image) {
             const data = entry.data ?? ''
             let text = '[image omitted]'
             try {

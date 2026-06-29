@@ -28,6 +28,26 @@ describe('toolResultMessage', () => {
       output: { type: 'text', value: 'done' },
     })
   })
+
+  it('switches to multimodal content output when images are supplied', () => {
+    const msg = toolResultMessage('tc_2', 'browser_take_screenshot', '[image returned, image/png]', [
+      { data: 'AAAA', mediaType: 'image/png' },
+    ])
+    const part = (msg.content as Array<{ output: { type: string; value: unknown } }>)[0]
+    expect(part.output).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: '[image returned, image/png]' },
+        { type: 'media', data: 'AAAA', mediaType: 'image/png' },
+      ],
+    })
+  })
+
+  it('keeps the plain text output when the images array is empty', () => {
+    const msg = toolResultMessage('tc_3', 'shell', 'done', [])
+    const part = (msg.content as Array<{ output: { type: string; value: string } }>)[0]
+    expect(part.output).toEqual({ type: 'text', value: 'done' })
+  })
 })
 
 describe('userMessage', () => {

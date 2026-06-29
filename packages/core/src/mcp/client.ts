@@ -381,21 +381,30 @@ function isUnauthorizedError(err: unknown): boolean {
   return false
 }
 
-/** Flatten MCP call result content blocks into a single string.
- *  MCP responses are an array of `{ type: "text" | "image" | ... }`
- *  blocks. For tool_result we only care about the text; images/audio are
- *  noted but not actually surfaced (the agent loop doesn't ingest images
- *  from tool results, only from user input). */
+/** Flatten MCP call result content blocks. MCP responses are an array of
+ *  `{ type: "text" | "image" | ... }` blocks. Text blocks join into a single
+ *  string; image blocks are pulled out onto `images` (base64 + media type) so
+ *  the tool_result can carry them as real media parts to a vision model
+ *  (browser screenshots). A short text marker is kept inline so the text path
+ *  (and text-only providers, which OCR the image downstream) still has a hint
+ *  that an image was returned. */
 function flattenCallResult(result: unknown): McpCallResult {
   const r = result as { content?: Array<unknown>; isError?: boolean }
   const blocks = Array.isArray(r.content) ? r.content : []
   const parts: string[] = []
+  const images: Array<{ data: string; mediaType: string }> = []
   for (const b of blocks) {
     const block = b as { type?: string; text?: string; data?: unknown; mimeType?: string }
     if (block.type === 'text' && typeof block.text === 'string') {
       parts.push(block.text)
     } else if (block.type === 'image') {
-      parts.push(`[image content omitted, mimeType=${block.mimeType ?? 'unknown'}]`)
+      const mediaType = block.mimeType ?? 'image/png'
+      if (typeof block.data === 'string' && block.data.length > 0) {
+        images.push({ data: block.data, mediaType })
+        parts.push(`[image returned, ${mediaType}]`)
+      } else {
+        parts.push(`[image content omitted, mimeType=${mediaType}]`)
+      }
     } else if (block.type === 'resource') {
       // Embedded resource — surface a one-line marker + any nested text.
       const nested = (block as { resource?: { text?: string; uri?: string } }).resource
@@ -408,5 +417,6 @@ function flattenCallResult(result: unknown): McpCallResult {
   return {
     text: parts.join('\n').trim() || '(empty response)',
     isError: r.isError === true,
+    ...(images.length > 0 ? { images } : {}),
   }
 }

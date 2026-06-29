@@ -14,7 +14,6 @@
 // reusing it removes the need for a manual /model switch every time the
 // user pastes a screenshot.
 import fs from 'node:fs/promises'
-import path from 'node:path'
 
 import { generateText } from 'ai'
 
@@ -79,50 +78,53 @@ export function pickVisionProvider(): VisionProvider | null {
  *  cheap collision-resistant key strategy provider-compat.ts uses for OCR. */
 const captionCache = new LruCache<string>({ maxEntries: 50 })
 
-async function cacheKey(filePath: string, providerModelId: string): Promise<string> {
-  const buffer = await fs.readFile(filePath)
-  return `${providerModelId}:${buffer.length}:${buffer.subarray(0, 64).toString('base64')}`
-}
+/** Default caption prompt: asks for both verbatim text AND visual elements
+ *  (layout, colors, components) — OCR alone misses the latter, so the caption
+ *  subsumes what OCR would have produced. Used for pasted-image ingest. */
+const DEFAULT_CAPTION_PROMPT =
+  'Describe this image in detail so a text-only AI can act on it. ' +
+  'Include: (1) any visible text transcribed verbatim, ' +
+  '(2) UI elements, layout, and visual hierarchy, ' +
+  '(3) colors, icons, shapes, and other visual details, ' +
+  '(4) inferred purpose or context. ' +
+  'Be thorough and specific. Output plain text only — no markdown formatting.'
 
 /**
- * Generate a textual description of an image via the chosen sub-agent.
- * The prompt asks for both verbatim text AND visual elements (layout,
- * colors, components) — OCR alone misses the latter, so we want the
- * caption to subsume what OCR would have produced.
+ * Caption an in-memory image buffer via the chosen vision model. Lower-level
+ * sibling of `captionImage` (which reads a file then delegates here). Used by
+ * the MCP tool-result path to turn browser screenshots into text for providers
+ * whose tool-result channel can't carry a real image (see
+ * capabilities.toolResultImage). `prompt` overrides the default caption
+ * instruction so callers can ask for, e.g., pixel coordinates.
  */
-export async function captionImage(filePath: string, sub: VisionProvider): Promise<string> {
-  const key = await cacheKey(filePath, sub.modelId)
+export async function captionImageBuffer(
+  buffer: Buffer,
+  mediaType: string,
+  modelId: string,
+  opts: { prompt?: string; abortSignal?: AbortSignal } = {},
+): Promise<string> {
+  const key = `${modelId}:${buffer.length}:${buffer.subarray(0, 64).toString('base64')}`
   const cached = captionCache.get(key)
   if (cached != null) {
-    debugLog('vision-fallback.cache-hit', `${sub.modelId} ${path.basename(filePath)}`)
+    debugLog('vision-fallback.cache-hit', `${modelId} ${buffer.length}B`)
     return cached
   }
 
-  const buffer = await fs.readFile(filePath)
   const registry = createModelRegistry()
-  // The registry's languageModel() type is `${string}:${string}` but our
-  // VISION_MODELS entries are typed as plain string. Cast at the boundary —
-  // we control both ends and every entry is of the form "provider:model".
-  const model = registry.languageModel(sub.modelId as `${string}:${string}`)
+  // The registry's languageModel() type is `${string}:${string}`; our model
+  // ids are all of the form "provider:model". Cast at the boundary.
+  const model = registry.languageModel(modelId as `${string}:${string}`)
 
-  debugLog('vision-fallback.caption', `${sub.modelId} ${path.basename(filePath)} ${buffer.length}B`)
+  debugLog('vision-fallback.caption', `${modelId} ${buffer.length}B`)
   const { text } = await generateText({
     model,
+    abortSignal: opts.abortSignal,
     messages: [
       {
         role: 'user',
         content: [
-          {
-            type: 'text',
-            text:
-              'Describe this image in detail so a text-only AI can act on it. ' +
-              'Include: (1) any visible text transcribed verbatim, ' +
-              '(2) UI elements, layout, and visual hierarchy, ' +
-              '(3) colors, icons, shapes, and other visual details, ' +
-              '(4) inferred purpose or context. ' +
-              'Be thorough and specific. Output plain text only — no markdown formatting.',
-          },
-          { type: 'image', image: buffer, mediaType: mediaTypeFor(filePath) },
+          { type: 'text', text: opts.prompt ?? DEFAULT_CAPTION_PROMPT },
+          { type: 'image', image: buffer, mediaType },
         ],
       },
     ],
@@ -131,4 +133,15 @@ export async function captionImage(filePath: string, sub: VisionProvider): Promi
   const caption = text.trim()
   captionCache.set(key, caption)
   return caption
+}
+
+/**
+ * Generate a textual description of an image FILE via the chosen sub-agent.
+ * Thin wrapper over `captionImageBuffer` that reads the file and derives the
+ * media type from its extension; keeps the existing file-ingest call site
+ * (and its cache key by file content) working unchanged.
+ */
+export async function captionImage(filePath: string, sub: VisionProvider): Promise<string> {
+  const buffer = await fs.readFile(filePath)
+  return captionImageBuffer(buffer, mediaTypeFor(filePath), sub.modelId)
 }

@@ -71,6 +71,13 @@ yarn global add @x-code-cli/cli
 
 **OpenAI 兼容接入**（自托管 vLLM / OpenRouter / 各种代理 / 公司内网网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，xc 会注册一个名为 `custom` 的 provider，模型 id 写成 `custom:<your-model-id>` 使用。
 
+**Moonshot（Kimi）国内 / 国际端点**：Moonshot 按区域分了两套平台，**Key 与端点绑定、不能混用**：
+
+- 国际：[platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) → 端点 `https://api.moonshot.ai/v1`（SDK 默认，无需额外设置）
+- 国内：[platform.moonshot.cn](https://platform.moonshot.cn) / [platform.kimi.com](https://platform.kimi.com) → 端点 `https://api.moonshot.cn/v1`
+
+国内平台申请的 Key 直接用会报 `Invalid Authentication`（401），因为它只认 `api.moonshot.cn`。此时额外设置环境变量 `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` 即可；国际 Key 无需设置。
+
 ### 网页搜索 Key（可选）
 
 启用网页搜索（`web_search` 工具）需要从下表中**任选一项**配置。两家服务均提供免费额度：

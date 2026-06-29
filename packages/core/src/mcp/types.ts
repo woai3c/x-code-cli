@@ -70,11 +70,17 @@ export interface McpResourceEntry {
 }
 
 /** Result of calling an MCP tool — flattened from MCP's content-blocks
- *  into something we can shove into a tool_result message. The raw blocks
- *  are kept on the side in case a future UI wants images/audio. */
+ *  into something we can shove into a tool_result message. Text blocks are
+ *  joined into `text`; image blocks are surfaced separately on `images` so a
+ *  vision-capable model can actually see them (e.g. browser screenshots). */
 export interface McpCallResult {
   /** Text representation suitable for tool_result. */
   text: string
   /** True iff the server marked the call as an error (MCP `isError` flag). */
   isError: boolean
+  /** Image content blocks the tool returned (base64 data + IANA media type).
+   *  Absent / empty for the common text-only result. Carried into the
+   *  tool_result message as `media` parts when the active model can see
+   *  images; OCR'd down to text otherwise (downgradeBinaryPartsForProvider). */
+  images?: Array<{ data: string; mediaType: string }>
 }

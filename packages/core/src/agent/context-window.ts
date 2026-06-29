@@ -117,6 +117,15 @@ const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
   ['alibaba:qwen3-max', 32000],
   ['alibaba:qwen3-coder-plus', 32000],
   ['alibaba:qwq-plus', 32000],
+  // Zhipu GLM-4V vision models cap reply size very low — glm-4v-flash rejects
+  // anything above 1024 ("Range of max_tokens [1,1024]"); glm-4v-plus is the
+  // same family and shares that ceiling. These are captioner-class models (the
+  // browser screenshot helper auto-picks glm-4v-flash), but they're selectable
+  // as a main model too, so cap them or the request 400s on the first turn.
+  // NOTE: the caption path (vision-fallback) sends NO max_tokens, so borrowing
+  // glm-4v-flash to describe a screenshot is unaffected — only main-model use is.
+  ['zhipu:glm-4v-flash', 1024],
+  ['zhipu:glm-4v-plus', 1024],
 ])
 
 /** Resolve the max_tokens ceiling we send to the provider. */

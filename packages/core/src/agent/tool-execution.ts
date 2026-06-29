@@ -7,6 +7,7 @@ import type { ModelMessage } from 'ai'
 import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import { checkPermission } from '../permissions/index.js'
+import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/capabilities.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
@@ -19,6 +20,7 @@ import type { LoopState } from './loop-state.js'
 import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
+import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
 
 /** Detect AbortError from any source. Kept local (duplicates the helper
  *  in loop.ts) because making it a shared utility would force a new
@@ -195,7 +197,10 @@ async function executeShell(
   return { output: output || 'Done', isError: false }
 }
 
-/** Push a tool result to state and notify the UI. */
+/** Push a tool result to state and notify the UI. `images` (base64 + media
+ *  type) ride along only for MCP tools that return image content — they become
+ *  media parts in the tool_result so a vision model can see them; the UI
+ *  callback always gets the text form. */
 function pushToolResult(
   state: LoopState,
   callbacks: AgentCallbacks,
@@ -203,8 +208,9 @@ function pushToolResult(
   toolName: string,
   output: string,
   isError = false,
+  images?: ReadonlyArray<{ data: string; mediaType: string }>,
 ): void {
-  state.messages.push(toolResultMessage(toolCallId, toolName, output))
+  state.messages.push(toolResultMessage(toolCallId, toolName, output, images))
   // Clear the progress reporter for manually-dispatched tools (shell,
   // writeFile, edit, askUser). Auto-executed tools go through the SDK
   // stream's `tool-result` event and are cleared there — this call is
@@ -233,7 +239,12 @@ interface HandlerCtx {
  *  emitting PostToolUse on a synthetic deny would be confusing for hook
  *  authors. Bypass handlers (askUser / task / MCP resources) also push
  *  directly today; lifting them to this helper is a follow-up. */
-async function pushSuccessfulToolResult(ctx: HandlerCtx, output: string, isError: boolean): Promise<void> {
+async function pushSuccessfulToolResult(
+  ctx: HandlerCtx,
+  output: string,
+  isError: boolean,
+  images?: ReadonlyArray<{ data: string; mediaType: string }>,
+): Promise<void> {
   let effectiveOutput = output
   if (ctx.options.hookBus?.has('PostToolUse')) {
     try {
@@ -252,7 +263,7 @@ async function pushSuccessfulToolResult(ctx: HandlerCtx, output: string, isError
       debugLog('agent.hook-post-tool-error', String(err))
     }
   }
-  pushToolResult(ctx.state, ctx.callbacks, ctx.toolCallId, ctx.toolName, effectiveOutput, isError)
+  pushToolResult(ctx.state, ctx.callbacks, ctx.toolCallId, ctx.toolName, effectiveOutput, isError, images)
 }
 
 type ToolHandler = (ctx: HandlerCtx) => Promise<void>
@@ -648,6 +659,117 @@ async function handleToolCall(
   await pushSuccessfulToolResult(ctx, truncateToolResult(result.output), result.isError)
 }
 
+/** Caption prompt for MCP screenshots. Unlike the pasted-image default it
+ *  also asks for approximate pixel coordinates, so a browser agent that can
+ *  only act by coordinate (the `--caps vision` mouse_*_xy tools) still has
+ *  something to aim at. */
+/** Hard ceiling on a single screenshot caption. A slow vision provider
+ *  (Moonshot can take minutes on a full screenshot) must degrade to
+ *  tree-only, not freeze the turn. Generous enough that a healthy call
+ *  finishes well inside it. */
+const CAPTION_TIMEOUT_MS = 120_000
+
+const SCREENSHOT_CAPTION_PROMPT =
+  'A browser automation agent captured this screenshot and needs to act on it. ' +
+  'Describe what is visible so it can proceed: ' +
+  '(1) transcribe any visible text verbatim, ' +
+  '(2) describe the layout, regions, and visual content (maps, charts, canvas drawings, images), ' +
+  '(3) list notable interactive elements (buttons, links, inputs, icons) with their approximate ' +
+  'pixel coordinates as [x,y] measured from the top-left of the image, ' +
+  '(4) note colors and any visual state (selected, disabled, error). ' +
+  'Be thorough and specific. Output plain text only — no markdown formatting.'
+
+/**
+ * Decide how an MCP tool's returned image(s) reach the model.
+ *
+ * Only Anthropic can carry an image part inside a tool-result message; every
+ * OpenAI-compatible provider `JSON.stringify`s tool-result content, turning a
+ * screenshot into a base64 STRING that the model can't see and that blows past
+ * the context limit (a 1 MB PNG ≈ 400k text tokens — see capabilities
+ * `toolResultImage`). So for everyone except Anthropic we caption the image to
+ * text with a vision model and fold that into the tool-result text, dropping
+ * the binary. The captioner prefers a SEPARATE configured vision provider
+ * (pickVisionProvider lists free/fast models first — Gemini Flash, GLM-4V-Flash)
+ * because the active model can be very slow at vision (Moonshot's Kimi takes
+ * minutes on a full screenshot); it falls back to the active model only when
+ * that's the only vision-capable option. The whole caption is bounded by a
+ * timeout so a slow provider degrades to "work from the tree" instead of
+ * freezing the UI for minutes.
+ *
+ * Returns the (possibly augmented) text plus the images that should still be
+ * attached natively (empty unless the provider is Anthropic).
+ */
+export async function deliverToolImages(
+  ctx: HandlerCtx,
+  text: string,
+  images: ReadonlyArray<{ data: string; mediaType: string }> | undefined,
+): Promise<{ text: string; images?: ReadonlyArray<{ data: string; mediaType: string }> }> {
+  if (!images || images.length === 0) return { text, images }
+
+  const modelId = ctx.options.modelId
+  // Native path: Anthropic tool-results carry image blocks, and the model can
+  // actually see them. Pass through untouched — best fidelity, cheapest.
+  if (capabilitiesOf(modelId).toolResultImage && modelSupportsVision(modelId)) {
+    return { text, images }
+  }
+
+  // Pick the captioner. Prefer a SEPARATE configured vision provider (fast/free
+  // models first) over the active model — the active model can be slow at
+  // vision (Moonshot). Fall back to the active model only when it's the sole
+  // vision-capable option (e.g. a Kimi-only user): kimi-k2.6 is guaranteed
+  // reachable where moonshot-v1-*-vision-preview may not be on every endpoint.
+  const borrowed = pickVisionProvider()
+  const activeCanCaption = modelSupportsVision(modelId) && capabilitiesOf(modelId).image
+  const captionModelId =
+    borrowed && providerOf(borrowed.modelId) !== providerOf(modelId)
+      ? borrowed.modelId
+      : activeCanCaption
+        ? modelId
+        : (borrowed?.modelId ?? null)
+
+  if (!captionModelId) {
+    return {
+      text:
+        `${text}\n\n[${images.length} screenshot(s) captured, but no vision model is available to read them. ` +
+        `Configure a vision provider key, or work from the accessibility snapshot instead.]`,
+      images: undefined,
+    }
+  }
+
+  const captions: string[] = []
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i]
+    if (!img) continue
+    // Bound each caption: a slow vision provider must degrade to "use the tree",
+    // never freeze the turn. Combine the user's abort signal with a timeout so
+    // Esc still cancels instantly and a 3-minute Moonshot call doesn't hang.
+    const guards = [ctx.options.abortSignal, AbortSignal.timeout(CAPTION_TIMEOUT_MS)].filter(
+      (s): s is AbortSignal => s != null,
+    )
+    const signal = guards.length === 1 ? guards[0] : AbortSignal.any(guards)
+    try {
+      const buffer = Buffer.from(img.data, 'base64')
+      const caption = await captionImageBuffer(buffer, img.mediaType, captionModelId, {
+        prompt: SCREENSHOT_CAPTION_PROMPT,
+        abortSignal: signal,
+      })
+      captions.push(
+        `[Screenshot ${i + 1} — visual description (your model cannot view the raw image; a vision model looked at it for you):\n${caption}\n]`,
+      )
+    } catch (err) {
+      // Only a genuine user abort propagates; a timeout or model failure
+      // degrades to a note so the agent keeps going from the accessibility tree.
+      if (ctx.options.abortSignal?.aborted) throw err
+      debugLog('tool.screenshot-caption-error', String(err))
+      captions.push(
+        `[Screenshot ${i + 1} could not be analyzed (vision model too slow or unavailable: ${toolErrorFromUnknown(err)}). ` +
+          `Work from the accessibility snapshot instead.]`,
+      )
+    }
+  }
+  return { text: `${text}\n\n${captions.join('\n\n')}`, images: undefined }
+}
+
 /** Dispatch an MCP tool call. Sits parallel to the writeFile/edit/shell
  *  pipeline above — same loop-guard, same abort handling, but using the
  *  per-tool permission store and the MCP registry's callTool. */
@@ -725,12 +847,39 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
     }
   }
 
+  // Normalize browser snapshot/screenshot args. Safe to mutate ctx.input (the
+  // PreToolUse hook may have already rewritten it, and callTool reads ctx.input
+  // below).
+  if (ctx.input && typeof ctx.input === 'object') {
+    const args = ctx.input as Record<string, unknown>
+    // NEVER let the model write the result to a file. @playwright/mcp writes a
+    // `filename` relative to its CWD (the user's repo), littering it — and for
+    // a snapshot the file lands outside --output-dir so the model can't even
+    // read it back (it 404s, then flails). We always want the result inline:
+    // snapshot text / a captioned image. Strip filename on both.
+    if (entry.rawName === 'browser_snapshot' || entry.rawName === 'browser_take_screenshot') {
+      delete args.filename
+    }
+    // Screenshots: force JPEG before capture (a full PNG of a busy page is
+    // ~0.5 MB and makes the downstream vision-caption call crawl; JPEG is
+    // ~5-8x smaller, lossy is fine for "describe what's on screen") and drop
+    // fullPage (a long-page shot is huge; the prompt already says viewport-only).
+    if (entry.rawName === 'browser_take_screenshot') {
+      args.type = 'jpeg'
+      delete args.fullPage
+    }
+  }
+
   // Execute. abortSignal threaded all the way down to the SDK request
   // so Esc immediately cancels in-flight MCP calls.
   reportProgress(toolCallId, `Calling ${entry.serverName}/${entry.rawName}`)
   try {
     const result = await registry.callTool(toolName, ctx.input, options.abortSignal)
-    await pushSuccessfulToolResult(ctx, truncateToolResult(result.text), result.isError)
+    // Images can't ride a tool-result on most providers — caption to text for
+    // all but Anthropic so a screenshot doesn't degrade to base64 and blow the
+    // context window.
+    const delivered = await deliverToolImages(ctx, result.text, result.images)
+    await pushSuccessfulToolResult(ctx, truncateToolResult(delivered.text), result.isError, delivered.images)
   } catch (err) {
     if (isAbortError(err, options.abortSignal)) {
       pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)

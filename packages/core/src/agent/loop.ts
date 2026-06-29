@@ -36,6 +36,7 @@ import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { processToolCalls } from './tool-execution.js'
+import { collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 
 /** Prepend an injected context block to a UserContent payload. Used by
@@ -305,6 +306,13 @@ async function runTurn(
   // "tool must be a response to a preceding message with tool_calls".
   // Idempotent — running every turn is cheap and bulletproof.
   repairOrphanToolCalls(state.messages)
+
+  // Collapse stale, fully-superseding tool results (browser snapshots /
+  // screenshots) to placeholders before the request is built, so only the
+  // latest of each is billed. No-op unless the agent opted in (browser only).
+  if (options.collapseStaleToolResults?.length) {
+    collapseStaleToolResults(state.messages, options.collapseStaleToolResults)
+  }
 
   // Text-only providers (DeepSeek, custom) would 400 on any surviving
   // image/file parts. Rewrite those parts to OCR'd text in-place before

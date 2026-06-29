@@ -10,8 +10,29 @@ export function userMessage(content: UserContent): ModelMessage {
   return { role: 'user', content }
 }
 
-/** Create a tool result message */
-export function toolResultMessage(toolCallId: string, toolName: string, result: string): ModelMessage {
+/** Create a tool result message. When `images` are supplied (e.g. browser
+ *  screenshots from an MCP tool) the output switches to the multimodal
+ *  `content` form so a vision-capable model actually sees them; the text
+ *  stays as a leading text part. AI SDK converts `media` → provider-level
+ *  `image-data`; text-only providers get the media stripped/OCR'd upstream
+ *  by downgradeBinaryPartsForProvider. The plain-string path is unchanged
+ *  for the overwhelmingly-common text-only result. */
+export function toolResultMessage(
+  toolCallId: string,
+  toolName: string,
+  result: string,
+  images?: ReadonlyArray<{ data: string; mediaType: string }>,
+): ModelMessage {
+  const output =
+    images && images.length > 0
+      ? {
+          type: 'content' as const,
+          value: [
+            ...(result ? [{ type: 'text' as const, text: result }] : []),
+            ...images.map((img) => ({ type: 'media' as const, data: img.data, mediaType: img.mediaType })),
+          ],
+        }
+      : { type: 'text' as const, value: result }
   return {
     role: 'tool',
     content: [
@@ -19,7 +40,7 @@ export function toolResultMessage(toolCallId: string, toolName: string, result: 
         type: 'tool-result',
         toolCallId,
         toolName,
-        output: { type: 'text', value: result },
+        output,
       },
     ],
   }

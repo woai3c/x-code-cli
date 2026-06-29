@@ -30,7 +30,17 @@ export function createModelRegistry() {
     })
   }
   if (opts.zhipu) providers.zhipu = zhipu
-  if (opts.moonshotai) providers.moonshotai = createMoonshotAI({ fetch: permanentErrorFetch })
+  if (opts.moonshotai) {
+    // The SDK defaults to the international endpoint (api.moonshot.ai). Keys
+    // minted on the China platform (platform.moonshot.cn / platform.kimi.com)
+    // only authenticate against api.moonshot.cn — without an override they 401
+    // with "Invalid Authentication". MOONSHOT_BASE_URL lets those users point
+    // at the right endpoint (e.g. https://api.moonshot.cn/v1).
+    providers.moonshotai = createMoonshotAI({
+      fetch: permanentErrorFetch,
+      ...(process.env.MOONSHOT_BASE_URL ? { baseURL: process.env.MOONSHOT_BASE_URL } : {}),
+    })
+  }
 
   // Custom OpenAI compatible provider
   if (opts.custom.apiKey && opts.custom.baseURL) {

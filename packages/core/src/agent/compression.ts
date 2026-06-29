@@ -195,6 +195,20 @@ export async function handleContextTooLong(
   // also shrinks state.messages in place, so the jsonl needs a
   // compact-boundary marker to keep loader semantics consistent.
   void markBoundaryAndReflush(state)
+
+  // Anti-spin guard. Compression only summarizes OLD history; it keeps the
+  // recent slice (KEEP_RECENT) verbatim. If summarizing barely moved the
+  // count, the overflow lives in those kept messages — a single giant
+  // tool-result the provider rejected (e.g. a screenshot that degraded to
+  // base64 text on an OpenAI-compatible provider). Retrying would re-send the
+  // same over-limit request and re-compress forever (~15s/round until the
+  // turn cap, minutes of frozen UI). Bail instead so the caller surfaces the
+  // error and the user can /clear. Threshold: <10% freed = "couldn't help".
+  if (tokensAfter > tokensBefore * 0.9) {
+    debugLog('compression.reactive-no-progress', `before=${tokensBefore} after=${tokensAfter} — not retrying`)
+    return false
+  }
+
   const beforeK = Math.round(tokensBefore / 1000)
   const afterK = Math.round(tokensAfter / 1000)
   callbacks.onContextCompressed(`Context too long — compressed (~${beforeK}k → ~${afterK}k tokens). Retrying...`)
