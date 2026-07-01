@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
+  TOOL_SEARCH_TOOL_NAME,
   agentLoop,
   appendCheckpoint,
   appendInterrupted,
@@ -299,6 +300,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // and the flash is shorter (~1 frame) than the previous flicker.
           flushBuffer()
           pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
+          // toolSearch is the internal deferred-tool loader — hide it from the
+          // UI entirely (matches Claude Code / Codex, which never surface their
+          // tool-search calls). No live “Running…” row and no scrollback line
+          // (the onToolResult push is skipped too); the spinner stays
+          // “Thinking…” while it runs, which is a sub-ms catalog lookup.
+          if (toolName === TOOL_SEARCH_TOOL_NAME) return
           // Update sticky read-chain flag synchronously alongside the
           // active-tool list. A collapsible tool extends the chain;
           // anything else (Edit/Write/Shell/Task) breaks it so the
@@ -331,6 +338,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           pendingToolsRef.current.delete(toolCallId)
           const editPayload = pendingEditDiffsRef.current.get(toolCallId)
           pendingEditDiffsRef.current.delete(toolCallId)
+          // Hidden internal tool (toolSearch): onToolCall added no live row, so
+          // there’s nothing to clear and no scrollback line to push. Bail after
+          // the pending-map cleanup above.
+          if (pending && pending.toolName === TOOL_SEARCH_TOOL_NAME) return
           const durationMs = pending ? Date.now() - pending.startedAt : 0
           setState((prev) => {
             const tc: DisplayToolCall = {

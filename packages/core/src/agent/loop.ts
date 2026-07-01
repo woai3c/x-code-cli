@@ -20,6 +20,7 @@ import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
+import { toolSearch } from '../tools/tool-search.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
@@ -28,6 +29,7 @@ import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
 import { runMemoryExtractor } from './memory-extractor.js'
+import { toolErrorString } from './messages.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
 import { appendCheckpoint, appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
@@ -38,6 +40,7 @@ import { buildSystemPrompt } from './system-prompt.js'
 import { processToolCalls } from './tool-execution.js'
 import { collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
+import { DEFERRED_BUILTIN_TOOLS, buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
 
 /** Prepend an injected context block to a UserContent payload. Used by
  *  the UserPromptSubmit hook decision: plugins can inject context (e.g.
@@ -93,7 +96,13 @@ export interface AgentLoopResult {
  *  etc.) are deliberately ignored: that's the model's internal chain of
  *  thought, not user-facing output. The final user-facing answer arrives
  *  as regular text-delta chunks. */
-async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks): Promise<void> {
+async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks, state: LoopState): Promise<void> {
+  // Deferred tools (webSearch / MCP / etc.) are name-only until the model loads
+  // them via toolSearch. If the model calls one BEFORE loading it, the tool
+  // isn't in this turn's tools map and the SDK rejects it with a tool-error.
+  // Track those calls so we can keep them out of the UI entirely.
+  const deferredNames = new Set((state.deferredCatalog ?? []).map((e) => e.name))
+  const suppressedDeferredCallIds = new Set<string>()
   for await (const chunk of result.fullStream) {
     if (chunk.type === 'error') {
       // AI SDK doesn't throw from fullStream iteration on request failure —
@@ -112,6 +121,19 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks)
     } else if (chunk.type === 'tool-call') {
       debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
       const toolCallId = chunk.toolCallId ?? ''
+      const toolName = chunk.toolName ?? ''
+      // Deferred tool called before it was loaded: its schema isn't in this
+      // turn's tools map, so the SDK will immediately reject it with a
+      // tool-error (NoSuchToolError). Suppress the UI row entirely — otherwise
+      // onToolCall paints a live "Running…" line that the tool-error chunk
+      // below can't clear (there's no result), leaving a phantom row that hangs
+      // until the whole turn ends. state.messages still carries the SDK's error
+      // result, so the model sees what happened and self-corrects via toolSearch.
+      if (deferredNames.has(toolName) && !state.activatedTools.has(toolName)) {
+        suppressedDeferredCallIds.add(toolCallId)
+        debugLog('stream.deferred-early-call', `${toolName} ${toolCallId} — suppressed (not loaded yet)`)
+        continue
+      }
       // Register the progress side-channel BEFORE tools start executing —
       // AI SDK will synchronously invoke `execute(input, { toolCallId })`
       // for auto-executed tools right after this event, and those tools
@@ -119,13 +141,31 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks)
       if (toolCallId) {
         setProgressReporter(toolCallId, (msg) => callbacks.onToolProgress(toolCallId, msg))
       }
-      callbacks.onToolCall(toolCallId, chunk.toolName ?? '', (chunk.input ?? {}) as Record<string, unknown>)
+      callbacks.onToolCall(toolCallId, toolName, (chunk.input ?? {}) as Record<string, unknown>)
     } else if (chunk.type === 'tool-result') {
       // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
       debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
       if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
+    } else if (chunk.type === 'tool-error') {
+      // The SDK rejected a tool call mid-stream. Two cases:
+      //  1. A deferred tool called before loading — already suppressed above,
+      //     so there's no UI row to clear; stay silent.
+      //  2. A genuine failure (malformed input on a loaded tool, or a
+      //     hallucinated tool name) where onToolCall DID paint a "Running…"
+      //     row. Resolve it to a visible error instead of letting it hang —
+      //     the old code dropped this chunk into the `else` below and the row
+      //     stayed "Running…" until the turn ended.
+      const toolCallId = chunk.toolCallId ?? ''
+      if (toolCallId) clearProgressReporter(toolCallId)
+      if (suppressedDeferredCallIds.has(toolCallId)) {
+        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed deferred early-call`)
+        continue
+      }
+      const message = chunk.error instanceof Error ? chunk.error.message : String(chunk.error ?? 'tool call failed')
+      debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} ${message}`)
+      callbacks.onToolResult(toolCallId, toolErrorString(message), true)
     } else {
       debugLog('stream.other-chunk', chunk.type)
     }
@@ -226,13 +266,23 @@ function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
   return false
 }
 
-/** Build the effective tool set for this loop, applying:
- *  1. The static tool registry (always)
- *  2. The task tool (when subAgentRegistry is present)
- *  3. options.toolFilter allow/deny (for sub-agent loops)
+/** Build the BASE tool set for this loop. "Base" = everything directly loaded
+ *  on every turn; the per-turn `composeTurnTools` call then splices in any
+ *  deferred tools the model has activated via `toolSearch`.
  *
- *  Computed once per session and cached — the tool set is stable within
- *  a session (registry doesn't change, filter doesn't change). */
+ *  Two modes:
+ *  1. Top-level agent (no toolFilter) — DEFERRED loading. Core tools + the
+ *     `toolSearch` entry point are loaded directly; non-core built-ins and ALL
+ *     MCP tools are pushed into `state.deferredCatalog` (name-only until the
+ *     model loads them). This is the whole point: a few connected MCP servers
+ *     no longer cost tens of thousands of tokens of tool schema on every
+ *     request.
+ *  2. Sub-agent (toolFilter present) — FULL injection, unchanged. Sub-agents
+ *     already run a curated, small tool set, so there's no context-bloat
+ *     problem to solve and adding a search round-trip would only slow them
+ *     down. They never get a deferredCatalog.
+ *
+ *  Computed once per session — the base set is stable within a session. */
 function buildTools(options: AgentOptions, state: LoopState) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = { ...toolRegistry }
@@ -251,6 +301,26 @@ function buildTools(options: AgentOptions, state: LoopState) {
     tools.activateSkill = createActivateSkillTool(options.skillRegistry)
   }
 
+  // Deferred loading is a top-level-agent feature only. The presence of a
+  // toolFilter is the authoritative "this is a sub-agent" signal (runner.ts
+  // always passes one; the main loop never does).
+  const deferralActive = !options.toolFilter
+  if (deferralActive) {
+    const catalog = buildDeferredCatalog(options)
+    state.deferredCatalog = catalog
+    // Strip the non-core built-ins out of the direct set — they live in the
+    // catalog now and get spliced back in on activation.
+    for (const name of DEFERRED_BUILTIN_TOOLS) delete tools[name]
+    // The entry point. Only register it when there's actually something to
+    // search; with no MCP and (somehow) no deferred built-ins the catalog is
+    // empty and toolSearch would just be dead weight.
+    if (catalog.length > 0) tools.toolSearch = toolSearch
+    // NOTE: MCP tools and listMcpResources / readMcpResource are deliberately
+    // NOT added here — they're in the catalog, loaded on demand via toolSearch.
+    return tools
+  }
+
+  // ── Sub-agent path: full injection + toolFilter (unchanged behavior) ──
   // MCP tools: declared without `execute` so the AI SDK leaves them in
   // `result.toolCalls` for processToolCalls to hand-dispatch through the
   // permission / loop-guard / abortSignal pipeline.
@@ -391,7 +461,7 @@ async function runTurn(
   drainStreamResult(result)
 
   try {
-    await streamChunksToUI(result, callbacks)
+    await streamChunksToUI(result, callbacks, state)
   } catch (err) {
     // Silently drain all pending AI SDK promises so unhandled-rejection
     // warnings (NoOutputGeneratedError) don't leak to stderr.
@@ -585,10 +655,11 @@ export async function agentLoop(
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
 
-  // Build the effective tool set once per session — includes the task
-  // tool when a subAgentRegistry is available, and applies toolFilter
-  // for sub-agent loops. Stable for the session lifetime.
-  const effectiveTools = buildTools(options, state)
+  // Build the BASE tool set once per session (core tools + toolSearch, or the
+  // full filtered set for sub-agents). The deferred catalog — when deferral is
+  // active — is stashed on `state` here. Each turn, `composeTurnTools` splices
+  // in whatever the model has activated via toolSearch so far.
+  const baseTools = buildTools(options, state)
 
   // Auto-continuation on `length` finish. Reasoning models can exhaust the
   // output token budget before the user-visible reply completes — the old
@@ -654,16 +725,34 @@ export async function agentLoop(
         isGitRepo,
         planMode: state.permissionMode === 'plan',
         planFilePath: state.currentPlanPath ?? undefined,
-        // Pass MCP tools so the `## MCP Tools` section is appended.
-        // Empty / absent registry → buildSystemPrompt's placeholder
-        // resolves to "" and the prompt is byte-identical to the
-        // pre-MCP shape, preserving prefix-cache for sessions
-        // without MCP configured.
-        mcpTools: options.mcpRegistry ? toSystemPromptEntries(options.mcpRegistry.list()) : undefined,
+        // When deferral is active (top-level agent), MCP tools + non-core
+        // built-ins are in the catalog, listed by NAME under `## Deferred
+        // Tools` instead of the old `## MCP Tools` block — the model loads
+        // them on demand via toolSearch. The full name list is fixed at boot,
+        // so the prompt stays byte-stable for prefix caching.
+        //
+        // Sub-agents (no catalog) keep the old `## MCP Tools` block. Empty /
+        // absent registry → both placeholders resolve to "" and the prompt is
+        // byte-identical to the pre-MCP shape.
+        deferredTools: state.deferredCatalog?.map((e) => ({
+          name: e.name,
+          serverName: e.serverName,
+          source: e.source,
+        })),
+        mcpTools: state.deferredCatalog
+          ? undefined
+          : options.mcpRegistry
+            ? toSystemPromptEntries(options.mcpRegistry.list())
+            : undefined,
         skills: options.skillRegistry ? options.skillRegistry.list() : undefined,
       })
     }
     const systemPrompt = state.systemPromptCache
+
+    // Splice in any deferred tools the model has loaded via toolSearch. Returns
+    // `baseTools` unchanged until the first activation, so sessions that never
+    // search keep a byte-stable tools prefix across turns.
+    const effectiveTools = composeTurnTools(baseTools, state.deferredCatalog, state.activatedTools)
 
     const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turn)
 

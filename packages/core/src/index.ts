@@ -54,6 +54,7 @@ export type { ProviderCapabilities } from './providers/capabilities.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'
+export { TOOL_SEARCH_TOOL_NAME } from './tools/tool-search.js'
 export { getShellProvider } from './tools/shell-provider.js'
 export type { ShellProvider, ShellType } from './tools/shell-provider.js'
 

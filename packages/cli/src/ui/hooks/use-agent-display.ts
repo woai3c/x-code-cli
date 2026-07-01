@@ -4,7 +4,7 @@
 // management. This module is UI-only — it never touches the core
 // agent loop.
 import type { DisplayMessage, DisplayToolCall, ModelMessage } from '@x-code-cli/core'
-import { extractText } from '@x-code-cli/core'
+import { TOOL_SEARCH_TOOL_NAME, extractText } from '@x-code-cli/core'
 
 type ContentPartLike = {
   type?: string
@@ -71,6 +71,10 @@ export function modelMessagesToDisplay(messages: ModelMessage[]): DisplayMessage
       let tcIdx = 0
       for (const part of msg.content as ContentPartLike[]) {
         if (part?.type !== 'tool-call' || typeof part.toolCallId !== 'string') continue
+        // toolSearch is hidden from scrollback in the live flow (see
+        // use-agent.ts) — skip it here too so a resumed session doesn't
+        // suddenly surface the tool-search calls the live view hid.
+        if (part.toolName === TOOL_SEARCH_TOOL_NAME) continue
         tcIdx++
         const result = toolResults.get(part.toolCallId)
         const tc: DisplayToolCall = {

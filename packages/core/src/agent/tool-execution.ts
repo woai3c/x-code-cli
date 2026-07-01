@@ -20,6 +20,7 @@ import type { LoopState } from './loop-state.js'
 import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
+import { runToolSearch } from './tool-search/resolve.js'
 import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
 
 /** Detect AbortError from any source. Kept local (duplicates the helper
@@ -429,6 +430,69 @@ async function handleKillShell(ctx: HandlerCtx): Promise<void> {
   pushToolResult(state, callbacks, toolCallId, toolName, `Killed background shell ${id}.`)
 }
 
+/** ── toolSearch ──
+ *  Loads deferred tools on demand (top-level agent only — sub-agents have no
+ *  catalog). Pure lookup against `state.deferredCatalog`; the matched names are
+ *  added to `state.activatedTools` so composeTurnTools splices their schemas
+ *  into the request tool set on the NEXT turn, making them callable.
+ *
+ *  Bypasses the loop guard intentionally: the model legitimately searches
+ *  several times per task (different capabilities), and identical repeat
+ *  searches are harmless no-ops (already-activated tools just stay activated). */
+async function handleToolSearch(ctx: HandlerCtx): Promise<void> {
+  const { input, toolCallId, toolName, state, callbacks } = ctx
+  const catalog = state.deferredCatalog ?? []
+  const query = (input.query as string | undefined)?.trim() ?? ''
+  if (!query) {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      toolErrorString('toolSearch requires a non-empty query.'),
+      true,
+    )
+    return
+  }
+  // Clamp: the model may pass 0 / a negative / a non-number, which would make
+  // the downstream slice() drop results or behave oddly. Keep it in [1, 50].
+  const requested = Number(input.max_results)
+  const maxResults = Number.isFinite(requested) ? Math.min(50, Math.max(1, Math.floor(requested))) : 5
+  const result = runToolSearch(query, maxResults, catalog)
+  // Observability for manual testing / debugging: shows the query, what it
+  // matched, and the catalog size. No-op without DEBUG_STDOUT.
+  debugLog(
+    'tool-search',
+    `query=${JSON.stringify(query)} max=${maxResults} catalog=${catalog.length} → [${result.activated.join(', ')}]`,
+  )
+
+  let added = false
+  let anyAlreadyActive = false
+  for (const name of result.activated) {
+    if (state.activatedTools.has(name)) {
+      anyAlreadyActive = true
+    } else {
+      state.activatedTools.add(name)
+      added = true
+    }
+  }
+  // Newly activated tools grow the tool list this turn → the tool-schema cache
+  // prefix changes once. Flag it so the cache-break detector doesn't warn.
+  if (added) state.expectCacheMiss = true
+
+  // If the model re-searched tools it had ALREADY loaded (nothing new added),
+  // tell it plainly. The "## Deferred Tools" system-prompt list is byte-frozen
+  // and keeps showing loaded tools as deferred, so a model that trusts it over
+  // the earlier tool_result can loop toolSearch→toolSearch; this nudges it to
+  // just call them.
+  const text =
+    !added && anyAlreadyActive
+      ? `Already loaded — call ${result.activated.join(', ')} directly now. No need to search again.`
+      : result.text
+
+  pushToolResult(state, callbacks, toolCallId, toolName, text)
+}
+
 /** Manual tools that bypass the loop guard and the writeFile/edit/shell
  *  permission + execution pipeline below. Each handler owns its own
  *  pushToolResult call. Adding a new bypass tool is a one-line entry here. */
@@ -445,6 +509,7 @@ const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
   readMcpResource: handleReadMcpResource,
   shellOutput: handleShellOutput,
   killShell: handleKillShell,
+  toolSearch: handleToolSearch,
 }
 
 /** Run the loop-guard machinery for a non-bypass tool. Returns true if the

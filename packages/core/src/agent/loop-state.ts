@@ -5,6 +5,7 @@ import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
 import type { CheckpointEntry } from './snapshot.js'
+import type { DeferredToolEntry } from './tool-search/catalog.js'
 
 export interface LoopState {
   messages: ModelMessage[]
@@ -99,6 +100,21 @@ export interface LoopState {
    *  (sub-agents get a fresh LoopState). In-memory only; execa's default
    *  cleanup kills any survivors when the CLI process exits. */
   bgShells: BackgroundShellRegistry
+
+  // ── Deferred tools / toolSearch (top-level agent only) ──
+
+  /** Catalog of deferred tools the model can discover via `toolSearch` but
+   *  that are NOT in the request tool list until activated. Built once by
+   *  buildTools at loop start. Undefined for sub-agents (they keep full tool
+   *  injection over their curated, small tool set). */
+  deferredCatalog?: DeferredToolEntry[]
+  /** Names of deferred tools the model has loaded via `toolSearch` this
+   *  session. composeTurnTools splices their definitions into the request
+   *  tool set every turn. Persists for the whole session — a loaded tool
+   *  stays loaded (matches Claude Code / Codex "discovered tools" semantics).
+   *  In-memory only; Set iteration order is insertion order, keeping the
+   *  spliced-in tail of the tools map stable across turns. */
+  activatedTools: Set<string>
 }
 
 /** Generate a human-skimmable session id: `YYYYMMDD-HHMMSS-mmm` (local
@@ -147,5 +163,6 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     expectCacheMiss: false,
     readFileCache: new Map(),
     bgShells: new BackgroundShellRegistry(),
+    activatedTools: new Set(),
   }
 }

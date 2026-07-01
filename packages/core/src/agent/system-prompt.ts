@@ -245,6 +245,15 @@ export interface SystemPromptMcpTool {
   description: string
 }
 
+/** One deferred tool, listed by NAME ONLY in the `## Deferred Tools` block.
+ *  No description — the whole point is to keep the up-front cost to just the
+ *  names; the model loads the real schema (and description) via toolSearch. */
+export interface SystemPromptDeferredTool {
+  name: string
+  serverName?: string
+  source: 'builtin' | 'mcp'
+}
+
 /** Format the optional skills block. Returns "" when no skills are loaded
  *  so the prompt is byte-identical to the no-skills shape, preserving
  *  prefix-cache hits for sessions without any skills configured. */
@@ -313,6 +322,46 @@ function formatMcpCapabilities(mcpTools: readonly SystemPromptMcpTool[] | undefi
   return lines.join('\n')
 }
 
+/** Format the `## Deferred Tools` block (top-level agent only). Lists the
+ *  NAMES of every deferred tool (non-core built-ins + all MCP tools), grouped
+ *  by source, plus instructions to load them via `toolSearch`. Returns "" when
+ *  `deferredTools` is undefined (sub-agents / no deferral) so the byte layout
+ *  matches the non-deferred shape. The list is fixed at boot, so the block is
+ *  byte-stable across turns — a prerequisite for prefix caching. */
+function formatDeferredCapabilities(deferredTools: readonly SystemPromptDeferredTool[] | undefined): string {
+  if (deferredTools === undefined) return ''
+
+  const lines: string[] = [
+    '',
+    '',
+    '## Deferred Tools',
+    'The tools below are available but NOT loaded — only their names are listed, with no schema. To use one, first call `toolSearch` (keyword search, or `select:<exact_name>` to load specific tools by name); its schema is then added to your tool set and it becomes directly callable on your next step. Core tools (readFile, writeFile, edit, shell, grep, glob, listDir, task) are always loaded — never search for those.',
+  ]
+
+  if (deferredTools.length === 0) {
+    return lines.join('\n')
+  }
+
+  const builtins = deferredTools.filter((t) => t.source === 'builtin').map((t) => t.name)
+  if (builtins.length > 0) {
+    lines.push('', '### Built-in', `- ${builtins.join(', ')}`)
+  }
+
+  // Group MCP tools by server, preserving incoming (registry) order.
+  const byServer = new Map<string, string[]>()
+  for (const t of deferredTools) {
+    if (t.source !== 'mcp') continue
+    const server = t.serverName ?? 'unknown'
+    const list = byServer.get(server) ?? []
+    list.push(t.name)
+    byServer.set(server, list)
+  }
+  for (const [server, names] of byServer) {
+    lines.push('', `### Server: ${server}`, `- ${names.join(', ')}`)
+  }
+  return lines.join('\n')
+}
+
 /** Build the full system prompt with dynamic values and optional knowledge context */
 export function buildSystemPrompt(options?: {
   knowledgeContext?: string
@@ -330,6 +379,12 @@ export function buildSystemPrompt(options?: {
    *  absent or empty, the prompt body is byte-identical to the
    *  pre-MCP version. */
   mcpTools?: readonly SystemPromptMcpTool[]
+  /** Optional deferred-tool surface (top-level agent only). When provided, a
+   *  `## Deferred Tools` section listing tool NAMES is appended in place of
+   *  the `## MCP Tools` block, and the model loads each tool's real schema on
+   *  demand via `toolSearch`. Mutually exclusive with `mcpTools` in practice
+   *  (deferral replaces full injection). */
+  deferredTools?: readonly SystemPromptDeferredTool[]
   /** Optional skill surface. When provided, an `## Available Skills`
    *  section is appended listing each skill name + description. When
    *  absent or empty, the prompt is byte-identical to the no-skills shape. */
@@ -342,7 +397,13 @@ export function buildSystemPrompt(options?: {
     .replace(/\{cwd\}/g, process.cwd())
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
     .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')
-    .replace(/\{mcpCapabilities\}/g, formatMcpCapabilities(options?.mcpTools))
+    // Deferred + MCP share one slot. At most one is non-empty: the top-level
+    // agent passes deferredTools (full injection replaced by name-only), and
+    // sub-agents pass mcpTools (full injection). Both undefined → "".
+    .replace(
+      /\{mcpCapabilities\}/g,
+      formatDeferredCapabilities(options?.deferredTools) + formatMcpCapabilities(options?.mcpTools),
+    )
     .replace(/\{skillCapabilities\}/g, formatSkillCapabilities(options?.skills))
 
   if (options?.knowledgeContext) {
