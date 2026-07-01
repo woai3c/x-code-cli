@@ -217,8 +217,8 @@ export {
 export type { LoadedSession, SessionListEntry } from './agent/session-store.js'
 
 // Rewind snapshots — file-history backing for /rewind.
-export { createCheckpoint, restoreCheckpoint } from './agent/snapshot.js'
-export type { CheckpointEntry } from './agent/snapshot.js'
+export { createCheckpoint, restoreCheckpoint, getDiffStatsForCheckpoint } from './agent/snapshot.js'
+export type { CheckpointEntry, DiffStats } from './agent/snapshot.js'
 
 // MCP — Model Context Protocol client support.
 export { McpRegistry, emptyRegistry } from './mcp/registry.js'

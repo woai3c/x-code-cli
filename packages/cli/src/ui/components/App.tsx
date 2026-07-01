@@ -1,4 +1,6 @@
 // @x-code-cli/cli — Root App component
+import path from 'node:path'
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useApp } from 'ink'
@@ -22,6 +24,7 @@ import {
 } from '@x-code-cli/core'
 import type {
   AgentOptions,
+  DiffStats,
   KnowledgeFact,
   LanguageModel,
   LoadedSession,
@@ -352,6 +355,7 @@ export function App({
     resume,
     rewind,
     getCheckpoints,
+    getDiffStats,
     getSessionInfo,
     switchModel,
     setThinking,
@@ -534,6 +538,17 @@ export function App({
     )
   }, [addInfoMessage, askQuestion, resume])
 
+  /** Format a DiffStats object into a compact string like "+42 -18 in main.ts". */
+  function formatDiffStats(stats: DiffStats | null): string {
+    if (!stats || stats.filesChanged.length === 0) return 'no code changes'
+    const ins = `+${stats.insertions}`
+    const del = `-${stats.deletions}`
+    if (stats.filesChanged.length === 1) {
+      return `${ins} ${del} in ${path.basename(stats.filesChanged[0]!)}`
+    }
+    return `${ins} ${del} in ${stats.filesChanged.length} files`
+  }
+
   /** Picker + executor for `/rewind`. With an arg, jumps straight to the
    *  named checkpoint (full or sha1-style prefix). Without, lists every
    *  checkpoint in this session newest-first with the user prompt that
@@ -575,13 +590,24 @@ export function App({
         // Newest first matches what users intuit when they think "go back
         // a step or two" — the freshest decision points are at the top.
         const ordered = [...checkpoints].reverse()
-        const choices = ordered.slice(0, 30).map((c) => {
-          const preview = (c.userPrompt || '(empty prompt)').slice(0, 60).replace(/\s+/g, ' ').trim()
+
+        // Compute diff stats for each checkpoint in parallel.
+        const statsArr = await Promise.all(ordered.slice(0, 30).map((c) => getDiffStats(c.ckptId)))
+
+        const choices = ordered.slice(0, 30).map((c, i) => {
+          const preview = (c.userPrompt || '(empty prompt)')
+            .replace(/[\u2500-\u257F\u2580-\u259F\u25A0-\u25FF]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 50)
           const ago = formatRelativeTime(new Date(c.ts).getTime())
+          const stats = statsArr[i]
+          const diffLabel = formatDiffStats(stats ?? null)
           return {
             label: `${preview}  ·  ${ago}`,
-            description: `${c.ckptId}  ·  message #${c.messageCount}`,
+            description: `${diffLabel}  ·  ${c.ckptId}`,
             ckptId: c.ckptId,
+            stats,
           }
         })
         const answer = await askQuestion(
@@ -596,16 +622,52 @@ export function App({
         pickedId = picked.ckptId
       }
 
-      const result = await rewind(pickedId)
+      // Step 2: confirmation — let the user choose what to restore.
+      const stats = await getDiffStats(pickedId)
+      const hasCodeChanges = stats !== null && stats.filesChanged.length > 0
+
+      const restoreOptions = hasCodeChanges
+        ? [
+            { label: 'Restore code and conversation', description: `Rewind both (${formatDiffStats(stats)})` },
+            { label: 'Restore conversation only', description: 'Keep current files unchanged' },
+            { label: 'Restore code only', description: 'Keep full conversation, revert files' },
+            { label: 'Cancel', description: '' },
+          ]
+        : [
+            { label: 'Restore conversation', description: 'No code changes to revert' },
+            { label: 'Cancel', description: '' },
+          ]
+
+      const restoreAnswer = await askQuestion('What would you like to restore?', restoreOptions)
+      if (restoreAnswer === 'Cancel') {
+        addInfoMessage('Rewind cancelled.')
+        return
+      }
+
+      const restoreCode = restoreAnswer === 'Restore code and conversation' || restoreAnswer === 'Restore code only'
+      const restoreConversation = restoreAnswer !== 'Restore code only'
+
+      const mode = restoreCode && restoreConversation ? 'both' : restoreCode ? 'code' : 'conversation'
+      const result = await rewind(pickedId, mode)
       if (!result.ok) {
         addInfoMessage(`**Rewind failed:** ${result.reason}`)
         return
       }
-      addInfoMessage(
-        `**Rewound to:** ${result.preview || '(empty prompt)'}\n\nFiles and conversation restored. Continue from here.`,
-      )
+
+      const diffSummary = hasCodeChanges ? ` (${formatDiffStats(stats)})` : ''
+      if (mode === 'both') {
+        addInfoMessage(
+          `**Rewound to:** ${result.preview || '(empty prompt)'}\n\nFiles and conversation restored${diffSummary}. Continue from here.`,
+        )
+      } else if (mode === 'code') {
+        addInfoMessage(
+          `**Code restored** to the state before: ${result.preview || '(empty prompt)'}${diffSummary}\n\nConversation unchanged.`,
+        )
+      } else {
+        addInfoMessage(`**Conversation rewound to:** ${result.preview || '(empty prompt)'}\n\nFiles unchanged.`)
+      }
     },
-    [addInfoMessage, askQuestion, getCheckpoints, rewind],
+    [addInfoMessage, askQuestion, getCheckpoints, getDiffStats, rewind],
   )
 
   /** Resolve a ThemeName back to its display label. */

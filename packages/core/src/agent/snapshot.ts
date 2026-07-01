@@ -17,6 +17,8 @@
 // Why no shadow-git (per the design discussion): file-copy keeps this
 // working in non-git projects, sidesteps .gitignore conflicts, and avoids
 // any chance of touching the user's real .git index.
+import { diffLines } from 'diff'
+
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -305,6 +307,114 @@ export async function restoreCheckpoint(
   }
   await garbageCollectBlobs(state, cwd).catch(() => undefined)
   return true
+}
+
+export interface DiffStats {
+  filesChanged: string[]
+  insertions: number
+  deletions: number
+}
+
+async function readFileUtf8OrNull(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+/** Compute how many files/lines would change if the working tree were
+ *  restored to the given checkpoint. Returns null when the manifest cannot
+ *  be read (evicted or corrupt). Uses the same `filesModified ∪ manifest`
+ *  union as restoreCheckpoint so the preview exactly matches what a real
+ *  rewind would touch. */
+export async function getDiffStatsForCheckpoint(
+  state: LoopState,
+  ckptId: string,
+  cwd: string = process.cwd(),
+): Promise<DiffStats | null> {
+  let raw: string
+  try {
+    raw = await fs.readFile(manifestPath(state.sessionId, ckptId, cwd), 'utf-8')
+  } catch {
+    return null
+  }
+  let manifest: Manifest
+  try {
+    manifest = JSON.parse(raw) as Manifest
+  } catch {
+    return null
+  }
+
+  const filesChanged: string[] = []
+  let insertions = 0
+  let deletions = 0
+
+  // Mirror restoreCheckpoint's file union: manifest keys (files tracked at
+  // checkpoint time) + state.filesModified (files the agent has touched since
+  // session start, including those created AFTER this checkpoint).
+  const allFiles = new Set<string>([...state.filesModified, ...Object.keys(manifest.files)])
+  for (const absPath of allFiles) {
+    try {
+      const entry = manifest.files[absPath]
+
+      if (entry?.skip) continue
+
+      const currentContent = await readFileUtf8OrNull(absPath)
+
+      if (!entry) {
+        // File created after this checkpoint — rewind would delete it.
+        if (currentContent !== null) {
+          const lineCount = currentContent.split('\n').length
+          filesChanged.push(absPath)
+          deletions += lineCount
+        }
+        continue
+      }
+
+      if (entry.absent) {
+        // File did not exist at checkpoint time — rewind would delete it.
+        if (currentContent !== null) {
+          const lineCount = currentContent.split('\n').length
+          filesChanged.push(absPath)
+          deletions += lineCount
+        }
+        continue
+      }
+
+      if (entry.hash) {
+        const blobContent = await readFileUtf8OrNull(blobPath(state.sessionId, entry.hash, cwd))
+        if (blobContent === null) continue
+
+        if (currentContent === null) {
+          // File was deleted after checkpoint — rewind would recreate it.
+          const lineCount = blobContent.split('\n').length
+          filesChanged.push(absPath)
+          insertions += lineCount
+          continue
+        }
+
+        if (currentContent === blobContent) continue
+
+        const changes = diffLines(blobContent, currentContent)
+        let fileInsertions = 0
+        let fileDeletions = 0
+        for (const change of changes) {
+          if (change.added) fileDeletions += change.count ?? 0
+          if (change.removed) fileInsertions += change.count ?? 0
+        }
+        if (fileInsertions > 0 || fileDeletions > 0) {
+          filesChanged.push(absPath)
+          insertions += fileInsertions
+          deletions += fileDeletions
+        }
+      }
+    } catch {
+      // Single file failure — skip, don't doom the whole stats computation.
+    }
+  }
+
+  return { filesChanged, insertions, deletions }
 }
 
 /** Sweep blobs/ and unlink any blob not referenced by a remaining manifest.

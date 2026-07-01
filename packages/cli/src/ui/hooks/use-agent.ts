@@ -11,6 +11,7 @@ import {
   classifyApiError,
   compressMessages,
   flushPendingMessages,
+  getDiffStatsForCheckpoint,
   hydrateLoopState,
   initMemories,
   loadPersistedRules,
@@ -23,6 +24,7 @@ import type {
   AgentCallbacks,
   AgentOptions,
   CheckpointEntry,
+  DiffStats,
   DisplayMessage,
   DisplayToolCall,
   LanguageModel,
@@ -302,9 +304,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
           // toolSearch is the internal deferred-tool loader — hide it from the
           // UI entirely (matches Claude Code / Codex, which never surface their
-          // tool-search calls). No live “Running…” row and no scrollback line
+          // tool-search calls). No live "Running…" row and no scrollback line
           // (the onToolResult push is skipped too); the spinner stays
-          // “Thinking…” while it runs, which is a sub-ms catalog lookup.
+          // "Thinking…" while it runs, which is a sub-ms catalog lookup.
           if (toolName === TOOL_SEARCH_TOOL_NAME) return
           // Update sticky read-chain flag synchronously alongside the
           // active-tool list. A collapsible tool extends the chain;
@@ -339,7 +341,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           const editPayload = pendingEditDiffsRef.current.get(toolCallId)
           pendingEditDiffsRef.current.delete(toolCallId)
           // Hidden internal tool (toolSearch): onToolCall added no live row, so
-          // there’s nothing to clear and no scrollback line to push. Bail after
+          // there's nothing to clear and no scrollback line to push. Bail after
           // the pending-map cleanup above.
           if (pending && pending.toolName === TOOL_SEARCH_TOOL_NAME) return
           const durationMs = pending ? Date.now() - pending.startedAt : 0
@@ -856,61 +858,51 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const rewind = useCallback(
     async (
       ckptId: string,
+      mode: 'both' | 'code' | 'conversation' = 'both',
     ): Promise<{ ok: true; preview: string; messageCount: number } | { ok: false; reason: string }> => {
       const ls = loopStateRef.current
       if (!ls) return { ok: false, reason: 'No active session to rewind.' }
-      // Refuse mid-turn: a write tool could be executing concurrently and
-      // race us into a half-restored tree. Telling the user to Esc first
-      // is cleaner than asking the FS scheduler to interleave it for us.
       if (state.isLoading) {
         return { ok: false, reason: 'A turn is in progress. Press Esc to cancel it, then run /rewind.' }
       }
       const target = ls.checkpoints.find((c) => c.ckptId === ckptId)
       if (!target) return { ok: false, reason: `Checkpoint not found: ${ckptId}` }
 
-      // Restore working tree + trim state.checkpoints in place to the
-      // prefix ending at the target. Partial-failure path leaves disk
-      // half-restored; we surface the error rather than masking it.
-      const ok = await restoreCheckpoint(ls, ckptId)
-      if (!ok) {
-        return { ok: false, reason: 'Failed to read checkpoint manifest — backups may have been cleaned up.' }
+      // Restore working tree (skip for conversation-only rewind).
+      if (mode === 'both' || mode === 'code') {
+        const ok = await restoreCheckpoint(ls, ckptId)
+        if (!ok) {
+          return { ok: false, reason: 'Failed to read checkpoint manifest — backups may have been cleaned up.' }
+        }
       }
 
-      // Drop the user message that triggered this snapshot, plus every
-      // assistant / tool entry the model emitted after it.
-      const newLen = Math.max(0, target.messageCount - 1)
-      ls.messages = ls.messages.slice(0, newLen)
-      ls.persistedMessageCount = ls.messages.length
+      // Truncate conversation (skip for code-only rewind).
+      if (mode === 'both' || mode === 'conversation') {
+        const newLen = Math.max(0, target.messageCount - 1)
+        ls.messages = ls.messages.slice(0, newLen)
+        ls.persistedMessageCount = ls.messages.length
 
-      // markBoundaryAndReflush writes a compact-boundary + reflushes the
-      // (now-truncated) messages, so /resume on this jsonl reconstructs
-      // the same state. It also clears state.checkpoints (compaction
-      // semantics) — snapshot the surviving prefix beforehand and
-      // re-append after, so the picker still offers them.
-      const survivingCheckpoints = ls.checkpoints.slice()
-      await markBoundaryAndReflush(ls)
-      ls.checkpoints = survivingCheckpoints
-      for (const c of survivingCheckpoints) {
-        await appendCheckpoint(ls, c)
+        const survivingCheckpoints = ls.checkpoints.slice()
+        await markBoundaryAndReflush(ls)
+        ls.checkpoints = survivingCheckpoints
+        for (const c of survivingCheckpoints) {
+          await appendCheckpoint(ls, c)
+        }
+
+        pendingToolsRef.current.clear()
+        resetBuffer()
+        const converted = modelMessagesToDisplay(ls.messages)
+        setState((prev) => ({
+          ...prev,
+          activeToolCalls: [],
+          shellOutput: '',
+          error: null,
+          todos: [],
+          messages: converted,
+        }))
       }
 
-      // Replace UI messages with the converted truncated view. ChatInput
-      // sees length shrink below `writtenMessageCountRef` and wipes the
-      // terminal + scrollback before repainting — matches the visual
-      // semantics of /clear, only stopping at the rewind point.
-      pendingToolsRef.current.clear()
-      resetBuffer()
-      const converted = modelMessagesToDisplay(ls.messages)
-      setState((prev) => ({
-        ...prev,
-        activeToolCalls: [],
-        shellOutput: '',
-        error: null,
-        todos: [],
-        messages: converted,
-      }))
-
-      return { ok: true, preview: target.userPrompt, messageCount: newLen }
+      return { ok: true, preview: target.userPrompt, messageCount: target.messageCount - 1 }
     },
     [resetBuffer, state.isLoading],
   )
@@ -986,6 +978,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setState((prev) => ({ ...prev, permissionMode: next }))
   }, [])
 
+  const getDiffStats = useCallback(async (ckptId: string): Promise<DiffStats | null> => {
+    const ls = loopStateRef.current
+    if (!ls) return null
+    return getDiffStatsForCheckpoint(ls, ckptId)
+  }, [])
+
   const { addInfoMessage, addUserMessage, echoCommand, addCommandMessage, addCommandResult } =
     useAgentDisplayHelpers(appendMessage)
 
@@ -1001,6 +999,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     resume,
     rewind,
     getCheckpoints,
+    getDiffStats,
     getSessionInfo,
     switchModel,
     setThinking,

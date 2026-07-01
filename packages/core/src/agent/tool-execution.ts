@@ -616,14 +616,31 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
           isError: false,
         }
       }
+      // Intercept sed -i: simulate the edit in-process so the modified
+      // file enters filesModified and is covered by /rewind checkpoints.
+      // Falls through to real shell execution on parse failure or IO error.
+      const command = input.command as string
+      const { parseSedEditCommand, applySedSubstitution } = await import('../tools/sed-edit-parser.js')
+      const sedInfo = parseSedEditCommand(command)
+      if (sedInfo) {
+        const absPath = path.isAbsolute(sedInfo.filePath)
+          ? sedInfo.filePath
+          : path.join(process.cwd(), sedInfo.filePath)
+        try {
+          const original = await fs.readFile(absPath, 'utf-8')
+          const newContent = applySedSubstitution(original, sedInfo)
+          if (original !== newContent) {
+            await fs.writeFile(absPath, newContent, 'utf-8')
+          }
+          state.filesModified.add(absPath)
+          return { output: '', isError: false }
+        } catch {
+          // File unreadable or unwritable — fall through to real sed
+        }
+      }
+
       const timeout = (input.timeout as number) ?? 30000
-      const shellResult = await executeShell(
-        input.command as string,
-        timeout,
-        options.abortSignal,
-        callbacks,
-        toolCallId,
-      )
+      const shellResult = await executeShell(command, timeout, options.abortSignal, callbacks, toolCallId)
       return { output: shellResult.output, isError: shellResult.isError }
     }
     // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
