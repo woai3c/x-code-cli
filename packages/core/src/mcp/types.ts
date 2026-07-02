@@ -58,6 +58,11 @@ export interface McpToolEntry {
   /** JSON Schema as received from the server. We pass it directly to the
    *  AI SDK via `jsonSchema(...)` — no zod conversion. */
   inputSchema: Record<string, unknown>
+  /** MCP tool annotations (readOnlyHint, destructiveHint, etc.) plus any
+   *  vendor extensions. We read two custom keys:
+   *  - `alwaysLoad: true` → never defer this tool (always in the tools array)
+   *  - `searchHint: string` → extra keywords to improve toolSearch recall */
+  annotations?: Record<string, unknown>
 }
 
 /** One MCP resource (data the server lets us pull). */

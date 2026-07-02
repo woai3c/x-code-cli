@@ -25,7 +25,7 @@ import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
-import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
+import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
 import { runMemoryExtractor } from './memory-extractor.js'
@@ -306,18 +306,19 @@ function buildTools(options: AgentOptions, state: LoopState) {
   // always passes one; the main loop never does).
   const deferralActive = !options.toolFilter
   if (deferralActive) {
-    const catalog = buildDeferredCatalog(options)
+    const catalog = buildDeferredCatalog(options, getContextWindow(options.modelId))
     state.deferredCatalog = catalog
-    // Strip the non-core built-ins out of the direct set — they live in the
-    // catalog now and get spliced back in on activation.
-    for (const name of DEFERRED_BUILTIN_TOOLS) delete tools[name]
-    // The entry point. Only register it when there's actually something to
-    // search; with no MCP and (somehow) no deferred built-ins the catalog is
-    // empty and toolSearch would just be dead weight.
-    if (catalog.length > 0) tools.toolSearch = toolSearch
-    // NOTE: MCP tools and listMcpResources / readMcpResource are deliberately
-    // NOT added here — they're in the catalog, loaded on demand via toolSearch.
-    return tools
+
+    if (catalog.length > 0) {
+      // Deferral enabled: strip non-core built-ins (they're in the catalog)
+      // and register toolSearch as the entry point.
+      for (const name of DEFERRED_BUILTIN_TOOLS) delete tools[name]
+      tools.toolSearch = toolSearch
+      return tools
+    }
+
+    // Deferral disabled (weak model / below threshold): fall through to the
+    // full-injection path below so all MCP tools get loaded directly.
   }
 
   // ── Sub-agent path: full injection + toolFilter (unchanged behavior) ──

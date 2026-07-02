@@ -458,7 +458,12 @@ async function handleToolSearch(ctx: HandlerCtx): Promise<void> {
   // the downstream slice() drop results or behave oddly. Keep it in [1, 50].
   const requested = Number(input.max_results)
   const maxResults = Number.isFinite(requested) ? Math.min(50, Math.max(1, Math.floor(requested))) : 5
-  const result = runToolSearch(query, maxResults, catalog)
+  // Surface pending MCP servers so the model knows to retry if nothing matches.
+  const pendingServers = ctx.options.mcpRegistry
+    ?.serverStatus()
+    .filter((s) => s.status.kind === 'connecting')
+    .map((s) => s.name)
+  const result = runToolSearch(query, maxResults, catalog, pendingServers)
   // Observability for manual testing / debugging: shows the query, what it
   // matched, and the catalog size. No-op without DEBUG_STDOUT.
   debugLog(

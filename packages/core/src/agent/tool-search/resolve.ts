@@ -21,11 +21,14 @@ export interface ToolSearchResult {
 }
 
 /** Resolve a toolSearch query against the catalog. Handles both the `select:`
- *  exact-load path and the keyword path. */
+ *  exact-load path and the keyword path. `pendingServers` (if provided) is
+ *  surfaced when no match is found — tells the model some MCP servers are
+ *  still connecting and it should retry shortly. */
 export function runToolSearch(
   query: string,
   maxResults: number,
   catalog: readonly DeferredToolEntry[],
+  pendingServers?: readonly string[],
 ): ToolSearchResult {
   const byName = new Map(catalog.map((e) => [e.name, e]))
 
@@ -48,7 +51,10 @@ export function runToolSearch(
     }
     if (matched.length === 0) {
       return {
-        text: `No deferred tools matched select: ${missing.join(', ')}. Check the exact names under "## Deferred Tools" in the system prompt.`,
+        text: noMatchText(
+          `No deferred tools matched select: ${missing.join(', ')}. Check the exact names under "## Deferred Tools" in the system prompt.`,
+          pendingServers,
+        ),
         activated: [],
       }
     }
@@ -84,7 +90,10 @@ export function runToolSearch(
   const matched = searchDeferredTools(query, catalog, maxResults)
   if (matched.length === 0) {
     return {
-      text: `No matching deferred tools for "${query}". Browse the "## Deferred Tools" list in the system prompt and retry with different keywords, or use select:<exact_name>.`,
+      text: noMatchText(
+        `No matching deferred tools for "${query}". Browse the "## Deferred Tools" list in the system prompt and retry with different keywords, or use select:<exact_name>.`,
+        pendingServers,
+      ),
       activated: [],
     }
   }
@@ -99,4 +108,11 @@ function formatLoaded(matched: string[], byName: Map<string, DeferredToolEntry>,
   let text = `Loaded ${matched.length} tool(s) — now callable directly on your next step:\n${lines.join('\n')}`
   if (missing.length > 0) text += `\n(not found: ${missing.join(', ')})`
   return text
+}
+
+function noMatchText(base: string, pendingServers?: readonly string[]): string {
+  if (pendingServers && pendingServers.length > 0) {
+    return `${base}\n\nNote: some MCP servers are still connecting (${pendingServers.join(', ')}). Their tools will become available shortly — try searching again.`
+  }
+  return base
 }

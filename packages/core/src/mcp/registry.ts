@@ -346,6 +346,7 @@ export class McpRegistry {
         serverName: r.server.name,
         description: t.description ?? '',
         inputSchema: t.inputSchema,
+        annotations: t.annotations,
       })
     }
     for (const res of r.resources) this.resources.set(res.uri, res)
@@ -366,7 +367,12 @@ export function emptyRegistry(): McpRegistry {
  *  the connect-shape stays consistent. */
 export interface ConnectResult {
   server: RegisteredServer
-  tools: ReadonlyArray<{ name: string; description?: string; inputSchema: Record<string, unknown> }>
+  tools: ReadonlyArray<{
+    name: string
+    description?: string
+    inputSchema: Record<string, unknown>
+    annotations?: Record<string, unknown>
+  }>
   resources: ReadonlyArray<McpResourceEntry>
 }
 

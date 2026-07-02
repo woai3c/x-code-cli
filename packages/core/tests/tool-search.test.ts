@@ -7,6 +7,7 @@ import {
   type DeferredToolEntry,
   buildDeferredCatalog,
   composeTurnTools,
+  isWeakModel,
 } from '../src/agent/tool-search/catalog.js'
 import { runToolSearch } from '../src/agent/tool-search/resolve.js'
 import { searchDeferredTools } from '../src/agent/tool-search/search.js'
@@ -162,6 +163,10 @@ describe('composeTurnTools', () => {
 })
 
 describe('buildDeferredCatalog', () => {
+  // Use a tiny context window (100) to ensure catalog EXCEEDS the 10% threshold
+  // (even the built-in entries add up to more than 10 tokens).
+  const LARGE_CTX = 100
+
   const mcpTools = [
     {
       callableName: 'mcp__db__query_rows',
@@ -175,7 +180,7 @@ describe('buildDeferredCatalog', () => {
   const options = { mcpRegistry: { list: () => mcpTools } } as any
 
   it('defers the non-core built-ins plus the MCP resource tools', () => {
-    const catalog = buildDeferredCatalog(options)
+    const catalog = buildDeferredCatalog(options, LARGE_CTX)
     const names = catalog.map((e) => e.name)
     for (const name of DEFERRED_BUILTIN_TOOLS) expect(names).toContain(name)
     expect(names).toContain('listMcpResources')
@@ -183,7 +188,7 @@ describe('buildDeferredCatalog', () => {
   })
 
   it('includes MCP tools and folds their schema property names into searchText', () => {
-    const catalog = buildDeferredCatalog(options)
+    const catalog = buildDeferredCatalog(options, LARGE_CTX)
     const dbTool = catalog.find((e) => e.name === 'mcp__db__query_rows')
     expect(dbTool).toBeDefined()
     expect(dbTool!.source).toBe('mcp')
@@ -196,9 +201,89 @@ describe('buildDeferredCatalog', () => {
 
   it('omits the MCP resource tools when no registry is configured', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const catalog = buildDeferredCatalog({} as any)
+    const catalog = buildDeferredCatalog({} as any, LARGE_CTX)
     const names = catalog.map((e) => e.name)
     expect(names).not.toContain('listMcpResources')
     expect(names).toContain('webSearch')
+  })
+
+  it('returns empty catalog for weak models (threshold gate)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const weakOpts = { ...options, modelId: 'anthropic:claude-haiku-4-5' } as any
+    const catalog = buildDeferredCatalog(weakOpts, LARGE_CTX)
+    expect(catalog).toEqual([])
+  })
+
+  it('returns empty catalog when schema weight is below threshold', () => {
+    // A context window of 10M means 10% = 1M tokens threshold — our tiny
+    // catalog will never reach that.
+    const catalog = buildDeferredCatalog(options, 10_000_000)
+    expect(catalog).toEqual([])
+  })
+
+  it('skips MCP tools with annotations.alwaysLoad', () => {
+    const toolsWithAlwaysLoad = [
+      ...mcpTools,
+      {
+        callableName: 'mcp__db__always_tool',
+        rawName: 'always_tool',
+        serverName: 'db',
+        description: 'Always loaded',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { alwaysLoad: true },
+      },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts = { mcpRegistry: { list: () => toolsWithAlwaysLoad } } as any
+    const catalog = buildDeferredCatalog(opts, LARGE_CTX)
+    const names = catalog.map((e) => e.name)
+    expect(names).not.toContain('mcp__db__always_tool')
+    expect(names).toContain('mcp__db__query_rows')
+  })
+
+  it('includes searchHint from annotations in searchText', () => {
+    const toolsWithHint = [
+      {
+        callableName: 'mcp__s3__put_object',
+        rawName: 'put_object',
+        serverName: 's3',
+        description: 'Upload to S3',
+        inputSchema: { type: 'object', properties: { key: { type: 'string' } } },
+        annotations: { searchHint: 'upload file to cloud storage' },
+      },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts = { mcpRegistry: { list: () => toolsWithHint } } as any
+    const catalog = buildDeferredCatalog(opts, LARGE_CTX)
+    const s3Tool = catalog.find((e) => e.name === 'mcp__s3__put_object')
+    expect(s3Tool!.searchText).toContain('upload file to cloud storage')
+    expect(searchDeferredTools('upload cloud', catalog, 5)).toContain('mcp__s3__put_object')
+  })
+})
+
+describe('isWeakModel', () => {
+  it('detects haiku as weak', () => {
+    expect(isWeakModel('anthropic:claude-haiku-4-5')).toBe(true)
+  })
+  it('detects nano as weak', () => {
+    expect(isWeakModel('openai:gpt-4.1-nano')).toBe(true)
+  })
+  it('does not flag strong models', () => {
+    expect(isWeakModel('anthropic:claude-sonnet-4-6')).toBe(false)
+    expect(isWeakModel('openai:gpt-4.1')).toBe(false)
+    expect(isWeakModel('deepseek:deepseek-v4-pro')).toBe(false)
+  })
+})
+
+describe('runToolSearch with pendingServers', () => {
+  it('includes pending server hint when no matches found', () => {
+    const r = runToolSearch('quantum teleporter', 5, CATALOG, ['slow-mcp-server'])
+    expect(r.text).toContain('slow-mcp-server')
+    expect(r.text).toContain('still connecting')
+  })
+
+  it('does not include pending hint when matches are found', () => {
+    const r = runToolSearch('create issue', 5, CATALOG, ['slow-mcp-server'])
+    expect(r.text).not.toContain('still connecting')
   })
 })

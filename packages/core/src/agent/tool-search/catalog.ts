@@ -23,6 +23,25 @@ import { bridgeMcpTool, truncateDescription } from '../../mcp/tool-bridge.js'
 import { toolRegistry } from '../../tools/index.js'
 import type { AgentOptions } from '../../types/index.js'
 
+/** Approximate chars-per-token for catalog size estimation. Conservative
+ *  (lower = over-counts) so the threshold errs toward enabling deferral. */
+const CHARS_PER_TOKEN = 3.0
+
+/** Percentage of context window below which we skip deferral entirely.
+ *  Mirrors Claude Code's `tst-auto` DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE.
+ *  When catalog total token weight is below this fraction, the overhead
+ *  of one extra toolSearch round-trip outweighs the token savings. */
+const DEFERRAL_THRESHOLD_PERCENT = 0.1
+
+/** Model patterns whose instruction-following is too weak to reliably
+ *  call toolSearch unprompted. These fall back to full injection. Patterns
+ *  are matched case-insensitively against the full `provider:model` id. */
+const WEAK_MODEL_PATTERNS = [
+  'haiku', // Claude Haiku — limited tool_reference support
+  'nano', // GPT-4.1-nano
+  'glm-4v', // Zhipu vision-only captioners
+] as const
+
 /** Non-core built-in tools that are deferred (name-only until toolSearch loads
  *  them). The core editing / search / exec tools (readFile, writeFile, edit,
  *  shell, grep, glob, listDir) plus task / askUser / plan-mode controls stay
@@ -93,10 +112,24 @@ function builtinEntry(name: string, def: unknown): DeferredToolEntry {
   return { name, description: truncateDescription(raw), searchText, source: 'builtin', def }
 }
 
-/** Build the full deferred-tool catalog for the current session. Order is
- *  stable (built-ins first, then MCP grouped by server in registry order) so
- *  the system-prompt listing and any cache prefix stay byte-stable. */
-export function buildDeferredCatalog(options: AgentOptions): DeferredToolEntry[] {
+/** True when the model is too weak to reliably invoke toolSearch. */
+export function isWeakModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase()
+  return WEAK_MODEL_PATTERNS.some((p) => lower.includes(p))
+}
+
+/** Build the full deferred-tool catalog for the current session. Returns an
+ *  empty array (= deferral disabled) when:
+ *  - the model is in WEAK_MODEL_PATTERNS (can't reliably drive toolSearch), or
+ *  - the total catalog weight is below DEFERRAL_THRESHOLD_PERCENT of context.
+ *
+ *  Order is stable (built-ins first, then MCP grouped by server in registry
+ *  order) so the system-prompt listing and any cache prefix stay byte-stable. */
+export function buildDeferredCatalog(options: AgentOptions, contextWindow: number): DeferredToolEntry[] {
+  // Gate 1: weak models fall back to full injection — they may not call
+  // toolSearch unprompted and the user loses access to deferred tools.
+  if (options.modelId && isWeakModel(options.modelId)) return []
+
   const entries: DeferredToolEntry[] = []
 
   for (const name of DEFERRED_BUILTIN_TOOLS) {
@@ -105,16 +138,21 @@ export function buildDeferredCatalog(options: AgentOptions): DeferredToolEntry[]
   }
 
   if (options.mcpRegistry) {
-    // The two MCP resource tools are only meaningful when MCP is configured,
-    // and they're occasional — defer them alongside the server tools.
     entries.push(builtinEntry('listMcpResources', listMcpResources))
     entries.push(builtinEntry('readMcpResource', readMcpResource))
 
     for (const e of options.mcpRegistry.list()) {
+      // Gate 3: MCP tools with annotations.alwaysLoad skip deferral — the
+      // server author declared this tool is critical enough to always be
+      // directly available (e.g. a RAG search tool used on every task).
+      if (e.annotations?.alwaysLoad === true) continue
+
       const schemaText: string[] = []
       collectSchemaText(e.inputSchema, schemaText)
+      // Gate 5: searchHint from annotations enriches the search haystack.
+      const hint = typeof e.annotations?.searchHint === 'string' ? (e.annotations.searchHint as string) : ''
       const searchText =
-        `${e.callableName} ${nameTokens(e.callableName)} ${e.serverName} ${e.description} ${schemaText.join(' ')}`.toLowerCase()
+        `${e.callableName} ${nameTokens(e.callableName)} ${e.serverName} ${e.description} ${hint} ${schemaText.join(' ')}`.toLowerCase()
       entries.push({
         name: e.callableName,
         description: truncateDescription(e.description),
@@ -124,6 +162,21 @@ export function buildDeferredCatalog(options: AgentOptions): DeferredToolEntry[]
         def: bridgeMcpTool(e),
       })
     }
+  }
+
+  // Gate 2: if the total catalog schema weight is below the threshold
+  // fraction of context, deferral isn't worth the extra round-trip.
+  // Estimate using the full tool definition's serialised size (name +
+  // description + JSON Schema) — NOT the searchText haystack, which is
+  // much smaller than the actual wire payload sent to the API.
+  if (entries.length > 0) {
+    const totalChars = entries.reduce((sum, e) => {
+      const defStr = typeof e.def === 'object' ? JSON.stringify(e.def) : ''
+      return sum + e.name.length + defStr.length
+    }, 0)
+    const estimatedTokens = Math.ceil(totalChars / CHARS_PER_TOKEN)
+    const threshold = Math.floor(contextWindow * DEFERRAL_THRESHOLD_PERCENT)
+    if (estimatedTokens < threshold) return []
   }
 
   return entries

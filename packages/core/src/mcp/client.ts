@@ -111,6 +111,7 @@ export class McpClient {
         name: t.name,
         description: t.description ?? '',
         inputSchema: (t.inputSchema as Record<string, unknown>) ?? {},
+        annotations: (t as { annotations?: Record<string, unknown> }).annotations,
       }))
     } catch (err) {
       debugLog('mcp.listTools-failed', `${this.serverName}: ${String(err)}`)
@@ -143,7 +144,12 @@ export class McpClient {
 
   /** Tools discovered at connect time. Stable for the connection lifetime;
    *  refresh by calling connect() again on a fresh McpClient. */
-  tools(): ReadonlyArray<{ name: string; description?: string; inputSchema: Record<string, unknown> }> {
+  tools(): ReadonlyArray<{
+    name: string
+    description?: string
+    inputSchema: Record<string, unknown>
+    annotations?: Record<string, unknown>
+  }> {
     return this.cachedTools
   }
 
