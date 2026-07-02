@@ -23,7 +23,7 @@ import {
   getTokenStorage,
   listSessions,
   loadAllPlugins,
-  loadMcpFromDisk,
+  loadMcpConfigsFromDisk,
   loadSession,
   loadUserConfig,
   pickLatestSession,
@@ -317,25 +317,17 @@ async function main() {
   const skillRegistry = await createSkillRegistry({ extraDirs: pluginIntegration.skillsDirs })
   const commandRegistry = await createCommandRegistry({ extraDirs: pluginIntegration.commandsDirs })
 
-  // MCP: load servers, run trust dialog if project-level config is
-  // unfamiliar. Done BEFORE Ink mounts so the readline-based trust
-  // prompt has a clean terminal. The MCP machinery is opt-in: a user
-  // with no mcpServers in their config pays a single fs.stat (one for
-  // user config, one for project config) and that's it.
+  // MCP: Phase 1 — read configs + run trust dialog. This is fast (disk
+  // reads + optional readline prompt) and MUST happen before Ink mounts
+  // because the trust dialog uses raw readline on stdin. Actual server
+  // connections are deferred to Phase 2 (post-render, async) so the UI
+  // appears instantly even when remote HTTP MCP servers are slow.
   const tokenStorage = getTokenStorage()
   const mcpPermissionStore = new McpPermissionStore()
-  const mcpLoadResult = await loadMcpFromDisk({
+  const mcpLoadResult = await loadMcpConfigsFromDisk({
     cwd: process.cwd(),
     extraServers: pluginIntegration.mcpServers,
     askUser: (question, opts) => askInTerminal(question, opts),
-    // The browser-open hook only fires during /mcp auth (passive boot
-    // mode never invokes redirectToAuthorization — see
-    // McpOAuthProvider.redirectToAuthorization). The /mcp auth handler
-    // in App.tsx already surfaces the URL via addCommandResult; writing
-    // ANOTHER copy here via console.error would land in stderr and
-    // corrupt ChatInput's cell frame (the `[` glyph collides with the
-    // bottom separator of the input box). Send it to the debug log so
-    // it's still recoverable for support.
     oauthProviderFor: createOAuthProviderFactory(tokenStorage, (server, url) => {
       debugLog('mcp.open-browser', `${server}: ${url}`)
     }),
@@ -457,6 +449,9 @@ async function main() {
       console.error('Error: -p / --print requires a prompt (as an argument or via stdin).')
       process.exit(1)
     }
+    // MCP Phase 2 (blocking): print mode is single-turn — all tools must
+    // be available before agentLoop runs.
+    await mcpLoadResult.registry.connectAll()
     const { runPrintMode } = await import('./print.js')
     const code = await runPrintMode(model, options, fullPrompt, initialSession)
     resetTerminal()
@@ -476,6 +471,16 @@ async function main() {
     initialSession,
     resumeIntent,
   })
+
+  // MCP Phase 2 (non-blocking): fire connections in background while the
+  // user sees the prompt immediately. onReady invalidates the system prompt
+  // cache so the next turn picks up newly-discovered MCP tools.
+  mcpLoadResult.registry
+    .connectAll(() => {
+      options.onMcpReady?.()
+    })
+    .catch((err) => debugLog('mcp.connectAll-error', String(err)))
+
   await waitUntilExit()
 
   // Normal exit path (including Ctrl+C which unmounts Ink first)

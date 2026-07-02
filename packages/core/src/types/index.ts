@@ -248,6 +248,11 @@ export interface AgentOptions {
    *  caches the persisted always-allow list + session-scoped allows.
    *  Absent ⇒ tool-execution falls back to ask-every-time semantics. */
   mcpPermissionStore?: McpPermissionStore
+  /** Fired by the CLI when background MCP connections finish (async
+   *  startup Phase 2). The agent layer uses this to invalidate
+   *  `systemPromptCache` + `deferredCatalog` so the next turn picks
+   *  up newly-available MCP tools. */
+  onMcpReady?: () => void
 
   // ── Plugin support ──
 

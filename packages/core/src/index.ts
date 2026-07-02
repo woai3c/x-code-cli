@@ -229,7 +229,7 @@ export type {
   ConnectResult as McpConnectResult,
   OAuthProviderFactory,
 } from './mcp/registry.js'
-export { loadMcpServers, loadMcpFromDisk, loadMergedConfigsFromDisk } from './mcp/loader.js'
+export { loadMcpServers, loadMcpFromDisk, loadMcpConfigsFromDisk, loadMergedConfigsFromDisk } from './mcp/loader.js'
 export type { LoadOptions as McpLoadOptions, LoadResult as McpLoadResult } from './mcp/loader.js'
 export { McpPermissionStore, classifyDecision } from './mcp/permissions.js'
 export type { McpPermissionDecision } from './mcp/permissions.js'

@@ -234,6 +234,21 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Wire the async MCP startup callback: when background connections
+  // finish, invalidate the system prompt cache so the next turn rebuilds
+  // tools with the newly-available MCP entries.
+  useEffect(() => {
+    options.onMcpReady = () => {
+      if (loopStateRef.current) {
+        loopStateRef.current.systemPromptCache = null
+        loopStateRef.current.deferredCatalog = undefined
+      }
+    }
+    return () => {
+      options.onMcpReady = undefined
+    }
+  }, [options])
+
   /** Initialize memories (once). Project context comes from AGENTS.md at the repo
    *  root (walked up from cwd, Codex-style), not from language-specific manifest
    *  scanning, which would bias the tool toward Node/TS projects. */

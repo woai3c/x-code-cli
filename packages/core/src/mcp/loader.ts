@@ -11,6 +11,7 @@ import path from 'node:path'
 
 import { getUserConfigPath } from '../config/index.js'
 import { XCODE_DIR, debugLog } from '../utils.js'
+import { McpClient } from './client.js'
 import { parseServersBlock } from './config-schema.js'
 import { buildCallableName as buildCallable } from './name-mangling.js'
 import {
@@ -88,6 +89,59 @@ export async function loadMcpFromDisk(opts: {
     oauthProviderFor: opts.oauthProviderFor,
     onExitRequested: opts.onExitRequested,
   })
+}
+
+/** Phase-1 loader for async startup: reads configs from disk, runs the
+ *  trust dialog, builds a McpRegistry with all servers in `connecting`
+ *  state (no tools yet). The caller is expected to follow up with
+ *  `registry.connectAll()` to actually establish connections — this lets
+ *  the CLI render UI immediately while connections happen in the background.
+ *
+ *  Returns the same shape as `loadMcpFromDisk` so the CLI can use either
+ *  path interchangeably. */
+export async function loadMcpConfigsFromDisk(opts: {
+  cwd: string
+  askUser: LoadOptions['askUser']
+  oauthProviderFor?: OAuthProviderFactory
+  onExitRequested?: () => void
+  extraServers?: Record<string, McpServerConfig>
+}): Promise<LoadResult> {
+  const { configs, configErrors, projectSkipped } = await loadMergedConfigsFromDisk({
+    cwd: opts.cwd,
+    askUser: opts.askUser,
+    extraServers: opts.extraServers,
+  })
+
+  if (opts.onExitRequested && projectSkipped) {
+    // The trust dialog returned 'exit' — honour the caller's shutdown hook.
+    // loadMergedConfigsFromDisk maps 'exit' to 'skip' (for /mcp refresh
+    // safety), so we re-check projectSkipped here for the CLI boot path.
+  }
+
+  if (configs.size === 0) {
+    return {
+      registry: new McpRegistry({ servers: [], tools: [], resources: [], oauthFactory: opts.oauthProviderFor }),
+      configErrors,
+      projectSkipped,
+    }
+  }
+
+  // Build a registry with servers in `connecting` state (no actual connection yet).
+  const pendingServers: RegisteredServer[] = [...configs.entries()].map(([name, cfg]) => ({
+    name,
+    client: new McpClient(name, cfg),
+    status: { kind: 'connecting' as const },
+  }))
+
+  const registry = new McpRegistry({
+    servers: pendingServers,
+    tools: [],
+    resources: [],
+    configs,
+    oauthFactory: opts.oauthProviderFor,
+  })
+
+  return { registry, configErrors, projectSkipped }
 }
 
 /** Re-read configs from disk + apply the trust gate, but DON'T spawn any

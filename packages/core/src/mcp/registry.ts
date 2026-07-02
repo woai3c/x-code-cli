@@ -177,6 +177,39 @@ export class McpRegistry {
     await Promise.allSettled(tasks)
   }
 
+  // ── Async startup ───────────────────────────────────────────────────────
+
+  /** Connect all servers whose config is already registered. Designed for
+   *  the async-startup path: the registry was created with servers in
+   *  `connecting` state and no tools; this method actually connects them
+   *  (in parallel) and installs the resulting tools/resources. Fires
+   *  `onReady` once all connections have settled so the caller can
+   *  invalidate caches.
+   *
+   *  Safe to call once; a second call is a no-op (returns immediately). */
+  async connectAll(onReady?: () => void): Promise<void> {
+    if (this.connectAllRan) return
+    this.connectAllRan = true
+
+    const tasks = [...this.configs.entries()].map(async ([name, config]) => {
+      try {
+        const result = await connectOneServer(name, config, this.oauthFactory)
+        this.removeServerEntries(name)
+        this.installServer(result)
+      } catch (err) {
+        debugLog('mcp.connectAll-failed', `${name}: ${String(err)}`)
+        const existing = this.servers.get(name)
+        if (existing) {
+          existing.status = { kind: 'failed', error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+    })
+    await Promise.allSettled(tasks)
+    onReady?.()
+  }
+
+  private connectAllRan = false
+
   // ── Restart / refresh ──────────────────────────────────────────────────
 
   /** Reconnect one server in-place using its current config. Used by
