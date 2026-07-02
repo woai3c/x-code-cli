@@ -1,3 +1,17 @@
+## v0.3.5 (2026-07-02)
+
+### Features
+
+- add threshold gate, weak-model guard, and MCP annotations to tool search (8f80d96)
+- enhance /rewind with diff stats, selective restore, sed -i interception (2413b7f)
+- add deferred tool loading via toolSearch (a2fcf12)
+- give the browser sub-agent visual capability (tree + vision) (cb2653a)
+
+### Bug Fixes
+
+- loading the mcp server should not block the CLI loading (119b683)
+- re-gate browser_evaluate behind a confirmation prompt (ae48d7d)
+
 ## v0.3.4 (2026-06-26)
 
 ### Features
