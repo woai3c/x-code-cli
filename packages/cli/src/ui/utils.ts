@@ -167,6 +167,8 @@ export interface ReadGroupSummary {
   detail?: string
 }
 
+const TABLE_OUTPUT_MAX_LINES = 30
+
 export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadGroupSummary {
   let readCount = 0
   let grepCount = 0
@@ -303,6 +305,7 @@ export function getToolResultSummary(toolName: string, output: string | undefine
     text = text.replace(/^exit code: 0\n?/, '')
     const lines = text.split('\n').filter((l) => l.trim())
     if (lines.length === 0) return 'Done'
+    if (looksLikeTableOutput(lines)) return summarizeTableOutput(lines)
     if (lines.length <= 4) return lines.join('\n')
     return lines.slice(0, 3).join('\n') + `\n... +${lines.length - 3} lines`
   }
@@ -314,4 +317,34 @@ export function getToolResultSummary(toolName: string, output: string | undefine
   if (lines.length === 0) return 'Done'
   if (lines.length <= 3) return lines.join('\n')
   return lines.slice(0, 2).join('\n') + `\n... +${lines.length - 2} lines`
+}
+
+function looksLikeTableOutput(lines: readonly string[]): boolean {
+  if (lines.length < 3) return false
+  if (lines.some((line) => /[┌┬┐├┼┤└┴┘]/.test(line))) return true
+  const markdownRows = lines.filter((line) => /^\s*\|.*\|\s*$/.test(line))
+  if (
+    markdownRows.length >= 2 &&
+    lines.some((line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line))
+  ) {
+    return true
+  }
+  return lines.filter((line) => /^\s*\+[-=+]+\+\s*$/.test(line)).length >= 2
+}
+
+function summarizeTableOutput(lines: readonly string[]): string {
+  if (lines.length <= TABLE_OUTPUT_MAX_LINES) return lines.join('\n')
+  const bottom = lines.at(-1)
+  if (bottom && isTableBottomBorder(bottom)) {
+    const head = lines.slice(0, TABLE_OUTPUT_MAX_LINES - 2)
+    const omitted = lines.length - head.length - 1
+    return [...head, `... +${omitted} lines`, bottom].join('\n')
+  }
+  const head = lines.slice(0, TABLE_OUTPUT_MAX_LINES - 1)
+  return [...head, `... +${lines.length - head.length} lines`].join('\n')
+}
+
+function isTableBottomBorder(line: string): boolean {
+  const trimmed = line.trim()
+  return /[└┴┘]/.test(trimmed) || /^\+[-=+]+\+$/.test(trimmed)
 }

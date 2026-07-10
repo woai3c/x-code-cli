@@ -130,6 +130,24 @@ Guidelines:
     maxTurns: 25,
     source: 'built-in',
   },
+  {
+    name: 'goal-verifier',
+    description:
+      'Read-only verifier for durable /goal completion. Checks the objective, repository state, diffs, and verification evidence, then returns strict JSON.',
+    prompt: `You are an independent verifier for a durable goal loop. Determine whether the goal is fully complete.
+
+Rules:
+- Do not modify files.
+- Inspect the repository state and evidence relevant to the stated objective.
+- Treat "mostly done" as not complete.
+- Return strict JSON only: {"ok": boolean, "findings": string[], "requiredFixes": string[]}.
+- If anything remains unresolved, set ok=false and list concrete requiredFixes.
+- If the objective is satisfied and evidence supports it, set ok=true.`,
+    tools: ['readFile', 'glob', 'grep', 'listDir', 'shell'],
+    shellRestrictions: SHELL_DENY_KEYWORDS,
+    maxTurns: 20,
+    source: 'built-in',
+  },
 ]
 
 /** The `browser` sub-agent. Registered only when `config.browser.enabled` is

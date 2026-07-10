@@ -26,6 +26,7 @@ import type { ModelMessage } from 'ai'
 
 import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
+import type { GoalInput, GoalState, GoalVerificationResult } from './goal/types.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState } from './loop-state.js'
 import type { CheckpointEntry } from './snapshot.js'
@@ -108,7 +109,39 @@ interface CheckpointJsonlEntry {
   userPrompt: string
 }
 
-type Entry = HeaderEntry | MsgEntry | UsageEntry | CompactBoundaryEntry | InterruptedEntry | CheckpointJsonlEntry
+interface GoalEntry {
+  t: 'meta'
+  kind: 'goal'
+  goal: GoalState | null
+  ts: string
+}
+
+interface GoalInputEntry {
+  t: 'meta'
+  kind: 'goal-input'
+  goalId: string
+  input: GoalInput
+  ts: string
+}
+
+interface GoalVerificationEntry {
+  t: 'meta'
+  kind: 'goal-verification'
+  goalId: string
+  result: GoalVerificationResult
+  ts: string
+}
+
+type Entry =
+  | HeaderEntry
+  | MsgEntry
+  | UsageEntry
+  | CompactBoundaryEntry
+  | InterruptedEntry
+  | CheckpointJsonlEntry
+  | GoalEntry
+  | GoalInputEntry
+  | GoalVerificationEntry
 
 // ── Append helpers (fire-and-forget; never throw) ───────────────────────
 
@@ -289,6 +322,48 @@ export async function appendInterrupted(state: LoopState): Promise<void> {
   await appendLine(filePath, entry)
 }
 
+export async function appendGoalState(state: LoopState): Promise<void> {
+  if (!state.sessionId) return
+  const filePath = getSessionFilePath(state)
+  const entry: GoalEntry = {
+    t: 'meta',
+    kind: 'goal',
+    goal: state.goal ? structuredClone(state.goal) : null,
+    ts: new Date().toISOString(),
+  }
+  await appendLine(filePath, entry)
+}
+
+export async function appendGoalInput(state: LoopState, input: GoalInput): Promise<void> {
+  if (!state.sessionId) return
+  const filePath = getSessionFilePath(state)
+  const entry: GoalInputEntry = {
+    t: 'meta',
+    kind: 'goal-input',
+    goalId: input.goalId,
+    input: structuredClone(input),
+    ts: new Date().toISOString(),
+  }
+  await appendLine(filePath, entry)
+}
+
+export async function appendGoalVerification(
+  state: LoopState,
+  goalId: string,
+  result: GoalVerificationResult,
+): Promise<void> {
+  if (!state.sessionId) return
+  const filePath = getSessionFilePath(state)
+  const entry: GoalVerificationEntry = {
+    t: 'meta',
+    kind: 'goal-verification',
+    goalId,
+    result: structuredClone(result),
+    ts: new Date().toISOString(),
+  }
+  await appendLine(filePath, entry)
+}
+
 // ── Read path: load + list ──────────────────────────────────────────────
 
 export interface LoadedSession {
@@ -301,6 +376,8 @@ export interface LoadedSession {
   firstPrompt: string
   messages: ModelMessage[]
   tokenUsage: TokenUsage
+  goal: GoalState | null
+  goalInputs: GoalInput[]
   /** Rewind checkpoints surviving the last compact-boundary (if any).
    *  The backing file manifests live under `.x-code/file-history/<sid>/`. */
   checkpoints: CheckpointEntry[]
@@ -340,6 +417,8 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   let lastUsage: UsageEntry | null = null
   let messages: ModelMessage[] = []
   let checkpoints: CheckpointEntry[] = []
+  let goal: GoalState | null = null
+  const goalInputs: GoalInput[] = []
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -366,6 +445,16 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
           ts: entry.ts,
           userPrompt: entry.userPrompt,
         })
+      } else if (entry.kind === 'goal') {
+        goal = entry.goal
+      } else if (entry.kind === 'goal-input') {
+        const idx = goalInputs.findIndex((input) => input.id === entry.input.id)
+        if (idx >= 0) goalInputs[idx] = entry.input
+        else goalInputs.push(entry.input)
+      } else if (entry.kind === 'goal-verification' && goal && goal.id === entry.goalId) {
+        if (!goal.verificationResults.some((result) => result.ts === entry.result.ts)) {
+          goal.verificationResults.push(entry.result)
+        }
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg') {
@@ -384,6 +473,8 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     firstPrompt: header.firstPrompt,
     messages: sanitizeMessageTail(messages),
     tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
+    goal,
+    goalInputs,
     checkpoints,
     filePath,
   }
@@ -560,5 +651,7 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.lastInputTokens = loaded.tokenUsage.inputTokens
   state.persistedMessageCount = loaded.messages.length
   state.checkpoints = loaded.checkpoints.slice()
+  state.goal = loaded.goal ? structuredClone(loaded.goal) : null
+  state.goalInputs = loaded.goalInputs.map((input) => ({ ...input }))
   return state
 }

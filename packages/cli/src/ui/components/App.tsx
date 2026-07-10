@@ -25,6 +25,8 @@ import {
 import type {
   AgentOptions,
   DiffStats,
+  GoalState,
+  GoalVerifier,
   KnowledgeFact,
   LanguageModel,
   LoadedSession,
@@ -94,6 +96,21 @@ export const SLASH_COMMANDS = [
   },
   { name: '/clear', description: 'Clear conversation history' },
   { name: '/compact', description: 'Manually compress context' },
+  {
+    name: '/goal',
+    description: 'Run a durable, verifiable goal loop',
+    argumentHint: '<objective>|status|pause|resume|cancel|clear|steer|verify',
+    subcommands: [
+      { name: 'status', description: 'Show current goal state' },
+      { name: 'pause', description: 'Pause the active goal loop' },
+      { name: 'resume', description: 'Resume a paused or blocked goal loop' },
+      { name: 'cancel', description: 'Cancel the current goal' },
+      { name: 'clear', description: 'Clear current goal state' },
+      { name: 'edit', description: 'Edit objective or max-turns for the current goal' },
+      { name: 'steer', description: 'Add steering input for the next goal turn' },
+      { name: 'verify', description: 'Wake the goal runner to verify/continue' },
+    ],
+  },
   { name: '/resume', description: 'Pick a past session in this project to resume', argumentHint: '[id]' },
   {
     name: '/rewind',
@@ -238,6 +255,104 @@ function formatRelativeTime(epochMs: number): string {
   return new Date(epochMs).toISOString().slice(0, 10)
 }
 
+function tokenizeArgs(input: string): string[] {
+  const tokens: string[] = []
+  const re = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g
+  for (const match of input.matchAll(re)) {
+    tokens.push((match[1] ?? match[2] ?? match[3] ?? '').replace(/\\"/g, '"').replace(/\\'/g, "'"))
+  }
+  return tokens
+}
+
+function parseGoalCreateArgs(arg: string): {
+  objective: string
+  maxTurns?: number
+  tokenBudget?: number
+  requiresUserConfirmation?: boolean
+  verifiers: GoalVerifier[]
+} {
+  const tokens = tokenizeArgs(arg)
+  const objectiveParts: string[] = []
+  const verifiers: GoalVerifier[] = []
+  let maxTurns: number | undefined
+  let tokenBudget: number | undefined
+  let requiresUserConfirmation = false
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (token === '--verify') {
+      const command = tokens[++i]
+      if (command) verifiers.push({ kind: 'shell', command, timeoutMs: 120000 })
+      continue
+    }
+    if (token === '--max-turns') {
+      const value = Number(tokens[++i])
+      if (Number.isFinite(value) && value > 0) maxTurns = Math.floor(value)
+      continue
+    }
+    if (token === '--token-budget') {
+      const value = Number(tokens[++i])
+      if (Number.isFinite(value) && value > 0) tokenBudget = Math.floor(value)
+      continue
+    }
+    if (token === '--confirm') {
+      requiresUserConfirmation = true
+      continue
+    }
+    if (token === '--verifier-agent') {
+      const agent = tokens[++i]
+      if (agent) {
+        verifiers.push({
+          kind: 'subagent',
+          agent,
+          prompt: 'Verify that the current goal objective is fully complete in the repository/session state.',
+          timeoutMs: 120000,
+        })
+      }
+      continue
+    }
+    objectiveParts.push(token)
+  }
+
+  return {
+    objective: objectiveParts.join(' ').trim(),
+    maxTurns,
+    tokenBudget,
+    requiresUserConfirmation,
+    verifiers,
+  }
+}
+
+function formatGoalStatus(goal: GoalState): string {
+  const latest = goal.verificationResults.at(-1)
+  const verifiers = goal.verifiers.length
+    ? goal.verifiers
+        .map((v, i) => {
+          if (v.kind === 'shell') return `${i + 1}. shell: \`${v.command}\``
+          if (v.kind === 'subagent') return `${i + 1}. subagent: ${v.agent}`
+          return `${i + 1}. file: ${v.path}`
+        })
+        .join('\n')
+    : 'none'
+  return [
+    '**Goal Status**',
+    '',
+    `- Objective: ${goal.objective}`,
+    `- Status: ${goal.status}`,
+    `- Turns: ${goal.turnCount}/${goal.maxTurns}`,
+    `- Token budget: ${goal.tokenBudget?.toLocaleString('en-US') ?? 'n/a'}`,
+    `- Pending transition: ${goal.pendingTransition?.kind ?? 'none'}`,
+    `- Latest verifier: ${latest ? `${latest.ok ? 'passed' : 'failed'} - ${latest.summary}` : 'none'}`,
+    `- Repeated blocker: ${goal.repeatedBlockerCount}`,
+    '',
+    '**Verifiers**',
+    verifiers,
+    goal.finalSummary ? `\n**Final Summary**\n${goal.finalSummary}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
 // formatUsageHistory was replaced by the interactive handleUsageHistory
 // picker inside the component — see handleUsageHistory().
 
@@ -346,6 +461,14 @@ export function App({
   const {
     state,
     submit,
+    runGoal,
+    pauseGoal,
+    resumeGoal,
+    cancelGoal,
+    clearGoal,
+    steerGoal,
+    editGoal,
+    verifyGoal,
     resolvePermission,
     resolveQuestion,
     abort,
@@ -362,7 +485,6 @@ export function App({
     getThinking,
     invalidateSystemPromptCache,
     addInfoMessage,
-    addUserMessage,
     echoCommand,
     addCommandMessage,
     addCommandResult,
@@ -834,6 +956,11 @@ export function App({
           await handleCompact()
           return
 
+        case 'goal':
+          echoCommand(text)
+          await handleGoal(arg)
+          return
+
         case 'resume':
           echoCommand(text)
           await handleResume()
@@ -1265,6 +1392,107 @@ export function App({
     // callback path do the React state / UI sync via setPermissionMode.
     setPermissionMode(next ? 'plan' : 'default')
     addCommandMessage(commandText, next ? 'Enabled plan mode' : 'Disabled plan mode')
+  }
+
+  async function handleGoal(arg: string) {
+    try {
+      const [subcommand = '', ...rest] = tokenizeArgs(arg)
+      const goal = state.goalStatus
+      const lower = subcommand.toLowerCase()
+
+      if (!arg.trim() || lower === 'status') {
+        addCommandResult(goal ? formatGoalStatus(goal) : 'No current goal.')
+        return
+      }
+
+      if (lower === 'pause') {
+        const paused = await pauseGoal()
+        addCommandResult(paused ? `Goal paused: ${paused.objective}` : 'No active goal to pause.')
+        return
+      }
+
+      if (lower === 'resume') {
+        const maxTurnsArg = rest[0] === '--max-turns' ? rest[1] : undefined
+        if (maxTurnsArg && goal) {
+          const maxTurns = maxTurnsArg.startsWith('+')
+            ? goal.maxTurns + Number(maxTurnsArg.slice(1))
+            : Number(maxTurnsArg)
+          if (Number.isFinite(maxTurns) && maxTurns > 0) {
+            await editGoal({ maxTurns })
+          }
+        }
+        const resumed = await resumeGoal()
+        addCommandResult(resumed ? `Goal resumed: ${resumed.objective}` : 'No goal to resume.')
+        return
+      }
+
+      if (lower === 'cancel') {
+        const cancelled = await cancelGoal()
+        addCommandResult(cancelled ? `Goal cancelled: ${cancelled.objective}` : 'No goal to cancel.')
+        return
+      }
+
+      if (lower === 'clear') {
+        await clearGoal()
+        addCommandResult('Goal cleared.')
+        return
+      }
+
+      if (lower === 'steer') {
+        const steering = rest.join(' ').trim()
+        if (!steering) {
+          addCommandResult('Usage: /goal steer <instruction>')
+          return
+        }
+        const steered = await steerGoal(steering)
+        addCommandResult(steered ? 'Goal steering queued.' : 'No goal to steer.')
+        return
+      }
+
+      if (lower === 'edit') {
+        const parsed = parseGoalCreateArgs(rest.join(' '))
+        const edited = await editGoal({
+          objective: parsed.objective || undefined,
+          maxTurns: parsed.maxTurns,
+        })
+        addCommandResult(edited ? `Goal edited: ${edited.objective}` : 'No goal to edit.')
+        return
+      }
+
+      if (lower === 'verify') {
+        if (!goal) {
+          addCommandResult('No goal to verify.')
+          return
+        }
+        if (goal.verifiers.length === 0 && !goal.requiresUserConfirmation) {
+          addCommandResult('No verifier configured for this goal.')
+          return
+        }
+        const verified = await verifyGoal()
+        addCommandResult(
+          verified
+            ? `Goal verification ${verified.ok ? 'passed' : 'failed'}: ${verified.summary}`
+            : 'No goal to verify.',
+        )
+        return
+      }
+
+      const parsed = parseGoalCreateArgs(arg)
+      if (!parsed.objective) {
+        addCommandResult('Usage: /goal <objective> [--verify "cmd"] [--max-turns n] [--token-budget n] [--confirm]')
+        return
+      }
+      addCommandResult(`Goal started: ${parsed.objective}`)
+      await runGoal({
+        objective: parsed.objective,
+        maxTurns: parsed.maxTurns,
+        tokenBudget: parsed.tokenBudget,
+        verifiers: parsed.verifiers,
+        requiresUserConfirmation: parsed.requiresUserConfirmation,
+      })
+    } catch (err) {
+      addCommandResult(err instanceof Error ? err.message : String(err))
+    }
   }
 
   async function handleCompact() {

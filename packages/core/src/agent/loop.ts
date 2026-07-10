@@ -16,11 +16,13 @@ import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { applyCacheControl } from '../providers/cache-control.js'
 import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { createActivateSkillTool } from '../tools/activate-skill.js'
+import { createGetGoalTool } from '../tools/get-goal.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
+import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { classifyApiError, isContextTooLongError } from './api-errors.js'
@@ -301,10 +303,18 @@ function buildTools(options: AgentOptions, state: LoopState) {
     tools.activateSkill = createActivateSkillTool(options.skillRegistry)
   }
 
+  if (!options.toolFilter && state.goal?.status === 'active') {
+    tools.getGoal = createGetGoalTool(state)
+    tools.updateGoal = createUpdateGoalTool(state)
+  }
+
   // Deferred loading is a top-level-agent feature only. The presence of a
   // toolFilter is the authoritative "this is a sub-agent" signal (runner.ts
   // always passes one; the main loop never does).
   const deferralActive = !options.toolFilter
+  if (!deferralActive) {
+    state.deferredCatalog = undefined
+  }
   if (deferralActive) {
     const catalog = buildDeferredCatalog(options, getContextWindow(options.modelId))
     state.deferredCatalog = catalog

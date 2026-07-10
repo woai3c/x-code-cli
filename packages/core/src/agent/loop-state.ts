@@ -4,6 +4,7 @@ import type { ModelMessage } from 'ai'
 import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
+import type { GoalInput, GoalState } from './goal/types.js'
 import type { CheckpointEntry } from './snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
 
@@ -101,6 +102,15 @@ export interface LoopState {
    *  cleanup kills any survivors when the CLI process exits. */
   bgShells: BackgroundShellRegistry
 
+  /** Session-scoped durable goal. Mutated by /goal and by getGoal/updateGoal
+   *  tools. Dynamic goal details are intentionally kept out of the cached
+   *  system prompt; models inspect them through tools or continuation inputs. */
+  goal: GoalState | null
+  /** Durable queued inputs for the goal runner. These are ordinary user
+   *  messages once promoted, but tracked separately so pause/resume/crash
+   *  recovery can continue at a safe boundary. */
+  goalInputs: GoalInput[]
+
   // ── Deferred tools / toolSearch (top-level agent only) ──
 
   /** Catalog of deferred tools the model can discover via `toolSearch` but
@@ -163,6 +173,8 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     expectCacheMiss: false,
     readFileCache: new Map(),
     bgShells: new BackgroundShellRegistry(),
+    goal: null,
+    goalInputs: [],
     activatedTools: new Set(),
   }
 }

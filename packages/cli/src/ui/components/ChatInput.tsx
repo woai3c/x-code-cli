@@ -585,7 +585,7 @@ export function ChatInput({
     // Block submit while the agent is still thinking. Keystrokes still flow
     // (the keyboard stays enabled so users can pre-type the next prompt) —
     // only Enter is suppressed, matching Claude Code's behavior.
-    if (spinner) return
+    if (spinner && !raw.trimStart().toLowerCase().startsWith('/goal')) return
     const expanded = override ? raw : expandPasteRefs(raw, pastedContents)
     // Record the pre-expansion form in input history (Up/Down recall) so
     // that restoring an entry doesn't unfold the entire paste block back
