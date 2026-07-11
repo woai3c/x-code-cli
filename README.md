@@ -12,7 +12,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 
 - **多模型支持**：内置 8 家主流厂商，并支持任意 OpenAI 兼容接口
 - **14 个内置工具**：覆盖文件读写、Shell 执行、代码搜索、网页抓取、子 Agent 委派、任务追踪、计划模式等常见开发场景
-- **子 Agent（task 工具）**：将研究、代码审查、规划等子任务委派给专用子 Agent，独立上下文运行后仅返回结论，保持主对话简洁。内置 4 个子 Agent（explore / general-purpose / plan / code-reviewer），支持自定义子 Agent
+- **子 Agent（task 工具）**：将研究、代码审查、规划、目标验收等子任务委派给专用子 Agent，独立上下文运行后仅返回结论，保持主对话简洁。内置 5 个子 Agent（explore / general-purpose / plan / code-reviewer / goal-verifier），支持自定义子 Agent
 - **Plan 模式**：`--plan` 或 `/plan` 进入只读探索模式，Agent 先制定方案、经用户批准后再执行代码修改
 - **Todo 追踪**：Agent 自动将复杂任务分解为 todo 列表并追踪执行进度
 - **三级权限模型**：默认安全，写操作前请求确认；`--trust` 可跳过确认
@@ -23,6 +23,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **自动记忆**：每轮对话结束后自动从最近转录里筛选值得长期记住的事实(用户偏好、纠正反馈、项目状态、外部资源指针),下次会话作为上下文加载;`/memory` 查看当前条目,直接编辑 `auto.md` 修改
 - **Skills**：以 `SKILL.md` 描述可复用工作流模板（如代码审查清单、PR 评审范式），交互中通过 `/<skill-name>` 触发；`/skill` 管理
 - **自定义斜杠命令**：把 markdown 文件放进 `~/.x-code/commands/<name>.md`（用户级）或 `<repo>/.x-code/commands/<name>.md`（项目级），输入 `/<name>` 即把文件内容作为 prompt 发给 agent；支持 `$ARGUMENTS` 占位符与可选的 YAML frontmatter `description`；优先级为 project > plugin > user，`/plugin refresh` 后即时生效（与 Skills 的区别：commands 是确定性模板每次都发同一段，skills 由 agent 按场景自主激活）
+- **持续目标循环**：`/goal` 让 agent 围绕一个目标自动执行、验证失败后继续修复，直到验证通过或触发轮数、token、阻塞等停止条件；支持 shell、只读子 agent 和用户确认验证。详见 [docs/goal.md](./docs/goal.md)
 - **MCP 集成**：支持 Model Context Protocol 服务器（stdio + HTTP，含 OAuth），由 `/mcp` 管理；服务器工具自动并入 agent 工具集
 - **插件系统**：将 skill / sub-agent / MCP 服务器 / hooks 打包成可分发单元，统一安装/启用/卸载；订阅 marketplace 一键发现插件；Manifest 与 Claude Code 字节级兼容，可直接安装其生态的插件。详见 [docs/plugins.md](./docs/plugins.md)
 - **Hooks**：插件可注册 10 个生命周期事件回调（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` / `SubagentStart` / `SubagentStop` / `TurnComplete` / `SessionEnd`），用 shell 命令拦截/改写 agent 行为；支持 `commandWindows` / `commandDarwin` / `commandLinux` 跨平台命令覆盖、`${pluginDataDir}` 持久数据目录。详见 [docs/hooks.md](./docs/hooks.md)
@@ -30,7 +31,7 @@ X-Code CLI 支持主流大模型（Claude、GPT、DeepSeek、Gemini、Qwen、Gro
 - **视觉子 agent**：DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
 - **浏览器自动化（可选）**：`/browser on` 启用内置 `browser` 子 agent，用真实浏览器（由 @playwright/mcp 驱动）完成 webFetch 搞不定的任务——登录态、JS 渲染页面、多步交互；基于无障碍树跨厂商可用。默认关闭，详见 [docs/sub-agents.md](./docs/sub-agents.md)
 - **主题切换**：`/theme` 切换 UI 主题，控制 diff 配色和语法高亮风格
-- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/resume`、`/rewind`、`/usage`、`/usage-history`、`/memory`、`/review`、`/doctor`、`/skill`、`/mcp`、`/plugin`、`/browser` 等
+- **斜杠命令**：`/help`、`/model`、`/thinking`、`/theme`、`/plan`、`/goal`、`/resume`、`/rewind`、`/usage`、`/usage-history`、`/memory`、`/review`、`/doctor`、`/skill`、`/mcp`、`/plugin`、`/browser` 等
 - **统一思考模式开关**：`/thinking on|off` 将不同厂商各异的 thinking/reasoning 参数统一为单一开关
 - **多行输入**：`Alt+Enter`（macOS 为 `Option+Enter`）或行尾 `\` 后 Enter 插入换行；普通 Enter 直接发送
 - **历史输入回溯**：输入框为空时按 `↑`/`↓` 召回已提交的提示词
@@ -210,28 +211,41 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 
 ## 斜杠命令
 
-| 命令                  | 说明                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------- |
-| `/help`               | 查看所有可用命令                                                                    |
-| `/model [alias]`      | 切换模型或查看可用模型列表                                                          |
-| `/thinking [on\|off]` | 启用 / 禁用思考模式（无参数时弹出选择器）                                           |
-| `/theme [name]`       | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                        |
-| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                       |
-| `/usage`              | 查看本次会话 Token 用量（含缓存命中率）                                             |
-| `/usage-history`      | 列出当前项目历史会话，可交互选择查看详情                                            |
-| `/clear`              | 清空当前会话                                                                        |
-| `/compact`            | 手动压缩上下文                                                                      |
-| `/resume`             | 从当前项目的历史会话中选择一个恢复                                                  |
-| `/rewind`             | 回到本会话某条用户消息之前——同时还原 agent 改过的文件并截断对话历史（无参弹选择器） |
-| `/init`               | 分析代码库后在项目根创建或更新 `AGENTS.md`                                          |
-| `/review [PR号]`      | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）                                |
-| `/memory`             | 查看当前自动记忆条目（project + user,按类目分组）                                   |
-| `/skill <sub>`        | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`）  |
-| `/mcp <sub>`          | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）      |
-| `/plugin <sub>`       | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）                 |
-| `/browser [on\|off]`  | 开关浏览器子 agent（无参看状态）——开启后可用真实浏览器自动化，默认关闭              |
-| `/doctor`             | 一键诊断运行环境（版本、API Key、MCP 连通性、插件、子 Agent、Skills）               |
-| `/exit`               | 保存会话并退出                                                                      |
+| 命令                   | 说明                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| `/help`                | 查看所有可用命令                                                                    |
+| `/model [alias]`       | 切换模型或查看可用模型列表                                                          |
+| `/thinking [on\|off]`  | 启用 / 禁用思考模式（无参数时弹出选择器）                                           |
+| `/theme [name]`        | 切换 UI 主题（无参数时弹出选择器），控制 diff 配色和语法高亮                        |
+| `/plan [on\|off]`      | 启用 / 禁用 Plan 模式（无参数时切换当前状态）                                       |
+| `/usage`               | 查看本次会话 Token 用量（含缓存命中率）                                             |
+| `/usage-history`       | 列出当前项目历史会话，可交互选择查看详情                                            |
+| `/clear`               | 清空当前会话                                                                        |
+| `/compact`             | 手动压缩上下文                                                                      |
+| `/goal [目标\|子命令]` | 启动或控制可验证的持续目标循环；详见 [docs/goal.md](./docs/goal.md)                 |
+| `/resume`              | 从当前项目的历史会话中选择一个恢复                                                  |
+| `/rewind`              | 回到本会话某条用户消息之前——同时还原 agent 改过的文件并截断对话历史（无参弹选择器） |
+| `/init`                | 分析代码库后在项目根创建或更新 `AGENTS.md`                                          |
+| `/review [PR号]`       | 评审 GitHub PR（无参数列出开放 PR；需本地装好 `gh`）                                |
+| `/memory`              | 查看当前自动记忆条目（project + user,按类目分组）                                   |
+| `/skill <sub>`         | 管理 Skills（`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`）  |
+| `/mcp <sub>`           | 管理 MCP 服务器（`list` / `tools` / `add` / `remove` / `auth` / `refresh` 等）      |
+| `/plugin <sub>`        | 管理插件与 marketplace（详见 [docs/plugins.md](./docs/plugins.md)）                 |
+| `/browser [on\|off]`   | 开关浏览器子 agent（无参看状态）——开启后可用真实浏览器自动化，默认关闭              |
+| `/doctor`              | 一键诊断运行环境（版本、API Key、MCP 连通性、插件、子 Agent、Skills）               |
+| `/exit`                | 保存会话并退出                                                                      |
+
+### 持续目标循环
+
+使用 `/goal` 处理需要 agent 自动反复执行、验证和修复的工程任务：
+
+```text
+/goal 修复所有单元测试 --verify "pnpm test" --max-turns 10 --token-budget 100000
+```
+
+验证命令退出码为 0 后目标才会完成；验证失败会自动进入下一轮继续修复。也可以使用 `--verifier-agent goal-verifier` 做只读语义验收，或使用 `--confirm` 在完成前要求用户确认。运行期间可用 `/goal status`、`pause`、`resume`、`steer`、`verify`、`cancel` 和 `clear` 控制目标。
+
+开放式讨论或没有明确验收条件的问题应使用普通对话。未配置验证器或 `--confirm` 的 goal 不会让模型自行宣布完成，而会停止为 `blocked`。完整参数、状态和示例见 [持续目标循环文档](./docs/goal.md)。
 
 ### 思考模式说明
 
@@ -302,6 +316,7 @@ README 是入门视图，每个功能的完整用法在 [`docs/`](./docs/) 下�
 | 文档                                                     | 你想做什么                                                          |
 | -------------------------------------------------------- | ------------------------------------------------------------------- |
 | [`docs/skills.md`](./docs/skills.md)                     | 写复用工作流模板，`/<name>` 触发                                    |
+| [`docs/goal.md`](./docs/goal.md)                         | 用 `/goal` 持续执行任务，并通过命令、子 agent 或用户确认验收        |
 | [`docs/sub-agents.md`](./docs/sub-agents.md)             | 用内置 / 自定义子 agent 委派子任务（`task` 工具）                   |
 | [`docs/mcp.md`](./docs/mcp.md)                           | 配 MCP 服务器（stdio / HTTP / OAuth）+ `/mcp` 命令                  |
 | [`docs/knowledge.md`](./docs/knowledge.md)               | 知识库（`AGENTS.md` / `CLAUDE.md` 5 层加载）与自动记忆              |

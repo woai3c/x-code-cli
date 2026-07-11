@@ -12,7 +12,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 
 - **Multi-model support** — 8 built-in providers and any OpenAI-compatible custom endpoint
 - **14 built-in tools** — covers file I/O, shell execution, code search, web fetch, sub-agent delegation, task tracking, plan mode, and other common development tasks
-- **Sub-agents (task tool)** — delegate research, code review, planning, and other sub-tasks to specialized sub-agents that run in isolated context and return only conclusions, keeping the main conversation lean. Ships with 4 built-in sub-agents (explore / general-purpose / plan / code-reviewer) and supports custom sub-agents
+- **Sub-agents (task tool)** — delegate research, code review, planning, goal verification, and other sub-tasks to specialized sub-agents that run in isolated context and return only conclusions, keeping the main conversation lean. Ships with 5 built-in sub-agents (explore / general-purpose / plan / code-reviewer / goal-verifier) and supports custom sub-agents
 - **Plan mode** — `--plan` or `/plan` enters a read-only exploration mode where the agent designs a plan first and only executes code changes after user approval
 - **Todo tracking** — the agent automatically breaks complex tasks into a todo list and tracks progress
 - **3-level permission model** — safe by default, prompts before write operations; `--trust` bypasses prompts
@@ -23,6 +23,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Auto-memory** — after each turn, durable facts from the conversation (user preferences, corrections, project state, external pointers) are automatically saved and loaded as context next session; `/memory` to inspect entries, edit `auto.md` directly to modify
 - **Skills** — describe reusable workflow templates as `SKILL.md` (e.g. code-review checklists, PR-review playbooks); trigger via `/<skill-name>` in the chat; `/skill` manages
 - **Custom slash commands** — drop a markdown file into `~/.x-code/commands/<name>.md` (user scope) or `<repo>/.x-code/commands/<name>.md` (project scope) and `/<name>` sends the file body as a prompt to the agent. Supports `$ARGUMENTS` substitution and an optional YAML frontmatter `description`. Precedence is project > plugin > user, and `/plugin refresh` reloads the registry without restart. (Difference from Skills: commands are deterministic prompt templates sent verbatim each invocation, whereas skills are activated by the agent on its own judgement)
+- **Durable goal loops** — `/goal` keeps the agent working toward an objective, repairs failed verification, and stops only after success or a turn, token, or blocker limit; supports shell, read-only sub-agent, and user-confirmation verifiers. See [docs/goal.en.md](./docs/goal.en.md)
 - **MCP integration** — first-class Model Context Protocol support (stdio + HTTP with OAuth) via `/mcp`; server tools fold into the agent's tool set
 - **Plugin system** — bundle skills / sub-agents / MCP servers / hooks into installable units, with subscribed marketplaces driving discovery. Manifest is byte-compatible with Claude Code's `.claude-plugin/plugin.json`, so its ecosystem installs directly. See [docs/plugins.md](./docs/plugins.md)
 - **Hooks** — plugins can register ten lifecycle event callbacks (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PreCompact` / `PostCompact` / `SubagentStart` / `SubagentStop` / `TurnComplete` / `SessionEnd`) as shell commands that intercept or rewrite agent behaviour; supports `commandWindows` / `commandDarwin` / `commandLinux` per-platform overrides and a persistent `${pluginDataDir}` variable. See [docs/hooks.md](./docs/hooks.md)
@@ -30,7 +31,7 @@ X-Code CLI supports the major LLM providers (Claude, GPT, DeepSeek, Gemini, Qwen
 - **Vision sub-agent** — text-only providers such as DeepSeek can borrow another configured vision model to generate image descriptions
 - **Browser automation (opt-in)** — `/browser on` enables the built-in `browser` sub-agent, which drives a real browser (powered by @playwright/mcp) for tasks webFetch can't do: logged-in sessions, JS-rendered pages, multi-step flows. Accessibility-tree based, works across providers. Off by default — see [docs/sub-agents.md](./docs/sub-agents.md)
 - **Theme switching** — `/theme` cycles through UI themes, controlling diff colors and syntax-highlight palette
-- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/resume`, `/rewind`, `/usage`, `/usage-history`, `/memory`, `/review`, `/doctor`, `/skill`, `/mcp`, `/plugin`, `/browser`, and more
+- **Slash commands** — quick controls including `/help`, `/model`, `/thinking`, `/theme`, `/plan`, `/goal`, `/resume`, `/rewind`, `/usage`, `/usage-history`, `/memory`, `/review`, `/doctor`, `/skill`, `/mcp`, `/plugin`, `/browser`, and more
 - **Unified thinking-mode toggle** — `/thinking on|off` consolidates each provider's bespoke thinking/reasoning parameters into a single switch
 - **Multiline input** — `Alt+Enter` (or `Option+Enter` on macOS) or a trailing `\` followed by Enter inserts a newline; plain Enter still submits
 - **Input history recall** — press `↑` / `↓` on an empty prompt to walk through previously submitted messages
@@ -210,28 +211,41 @@ Full usage: [docs/plugins.md](./docs/plugins.md).
 
 ## Slash Commands
 
-| Command               | Description                                                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `/help`               | Show available commands                                                                                                        |
-| `/model [alias]`      | Switch model or list available models                                                                                          |
-| `/thinking [on\|off]` | Enable / disable thinking mode (no argument opens the picker)                                                                  |
-| `/theme [name]`       | Switch UI theme (no argument opens the picker); controls diff colors and syntax-highlight palette                              |
-| `/plan [on\|off]`     | Enable / disable plan mode (no argument toggles the current state)                                                             |
-| `/usage`              | Show current-session token usage (including cache hit rate)                                                                    |
-| `/usage-history`      | List past project sessions with interactive detail view                                                                        |
-| `/clear`              | Clear the current conversation                                                                                                 |
-| `/compact`            | Manually compress context                                                                                                      |
-| `/resume`             | Pick a past session in this project to resume                                                                                  |
-| `/rewind`             | Roll back to before a previous user message — restores agent-edited files and truncates history (no argument opens the picker) |
-| `/init`               | Analyze the codebase and create or update `AGENTS.md` at the project root                                                      |
-| `/review [PR#]`       | Review a GitHub PR (no argument lists open PRs); requires `gh` to be installed locally                                         |
-| `/memory`             | List auto-memory entries (project + user, grouped by category)                                                                 |
-| `/skill <sub>`        | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`)                                            |
-| `/mcp <sub>`          | Manage MCP servers (`list` / `tools` / `add` / `remove` / `auth` / `refresh`, etc.)                                            |
-| `/plugin <sub>`       | Manage plugins and marketplaces — see [docs/plugins.md](./docs/plugins.md)                                                     |
-| `/browser [on\|off]`  | Toggle the browser sub-agent (no argument shows status) — enables real-browser automation; off by default                      |
-| `/doctor`             | Diagnose the runtime environment (version, API keys, MCP connectivity, plugins, sub-agents, skills)                            |
-| `/exit`               | Save the session and exit                                                                                                      |
+| Command                         | Description                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `/help`                         | Show available commands                                                                                                        |
+| `/model [alias]`                | Switch model or list available models                                                                                          |
+| `/thinking [on\|off]`           | Enable / disable thinking mode (no argument opens the picker)                                                                  |
+| `/theme [name]`                 | Switch UI theme (no argument opens the picker); controls diff colors and syntax-highlight palette                              |
+| `/plan [on\|off]`               | Enable / disable plan mode (no argument toggles the current state)                                                             |
+| `/usage`                        | Show current-session token usage (including cache hit rate)                                                                    |
+| `/usage-history`                | List past project sessions with interactive detail view                                                                        |
+| `/clear`                        | Clear the current conversation                                                                                                 |
+| `/compact`                      | Manually compress context                                                                                                      |
+| `/goal [objective\|subcommand]` | Start or control a durable, verifiable goal loop — see [docs/goal.en.md](./docs/goal.en.md)                                    |
+| `/resume`                       | Pick a past session in this project to resume                                                                                  |
+| `/rewind`                       | Roll back to before a previous user message — restores agent-edited files and truncates history (no argument opens the picker) |
+| `/init`                         | Analyze the codebase and create or update `AGENTS.md` at the project root                                                      |
+| `/review [PR#]`                 | Review a GitHub PR (no argument lists open PRs); requires `gh` to be installed locally                                         |
+| `/memory`                       | List auto-memory entries (project + user, grouped by category)                                                                 |
+| `/skill <sub>`                  | Manage Skills (`list` / `install` / `refresh` / `enable` / `disable` / `uninstall`)                                            |
+| `/mcp <sub>`                    | Manage MCP servers (`list` / `tools` / `add` / `remove` / `auth` / `refresh`, etc.)                                            |
+| `/plugin <sub>`                 | Manage plugins and marketplaces — see [docs/plugins.md](./docs/plugins.md)                                                     |
+| `/browser [on\|off]`            | Toggle the browser sub-agent (no argument shows status) — enables real-browser automation; off by default                      |
+| `/doctor`                       | Diagnose the runtime environment (version, API keys, MCP connectivity, plugins, sub-agents, skills)                            |
+| `/exit`                         | Save the session and exit                                                                                                      |
+
+### Durable goal loops
+
+Use `/goal` for engineering work that should automatically repeat execution, verification, and repair:
+
+```text
+/goal Fix all unit tests --verify "pnpm test" --max-turns 10 --token-budget 100000
+```
+
+The goal completes only when the verifier exits with code 0; failed verification automatically starts another repair turn. Use `--verifier-agent goal-verifier` for read-only semantic acceptance or `--confirm` to require user approval. While it runs, control it with `/goal status`, `pause`, `resume`, `steer`, `verify`, `cancel`, and `clear`.
+
+Use normal conversation for open-ended questions without concrete acceptance criteria. A goal without a verifier or `--confirm` cannot self-certify completion and stops as `blocked`. See the [durable goal loop guide](./docs/goal.en.md) for all options, states, and examples.
 
 ### Thinking-mode notes
 
@@ -302,6 +316,7 @@ This README is the entry view. Each feature has a focused doc under [`docs/`](./
 | Doc                                                            | What it covers                                                                                            |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | [`docs/skills.en.md`](./docs/skills.en.md)                     | Write reusable workflow templates, trigger with `/<name>`                                                 |
+| [`docs/goal.en.md`](./docs/goal.en.md)                         | Run durable `/goal` tasks with shell, sub-agent, or user-confirmation verification                        |
 | [`docs/sub-agents.en.md`](./docs/sub-agents.en.md)             | Use built-in / custom sub-agents via the `task` tool                                                      |
 | [`docs/mcp.en.md`](./docs/mcp.en.md)                           | Configure MCP servers (stdio / HTTP / OAuth) + `/mcp` commands                                            |
 | [`docs/knowledge.en.md`](./docs/knowledge.en.md)               | Knowledge base (`AGENTS.md` / `CLAUDE.md` 5-layer load) and auto-memory                                   |
