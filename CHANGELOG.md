@@ -1,3 +1,9 @@
+## v0.3.9 (2026-07-11)
+
+### Bug Fixes
+
+- npm publish error (e7819e7)
+
 ## v0.3.7 (2026-07-11)
 
 ### Bug Fixes
