@@ -29,10 +29,6 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      # Pin both sides of npm's engine contract. Using npm@latest made the
-      # release depend on whichever Node floor a new npm major introduced.
-      - run: npm install -g npm@12
-
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm build
