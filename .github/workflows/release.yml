@@ -45,8 +45,9 @@ jobs:
           mkdir release-packages
           (cd packages/core && pnpm pack --pack-destination ../../release-packages)
           (cd packages/cli && pnpm pack --pack-destination ../../release-packages)
-          npm publish release-packages/x-code-cli-core-*.tgz --provenance --access public
-          npm publish release-packages/x-code-cli-cli-*.tgz --provenance --access public
+          for tgz in release-packages/*.tgz; do
+            npm publish "$tgz" --provenance --access public
+          done
 
       - name: Extract latest changelog section
         run: awk '/^## v/{c++} c==1' CHANGELOG.md > RELEASE_NOTES.md
