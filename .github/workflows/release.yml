@@ -25,11 +25,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.22.2
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - run: npm install -g npm@latest
+      # Pin both sides of npm's engine contract. Using npm@latest made the
+      # release depend on whichever Node floor a new npm major introduced.
+      - run: npm install -g npm@12
 
       - run: pnpm install --frozen-lockfile
 
@@ -44,8 +46,11 @@ jobs:
 
       - name: Publish to npm
         run: |
-          cd packages/core && pnpm publish --provenance --access public --no-git-checks
-          cd ../cli && pnpm publish --provenance --access public --no-git-checks
+          mkdir release-packages
+          (cd packages/core && pnpm pack --pack-destination ../../release-packages)
+          (cd packages/cli && pnpm pack --pack-destination ../../release-packages)
+          npm publish release-packages/x-code-cli-core-*.tgz --provenance --access public
+          npm publish release-packages/x-code-cli-cli-*.tgz --provenance --access public
 
       - name: Extract latest changelog section
         run: awk '/^## v/{c++} c==1' CHANGELOG.md > RELEASE_NOTES.md
