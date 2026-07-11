@@ -1,3 +1,9 @@
+## v0.3.6 (2026-07-11)
+
+### Features
+
+- add durable goal loop (#14) (37a98c0)
+
 ## v0.3.5 (2026-07-02)
 
 ### Features
