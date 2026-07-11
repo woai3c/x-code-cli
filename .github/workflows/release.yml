@@ -45,7 +45,7 @@ jobs:
           mkdir release-packages
           (cd packages/core && pnpm pack --pack-destination ../../release-packages)
           (cd packages/cli && pnpm pack --pack-destination ../../release-packages)
-          for tgz in release-packages/*.tgz; do
+          for tgz in "$GITHUB_WORKSPACE"/release-packages/*.tgz; do
             npm publish "$tgz" --provenance --access public
           done
 
