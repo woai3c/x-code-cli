@@ -28,6 +28,7 @@ export function createGetGoalTool(state: LoopState) {
           pendingTransition: goal.pendingTransition,
           lastBlocker: goal.lastBlocker,
           repeatedBlockerCount: goal.repeatedBlockerCount,
+          repeatedVerificationFailureCount: goal.repeatedVerificationFailureCount,
           recentAttempts: goal.attempts.slice(-5),
         },
       }

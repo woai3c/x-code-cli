@@ -45,6 +45,8 @@ export interface GoalVerificationResult {
   exitCode?: number | null
   stdout?: string
   stderr?: string
+  findings?: string[]
+  requiredFixes?: string[]
   durationMs: number
   ts: string
   verificationRunId?: string
@@ -79,7 +81,7 @@ export interface GoalState {
   createdAt: string
   updatedAt: string
   createdBy: 'slash' | 'tool' | 'resume'
-  maxTurns: number
+  maxTurns?: number
   turnCount: number
   tokenBudget?: number
   baselineTokens: number
@@ -88,6 +90,8 @@ export interface GoalState {
   pendingTransition?: GoalPendingTransition
   lastBlocker?: string
   repeatedBlockerCount: number
+  lastVerificationFailureFingerprint?: string
+  repeatedVerificationFailureCount: number
   attempts: GoalAttempt[]
   finalSummary?: string
   requiresUserConfirmation?: boolean

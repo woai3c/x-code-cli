@@ -7,10 +7,18 @@ import { createLoopState } from '../src/agent/loop-state.js'
 import { appendGoalInput } from '../src/agent/session-store.js'
 import type { AgentCallbacks, AgentOptions } from '../src/types/index.js'
 
+const { runSubAgent } = vi.hoisted(() => ({
+  runSubAgent: vi.fn(),
+}))
+
 vi.mock('../src/agent/session-store.js', () => ({
   appendGoalInput: vi.fn().mockResolvedValue(undefined),
   appendGoalState: vi.fn().mockResolvedValue(undefined),
   appendGoalVerification: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../src/agent/sub-agents/runner.js', () => ({
+  runSubAgent,
 }))
 
 function callbacks(): AgentCallbacks {
@@ -43,6 +51,14 @@ function options(signal?: AbortSignal): AgentOptions {
 describe('goal runner', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    runSubAgent.mockResolvedValue({
+      resultText: '<task_result>{"ok":true,"findings":[],"requiredFixes":[]}</task_result>',
+      tokenUsage: {},
+      turnCount: 1,
+      toolCallCount: 0,
+      durationMs: 1,
+      aborted: false,
+    })
   })
 
   it('persists the initial goal input before promotion', async () => {
@@ -89,7 +105,7 @@ describe('goal runner', () => {
     expect(state.goalInputs).toHaveLength(1)
   })
 
-  it('blocks instead of retrying forever when completion has no verifier or confirmation gate', async () => {
+  it('completes through the automatic semantic verifier when no verifier is specified', async () => {
     const state = createLoopState()
     const goal = createGoal(state, { objective: 'answer something subjective', maxTurns: 20 })
     const runAgentTurn = vi.fn().mockImplementation(async () => {
@@ -106,15 +122,80 @@ describe('goal runner', () => {
       runAgentTurn,
     })
 
-    expect(goal.status).toBe('blocked')
+    expect(goal.status).toBe('complete')
     expect(goal.turnCount).toBe(1)
-    expect(goal.finalSummary).toContain('No verifier configured')
     expect(runAgentTurn).toHaveBeenCalledTimes(1)
+    expect(runSubAgent).toHaveBeenCalledTimes(1)
     expect(hasPendingGoalInput(state, goal.id)).toBe(false)
     expect(appendGoalInput).not.toHaveBeenCalledWith(
       state,
       expect.objectContaining({ kind: 'verifier_failure', goalId: goal.id }),
     )
+  })
+
+  it('escalates strategy guidance for repeated equivalent verifier failures and resets after success', async () => {
+    const failed = {
+      resultText:
+        '<task_result>{"ok":false,"findings":["tests fail"],"requiredFixes":["fix the failing tests"]}</task_result>',
+      tokenUsage: {},
+      turnCount: 1,
+      toolCallCount: 0,
+      durationMs: 1,
+      aborted: false,
+    }
+    const passed = {
+      ...failed,
+      resultText: '<task_result>{"ok":true,"findings":[],"requiredFixes":[]}</task_result>',
+    }
+    runSubAgent
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(passed)
+    const state = createLoopState()
+    const goal = createGoal(state, { objective: 'fix all tests', maxTurns: 5 })
+    const runAgentTurn = vi.fn().mockImplementation(async () => {
+      requestGoalComplete(state, { evidence: 'ran tests' })
+      return { state, turnCount: 1 }
+    })
+
+    await runGoalLoop({
+      state,
+      model: {} as any,
+      options: options(),
+      callbacks: callbacks(),
+      goalId: goal.id,
+      runAgentTurn,
+    })
+
+    expect(goal.status).toBe('complete')
+    expect(goal.turnCount).toBe(4)
+    expect(goal.repeatedVerificationFailureCount).toBe(0)
+    expect(String(runAgentTurn.mock.calls[2]?.[0])).toContain('do not repeat the previous action unchanged')
+    expect(String(runAgentTurn.mock.calls[3]?.[0])).toContain('Stop repeating the same approach')
+    expect(String(runAgentTurn.mock.calls[3]?.[0])).toContain('required fix: fix the failing tests')
+  })
+
+  it('runs without an outer turn cap when maxTurns is omitted', async () => {
+    const state = createLoopState()
+    const goal = createGoal(state, { objective: 'finish after several turns' })
+    const runAgentTurn = vi.fn().mockImplementation(async () => {
+      if (goal.turnCount >= 2) requestGoalComplete(state, { evidence: 'finished on the third turn' })
+      return { state, turnCount: 1 }
+    })
+
+    await runGoalLoop({
+      state,
+      model: {} as any,
+      options: options(),
+      callbacks: callbacks(),
+      goalId: goal.id,
+      runAgentTurn,
+    })
+
+    expect(goal.status).toBe('complete')
+    expect(goal.turnCount).toBe(3)
+    expect(goal.maxTurns).toBeUndefined()
   })
 
   it('honors token budget reached after a turn before completion verification', async () => {

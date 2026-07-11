@@ -35,10 +35,13 @@ import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-
 
 import { getCleanupFn, startApp } from './app.js'
 import { parseCliArgs } from './cli-args.js'
+import { restoreInvocationCwd } from './launch-cwd.js'
 import { runPluginCli } from './plugin-cli.js'
 import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
+
+restoreInvocationCwd()
 
 // Route AI SDK warnings to debugLog instead of letting them blast straight
 // to stderr. The default `console.warn` path bypasses ChatInput's
@@ -51,7 +54,6 @@ import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
 //
 // Must run BEFORE any code path that constructs an AI SDK call. Done at
 // module top-level so it's set up before yargs even parses argv.
-
 ;(globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS = (options: {
   warnings: unknown[]
   provider?: string

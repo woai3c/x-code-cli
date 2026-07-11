@@ -16,6 +16,8 @@ import {
 import {
   clearPendingTransition,
   recordGoalAttempt,
+  recordVerificationFailure,
+  resetVerificationFailures,
   snapshotUsage,
   tokenBudgetReached,
   updateGoalStatus,
@@ -53,7 +55,7 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
       await finalizeBySummary(input, goal, 'budget_limited')
       break
     }
-    if (goal.turnCount >= goal.maxTurns) {
+    if (goal.maxTurns !== undefined && goal.turnCount >= goal.maxTurns) {
       await finalizeBySummary(input, goal, 'max_turns')
       break
     }
@@ -113,13 +115,15 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
         void appendGoalVerification(state, goal.id, result)
       }
       if (verification.ok) {
+        resetVerificationFailures(goal)
         attempt.finish = 'complete'
         updateGoalStatus(goal, 'complete', transition.summary ?? verification.summary)
         clearPendingTransition(goal)
         void appendGoalState(state)
         break
       }
-      if (!verification.retryable || isMissingCompletionVerifier(verification.results)) {
+      const repeatedFailureCount = recordVerificationFailure(goal, verification.results)
+      if (!verification.retryable) {
         attempt.finish = 'blocked'
         updateGoalStatus(goal, 'blocked', verification.summary)
         clearPendingTransition(goal)
@@ -130,7 +134,7 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
       const nextInput = admitGoalInput(state, {
         goalId: goal.id,
         kind: 'verifier_failure',
-        content: buildVerifierFailurePrompt(goal, verification.results, verification.summary),
+        content: buildVerifierFailurePrompt(goal, verification.results, verification.summary, repeatedFailureCount),
       })
       void appendGoalInput(state, nextInput)
       clearPendingTransition(goal)
@@ -198,10 +202,6 @@ async function finalizeBySummary(
 
 function preview(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 240)
-}
-
-function isMissingCompletionVerifier(results: Awaited<ReturnType<typeof runVerifierLadder>>['results']): boolean {
-  return results.some((result) => result.verifier.kind === 'file' && result.verifier.path === '<missing-verifier>')
 }
 
 export function isSameBlocker(previous: string, current: string): boolean {

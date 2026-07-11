@@ -244,6 +244,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     maxTurns: agentDef.maxTurns,
     toolFilter,
     shellRestrictions: agentDef.shellRestrictions,
+    shellReadOnlyOnly: agentDef.shellReadOnlyOnly,
     abortSignal: parentOptions.abortSignal,
     permissionMode: 'default',
     printMode: false,

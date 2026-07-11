@@ -272,24 +272,30 @@ function formatGoalTokenBudget(goal: GoalState, usage?: TokenUsage): string {
 function formatGoalStatus(goal: GoalState, usage?: TokenUsage): string {
   const latest = goal.verificationResults.at(-1)
   const verifiers = goal.verifiers.length
-    ? goal.verifiers
-        .map((v, i) => {
+    ? [
+        ...goal.verifiers.map((v, i) => {
           if (v.kind === 'shell') return `${i + 1}. shell: \`${v.command}\``
           if (v.kind === 'subagent') return `${i + 1}. subagent: ${v.agent}`
           return `${i + 1}. file: ${v.path}`
-        })
-        .join('\n')
-    : 'none'
+        }),
+        `${goal.verifiers.length + 1}. automatic semantic verifier`,
+      ].join('\n')
+    : 'automatic semantic verifier'
   return [
     '**Goal Status**',
     '',
     `- Objective: ${goal.objective}`,
     `- Status: ${goal.status}`,
-    `- Turns: ${goal.turnCount}/${goal.maxTurns}`,
+    goal.status === 'active'
+      ? '- Background execution: running; `/goal status` does not pause it. Use `/goal pause` to stop after viewing status.'
+      : '',
+    `- Turns: ${goal.turnCount}/${goal.maxTurns ?? 'unlimited'}`,
     `- Token budget: ${formatGoalTokenBudget(goal, usage)}`,
     `- Pending transition: ${goal.pendingTransition?.kind ?? 'none'}`,
+    `- Completion verification: ${goal.pendingTransition?.kind === 'complete_requested' ? 'running' : 'idle'}`,
     `- Latest verifier: ${latest ? `${latest.ok ? 'passed' : 'failed'} - ${latest.summary}` : 'none'}`,
     `- Repeated blocker: ${goal.repeatedBlockerCount}`,
+    `- Repeated verification failure: ${goal.repeatedVerificationFailureCount}`,
     '',
     '**Verifiers**',
     verifiers,
@@ -1354,8 +1360,12 @@ export function App({
       if (lower === 'resume') {
         const maxTurnsArg = rest[0] === '--max-turns' ? rest[1] : undefined
         if (maxTurnsArg && goal && canResumeGoalStatus(goal)) {
+          if (maxTurnsArg.startsWith('+') && goal.maxTurns === undefined) {
+            addCommandResult('Cannot add relative turns to an unlimited goal. Use an absolute --max-turns value.')
+            return
+          }
           const maxTurns = maxTurnsArg.startsWith('+')
-            ? goal.maxTurns + Number(maxTurnsArg.slice(1))
+            ? goal.maxTurns! + Number(maxTurnsArg.slice(1))
             : Number(maxTurnsArg)
           if (Number.isFinite(maxTurns) && maxTurns > 0) {
             await editGoal({ maxTurns })
@@ -1402,10 +1412,6 @@ export function App({
       if (lower === 'verify') {
         if (!goal) {
           addCommandResult('No goal to verify.')
-          return
-        }
-        if (goal.verifiers.length === 0 && !goal.requiresUserConfirmation) {
-          addCommandResult('No verifier configured for this goal.')
           return
         }
         const verified = await verifyGoal()

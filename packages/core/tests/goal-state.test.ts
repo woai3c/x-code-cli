@@ -15,6 +15,15 @@ describe('goal state', () => {
     expect(() => createGoal(state, { objective: 'another goal' })).toThrow(/Cannot create/)
   })
 
+  it('leaves turn and token limits unlimited unless explicitly configured', () => {
+    const state = createLoopState()
+    const goal = createGoal(state, { objective: 'keep working until verified' })
+
+    expect(goal.maxTurns).toBeUndefined()
+    expect(goal.tokenBudget).toBeUndefined()
+    expect(goal.repeatedVerificationFailureCount).toBe(0)
+  })
+
   it('pauses and resumes a goal', () => {
     const state = createLoopState()
     createGoal(state, { objective: 'ship feature' })

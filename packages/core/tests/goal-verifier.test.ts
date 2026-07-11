@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createGoal } from '../src/agent/goal/state.js'
+import { createGoal, requestGoalComplete } from '../src/agent/goal/state.js'
 import { runVerifierLadder } from '../src/agent/goal/verifier.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import type { AgentCallbacks, AgentOptions } from '../src/types/index.js'
@@ -95,15 +95,22 @@ describe('goal verifier', () => {
     expect(spawn).not.toHaveBeenCalled()
   })
 
-  it('rejects model-only completion evidence when no verifier or confirmation is configured', async () => {
+  it('runs the automatic semantic verifier when none is explicitly configured', async () => {
     const state = createLoopState()
     const goal = createGoal(state, { objective: 'verify' })
+    requestGoalComplete(state, { evidence: 'pnpm test exited with code 0' })
     const cb = callbacks()
 
     const result = await runVerifierLadder({ goal, state, options: options(), callbacks: cb, model: {} as any })
 
-    expect(result.ok).toBe(false)
-    expect(result.summary).toMatch(/No verifier configured/)
+    expect(result.ok).toBe(true)
+    expect(runSubAgent).toHaveBeenCalledTimes(1)
+    expect(runSubAgent.mock.calls[0]?.[0].prompt).toContain('<goal_objective>\nverify\n</goal_objective>')
+    expect(runSubAgent.mock.calls[0]?.[0].prompt).toContain('Independently derive every requirement')
+    expect(runSubAgent.mock.calls[0]?.[0].prompt).toContain(
+      '<working_agent_evidence>\npnpm test exited with code 0\n</working_agent_evidence>',
+    )
+    expect(runSubAgent.mock.calls[0]?.[0].prompt).toContain('untrusted lead, not proof')
     expect(cb.onAskUser).not.toHaveBeenCalled()
   })
 
@@ -115,7 +122,56 @@ describe('goal verifier', () => {
     const result = await runVerifierLadder({ goal, state, options: options(), callbacks: cb, model: {} as any })
 
     expect(result.ok).toBe(true)
+    expect(runSubAgent).toHaveBeenCalledTimes(1)
+    expect(runSubAgent.mock.calls[0]?.[0].prompt).toContain('subjective user approval is still pending')
     expect(cb.onAskUser).toHaveBeenCalled()
+  })
+
+  it('runs semantic scope audit after an explicit shell verifier passes', async () => {
+    const state = createLoopState()
+    const goal = createGoal(state, {
+      objective: 'verify the whole project',
+      verifiers: [{ kind: 'shell', command: 'pwd' }],
+    })
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: options(),
+      callbacks: callbacks(),
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(runSubAgent).toHaveBeenCalledTimes(1)
+    expect(result.results.map((item) => item.verifier.kind)).toEqual(['shell', 'subagent'])
+  })
+
+  it('preserves semantic verifier findings and required fixes', async () => {
+    runSubAgent.mockResolvedValueOnce({
+      resultText:
+        '<task_result>{"ok":false,"findings":["two tests still fail"],"requiredFixes":["fix both failing tests"]}</task_result>',
+      tokenUsage: {},
+      turnCount: 1,
+      toolCallCount: 0,
+      durationMs: 1,
+      aborted: false,
+    })
+    const state = createLoopState()
+    const goal = createGoal(state, { objective: 'fix all tests' })
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: options(),
+      callbacks: callbacks(),
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.results[0]?.findings).toEqual(['two tests still fail'])
+    expect(result.results[0]?.requiredFixes).toEqual(['fix both failing tests'])
   })
 
   it('fails a sub-agent verifier if a shell command was denied by sub-agent restrictions', async () => {
@@ -144,6 +200,35 @@ describe('goal verifier', () => {
       objective: 'verify',
       verifiers: [{ kind: 'subagent', agent: 'goal-verifier', prompt: 'run pwd to verify' }],
     })
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: options(),
+      callbacks: callbacks(),
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.summary).toContain('denied by sub-agent restriction')
+  })
+
+  it('fails a sub-agent verifier if the read-only shell policy denied a command', async () => {
+    runSubAgent.mockResolvedValue({
+      resultText: [
+        '<task_result>',
+        'Shell command denied by read-only sub-agent policy.',
+        '{"ok": true, "findings": [], "requiredFixes": []}',
+        '</task_result>',
+      ].join('\n'),
+      tokenUsage: {},
+      turnCount: 1,
+      toolCallCount: 1,
+      durationMs: 1,
+      aborted: false,
+    })
+    const state = createLoopState()
+    const goal = createGoal(state, { objective: 'verify without writes' })
 
     const result = await runVerifierLadder({
       goal,

@@ -222,6 +222,9 @@ export interface AgentOptions {
   /** Shell command keywords to deny before permission checks. Used by
    *  sub-agents whose tool surface includes shell but must remain read-only. */
   shellRestrictions?: readonly string[]
+  /** Deny non-read-only shell commands without prompting. Used by
+   *  independent verifier agents that must never mutate inspected state. */
+  shellReadOnlyOnly?: boolean
 
   /** Tool-name suffixes whose older results get collapsed to a placeholder
    *  before each request (keeping only the latest), to stop large

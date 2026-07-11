@@ -31,6 +31,11 @@ describe('getPermissionLevel', () => {
     expect(getPermissionLevel('shell', { command: 'ls -la' })).toBe('always-allow')
     expect(getPermissionLevel('shell', { command: 'pwd' })).toBe('always-allow')
     expect(getPermissionLevel('shell', { command: 'cat file.txt' })).toBe('always-allow')
+    expect(getPermissionLevel('shell', { command: 'where tsc' })).toBe('always-allow')
+    expect(getPermissionLevel('shell', { command: 'pnpm exec tsc --noEmit -p packages/core/tsconfig.json' })).toBe(
+      'always-allow',
+    )
+    expect(getPermissionLevel('shell', { command: 'tsc -b' })).toBe('ask')
     expect(getPermissionLevel('shell', { command: 'git status' })).toBe('always-allow')
     expect(getPermissionLevel('shell', { command: 'git log --oneline' })).toBe('always-allow')
   })

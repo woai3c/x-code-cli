@@ -16,6 +16,8 @@ export interface SubAgentDefinition {
   maxTurns: number
   /** Shell commands to deny (keyword matching). Only relevant when shell is in tools */
   shellRestrictions?: string[]
+  /** Deny every shell command that is not classified read-only. */
+  shellReadOnlyOnly?: boolean
   /** Where this definition came from */
   source: 'built-in' | 'user' | 'project'
   /** When this sub-agent comes from a plugin contribution, the owning

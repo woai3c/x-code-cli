@@ -11,6 +11,7 @@ import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/ca
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
+import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
@@ -576,6 +577,18 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
 
   if (toolName === 'shell') {
     const command = typeof input.command === 'string' ? input.command : ''
+    const shellCommands = splitShellCommands(command)
+    if (options.shellReadOnlyOnly && (shellCommands.length === 0 || !shellCommands.every(isReadOnly))) {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        'Shell command denied by read-only sub-agent policy. Use a non-emitting read-only alternative (for example, tsc --noEmit instead of tsc -b).',
+        true,
+      )
+      return false
+    }
     const deniedKeyword = findDeniedShellKeyword(command, options.shellRestrictions)
     if (deniedKeyword) {
       pushToolResult(

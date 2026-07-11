@@ -240,7 +240,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 使用 `/goal` 处理需要 agent 自动反复执行、验证和修复的工程任务：
 
 ```text
-/goal 修复所有单元测试 --verify "pnpm test" --max-turns 10 --token-budget 100000
+/goal 修复当前项目所有测试失败，直到测试成功为止
 ```
 
 验证命令退出码为 0 后目标才会完成；验证失败会自动进入下一轮继续修复。也可以使用 `--verifier-agent goal-verifier` 做只读语义验收，或使用 `--confirm` 在完成前要求用户确认。运行期间可用 `/goal status`、`pause`、`resume`、`steer`、`verify`、`cancel` 和 `clear` 控制目标。

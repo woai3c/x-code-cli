@@ -51,6 +51,7 @@ export { captionImage, pickVisionProvider } from './agent/vision-fallback.js'
 export type { VisionProvider } from './agent/vision-fallback.js'
 export {
   admitGoalInput,
+  buildVerifierFailurePrompt,
   cancelGoal,
   clearPendingTransition,
   clearGoal,
@@ -61,6 +62,8 @@ export {
   pendingGoalInputs,
   promoteNextGoalInput,
   remainingTokenBudget,
+  recordVerificationFailure,
+  resetVerificationFailures,
   resumeGoal,
   runGoalLoop,
   runVerifierLadder,

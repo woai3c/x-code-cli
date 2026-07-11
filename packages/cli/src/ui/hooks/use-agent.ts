@@ -12,6 +12,7 @@ import {
   appendHeader,
   appendInterrupted,
   buildUserContent,
+  buildVerifierFailurePrompt,
   cancelGoal as cancelCoreGoal,
   capabilitiesOf,
   classifyApiError,
@@ -29,6 +30,8 @@ import {
   loadPersistedRules,
   markBoundaryAndReflush,
   pauseGoal as pauseCoreGoal,
+  recordVerificationFailure,
+  resetVerificationFailures,
   restoreCheckpoint,
   resumeGoal as resumeCoreGoal,
   runGoalLoop,
@@ -1097,14 +1100,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
       if (goal.status === 'active') {
         if (verification.ok) {
+          resetVerificationFailures(goal)
           updateGoalStatus(goal, 'complete', verification.summary)
           clearPendingTransition(goal)
         } else {
+          const repeatedFailureCount = recordVerificationFailure(goal, verification.results)
           clearPendingTransition(goal)
           const input = admitGoalInput(ls, {
             goalId: goal.id,
             kind: 'verifier_failure',
-            content: `Manual goal verification failed:\n${verification.summary}\n\nContinue fixing the goal, then request completion again.`,
+            content: buildVerifierFailurePrompt(goal, verification.results, verification.summary, repeatedFailureCount),
           })
           await appendGoalInput(ls, input)
           await resumeGoal()

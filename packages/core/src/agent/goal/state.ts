@@ -57,13 +57,14 @@ export function createGoal(state: LoopState, input: CreateGoalInput): GoalState 
     createdAt: now,
     updatedAt: now,
     createdBy: input.createdBy ?? 'slash',
-    maxTurns: Math.max(1, Math.floor(input.maxTurns ?? 20)),
+    maxTurns: input.maxTurns && input.maxTurns > 0 ? Math.floor(input.maxTurns) : undefined,
     turnCount: 0,
     tokenBudget: input.tokenBudget && input.tokenBudget > 0 ? Math.floor(input.tokenBudget) : undefined,
     baselineTokens: state.tokenUsage.totalTokens,
     verifiers: input.verifiers ?? [],
     verificationResults: [],
     repeatedBlockerCount: 0,
+    repeatedVerificationFailureCount: 0,
     attempts: [],
     requiresUserConfirmation: input.requiresUserConfirmation,
   }
@@ -165,6 +166,47 @@ export function recordGoalAttempt(goal: GoalState, attempt: GoalAttempt): void {
 export function recordVerificationResult(goal: GoalState, result: GoalVerificationResult): void {
   goal.verificationResults.push(result)
   goal.updatedAt = result.ts
+}
+
+export function recordVerificationFailure(goal: GoalState, results: GoalVerificationResult[]): number {
+  const fingerprint = verificationFailureFingerprint(results)
+  const repeatedCount =
+    fingerprint && fingerprint === goal.lastVerificationFailureFingerprint
+      ? goal.repeatedVerificationFailureCount + 1
+      : 1
+  goal.lastVerificationFailureFingerprint = fingerprint
+  goal.repeatedVerificationFailureCount = repeatedCount
+  goal.updatedAt = new Date().toISOString()
+  return repeatedCount
+}
+
+export function resetVerificationFailures(goal: GoalState): void {
+  goal.repeatedVerificationFailureCount = 0
+  delete goal.lastVerificationFailureFingerprint
+  goal.updatedAt = new Date().toISOString()
+}
+
+export function verificationFailureFingerprint(results: GoalVerificationResult[]): string {
+  return results
+    .filter((result) => !result.ok)
+    .map((result) => {
+      const verifier =
+        result.verifier.kind === 'shell'
+          ? `shell:${result.verifier.command}`
+          : result.verifier.kind === 'subagent'
+            ? `subagent:${result.verifier.agent}`
+            : `file:${result.verifier.path}`
+      const details = result.requiredFixes?.length ? result.requiredFixes : [result.summary]
+      return `${verifier}:${details.map(normalizeFailureText).join('|')}`
+    })
+    .join('||')
+}
+
+function normalizeFailureText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\d+/g, '#')
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
 }
 
 export function snapshotUsage(usage: TokenUsage): TokenUsage {

@@ -301,6 +301,79 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
     )
   })
 
+  it('denies non-read-only verifier shell commands without asking permission', async () => {
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'verify without writes' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-verifier-write',
+            toolName: 'shell',
+            input: { command: 'tsc -b' },
+          },
+        ],
+      } as ModelMessage,
+    )
+    const askPermission = vi.fn().mockResolvedValue('yes')
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onAskPermission: askPermission, onToolResult })
+
+    await processToolCalls(
+      [{ toolName: 'shell', toolCallId: 'tc-verifier-write', input: { command: 'tsc -b' } }],
+      state,
+      { ...options, shellReadOnlyOnly: true },
+      callbacks,
+      stubModel,
+    )
+
+    expect(askPermission).not.toHaveBeenCalled()
+    expect(onToolResult).toHaveBeenCalledWith(
+      'tc-verifier-write',
+      expect.stringMatching(/denied by read-only sub-agent policy/),
+      true,
+    )
+  })
+
+  it('denies a compound verifier shell command when any segment is not read-only', async () => {
+    const command = 'tsc --noEmit && Set-Content compromised.txt yes'
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'verify without writes' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-verifier-compound-write',
+            toolName: 'shell',
+            input: { command },
+          },
+        ],
+      } as ModelMessage,
+    )
+    const askPermission = vi.fn().mockResolvedValue('yes')
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onAskPermission: askPermission, onToolResult })
+
+    await processToolCalls(
+      [{ toolName: 'shell', toolCallId: 'tc-verifier-compound-write', input: { command } }],
+      state,
+      { ...options, shellReadOnlyOnly: true },
+      callbacks,
+      stubModel,
+    )
+
+    expect(askPermission).not.toHaveBeenCalled()
+    expect(onToolResult).toHaveBeenCalledWith(
+      'tc-verifier-compound-write',
+      expect.stringMatching(/denied by read-only sub-agent policy/),
+      true,
+    )
+  })
+
   it('skips writeFile when the SDK auto-rejected it as unavailable', async () => {
     // Real failure case from the disk-info sub-agent in a.log: the
     // general-purpose agent's tool filter excluded writeFile, but the
