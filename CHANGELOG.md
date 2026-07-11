@@ -1,3 +1,9 @@
+## v0.3.12 (2026-07-11)
+
+### Features
+
+- improve goal loop completion verification (50b941a)
+
 ## v0.3.9 (2026-07-11)
 
 ### Bug Fixes
