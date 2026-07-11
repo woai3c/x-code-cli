@@ -142,6 +142,7 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     setRawMode(true)
     process.stdout.write(ENABLE_BRACKETED_PASTE)
     const useBracketedPaste = true
+    const pasteState = pasteStateRef.current
 
     // ── Flush the debounce buffer ──
     //
@@ -359,13 +360,12 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     return () => {
       flushPending()
       // Clear paste safety timeout
-      const ps = pasteStateRef.current
-      if (ps.timer) {
-        clearTimeout(ps.timer)
-        ps.timer = null
+      if (pasteState.timer) {
+        clearTimeout(pasteState.timer)
+        pasteState.timer = null
       }
-      ps.inPaste = false
-      ps.buffer = ''
+      pasteState.inPaste = false
+      pasteState.buffer = ''
       stdin.off('data', handleData)
       if (useBracketedPaste) {
         process.stdout.write(DISABLE_BRACKETED_PASTE)
