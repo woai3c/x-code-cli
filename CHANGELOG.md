@@ -1,3 +1,9 @@
+## v0.3.7 (2026-07-11)
+
+### Bug Fixes
+
+- publish error (9d6cd5c)
+
 ## v0.3.6 (2026-07-11)
 
 ### Features
