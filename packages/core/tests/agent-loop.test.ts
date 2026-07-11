@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { streamText } from 'ai'
 
+import { createGoal, requestGoalBlocked } from '../src/agent/goal/state.js'
+import { createLoopState } from '../src/agent/loop-state.js'
 import { agentLoop } from '../src/agent/loop.js'
 import type { AgentCallbacks, TokenUsage } from '../src/types/index.js'
 
@@ -215,6 +217,42 @@ describe('agent loop', () => {
       mockCallbacks,
     )
     expect(turnCount).toBe(1)
+    expect(mockCallbacks.onError).not.toHaveBeenCalled()
+  })
+
+  it('returns to the goal runner as soon as updateGoal requests a transition', async () => {
+    const state = createLoopState()
+    createGoal(state, { objective: 'wait for an external value', maxTurns: 20 })
+    vi.mocked(streamText).mockReturnValue({
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          requestGoalBlocked(state, { blocker: 'missing environment variable' })
+          yield { type: 'tool-call', toolCallId: 'goal-blocked', toolName: 'updateGoal', input: {} }
+          yield {
+            type: 'tool-result',
+            toolCallId: 'goal-blocked',
+            toolName: 'updateGoal',
+            output: { ok: true },
+          }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: '' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('tool-calls'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const result = await agentLoop(
+      'check once',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 10, printMode: false },
+      mockCallbacks,
+      state,
+    )
+
+    expect(result.turnCount).toBe(1)
+    expect(state.goal?.pendingTransition?.kind).toBe('blocked_requested')
+    expect(streamText).toHaveBeenCalledTimes(1)
     expect(mockCallbacks.onError).not.toHaveBeenCalled()
   })
 })

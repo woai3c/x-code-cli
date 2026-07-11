@@ -94,6 +94,11 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
     }
     if (finish === 'aborted' || finish === 'error') break
     if (goal.status !== 'active') break
+    if (tokenBudgetReached(goal, state)) {
+      attempt.finish = 'budget_limited'
+      await finalizeBySummary(input, goal, 'budget_limited')
+      break
+    }
 
     const transition = goal.pendingTransition
     if (transition?.kind === 'complete_requested') {
@@ -114,6 +119,13 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
         void appendGoalState(state)
         break
       }
+      if (!verification.retryable || isMissingCompletionVerifier(verification.results)) {
+        attempt.finish = 'blocked'
+        updateGoalStatus(goal, 'blocked', verification.summary)
+        clearPendingTransition(goal)
+        void appendGoalState(state)
+        break
+      }
       attempt.finish = 'verification_failed'
       const nextInput = admitGoalInput(state, {
         goalId: goal.id,
@@ -128,7 +140,7 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
 
     if (transition?.kind === 'blocked_requested') {
       const blocker = transition.blocker ?? transition.evidence
-      const repeated = goal.lastBlocker === blocker ? goal.repeatedBlockerCount + 1 : 1
+      const repeated = goal.lastBlocker && isSameBlocker(goal.lastBlocker, blocker) ? goal.repeatedBlockerCount + 1 : 1
       goal.lastBlocker = blocker
       goal.repeatedBlockerCount = repeated
       clearPendingTransition(goal)
@@ -179,10 +191,47 @@ async function finalizeBySummary(
     reason,
     runAgentTurn: async (content, options) => input.runAgentTurn(content, options),
   })
+  clearPendingTransition(goal)
   updateGoalStatus(goal, reason, summary)
   void appendGoalState(input.state)
 }
 
 function preview(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 240)
+}
+
+function isMissingCompletionVerifier(results: Awaited<ReturnType<typeof runVerifierLadder>>['results']): boolean {
+  return results.some((result) => result.verifier.kind === 'file' && result.verifier.path === '<missing-verifier>')
+}
+
+export function isSameBlocker(previous: string, current: string): boolean {
+  const a = normalizeBlocker(previous)
+  const b = normalizeBlocker(current)
+  if (!a || !b) return false
+  if (a === b || a.includes(b) || b.includes(a)) return true
+
+  const aPairs = bigrams(a)
+  const bPairs = bigrams(b)
+  let overlap = 0
+  for (const pair of aPairs) {
+    if (bPairs.has(pair)) overlap++
+  }
+  return (2 * overlap) / (aPairs.size + bPairs.size) >= 0.4
+}
+
+function normalizeBlocker(value: string): string {
+  return value
+    .toLowerCase()
+    .split(/已(?:检查|尝试|穷尽|确认|搜索|查看)/u, 1)[0]!
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
+    .replace(/(?:未包含|没有|无)(?:任何)?(?:具体)?(?:可执行)?(?:的)?(?:任务内容|任务要求|任务|内容)/gu, '缺少任务')
+    .replace(/无法确定需要完成什么工作/gu, '缺少任务')
+    .replace(/目标描述仅为/gu, '目标')
+}
+
+function bigrams(value: string): Set<string> {
+  if (value.length < 2) return new Set([value])
+  const result = new Set<string>()
+  for (let i = 0; i < value.length - 1; i++) result.add(value.slice(i, i + 2))
+  return result
 }

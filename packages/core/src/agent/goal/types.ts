@@ -40,6 +40,7 @@ export type GoalVerifier = GoalVerifierShell | GoalVerifierSubAgent | GoalVerifi
 export interface GoalVerificationResult {
   verifier: GoalVerifier
   ok: boolean
+  retryable?: boolean
   summary: string
   exitCode?: number | null
   stdout?: string
@@ -59,7 +60,7 @@ export interface GoalAttempt {
   turnCount: number
   tokenUsageBefore: TokenUsage
   tokenUsageAfter?: TokenUsage
-  finish: 'stop' | 'aborted' | 'error' | 'max_turns' | 'verification_failed' | 'complete' | 'blocked'
+  finish: 'stop' | 'aborted' | 'error' | 'max_turns' | 'budget_limited' | 'verification_failed' | 'complete' | 'blocked'
 }
 
 export interface GoalPendingTransition {

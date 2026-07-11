@@ -5,12 +5,11 @@ import { fileURLToPath } from 'node:url'
 export default defineConfig({
   resolve: {
     alias: {
-      '@x-code-cli/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
+      '@x-code-cli/core': fileURLToPath(new URL('./packages/core/src/index.ts', import.meta.url)),
     },
   },
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.{ts,tsx}'],
   },
 })

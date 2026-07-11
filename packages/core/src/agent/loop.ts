@@ -784,6 +784,15 @@ export async function agentLoop(
       continue
     }
 
+    if (state.goal?.pendingTransition) {
+      // updateGoal is auto-executed, so its result is already recorded when
+      // runTurn returns. The host goal runner owns the next decision; another
+      // inner round would only repeat work before blocker counts can advance.
+      debugLog('turn.goal-transition-stop', state.goal.pendingTransition.kind)
+      completedNormally = true
+      break
+    }
+
     if (outcome.finishReason === 'tool-calls') {
       // Any successful tool round means the model is making real progress —
       // reset the consecutive-truncation counter.

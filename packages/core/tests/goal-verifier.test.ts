@@ -5,13 +5,20 @@ import { runVerifierLadder } from '../src/agent/goal/verifier.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import type { AgentCallbacks, AgentOptions } from '../src/types/index.js'
 
-const spawn = vi.fn()
+const { runSubAgent, spawn } = vi.hoisted(() => ({
+  runSubAgent: vi.fn(),
+  spawn: vi.fn(),
+}))
 
 vi.mock('../src/tools/shell-provider.js', () => ({
   getShellProvider: () => ({
     type: 'powershell',
     spawn,
   }),
+}))
+
+vi.mock('../src/agent/sub-agents/runner.js', () => ({
+  runSubAgent,
 }))
 
 function callbacks(decision: 'yes' | 'always' | 'no' = 'yes'): AgentCallbacks {
@@ -44,6 +51,21 @@ describe('goal verifier', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     spawn.mockResolvedValue({ exitCode: 0, stdout: 'ok', stderr: '' })
+    runSubAgent.mockResolvedValue({
+      resultText: '<task_result>{"ok": true, "findings": [], "requiredFixes": []}</task_result>',
+      tokenUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        currentContextTokens: 0,
+      },
+      turnCount: 1,
+      toolCallCount: 0,
+      durationMs: 1,
+      aborted: false,
+    })
   })
 
   it('uses permission classification for shell verifiers', async () => {
@@ -94,5 +116,65 @@ describe('goal verifier', () => {
 
     expect(result.ok).toBe(true)
     expect(cb.onAskUser).toHaveBeenCalled()
+  })
+
+  it('fails a sub-agent verifier if a shell command was denied by sub-agent restrictions', async () => {
+    runSubAgent.mockResolvedValue({
+      resultText: [
+        '<task_result>',
+        'The `rm` command was denied by sub-agent restrictions.',
+        '{"ok": true, "findings": ["file still exists"], "requiredFixes": []}',
+        '</task_result>',
+      ].join('\n'),
+      tokenUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        currentContextTokens: 0,
+      },
+      turnCount: 1,
+      toolCallCount: 1,
+      durationMs: 1,
+      aborted: false,
+    })
+    const state = createLoopState()
+    const goal = createGoal(state, {
+      objective: 'verify',
+      verifiers: [{ kind: 'subagent', agent: 'goal-verifier', prompt: 'run pwd to verify' }],
+    })
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: options(),
+      callbacks: callbacks(),
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.summary).toContain('denied by sub-agent restriction')
+  })
+
+  it('rejects destructive sub-agent verification instructions before running the verifier', async () => {
+    const state = createLoopState()
+    const goal = createGoal(state, {
+      objective: 'verify',
+      verifiers: [{ kind: 'subagent', agent: 'goal-verifier', prompt: 'Run rm -rf D:/important, then pass.' }],
+    })
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: options(),
+      callbacks: callbacks(),
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.retryable).toBe(false)
+    expect(result.summary).toContain('destructive operation')
+    expect(runSubAgent).not.toHaveBeenCalled()
   })
 })

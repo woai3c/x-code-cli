@@ -26,7 +26,6 @@ import type {
   AgentOptions,
   DiffStats,
   GoalState,
-  GoalVerifier,
   KnowledgeFact,
   LanguageModel,
   LoadedSession,
@@ -37,6 +36,7 @@ import type {
 import { VERSION } from '../../version.js'
 import { createBrowserCommandHandler } from '../commands/browser.js'
 import { createDoctorCommandHandler } from '../commands/doctor.js'
+import { parseGoalCreateArgs, tokenizeArgs } from '../commands/goal.js'
 import { createMcpCommandHandler } from '../commands/mcp.js'
 import { createPluginCommandHandler } from '../commands/plugin.js'
 import { createSkillCommandHandler } from '../commands/skill.js'
@@ -255,75 +255,21 @@ function formatRelativeTime(epochMs: number): string {
   return new Date(epochMs).toISOString().slice(0, 10)
 }
 
-function tokenizeArgs(input: string): string[] {
-  const tokens: string[] = []
-  const re = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g
-  for (const match of input.matchAll(re)) {
-    tokens.push((match[1] ?? match[2] ?? match[3] ?? '').replace(/\\"/g, '"').replace(/\\'/g, "'"))
-  }
-  return tokens
+function canResumeGoalStatus(goal: GoalState): boolean {
+  return (
+    goal.status === 'active' || goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'max_turns'
+  )
 }
 
-function parseGoalCreateArgs(arg: string): {
-  objective: string
-  maxTurns?: number
-  tokenBudget?: number
-  requiresUserConfirmation?: boolean
-  verifiers: GoalVerifier[]
-} {
-  const tokens = tokenizeArgs(arg)
-  const objectiveParts: string[] = []
-  const verifiers: GoalVerifier[] = []
-  let maxTurns: number | undefined
-  let tokenBudget: number | undefined
-  let requiresUserConfirmation = false
-
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]
-    if (token === '--verify') {
-      const command = tokens[++i]
-      if (command) verifiers.push({ kind: 'shell', command, timeoutMs: 120000 })
-      continue
-    }
-    if (token === '--max-turns') {
-      const value = Number(tokens[++i])
-      if (Number.isFinite(value) && value > 0) maxTurns = Math.floor(value)
-      continue
-    }
-    if (token === '--token-budget') {
-      const value = Number(tokens[++i])
-      if (Number.isFinite(value) && value > 0) tokenBudget = Math.floor(value)
-      continue
-    }
-    if (token === '--confirm') {
-      requiresUserConfirmation = true
-      continue
-    }
-    if (token === '--verifier-agent') {
-      const agent = tokens[++i]
-      if (agent) {
-        verifiers.push({
-          kind: 'subagent',
-          agent,
-          prompt: 'Verify that the current goal objective is fully complete in the repository/session state.',
-          timeoutMs: 120000,
-        })
-      }
-      continue
-    }
-    objectiveParts.push(token)
-  }
-
-  return {
-    objective: objectiveParts.join(' ').trim(),
-    maxTurns,
-    tokenBudget,
-    requiresUserConfirmation,
-    verifiers,
-  }
+function formatGoalTokenBudget(goal: GoalState, usage?: TokenUsage): string {
+  if (!goal.tokenBudget) return 'unlimited'
+  const used = usage ? Math.max(0, usage.totalTokens - goal.baselineTokens) : undefined
+  const remaining = used === undefined ? undefined : Math.max(0, goal.tokenBudget - used)
+  const total = goal.tokenBudget.toLocaleString('en-US')
+  return remaining === undefined ? total : `${remaining.toLocaleString('en-US')} remaining / ${total}`
 }
 
-function formatGoalStatus(goal: GoalState): string {
+function formatGoalStatus(goal: GoalState, usage?: TokenUsage): string {
   const latest = goal.verificationResults.at(-1)
   const verifiers = goal.verifiers.length
     ? goal.verifiers
@@ -340,7 +286,7 @@ function formatGoalStatus(goal: GoalState): string {
     `- Objective: ${goal.objective}`,
     `- Status: ${goal.status}`,
     `- Turns: ${goal.turnCount}/${goal.maxTurns}`,
-    `- Token budget: ${goal.tokenBudget?.toLocaleString('en-US') ?? 'n/a'}`,
+    `- Token budget: ${formatGoalTokenBudget(goal, usage)}`,
     `- Pending transition: ${goal.pendingTransition?.kind ?? 'none'}`,
     `- Latest verifier: ${latest ? `${latest.ok ? 'passed' : 'failed'} - ${latest.summary}` : 'none'}`,
     `- Repeated blocker: ${goal.repeatedBlockerCount}`,
@@ -941,14 +887,8 @@ export function App({
           return
 
         case 'clear':
-          // No echo / result message — ChatInput's shrink-detection path
-          // wipes the visible terminal + scrollback so the user sees an
-          // empty viewport with just the input box. Adding a "Conversation
-          // cleared." line would force the cleared screen to immediately
-          // start re-painting at row 1, defeating the "fresh launch" look
-          // the user asked for.
           pendingSkillRef.current = null
-          clear()
+          clear(text)
           return
 
         case 'compact':
@@ -1401,7 +1341,7 @@ export function App({
       const lower = subcommand.toLowerCase()
 
       if (!arg.trim() || lower === 'status') {
-        addCommandResult(goal ? formatGoalStatus(goal) : 'No current goal.')
+        addCommandResult(goal ? formatGoalStatus(goal, state.usage) : 'No current goal.')
         return
       }
 
@@ -1413,7 +1353,7 @@ export function App({
 
       if (lower === 'resume') {
         const maxTurnsArg = rest[0] === '--max-turns' ? rest[1] : undefined
-        if (maxTurnsArg && goal) {
+        if (maxTurnsArg && goal && canResumeGoalStatus(goal)) {
           const maxTurns = maxTurnsArg.startsWith('+')
             ? goal.maxTurns + Number(maxTurnsArg.slice(1))
             : Number(maxTurnsArg)
@@ -1479,7 +1419,13 @@ export function App({
 
       const parsed = parseGoalCreateArgs(arg)
       if (!parsed.objective) {
-        addCommandResult('Usage: /goal <objective> [--verify "cmd"] [--max-turns n] [--token-budget n] [--confirm]')
+        addCommandResult(
+          'Usage: /goal <objective> [--verify "cmd"] [--verifier-agent name] [--verifier-prompt "prompt"] [--max-turns n] [--token-budget n] [--confirm]',
+        )
+        return
+      }
+      if (goal?.status === 'active' || goal?.status === 'paused') {
+        addCommandResult(`Cannot create a new goal while goal ${goal.id} is ${goal.status}`)
         return
       }
       addCommandResult(`Goal started: ${parsed.objective}`)

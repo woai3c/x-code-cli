@@ -15,6 +15,7 @@ import type { GoalState, GoalVerificationResult, GoalVerifier } from './types.js
 
 export interface GoalVerifierLadderResult {
   ok: boolean
+  retryable: boolean
   results: GoalVerificationResult[]
   summary: string
 }
@@ -71,10 +72,11 @@ export async function runVerifierLadder(input: {
   }
 
   const ok = results.every((result) => result.ok)
+  const retryable = results.find((result) => !result.ok)?.retryable !== false
   const summary = ok
     ? `All ${results.length} verifier step(s) passed.`
     : (results.find((result) => !result.ok)?.summary ?? 'Verification failed.')
-  return { ok, results, summary }
+  return { ok, retryable, results, summary }
 }
 
 async function runSingleVerifier(input: {
@@ -245,6 +247,16 @@ async function runSubAgentVerifier(input: {
 }): Promise<GoalVerificationResult> {
   const { verifier, goal, state, options, callbacks, model } = input
   const start = Date.now()
+  if (requestsDestructiveVerification(verifier.prompt)) {
+    return makeResult({
+      verifier,
+      ok: false,
+      retryable: false,
+      summary: 'Sub-agent verifier rejected: verification instructions request a destructive operation.',
+      start,
+      verificationRunId: input.verificationRunId,
+    })
+  }
   const prompt = [
     'You are an independent verifier. Return strict JSON: {"ok": boolean, "findings": string[], "requiredFixes": string[]}.',
     'Do not modify files.',
@@ -267,6 +279,16 @@ async function runSubAgentVerifier(input: {
       },
       model,
     )
+    if (hasDeniedSubAgentRestriction(result.resultText)) {
+      return makeResult({
+        verifier,
+        ok: false,
+        summary: 'Sub-agent verifier failed: shell command denied by sub-agent restriction.',
+        start,
+        verificationRunId: input.verificationRunId,
+        stdout: result.resultText.slice(0, 8000),
+      })
+    }
     const parsed = parseVerifierJson(result.resultText)
     return makeResult({
       verifier,
@@ -290,6 +312,16 @@ async function runSubAgentVerifier(input: {
   }
 }
 
+function hasDeniedSubAgentRestriction(text: string): boolean {
+  return /denied by sub-agent restrictions?/i.test(text)
+}
+
+function requestsDestructiveVerification(prompt: string): boolean {
+  return /(?:\brm\s+(?:-[a-z]*[rf][a-z]*\s+)+|\bdel\s+\/|\brmdir\s+\/s\b|\bremove-item\b[^\n]*(?:-recurse|-force)|\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f)|\bformat(?:\.com)?\b|\bdrop\s+(?:table|database)\b)/i.test(
+    prompt,
+  )
+}
+
 function parseVerifierJson(text: string): { ok: boolean; findings: string[]; requiredFixes: string[] } {
   const match = text.match(/\{[\s\S]*\}/)
   if (!match) return { ok: false, findings: [text], requiredFixes: ['Verifier did not return JSON.'] }
@@ -308,6 +340,7 @@ function parseVerifierJson(text: string): { ok: boolean; findings: string[]; req
 function makeResult(input: {
   verifier: GoalVerifier
   ok: boolean
+  retryable?: boolean
   summary: string
   start: number
   verificationRunId: string
@@ -318,6 +351,7 @@ function makeResult(input: {
   return {
     verifier: input.verifier,
     ok: input.ok,
+    retryable: input.retryable,
     summary: input.summary,
     exitCode: input.exitCode,
     stdout: input.stdout,

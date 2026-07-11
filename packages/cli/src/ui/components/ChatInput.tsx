@@ -177,6 +177,17 @@ interface ChatInputProps {
 
 // ── Component ───────────────────────────────────────────────────────────
 
+export function computePostContentScrollRows(
+  startRow: number,
+  contentRows: number,
+  frameTop: number,
+  terminalRows: number,
+): number {
+  const naturalScroll = Math.max(0, startRow + contentRows - 1 - terminalRows)
+  const effectiveContentEnd = Math.min(terminalRows, startRow + contentRows - 1 - naturalScroll)
+  return Math.max(0, effectiveContentEnd - frameTop + 1)
+}
+
 export function ChatInput({
   messages,
   initialContentRows = 0,
@@ -198,6 +209,7 @@ export function ChatInput({
   contextUsage,
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
+  const textRef = useRef('')
   const cursorRef = useRef(0)
   // Double-tap Esc to clear the input (idle mode only; loading mode uses
   // single Esc to cancel the in-flight turn). Timestamp of the last Esc
@@ -205,8 +217,9 @@ export function ChatInput({
   // triggers RESET.
   const lastEscapeAtRef = useRef(0)
   useLayoutEffect(() => {
+    textRef.current = text
     cursorRef.current = cursor
-  })
+  }, [cursor, text])
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   const [completionIndex, setCompletionIndex] = useState(0)
   const [atCompletionIndex, setAtCompletionIndex] = useState(0)
@@ -755,22 +768,33 @@ export function ChatInput({
     enabled: !disabled && !hidden,
     onInterrupt,
     onText: (chunk) => {
+      const dialogSlashDraft = textRef.current.trimStart().startsWith('/') || chunk.trimStart().startsWith('/')
       // Route single-char y/n to the Permission resolver when a dialog is
-      // active; block all other text input so the user can't type into
-      // the input box behind the dialog.
+      // active. Slash commands remain editable so `/goal pause` /
+      // `/goal cancel` can interrupt a goal even while a tool approval is
+      // waiting.
       if (permission) {
         const ch = chunk.toLowerCase()
-        if (ch === 'y') {
+        if (!dialogSlashDraft && ch === 'y') {
           permission.onResolve('yes')
           return
         }
-        if (ch === 'n') {
+        if (!dialogSlashDraft && ch === 'n') {
           permission.onResolve('no')
           return
+        }
+        if (dialogSlashDraft) {
+          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
+          setCompletionIndex(0)
         }
         return
       }
       if (selectRequest) {
+        if (dialogSlashDraft) {
+          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
+          setCompletionIndex(0)
+          return
+        }
         // Typing on a freeform option ("Other") feeds the inline text
         // buffer; on regular options it's still swallowed so the user
         // can't type into the hidden input behind the dialog.
@@ -787,8 +811,20 @@ export function ChatInput({
       setCompletionIndex(0)
     },
     onPaste: (content) => {
-      if (permission) return
+      const dialogSlashPaste = content.trimStart().startsWith('/')
+      if (permission) {
+        if (dialogSlashPaste) {
+          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: content })
+          setCompletionIndex(0)
+        }
+        return
+      }
       if (selectRequest) {
+        if (dialogSlashPaste) {
+          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: content })
+          setCompletionIndex(0)
+          return
+        }
         // Allow paste into the freeform buffer (e.g. pasting a long
         // path or model id). Skip the large-paste reference machinery
         // — it's a usability hit for free-text answers, which are
@@ -816,8 +852,9 @@ export function ChatInput({
       setCompletionIndex(0)
     },
     onKey: (key) => {
+      const dialogSlashMode = textRef.current.trimStart().startsWith('/')
       // Permission dialog captures navigation + submit keys.
-      if (permission) {
+      if (permission && !dialogSlashMode) {
         const hasAlwaysOption = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp) !== null
         const maxIdx = hasAlwaysOption ? 2 : 1
         if (key === 'up') {
@@ -839,7 +876,7 @@ export function ChatInput({
       // the highlighted option is `freeform`, editing keys (backspace,
       // delete, left, right, home, end) also feed its inline text
       // buffer instead of being swallowed.
-      if (selectRequest) {
+      if (selectRequest && !dialogSlashMode) {
         const len = selectRequest.options.length
         const opt = selectRequest.options[selectIndex]
         const isFreeform = !!opt?.freeform
@@ -1154,21 +1191,30 @@ export function ChatInput({
     // pushing rows into real scrollback (DECSTBM-restricted region scrolls
     // are splice-discarded in xterm.js's InputHandler, confirmed in source).
     //
-    // /clear shrinks the message list back to empty. Used to be a silent
-    // counter reset — meaning the in-memory history disappeared but the
-    // OLD scrollback stayed visible, so users reported "/clear does
-    // nothing". Now we erase the viewport + xterm scrollback and reset
-    // the frame-tracking refs so the next paint runs as a clean
-    // first-paint, anchored to the top of the empty terminal.
+    // /clear shrinks the message list back to empty. Push the current
+    // viewport into real terminal scrollback before repainting an empty
+    // viewport. CSI 3J must not be used here: unlike a shell `clear`, it
+    // destroys history that the user expects to reach by scrolling up.
     if (messages.length < writtenMessageCountRef.current) {
-      // \x1b[2J: erase the visible screen.
-      // \x1b[3J: drop xterm-style scrollback history (Windows Terminal,
-      //   xterm.js, iTerm2, kitty, GNOME Terminal — all honor it; the
-      //   handful of legacy terminals that ignore it still get the
-      //   viewport cleared, which is already a strict improvement).
-      // \x1b[H : home the cursor so the (empty) frame paint below lands
-      //   at known coordinates instead of wherever Ink last parked it.
-      preBuf += '\x1b[2J\x1b[3J\x1b[H'
+      const retainedClearEcho =
+        messages.length === 1 && messages[0]?.kind === 'command-echo' && messages[0].content.trim() === '/clear'
+      const clearRows = stdout?.rows ?? 25
+      const oldFrameTop = Math.max(1, lastFrameTopRef.current || clearRows - lastFrameHRef.current + 1)
+      if (retainedClearEcho) {
+        // Commit the canonical command echo at the bottom of the OLD
+        // viewport first. The writer's leading/trailing line breaks move
+        // it into position; the remaining LFs then make it the final row
+        // in scrollback. The new viewport therefore starts empty instead
+        // of showing `/clear` above the fresh input frame.
+        for (let row = oldFrameTop; row <= clearRows; row++) preBuf += `\x1b[${row};1H\x1b[K`
+        resetScrollbackSpacing()
+        preBuf += `\x1b[${clearRows};1H`
+        writeMessageToStdout((data) => (preBuf += data), messages[0]!)
+        preBuf += `${'\n'.repeat(Math.max(0, clearRows - 1))}\x1b[H`
+      } else {
+        for (let row = oldFrameTop; row <= clearRows; row++) preBuf += `\x1b[${row};1H\x1b[K`
+        preBuf += `\x1b[${clearRows};1H${'\n'.repeat(clearRows)}\x1b[H`
+      }
       writtenMessageCountRef.current = messages.length
       prevFrameRef.current = []
       lastFrameHRef.current = 0
@@ -2557,6 +2603,13 @@ export function ChatInput({
         }
         preBuf += `\x1b[${startRow};1H`
         preBuf += scrollbackContent
+        const postContentScrollRows = computePostContentScrollRows(startRow, scrollRows, frameTop, termRows)
+        if (postContentScrollRows > 0) {
+          // Content taller than the space above the frame leaves its tail
+          // in rows the absolute-positioned frame is about to repaint.
+          // Move only that overlap into real scrollback first.
+          preBuf += `\x1b[${termRows};1H${'\n'.repeat(postContentScrollRows)}`
+        }
         // When the frame shrank significantly (e.g. askUser dialog closed),
         // scrollback content only fills a fraction of the space the old frame
         // occupied. Instead of anchoring the frame at the terminal bottom and

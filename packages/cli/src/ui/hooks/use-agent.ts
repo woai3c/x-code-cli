@@ -884,7 +884,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const runGoal = useCallback(
     async (command: RunGoalCommand): Promise<void> => {
       const ls = ensureLoopState()
-      await prepareGoalSession(ls, command.objective)
       const goal = createCoreGoal(ls, {
         objective: command.objective,
         maxTurns: command.maxTurns,
@@ -892,8 +891,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         verifiers: command.verifiers ?? [],
         requiresUserConfirmation: command.requiresUserConfirmation,
       })
-      await appendGoalState(ls)
       setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
+      await prepareGoalSession(ls, command.objective)
+      await appendGoalState(ls)
 
       await goalCoordinatorRef.current.run(goal.id, async (signal) => {
         try {
@@ -1210,19 +1210,35 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     return { sessionId: ls.sessionId, taskSlug: ls.taskSlug, messageCount: ls.messages.length, firstPrompt }
   }, [])
 
-  /** Clear conversation */
-  const clear = useCallback(() => {
-    loopStateRef.current = null
-    pendingToolsRef.current.clear()
-    permissionResolversRef.current = []
-    pendingQuestionRef.current = null
-    resetBuffer()
-    // Preserve the current live model id and approval mode when clearing
-    // — user expects the model they just picked AND the plan-mode toggle
-    // they just flipped to stay after /clear (which only nukes the
-    // conversation, not session-wide settings).
-    setState((prev) => ({ ...initialState, modelId: prev.modelId, permissionMode: prev.permissionMode }))
-  }, [resetBuffer])
+  /** Clear conversation while retaining a display-only command echo. */
+  const clear = useCallback(
+    (commandText = '/clear') => {
+      loopStateRef.current = null
+      pendingToolsRef.current.clear()
+      permissionResolversRef.current = []
+      pendingQuestionRef.current = null
+      resetBuffer()
+      // Preserve the current live model id and approval mode when clearing
+      // — user expects the model they just picked AND the plan-mode toggle
+      // they just flipped to stay after /clear (which only nukes the
+      // conversation, not session-wide settings).
+      setState((prev) => ({
+        ...initialState,
+        modelId: prev.modelId,
+        permissionMode: prev.permissionMode,
+        messages: [
+          {
+            id: `cmd-${Date.now()}`,
+            role: 'user',
+            content: commandText,
+            timestamp: Date.now(),
+            kind: 'command-echo',
+          },
+        ],
+      }))
+    },
+    [resetBuffer],
+  )
 
   /** Mid-session resume: hot-swap the agent state to a previously-saved
    *  session. Hydrates loopStateRef from the jsonl so the next agent
