@@ -73,9 +73,13 @@ import { debugLog } from '@x-code-cli/core'
  *  indented paragraph — is rare in AI output and the streaming-feel
  *  win is large: list items appear one at a time as the model emits
  *  them instead of popping in as a finished block. */
-function hasOpenMarkdownBlock(text: string): boolean {
+export function hasOpenCodeFence(text: string): boolean {
   const fences = text.match(/^```/gm)
-  if (fences && fences.length % 2 !== 0) return true
+  return !!fences && fences.length % 2 !== 0
+}
+
+export function hasOpenMarkdownBlock(text: string): boolean {
+  if (hasOpenCodeFence(text)) return true
 
   const lines = text.split('\n')
   // Strip the ONE trailing '' that `split('\n')` produces for text
@@ -96,7 +100,7 @@ function hasOpenMarkdownBlock(text: string): boolean {
  *
  *  Scans backward from the end so the first hit IS the latest safe cut
  *  (no need to walk every newline tracking a maximum). */
-function findSafeBoundary(text: string): number {
+export function findSafeBoundary(text: string): number {
   let scan = text.length
   while (scan > 0) {
     const found = text.lastIndexOf('\n', scan - 1)
@@ -228,7 +232,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
         bufferRef.current = bufferRef.current.slice(boundary)
         debugLog('buffer.commit', `chars=${chunk.length}`)
         queueChunk(chunk)
-      } else if (bufferRef.current.length > CODE_FENCE_COMMIT_THRESHOLD && hasOpenMarkdownBlock(bufferRef.current)) {
+      } else if (bufferRef.current.length > CODE_FENCE_COMMIT_THRESHOLD && hasOpenCodeFence(bufferRef.current)) {
         // Large open code fence — force an intermediate commit at the last
         // newline so the terminal doesn't have to pre-scroll 100+ blank rows
         // in one shot. Find the last `\n` that is NOT part of a `\n\n` pair

@@ -574,6 +574,22 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   if (toolName !== 'writeFile' && toolName !== 'edit' && toolName !== 'shell') return true
 
+  if (toolName === 'shell') {
+    const command = typeof input.command === 'string' ? input.command : ''
+    const deniedKeyword = findDeniedShellKeyword(command, options.shellRestrictions)
+    if (deniedKeyword) {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        `Shell command denied by sub-agent restriction: ${deniedKeyword}`,
+        true,
+      )
+      return false
+    }
+  }
+
   const approved = await checkPermission(
     { toolCallId, toolName, input },
     options.trustMode,
@@ -590,6 +606,12 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
     return false
   }
   return true
+}
+
+function findDeniedShellKeyword(command: string, restrictions: readonly string[] | undefined): string | null {
+  if (!restrictions?.length) return null
+  const lowerCommand = command.toLowerCase()
+  return restrictions.find((keyword) => keyword.trim() && lowerCommand.includes(keyword.toLowerCase())) ?? null
 }
 
 /** Run the underlying side-effecting tool body for writeFile/edit/shell.

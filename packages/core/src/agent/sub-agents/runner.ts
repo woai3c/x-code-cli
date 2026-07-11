@@ -243,6 +243,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     modelId: subModelId,
     maxTurns: agentDef.maxTurns,
     toolFilter,
+    shellRestrictions: agentDef.shellRestrictions,
     abortSignal: parentOptions.abortSignal,
     permissionMode: 'default',
     printMode: false,

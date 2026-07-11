@@ -265,6 +265,42 @@ function toolResult(
 }
 
 describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)', () => {
+  it('denies shell commands blocked by sub-agent shell restrictions before permission checks', async () => {
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'hi' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-shell-denied',
+            toolName: 'shell',
+            input: { command: 'rm -rf tmp' },
+          },
+        ],
+      } as ModelMessage,
+    )
+    const askPermission = vi.fn().mockResolvedValue('yes')
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onAskPermission: askPermission, onToolResult })
+
+    await processToolCalls(
+      [{ toolName: 'shell', toolCallId: 'tc-shell-denied', input: { command: 'rm -rf tmp' } }],
+      state,
+      { ...options, shellRestrictions: ['rm'] },
+      callbacks,
+      stubModel,
+    )
+
+    expect(askPermission).not.toHaveBeenCalled()
+    expect(onToolResult).toHaveBeenCalledWith(
+      'tc-shell-denied',
+      expect.stringMatching(/denied by sub-agent restriction/),
+      true,
+    )
+  })
+
   it('skips writeFile when the SDK auto-rejected it as unavailable', async () => {
     // Real failure case from the disk-info sub-agent in a.log: the
     // general-purpose agent's tool filter excluded writeFile, but the

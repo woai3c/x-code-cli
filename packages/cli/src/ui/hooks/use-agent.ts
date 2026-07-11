@@ -3,30 +3,50 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   TOOL_SEARCH_TOOL_NAME,
+  admitGoalInput,
   agentLoop,
   appendCheckpoint,
+  appendGoalInput,
+  appendGoalState,
+  appendGoalVerification,
+  appendHeader,
   appendInterrupted,
   buildUserContent,
+  cancelGoal as cancelCoreGoal,
   capabilitiesOf,
   classifyApiError,
+  clearGoal as clearCoreGoal,
+  clearPendingTransition,
   compressMessages,
+  createGoal as createCoreGoal,
+  createGoalRunCoordinator,
+  createLoopState,
   flushPendingMessages,
+  generateTaskSlug,
   getDiffStatsForCheckpoint,
   hydrateLoopState,
   initMemories,
   loadPersistedRules,
   markBoundaryAndReflush,
+  pauseGoal as pauseCoreGoal,
   restoreCheckpoint,
+  resumeGoal as resumeCoreGoal,
+  runGoalLoop,
+  runVerifierLadder,
   saveSession,
+  updateGoalStatus,
 } from '@x-code-cli/core'
 import { extractText } from '@x-code-cli/core'
 import type {
   AgentCallbacks,
+  AgentLoopResult,
   AgentOptions,
   CheckpointEntry,
   DiffStats,
   DisplayMessage,
   DisplayToolCall,
+  GoalState,
+  GoalVerifier,
   LanguageModel,
   LoadedSession,
   LoopState,
@@ -127,6 +147,17 @@ export interface AgentState {
    *  spinner label so the user sees which compression phase is active
    *  instead of a generic "Thinking…". Cleared when compression ends. */
   compressionLabel: string | null
+  goalStatus: GoalState | null
+  goalRunnerActive: boolean
+  goalVerificationActive: boolean
+}
+
+export interface RunGoalCommand {
+  objective: string
+  maxTurns?: number
+  tokenBudget?: number
+  verifiers?: GoalVerifier[]
+  requiresUserConfirmation?: boolean
 }
 
 const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
@@ -148,6 +179,9 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   todos: [],
   bufferingReads: false,
   compressionLabel: null,
+  goalStatus: null,
+  goalRunnerActive: false,
+  goalVerificationActive: false,
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
@@ -163,6 +197,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     permissionMode: options.permissionMode ?? 'default',
     messages: initialSession ? modelMessagesToDisplay(initialSession.messages) : initialState.messages,
     usage: initialSession ? { ...initialSession.tokenUsage } : initialState.usage,
+    goalStatus: initialSession?.goal ? { ...initialSession.goal } : null,
   })
 
   const modelRef = useRef<LanguageModel>(initialModel)
@@ -185,7 +220,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const thinkingRef = useRef<boolean>(options.thinking ?? false)
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const goalCoordinatorRef = useRef(createGoalRunCoordinator())
   const initializedRef = useRef(false)
+  const pendingQuestionRef = useRef<PendingQuestion | null>(null)
   /** Pending tool calls keyed by toolCallId. A single slot can't survive
    *  parallel tool calls in one turn — the SDK emits tool-call A, tool-call
    *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
@@ -268,7 +305,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  echoCommand, and dumping the full prompt body into scrollback would be
    *  noise. The spinner / abort signal / session save still fire normally. */
   const submit = useCallback(
-    async (text: string, submitOptions?: { silent?: boolean }) => {
+    async (
+      text: string,
+      submitOptions?: {
+        silent?: boolean
+        toolFilter?: AgentOptions['toolFilter']
+        maxTurns?: number
+        signal?: AbortSignal
+      },
+    ): Promise<AgentLoopResult | null> => {
       await initialize()
 
       setState((prev) => ({
@@ -283,6 +328,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
       const controller = new AbortController()
       abortControllerRef.current = controller
+      const externalSignal = submitOptions?.signal
+      const abortFromExternal = () => controller.abort()
+      if (externalSignal?.aborted) controller.abort()
+      else externalSignal?.addEventListener('abort', abortFromExternal, { once: true })
 
       // Track whether the stream produced any text for this submit, so the
       // safety-net extraction below doesn't duplicate already-flushed text.
@@ -431,16 +480,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
                   ]
                 : []
             const augmented = [...opts, ...planMeta, OTHER_OPTION]
-            setState((prev) => ({
-              ...prev,
-              pendingQuestion: {
-                question,
-                options: augmented,
-                resolve,
-                abortAnswer: '[Request interrupted by user]',
-                layout: 'compact-vertical',
-              },
-            }))
+            const pendingQuestion: PendingQuestion = {
+              question,
+              options: augmented,
+              resolve,
+              abortAnswer: '[Request interrupted by user]',
+              layout: 'compact-vertical',
+            }
+            pendingQuestionRef.current = pendingQuestion
+            setState((prev) => ({ ...prev, pendingQuestion }))
           })
         },
         onPlanApprovalRequest: (planText) => {
@@ -464,18 +512,17 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             // paints first — avoids a simultaneous commit+grow
             // that confuses the geometry engine.
             setTimeout(() => {
-              setState((prev) => ({
-                ...prev,
-                pendingQuestion: {
-                  question: 'Approve the plan above?',
-                  options: [
-                    { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
-                    { label: 'No', description: 'Stay in plan mode and let the model revise.' },
-                  ],
-                  resolve: (answer) => resolve(answer === 'Yes'),
-                  abortAnswer: 'No',
-                },
-              }))
+              const pendingQuestion: PendingQuestion = {
+                question: 'Approve the plan above?',
+                options: [
+                  { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
+                  { label: 'No', description: 'Stay in plan mode and let the model revise.' },
+                ],
+                resolve: (answer) => resolve(answer === 'Yes'),
+                abortAnswer: 'No',
+              }
+              pendingQuestionRef.current = pendingQuestion
+              setState((prev) => ({ ...prev, pendingQuestion }))
             }, 0)
           })
         },
@@ -578,6 +625,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // (long-lived session). turnCount is per-invocation and the main
         // interactive loop has no use for it (the cap mechanism is what
         // sub-agents and --print mode use).
+        if (submitOptions?.toolFilter && loopStateRef.current) {
+          loopStateRef.current.systemPromptCache = null
+          loopStateRef.current.expectCacheMiss = true
+        }
+
         const agentResult = await agentLoop(
           content,
           modelRef.current,
@@ -585,6 +637,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             ...options,
             modelId: modelIdRef.current,
             thinking: thinkingRef.current,
+            toolFilter: submitOptions?.toolFilter ?? options.toolFilter,
+            maxTurns: submitOptions?.maxTurns ?? options.maxTurns,
             // permissionMode only matters for the FIRST submit (when
             // createLoopState is called inside agentLoop). For subsequent
             // submits the existing LoopState carries the live mode, so
@@ -596,6 +650,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           loopStateRef.current ?? undefined,
         )
         loopStateRef.current = agentResult.state
+        if (submitOptions?.toolFilter) {
+          loopStateRef.current.systemPromptCache = null
+          loopStateRef.current.expectCacheMiss = true
+        }
+        const finalGoal = agentResult.state.goal ? { ...agentResult.state.goal } : null
 
         // Finalize: drain whatever's left in the stream buffer into messages,
         // then clear the loading flag. As a safety net, if streaming produced
@@ -621,9 +680,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           activeToolCalls: [],
           bufferingReads: false,
           compressionLabel: null,
+          goalStatus: finalGoal,
         }))
+        externalSignal?.removeEventListener('abort', abortFromExternal)
+        return agentResult
       } catch (err) {
         pendingToolsRef.current.clear()
+        externalSignal?.removeEventListener('abort', abortFromExternal)
         // User-cancel path: agentLoop swallows AbortError into a clean
         // 'aborted' outcome and returns normally, so we shouldn't reach
         // here for an Esc/Ctrl+C abort. But if some unaborted-aware
@@ -640,6 +703,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           compressionLabel: null,
           error: wasAborted ? null : classifyApiError(err).message,
         }))
+        return null
       }
     },
     [options, initialize, appendTextDelta, flushBuffer, appendMessage],
@@ -664,12 +728,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   /** Resolve a pending question */
   const resolveQuestion = useCallback((answer: string) => {
-    setState((prev) => {
-      if (prev.pendingQuestion) {
-        queueMicrotask(() => prev.pendingQuestion!.resolve(answer))
-      }
-      return { ...prev, pendingQuestion: null }
-    })
+    const pendingQuestion = pendingQuestionRef.current
+    pendingQuestionRef.current = null
+    if (pendingQuestion) queueMicrotask(() => pendingQuestion.resolve(answer))
+    setState((prev) => ({ ...prev, pendingQuestion: null }))
   }, [])
 
   /** Pop a multi-choice question for the user. Same SelectOptions dialog
@@ -684,21 +746,378 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     ) => {
       return new Promise<string>((resolve) => {
         const augmented = opts?.noOther ? options : [...options, OTHER_OPTION]
-        setState((prev) => ({
-          ...prev,
-          pendingQuestion: {
-            question,
-            options: augmented,
-            resolve,
-            abortAnswer: '',
-            dismissible: true,
-            layout: opts?.layout,
-          },
-        }))
+        const pendingQuestion: PendingQuestion = {
+          question,
+          options: augmented,
+          resolve,
+          abortAnswer: '',
+          dismissible: true,
+          layout: opts?.layout,
+        }
+        pendingQuestionRef.current = pendingQuestion
+        setState((prev) => ({ ...prev, pendingQuestion }))
       })
     },
     [],
   )
+
+  const createGoalCallbacks = useCallback((): AgentCallbacks => {
+    return {
+      onTextDelta: appendTextDelta,
+      onToolCall: (toolCallId, toolName, input) => {
+        flushBuffer()
+        pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
+        setState((prev) => ({
+          ...prev,
+          activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
+        }))
+      },
+      onToolProgress: (toolCallId, message) => {
+        setState((prev) => {
+          const idx = prev.activeToolCalls.findIndex((t) => t.id === toolCallId)
+          if (idx < 0) return prev
+          const next = prev.activeToolCalls.slice()
+          next[idx] = { ...next[idx], progress: message }
+          return { ...prev, activeToolCalls: next }
+        })
+      },
+      onToolResult: (toolCallId, result, isError) => {
+        const pending = pendingToolsRef.current.get(toolCallId)
+        pendingToolsRef.current.delete(toolCallId)
+        const durationMs = pending ? Date.now() - pending.startedAt : 0
+        setState((prev) => {
+          const tc: DisplayToolCall = {
+            id: `tc-${Date.now()}`,
+            toolName: pending?.toolName ?? 'unknown',
+            input: pending?.input ?? {},
+            output: result,
+            status: isError ? 'error' : 'completed',
+            durationMs,
+          }
+          return {
+            ...prev,
+            activeToolCalls: prev.activeToolCalls.filter((t) => t.id !== toolCallId),
+            messages: [
+              ...prev.messages,
+              {
+                id: `tool-${Date.now()}`,
+                role: 'assistant',
+                content: '',
+                toolCalls: [tc],
+                timestamp: Date.now(),
+              },
+            ],
+          }
+        })
+      },
+      onAskPermission: (toolCall) => {
+        return new Promise<'yes' | 'always' | 'no'>((resolve) => {
+          permissionResolversRef.current.push(resolve)
+          const mcpEntry = options.mcpRegistry?.get(toolCall.toolName)
+          setState((prev) => ({
+            ...prev,
+            permissionQueue: [
+              ...prev.permissionQueue,
+              {
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                input: toolCall.input,
+                mcp: mcpEntry ? { serverName: mcpEntry.serverName, rawName: mcpEntry.rawName } : undefined,
+              },
+            ],
+          }))
+        })
+      },
+      onAskUser: (question, opts) => {
+        return new Promise<string>((resolve) => {
+          const pendingQuestion: PendingQuestion = {
+            question,
+            options: [...opts, OTHER_OPTION],
+            resolve,
+            abortAnswer: '',
+            layout: 'compact-vertical',
+          }
+          pendingQuestionRef.current = pendingQuestion
+          setState((prev) => ({ ...prev, pendingQuestion }))
+        })
+      },
+      onPlanApprovalRequest: async () => false,
+      onPlanModeChange: (mode) => {
+        permissionModeRef.current = mode
+        setState((prev) => ({ ...prev, permissionMode: mode }))
+      },
+      onTodosUpdate: (todos) => setState((prev) => ({ ...prev, todos })),
+      onShellOutput: (chunk) => setState((prev) => ({ ...prev, shellOutput: prev.shellOutput + chunk })),
+      onUsageUpdate: (usage) => setState((prev) => ({ ...prev, usage })),
+      onContextCompressed: (summary) => {
+        appendMessage({
+          id: `compress-${Date.now()}`,
+          role: 'assistant',
+          content: summary,
+          timestamp: Date.now(),
+          kind: 'command-result',
+        })
+      },
+      onError: (error) => setState((prev) => ({ ...prev, error: error.message })),
+    }
+  }, [appendMessage, appendTextDelta, flushBuffer, options.mcpRegistry])
+
+  const ensureLoopState = useCallback((): LoopState => {
+    if (!loopStateRef.current) {
+      loopStateRef.current = createLoopState(permissionModeRef.current)
+    }
+    return loopStateRef.current
+  }, [])
+
+  const prepareGoalSession = useCallback(async (ls: LoopState, firstPrompt: string) => {
+    if (!ls.taskSlug) {
+      ls.taskSlug = await generateTaskSlug(
+        firstPrompt,
+        modelRef.current,
+        modelIdRef.current,
+        abortControllerRef.current?.signal,
+      )
+    }
+    await appendHeader(ls, modelIdRef.current, firstPrompt)
+  }, [])
+
+  const runGoal = useCallback(
+    async (command: RunGoalCommand): Promise<void> => {
+      const ls = ensureLoopState()
+      const goal = createCoreGoal(ls, {
+        objective: command.objective,
+        maxTurns: command.maxTurns,
+        tokenBudget: command.tokenBudget,
+        verifiers: command.verifiers ?? [],
+        requiresUserConfirmation: command.requiresUserConfirmation,
+      })
+      setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
+      await prepareGoalSession(ls, command.objective)
+      await appendGoalState(ls)
+
+      await goalCoordinatorRef.current.run(goal.id, async (signal) => {
+        try {
+          await runGoalLoop({
+            state: ls,
+            model: modelRef.current,
+            options: {
+              ...options,
+              modelId: modelIdRef.current,
+              thinking: thinkingRef.current,
+              permissionMode: permissionModeRef.current,
+              abortSignal: signal,
+            },
+            callbacks: createGoalCallbacks(),
+            goalId: goal.id,
+            signal,
+            runAgentTurn: async (content, turnOptions) => {
+              const result = await submit(content, {
+                silent: true,
+                toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
+                maxTurns: turnOptions?.finalSummary ? 1 : undefined,
+                signal,
+              })
+              if (!result) throw new Error('Goal agent turn did not complete')
+              return {
+                ...result,
+                text: extractLastAssistantText(result.state.messages),
+              }
+            },
+          })
+        } finally {
+          if (loopStateRef.current) {
+            void appendGoalState(loopStateRef.current)
+            setState((prev) => ({
+              ...prev,
+              goalStatus: loopStateRef.current?.goal ? { ...loopStateRef.current.goal } : null,
+              goalRunnerActive: false,
+            }))
+          } else {
+            setState((prev) => ({ ...prev, goalRunnerActive: false }))
+          }
+        }
+      })
+    },
+    [createGoalCallbacks, ensureLoopState, options, prepareGoalSession, submit],
+  )
+
+  const drainPendingInteractions = useCallback(() => {
+    const permResolvers = permissionResolversRef.current
+    permissionResolversRef.current = []
+    for (const r of permResolvers) r('no')
+
+    const pendingQuestion = pendingQuestionRef.current
+    pendingQuestionRef.current = null
+    setState((prev) => ({ ...prev, permissionQueue: [], pendingQuestion: null, bufferingReads: false }))
+    if (pendingQuestion) pendingQuestion.resolve(pendingQuestion.abortAnswer)
+  }, [])
+
+  const pauseGoal = useCallback(async (): Promise<GoalState | null> => {
+    const ls = loopStateRef.current
+    if (!ls?.goal) return null
+    if (ls.goal.status !== 'active') return null
+    const goal = pauseCoreGoal(ls)
+    abortControllerRef.current?.abort()
+    drainPendingInteractions()
+    await goalCoordinatorRef.current.interrupt(goal.id)
+    await appendGoalState(ls)
+    setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: false }))
+    return goal
+  }, [drainPendingInteractions])
+
+  const resumeGoal = useCallback(async (): Promise<GoalState | null> => {
+    const ls = loopStateRef.current
+    if (!ls?.goal) return null
+    let goal: GoalState
+    try {
+      goal = ls.goal.status === 'active' ? ls.goal : resumeCoreGoal(ls)
+    } catch {
+      return null
+    }
+    await appendGoalState(ls)
+    setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
+    goalCoordinatorRef.current.wake(goal.id, async (signal) => {
+      try {
+        await runGoalLoop({
+          state: ls,
+          model: modelRef.current,
+          options: {
+            ...options,
+            modelId: modelIdRef.current,
+            thinking: thinkingRef.current,
+            permissionMode: permissionModeRef.current,
+            abortSignal: signal,
+          },
+          callbacks: createGoalCallbacks(),
+          goalId: goal.id,
+          signal,
+          runAgentTurn: async (content, turnOptions) => {
+            const result = await submit(content, {
+              silent: true,
+              toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
+              maxTurns: turnOptions?.finalSummary ? 1 : undefined,
+              signal,
+            })
+            if (!result) throw new Error('Goal agent turn did not complete')
+            return { ...result, text: extractLastAssistantText(result.state.messages) }
+          },
+        })
+      } finally {
+        setState((prev) => ({
+          ...prev,
+          goalStatus: ls.goal ? { ...ls.goal } : null,
+          goalRunnerActive: false,
+        }))
+      }
+    })
+    return goal
+  }, [createGoalCallbacks, options, submit])
+
+  const cancelGoal = useCallback(async (): Promise<GoalState | null> => {
+    const ls = loopStateRef.current
+    if (!ls?.goal) return null
+    const goal = cancelCoreGoal(ls)
+    abortControllerRef.current?.abort()
+    drainPendingInteractions()
+    await goalCoordinatorRef.current.interrupt(goal.id)
+    await appendGoalState(ls)
+    setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: false }))
+    return goal
+  }, [drainPendingInteractions])
+
+  const clearGoal = useCallback(async (): Promise<void> => {
+    const ls = loopStateRef.current
+    if (!ls) return
+    const goalId = ls.goal?.id
+    if (goalId) {
+      abortControllerRef.current?.abort()
+      drainPendingInteractions()
+      await goalCoordinatorRef.current.interrupt(goalId)
+    }
+    clearCoreGoal(ls)
+    await appendGoalState(ls)
+    setState((prev) => ({ ...prev, goalStatus: null, goalRunnerActive: false }))
+  }, [drainPendingInteractions])
+
+  const steerGoal = useCallback(
+    async (text: string): Promise<GoalState | null> => {
+      const ls = loopStateRef.current
+      if (!ls?.goal) return null
+      const input = admitGoalInput(ls, { goalId: ls.goal.id, kind: 'user_steering', content: text })
+      await appendGoalInput(ls, input)
+      await appendGoalState(ls)
+      setState((prev) => ({ ...prev, goalStatus: ls.goal ? { ...ls.goal } : null }))
+      await resumeGoal()
+      return ls.goal
+    },
+    [resumeGoal],
+  )
+
+  const editGoal = useCallback(async (input: { objective?: string; maxTurns?: number }): Promise<GoalState | null> => {
+    const ls = loopStateRef.current
+    if (!ls?.goal) return null
+    if (input.objective !== undefined) {
+      const objective = input.objective.trim()
+      if (objective) ls.goal.objective = objective
+    }
+    if (input.maxTurns !== undefined && Number.isFinite(input.maxTurns) && input.maxTurns > 0) {
+      ls.goal.maxTurns = Math.floor(input.maxTurns)
+    }
+    ls.goal.updatedAt = new Date().toISOString()
+    ls.systemPromptCache = null
+    await appendGoalState(ls)
+    setState((prev) => ({ ...prev, goalStatus: ls.goal ? { ...ls.goal } : null }))
+    return ls.goal
+  }, [])
+
+  const verifyGoal = useCallback(async (): Promise<{ goal: GoalState; ok: boolean; summary: string } | null> => {
+    const ls = loopStateRef.current
+    if (!ls?.goal) return null
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    setState((prev) => ({ ...prev, goalVerificationActive: true }))
+    try {
+      const goal = ls.goal
+      const verification = await runVerifierLadder({
+        goal,
+        state: ls,
+        options: {
+          ...options,
+          modelId: modelIdRef.current,
+          thinking: thinkingRef.current,
+          permissionMode: permissionModeRef.current,
+          abortSignal: controller.signal,
+        },
+        callbacks: createGoalCallbacks(),
+        model: modelRef.current,
+      })
+      for (const result of verification.results) {
+        await appendGoalVerification(ls, goal.id, result)
+      }
+
+      if (goal.status === 'active') {
+        if (verification.ok) {
+          updateGoalStatus(goal, 'complete', verification.summary)
+          clearPendingTransition(goal)
+        } else {
+          clearPendingTransition(goal)
+          const input = admitGoalInput(ls, {
+            goalId: goal.id,
+            kind: 'verifier_failure',
+            content: `Manual goal verification failed:\n${verification.summary}\n\nContinue fixing the goal, then request completion again.`,
+          })
+          await appendGoalInput(ls, input)
+          await resumeGoal()
+        }
+      }
+
+      await appendGoalState(ls)
+      setState((prev) => ({ ...prev, goalStatus: { ...goal } }))
+      return { goal, ok: verification.ok, summary: verification.summary }
+    } finally {
+      setState((prev) => ({ ...prev, goalVerificationActive: false }))
+    }
+  }, [createGoalCallbacks, options, resumeGoal])
 
   /** Abort the in-flight turn. Mirrors Claude Code's onCancel:
    *
@@ -741,6 +1160,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     // user-interrupted — without it the model would see an unfinished
     // assistant message and might silently try to resume.
     if (loopStateRef.current) {
+      if (loopStateRef.current.goal?.status === 'active') {
+        try {
+          pauseCoreGoal(loopStateRef.current)
+          void appendGoalState(loopStateRef.current)
+          void goalCoordinatorRef.current.interrupt(loopStateRef.current.goal.id)
+          setState((prev) => ({
+            ...prev,
+            goalStatus: loopStateRef.current?.goal ? { ...loopStateRef.current.goal } : null,
+          }))
+        } catch {
+          // A non-active terminal goal does not need abort-time state changes.
+        }
+      }
       loopStateRef.current.messages.push({ role: 'user', content: noticeText })
       // Persist the abort to the jsonl: drop an `interrupted` meta line
       // (informational — picker can show "interrupted" tags) and flush
@@ -754,24 +1186,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     // Unblock any `await onAskPermission` in the core loop (parallel tool
     // calls queue extra UI rows, but execution is sequential — the first
     // shell often sits here while the user thinks the UI is "frozen").
-    const permResolvers = permissionResolversRef.current
-    permissionResolversRef.current = []
-    for (const r of permResolvers) r('no')
-
-    // Unblock askUser / plan approval / slash pickers waiting on `pendingQuestion`.
-    const pendingAbortRef: {
-      current: { resolve: (answer: string) => void; abortAnswer: string } | null
-    } = { current: null }
-    setState((prev) => {
-      const pq = prev.pendingQuestion
-      pendingAbortRef.current = pq ? { resolve: pq.resolve, abortAnswer: pq.abortAnswer } : null
-      return { ...prev, permissionQueue: [], pendingQuestion: null, bufferingReads: false }
-    })
-    const pa = pendingAbortRef.current
-    if (pa) pa.resolve(pa.abortAnswer)
+    drainPendingInteractions()
 
     controller.abort()
-  }, [flushBuffer, appendMessage])
+  }, [drainPendingInteractions, flushBuffer, appendMessage])
 
   /** Save session and cleanup */
   const cleanup = useCallback(async () => {
@@ -792,18 +1210,35 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     return { sessionId: ls.sessionId, taskSlug: ls.taskSlug, messageCount: ls.messages.length, firstPrompt }
   }, [])
 
-  /** Clear conversation */
-  const clear = useCallback(() => {
-    loopStateRef.current = null
-    pendingToolsRef.current.clear()
-    permissionResolversRef.current = []
-    resetBuffer()
-    // Preserve the current live model id and approval mode when clearing
-    // — user expects the model they just picked AND the plan-mode toggle
-    // they just flipped to stay after /clear (which only nukes the
-    // conversation, not session-wide settings).
-    setState((prev) => ({ ...initialState, modelId: prev.modelId, permissionMode: prev.permissionMode }))
-  }, [resetBuffer])
+  /** Clear conversation while retaining a display-only command echo. */
+  const clear = useCallback(
+    (commandText = '/clear') => {
+      loopStateRef.current = null
+      pendingToolsRef.current.clear()
+      permissionResolversRef.current = []
+      pendingQuestionRef.current = null
+      resetBuffer()
+      // Preserve the current live model id and approval mode when clearing
+      // — user expects the model they just picked AND the plan-mode toggle
+      // they just flipped to stay after /clear (which only nukes the
+      // conversation, not session-wide settings).
+      setState((prev) => ({
+        ...initialState,
+        modelId: prev.modelId,
+        permissionMode: prev.permissionMode,
+        messages: [
+          {
+            id: `cmd-${Date.now()}`,
+            role: 'user',
+            content: commandText,
+            timestamp: Date.now(),
+            kind: 'command-echo',
+          },
+        ],
+      }))
+    },
+    [resetBuffer],
+  )
 
   /** Mid-session resume: hot-swap the agent state to a previously-saved
    *  session. Hydrates loopStateRef from the jsonl so the next agent
@@ -839,6 +1274,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         todos: [],
         messages: [...prev.messages, ...converted],
         usage: { ...loaded.tokenUsage },
+        goalStatus: loaded.goal ? { ...loaded.goal } : null,
       }))
     },
     [resetBuffer],
@@ -1005,6 +1441,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   return {
     state,
     submit,
+    runGoal,
+    pauseGoal,
+    resumeGoal,
+    cancelGoal,
+    clearGoal,
+    steerGoal,
+    editGoal,
+    verifyGoal,
     resolvePermission,
     resolveQuestion,
     abort,

@@ -23,8 +23,12 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { admitGoalInput, promoteNextGoalInput } from '../src/agent/goal/input.js'
+import { createGoal } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import {
+  appendGoalInput,
+  appendGoalState,
   appendHeader,
   appendUsage,
   flushPendingMessages,
@@ -345,5 +349,26 @@ describe('session-store: hydrateLoopState', () => {
     expect(hydrated.messages).toHaveLength(2)
     expect(hydrated.tokenUsage.inputTokens).toBe(50)
     expect(hydrated.persistedMessageCount).toBe(2)
+  })
+
+  it('hydrates the latest goal input entry by id after promotion', async () => {
+    const s = createLoopState()
+    s.sessionId = '20260101-120000-001'
+    s.taskSlug = 'goal'
+    const goal = createGoal(s, { objective: 'finish durable goal' })
+    const input = admitGoalInput(s, { goalId: goal.id, kind: 'initial', content: 'start' })
+
+    await appendHeader(s, 'anthropic:claude-sonnet-4-6', 'finish durable goal')
+    await appendGoalState(s)
+    await appendGoalInput(s, input)
+    const promoted = promoteNextGoalInput(s, goal.id)!
+    await appendGoalInput(s, promoted)
+
+    const loaded = await loadSession(getSessionFilePath(s))
+    const hydrated = hydrateLoopState(loaded!)
+
+    expect(hydrated.goalInputs).toHaveLength(1)
+    expect(hydrated.goalInputs[0]?.id).toBe(input.id)
+    expect(hydrated.goalInputs[0]?.promotedAt).toBe(promoted.promotedAt)
   })
 })

@@ -219,6 +219,9 @@ export interface AgentOptions {
   /** Tool allow/deny filter. Used by sub-agent loops to restrict
    *  which tools the child can call. `task` is always in `deny`. */
   toolFilter?: { allow?: string[]; deny?: string[] }
+  /** Shell command keywords to deny before permission checks. Used by
+   *  sub-agents whose tool surface includes shell but must remain read-only. */
+  shellRestrictions?: readonly string[]
 
   /** Tool-name suffixes whose older results get collapsed to a placeholder
    *  before each request (keeping only the latest), to stop large
