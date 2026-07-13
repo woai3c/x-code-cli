@@ -25,7 +25,7 @@ export const todoWrite = tool({
 - Right after exitPlanMode is approved and you have an approved plan with several files / phases — translate the plan into todos before starting work
 - The user gives multiple requests in one message ("do A, then B, then C")
 - When you start a step (mark it \`in_progress\` BEFORE doing the work)
-- When you finish a step (mark it \`completed\` IMMEDIATELY, not at the end)
+- After a tool-call batch finishes and you have observed its results (update every affected status at the next decision opportunity)
 
 ## When NOT to Use
 
@@ -37,8 +37,8 @@ export const todoWrite = tool({
 ## Hard Rules
 
 1. **Status values**: \`pending\` | \`in_progress\` | \`completed\` (exactly these three).
-2. **Exactly ONE task in_progress at any time** — not zero, not two. The user reads the in_progress one as "what the agent is doing right now".
-3. **Mark complete IMMEDIATELY after finishing** — don't batch completions at the end of the run. The user wants live feedback.
+2. **Exactly ONE task in_progress in each active checklist** — not zero, not two, except for the final all-completed update. The user reads the in_progress one as "the current logical milestone".
+3. **Update at model decision boundaries** — after observing the results of a tool-call batch, update every affected status at the next opportunity. Multiple items completed by the same batch may be marked together. Do not create extra model turns solely to refresh the checklist, but do not wait until the end of the overall task.
 4. **Only mark complete when truly done** — if tests are failing, the implementation is partial, you hit an error, or you're going to follow up later: leave it as \`in_progress\` and add a NEW pending todo describing the unresolved part.
 5. **Provide both \`content\` and \`activeForm\`**:
    - \`content\` is imperative: "Run tests", "Update auth handler"
@@ -115,7 +115,7 @@ You: <do not call todoWrite — pure Q&A, no work to track>`,
             .enum(['pending', 'in_progress', 'completed'])
             .optional()
             .describe(
-              'Lifecycle state. Exactly one item should be in_progress at any time. Defaults to "pending" if omitted.',
+              'Lifecycle state. Except for the final all-completed update, exactly one item should be in_progress in each active checklist. Defaults to "pending" if omitted.',
             ),
         }),
       )

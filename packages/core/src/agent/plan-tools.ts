@@ -71,7 +71,7 @@ export async function handleTodoWrite(
     'todoWrite',
     allDone
       ? `All todos completed. Checklist cleared.${verifyNote}${droppedNote}`
-      : `Todo list updated. Keep the checklist current — mark items completed immediately when finished, and ensure exactly one item is in_progress.${droppedNote}`,
+      : `Todo list updated. Keep the checklist current at model decision boundaries — update statuses after observing the relevant tool results, and ensure exactly one item is in_progress.${droppedNote}`,
   )
 }
 
