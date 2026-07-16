@@ -4,11 +4,8 @@
 // is stored as an AllowRule both in-memory AND on disk at
 // `.x-code/local/permissions.json`. On next startup the persisted rules
 // are loaded so approvals survive across sessions.
-import * as fs from 'node:fs'
-import * as path from 'node:path'
-
 import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
-import { XCODE_DIR } from '../utils.js'
+import { persistRule, readPersistedRules } from './persistence.js'
 
 export interface AllowRule {
   tool: string
@@ -589,31 +586,6 @@ function stripSafeEnvVars(command: string): string {
   return cmd.trim()
 }
 
-// ─── Serialization helpers ───
-
-function ruleToString(rule: AllowRule): string {
-  if (rule.type === 'tool') return `${rule.tool}:*`
-  if (rule.type === 'prefix') return `${rule.tool}:${rule.pattern}:*`
-  return `${rule.tool}:=${rule.pattern}`
-}
-
-function parseRuleString(s: string): AllowRule | null {
-  // tool:*  → tool-wide
-  const toolWide = s.match(/^([^:]+):\*$/)
-  if (toolWide) return { tool: toolWide[1]!, pattern: '*', type: 'tool' }
-  // tool:prefix:*  → prefix match
-  const prefix = s.match(/^([^:]+):(.+):\*$/)
-  if (prefix) return { tool: prefix[1]!, pattern: prefix[2]!, type: 'prefix' }
-  // tool:=exact  → exact match
-  const exact = s.match(/^([^:]+):=(.+)$/)
-  if (exact) return { tool: exact[1]!, pattern: exact[2]!, type: 'exact' }
-  return null
-}
-
-function getPermissionsPath(cwd: string): string {
-  return path.join(cwd, XCODE_DIR, 'local', 'permissions.json')
-}
-
 // ─── Store ───
 
 class SessionPermissionStore {
@@ -717,60 +689,8 @@ export function clearSessionRules(): void {
  * Silently no-ops if the file doesn't exist or is malformed.
  */
 export function loadPersistedRules(cwd: string): void {
-  const filePath = getPermissionsPath(cwd)
-  let raw: string
-  try {
-    raw = fs.readFileSync(filePath, 'utf-8')
-  } catch {
-    return
-  }
-  let data: { allow?: string[] }
-  try {
-    data = JSON.parse(raw) as { allow?: string[] }
-  } catch {
-    return
-  }
-  if (!Array.isArray(data.allow)) return
-  for (const entry of data.allow) {
-    if (typeof entry !== 'string') continue
-    const rule = parseRuleString(entry)
-    if (rule) store.addRule(rule)
-  }
+  const rules = readPersistedRules(cwd)
+  for (const rule of rules) store.addRule(rule)
 }
 
-/**
- * Persist a new rule to `.x-code/local/permissions.json`.
- * Creates the file if it doesn't exist. Appends without duplicating.
- */
-export function persistRule(cwd: string, rule: AllowRule): void {
-  const filePath = getPermissionsPath(cwd)
-  const ruleStr = ruleToString(rule)
-
-  const data: { allow: string[] } = { allow: [] }
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    const parsed = JSON.parse(raw) as { allow?: string[] }
-    if (Array.isArray(parsed.allow)) {
-      data.allow = parsed.allow.filter((s): s is string => typeof s === 'string')
-    }
-  } catch {
-    // File doesn't exist or is malformed — start fresh.
-  }
-
-  if (data.allow.includes(ruleStr)) return
-
-  data.allow.push(ruleStr)
-
-  const dir = path.dirname(filePath)
-  fs.mkdirSync(dir, { recursive: true })
-  // Self-protect .x-code/local/ — permissions.json records auto-approved
-  // shell-command patterns specific to this user's threat tolerance and
-  // shouldn't leak into git history. Drop a `*` .gitignore on first write
-  // so the directory is safe even when the user's project hasn't gitignored
-  // .x-code/ as a whole.
-  const gitignorePath = path.join(dir, '.gitignore')
-  if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, '*\n', 'utf-8')
-  }
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
-}
+export { persistRule }

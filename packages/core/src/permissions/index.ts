@@ -3,7 +3,8 @@ import path from 'node:path'
 
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { PermissionLevel, PermissionMode } from '../types/index.js'
-import { addSessionAllowRule, buildAllowRule, persistRule, sessionRulesMatch } from './session-store.js'
+import { persistRule } from './persistence.js'
+import { addSessionAllowRule, buildAllowRule, sessionRulesMatch } from './session-store.js'
 
 type PermissionInput = Record<string, unknown>
 
