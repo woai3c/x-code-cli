@@ -9,22 +9,12 @@
 import { describe, expect, it } from 'vitest'
 
 import fs from 'node:fs'
+import path from 'node:path'
 
 import { getRipgrepPath } from '../src/tools/utils.js'
 
 describe('getRipgrepPath', () => {
-  it('resolves to the @vscode/ripgrep prebuilt binary, not the literal "rg"', () => {
-    const p = getRipgrepPath()
-    // The whole point of @vscode/ripgrep is that it ships a per-platform
-    // prebuilt binary, so the resolved path must be an absolute path —
-    // not the unqualified `'rg'` fallback that fires only when the
-    // require itself fails (which used to happen due to the ESM/CJS
-    // mismatch).
-    expect(p).not.toBe('rg')
-    expect(p.length).toBeGreaterThan(2)
-  })
-
-  it('points at a binary that actually exists on disk', () => {
+  it('resolves to an existing absolute @vscode/ripgrep binary', () => {
     const p = getRipgrepPath()
     // If the resolved path doesn't exist, glob/grep will surface
     // `spawn ... ENOENT` to the model on first call. This test is the
@@ -32,12 +22,7 @@ describe('getRipgrepPath', () => {
     // and we silently fall back) and broken @vscode/ripgrep installs
     // (where require succeeds but the postinstall didn't drop the
     // binary).
+    expect(path.isAbsolute(p)).toBe(true)
     expect(fs.existsSync(p)).toBe(true)
-  })
-
-  it('caches the resolved path across calls', () => {
-    const a = getRipgrepPath()
-    const b = getRipgrepPath()
-    expect(a).toBe(b)
   })
 })

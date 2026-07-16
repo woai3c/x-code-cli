@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -14,7 +15,10 @@ function isolate(): string {
 }
 
 describe('trust persistence', () => {
-  beforeEach(() => isolate())
+  let home: string
+  beforeEach(() => {
+    home = isolate()
+  })
   afterEach(() => {
     delete process.env.X_CODE_HOME
   })
@@ -23,21 +27,15 @@ describe('trust persistence', () => {
     expect(await isProjectTrusted('/some/path')).toBe(false)
   })
 
-  it('persists a trusted path', async () => {
-    await trustProject('/foo/bar')
-    expect(await isProjectTrusted('/foo/bar')).toBe(true)
-  })
+  it('normalizes equivalent paths and persists only one trust entry', async () => {
+    const project = path.resolve('project')
+    await trustProject(project + path.sep)
+    await trustProject(project)
 
-  it('treats absolute path forms consistently', async () => {
-    await trustProject(path.resolve('.'))
-    expect(await isProjectTrusted(path.resolve('.'))).toBe(true)
-  })
-
-  it('does not duplicate entries when trustProject is called twice', async () => {
-    await trustProject('/foo')
-    await trustProject('/foo')
-    // Verified indirectly: still reports trusted, no throw on write.
-    expect(await isProjectTrusted('/foo')).toBe(true)
+    expect(await isProjectTrusted(project)).toBe(true)
+    const raw = await fs.readFile(path.join(home, 'trusted-projects.json'), 'utf-8')
+    const stored = JSON.parse(raw) as { trusted: Array<{ path: string }> }
+    expect(stored.trusted).toEqual([{ path: project, trustedAt: expect.any(String) }])
   })
 
   it('treats subdirectory as separate from parent', async () => {

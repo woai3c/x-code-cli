@@ -1,13 +1,7 @@
 // Tests for agent/messages.ts helpers
 import { describe, expect, it } from 'vitest'
 
-import {
-  isToolErrorString,
-  toolErrorFromUnknown,
-  toolErrorString,
-  toolResultMessage,
-  userMessage,
-} from '../src/agent/messages.js'
+import { isToolErrorString, toolErrorFromUnknown, toolResultMessage, userMessage } from '../src/agent/messages.js'
 
 describe('toolResultMessage', () => {
   it('builds a tool-role message with one tool-result content part', () => {
@@ -75,8 +69,7 @@ describe('toolErrorFromUnknown', () => {
 })
 
 describe('isToolErrorString', () => {
-  it('matches the prefix produced by toolErrorString', () => {
-    expect(isToolErrorString(toolErrorString('x'))).toBe(true)
+  it('matches the tool error prefix', () => {
     expect(isToolErrorString('Error: anything')).toBe(true)
   })
 

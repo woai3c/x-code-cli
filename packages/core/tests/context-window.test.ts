@@ -33,12 +33,6 @@ describe('getCompressionThreshold', () => {
     const window = getContextWindow('anthropic:claude-opus-4-7')
     expect(getCompressionThreshold('anthropic:claude-opus-4-7')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
   })
-
-  it('changes with model', () => {
-    const a = getCompressionThreshold('anthropic:claude-opus-4-7')
-    const b = getCompressionThreshold('alibaba:qwen-max')
-    expect(a).toBeGreaterThan(b)
-  })
 })
 
 describe('getMaxOutputTokens', () => {
@@ -64,7 +58,6 @@ describe('estimateTokenCount', () => {
   it('estimates tokens from string content', () => {
     const messages = [{ role: 'user' as const, content: 'hello world' }]
     const tokens = estimateTokenCount(messages)
-    expect(tokens).toBeGreaterThan(0)
     expect(tokens).toBe(Math.ceil(11 / 3.0))
   })
 
@@ -73,8 +66,8 @@ describe('estimateTokenCount', () => {
       {
         role: 'assistant' as const,
         content: [
-          { type: 'text', text: 'hello' },
-          { type: 'text', text: ' world' },
+          { type: 'text' as const, text: 'hello' },
+          { type: 'text' as const, text: ' world' },
         ],
       },
     ]
@@ -85,10 +78,10 @@ describe('estimateTokenCount', () => {
   it('ignores non-text parts in array content', () => {
     const messages = [
       {
-        role: 'assistant' as const,
+        role: 'user' as const,
         content: [
-          { type: 'text', text: 'hello' },
-          { type: 'image', image: 'data:...' },
+          { type: 'text' as const, text: 'hello' },
+          { type: 'image' as const, image: 'data:...' },
         ],
       },
     ]

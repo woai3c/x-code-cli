@@ -44,22 +44,16 @@ describe('McpPermissionStore', () => {
     expect(await store2.isApproved('foo__bar')).toBe(true)
   })
 
-  it('writes a 0600 file with sorted entries', async () => {
+  it('writes sorted entries without duplicating permanent approvals', async () => {
     const store = new McpPermissionStore()
     await store.approvePermanently('zeta__b')
     await store.approvePermanently('alpha__a')
+    await store.approvePermanently('zeta__b')
 
     const filePath = path.join(home, 'mcp-permissions.json')
     const raw = await fs.readFile(filePath, 'utf-8')
     const parsed = JSON.parse(raw) as { alwaysAllow: string[] }
     expect(parsed.alwaysAllow).toEqual(['alpha__a', 'zeta__b'])
-  })
-
-  it('ignores re-approving an already-permanent entry', async () => {
-    const store = new McpPermissionStore()
-    await store.approvePermanently('foo__bar')
-    await store.approvePermanently('foo__bar')
-    expect(await store.isApproved('foo__bar')).toBe(true)
   })
 })
 

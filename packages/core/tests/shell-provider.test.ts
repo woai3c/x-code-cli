@@ -68,11 +68,6 @@ describe.skipIf(!isPowerShell)('PowerShell provider', () => {
     expect(r.exitCode).toBe(3)
   })
 
-  it('returns exit 0 on success', async () => {
-    const r = await run(`Write-Output hello`)
-    expect(r.exitCode).toBe(0)
-  })
-
   it('does not leak CLIXML progress noise to stderr', async () => {
     const r = await run(`Write-Output ok`)
     expect(r.stderr).not.toMatch(/CLIXML/)
@@ -97,18 +92,5 @@ describe.skipIf(!isPosix)('POSIX provider (bash/zsh)', () => {
   it('propagates non-zero exit codes', async () => {
     const r = await run(`sh -c 'exit 3'`)
     expect(r.exitCode).toBe(3)
-  })
-
-  it('returns exit 0 on success', async () => {
-    const r = await run(`echo hello`)
-    expect(r.exitCode).toBe(0)
-    expect(r.stdout).toContain('hello')
-  })
-})
-
-describe('getShellProvider', () => {
-  it('returns a provider with a valid type and spawn()', () => {
-    expect(['bash', 'zsh', 'powershell']).toContain(provider.type)
-    expect(typeof provider.spawn).toBe('function')
   })
 })

@@ -74,8 +74,8 @@ describe('parseManifest', () => {
     })
 
     const manifest = await parseManifest(file)
-    expect(typeof manifest.mcpServers).toBe('object')
-    expect(typeof manifest.hooks).toBe('object')
+    expect(manifest.mcpServers).toEqual({ my_server: { command: 'node', args: ['server.js'] } })
+    expect(manifest.hooks).toEqual({ PreToolUse: [{ command: 'lint.sh' }] })
   })
 
   it('normalises string author to object form', async () => {
@@ -104,8 +104,8 @@ describe('parseManifest', () => {
     const manifest = await parseManifest(file)
     expect(manifest.name).toBe('foo')
     // Unknown fields are dropped.
-    expect((manifest as Record<string, unknown>)['output-styles']).toBeUndefined()
-    expect((manifest as Record<string, unknown>).lspServers).toBeUndefined()
+    expect(manifest).not.toHaveProperty('output-styles')
+    expect(manifest).not.toHaveProperty('lspServers')
   })
 
   it('rejects invalid name (uppercase)', async () => {

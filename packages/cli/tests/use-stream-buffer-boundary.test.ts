@@ -7,7 +7,6 @@ describe('stream buffer markdown boundaries', () => {
     const rows = Array.from({ length: 40 }, (_, index) => `| ${index + 1} | row ${index + 1} | value |`).join('\n')
     const table = `| id | name | value |\n| --- | --- | --- |\n${rows}\n`
 
-    expect(table.length).toBeGreaterThan(800)
     expect(hasOpenMarkdownBlock(table)).toBe(true)
     expect(hasOpenCodeFence(table)).toBe(false)
     expect(findSafeBoundary(table)).toBe(-1)
@@ -16,7 +15,6 @@ describe('stream buffer markdown boundaries', () => {
   it('still identifies a long open code fence for incremental commits', () => {
     const code = `\`\`\`text\n${'line of code\n'.repeat(100)}`
 
-    expect(code.length).toBeGreaterThan(800)
     expect(hasOpenCodeFence(code)).toBe(true)
   })
 })

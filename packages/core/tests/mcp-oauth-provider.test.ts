@@ -36,7 +36,6 @@ describe('McpOAuthProvider.redirectUrl', () => {
     // redirectToAuthorization fires and starts the callback server).
     const provider = makeProvider()
     const url = provider.redirectUrl
-    expect(typeof url).toBe('string')
     // Must be a loopback URL — per RFC 8252 the auth server must accept
     // any port on this host, so the lack of a concrete port is fine.
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1/)
