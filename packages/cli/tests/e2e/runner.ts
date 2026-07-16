@@ -39,16 +39,23 @@ const DEFAULT_TIMEOUT_MS = 180_000
 function parseArgs(argv: string[]): {
   resume: boolean
   all: boolean
-  filter?: string
+  filter: string | undefined
   list: boolean
-  model?: string
+  model: string | undefined
   keepTmp: boolean
   printJsonl: boolean
-  maxTurns?: number
+  maxTurns: number | undefined
 } {
-  const out = { resume: false, all: false, list: false, keepTmp: false, printJsonl: false } as ReturnType<
-    typeof parseArgs
-  >
+  const out: ReturnType<typeof parseArgs> = {
+    resume: false,
+    all: false,
+    filter: undefined,
+    list: false,
+    model: undefined,
+    keepTmp: false,
+    printJsonl: false,
+    maxTurns: undefined,
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--resume') out.resume = true

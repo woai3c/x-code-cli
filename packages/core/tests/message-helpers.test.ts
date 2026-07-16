@@ -9,8 +9,8 @@ describe('extractText', () => {
 
   it('extracts text from array of typed parts', () => {
     const content = [
-      { type: 'text', text: 'hello ' },
-      { type: 'text', text: 'world' },
+      { type: 'text' as const, text: 'hello ' },
+      { type: 'text' as const, text: 'world' },
     ]
     expect(extractText(content)).toBe('hello world')
   })

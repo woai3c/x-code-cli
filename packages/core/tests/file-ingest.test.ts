@@ -106,8 +106,8 @@ describe('classifyFile', () => {
 })
 
 describe('ingestFile', () => {
-  const multimodalCaps = { image: true, pdf: true, filesApi: true }
-  const textOnlyCaps = { image: false, pdf: false, filesApi: false }
+  const multimodalCaps = { image: true, pdf: true, filesApi: true, toolResultImage: true }
+  const textOnlyCaps = { image: false, pdf: false, filesApi: false, toolResultImage: false }
 
   it('inlines text files for any provider', async () => {
     const parts = await ingestFile({ raw: `@${textFile}`, absolutePath: textFile }, textOnlyCaps)
@@ -157,6 +157,7 @@ describe('buildUserContent', () => {
       image: true,
       pdf: true,
       filesApi: true,
+      toolResultImage: true,
     })
     expect(result).toBe('hello world')
   })
@@ -167,6 +168,7 @@ describe('buildUserContent', () => {
       image: true,
       pdf: true,
       filesApi: true,
+      toolResultImage: true,
     })
     expect(Array.isArray(result)).toBe(true)
     if (!Array.isArray(result)) return
@@ -176,7 +178,7 @@ describe('buildUserContent', () => {
 })
 
 describe('ingestFile image path with mocked vision sub-agent', () => {
-  const textOnlyCaps = { image: false, pdf: false, filesApi: false }
+  const textOnlyCaps = { image: false, pdf: false, filesApi: false, toolResultImage: false }
 
   beforeEach(() => {
     vi.mocked(pickVisionProvider).mockReset()

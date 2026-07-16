@@ -14,7 +14,7 @@
     "lint": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p packages/core/tests/tsconfig.json && tsc -p packages/cli/tests/tsconfig.json && tsc -p packages/cli/tests/e2e/tsconfig.json",
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "release": "node scripts/release.mjs",
     "prepare": "husky"

@@ -39,6 +39,7 @@ describe('buildBrowserServerConfig', () => {
 
     // A full command override owns its argv — we do not inject --output-dir.
     const override = buildBrowserServerConfig({ command: 'my-server', args: ['--port', '7'] })
+    if (!('command' in override)) throw new Error('Expected a stdio browser server config')
     expect(override.args).not.toContain('--output-dir')
   })
 

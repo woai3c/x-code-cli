@@ -28,8 +28,8 @@ async function makeTempPlugin(body: Record<string, unknown>): Promise<string> {
 }
 
 function combinedOutput(): string {
-  const log = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
-  const err = errSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+  const log = logSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n')
+  const err = errSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n')
   return `${log}\n${err}`
 }
 
