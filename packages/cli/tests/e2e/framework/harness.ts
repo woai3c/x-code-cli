@@ -25,6 +25,12 @@ export async function runCliInDir(
   const args = ['-p', prompt, ...(options?.args ?? [])]
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    // `pnpm test:e2e` sets INIT_CWD to the repository root. The CLI restores
+    // that value on startup, so forwarding it unchanged silently moves every
+    // scenario out of its isolated cwd and writes sessions/artifacts into the
+    // real repository. Keep package-manager cwd restoration scoped to the
+    // scenario directory instead.
+    INIT_CWD: cwd,
     X_CODE_HOME: path.join(cwd, '.x-code-home'), // isolate user-scope ~/.x-code per scenario
     X_CODE_MODEL: cfg.modelId,
     NODE_ENV: 'test',
@@ -65,16 +71,15 @@ export async function runCliInDir(
     stderr += `\n[harness] timeout after ${timeoutMs}ms — killed`
   }
 
-  // print.ts uses `saveSession().catch()` (fire-and-forget) and then process.exit().
-  // The final jsonl write may not be flushed when the process exits. Poll the
-  // sessions dir until file size stops changing (or up to 2s).
+  // Keep a short stability guard for providers that finish their final stream
+  // callbacks immediately before print mode performs its awaited session save.
   await waitForJsonlStable(path.join(cwd, '.x-code', 'sessions'))
 
   // Locate the freshest session jsonl in cwd/.x-code/sessions/
   const sessionJsonlPath = await pickLatestSessionJsonl(path.join(cwd, '.x-code', 'sessions'))
-  const parsed = sessionJsonlPath
+  const parsed: ParsedSession = sessionJsonlPath
     ? await parseSessionJsonl(sessionJsonlPath)
-    : { assistantText: '', toolCalls: [], tokenUsage: undefined as RunResult['tokenUsage'] }
+    : { assistantText: '', toolCalls: [] }
 
   return {
     assistantText: parsed.assistantText || stdout, // fallback: stdout already is the assistant text in print mode
@@ -84,7 +89,7 @@ export async function runCliInDir(
     exitCode,
     durationMs: Date.now() - startedAt,
     sessionJsonlPath: sessionJsonlPath ?? '',
-    tokenUsage: parsed.tokenUsage,
+    ...(parsed.tokenUsage ? { tokenUsage: parsed.tokenUsage } : {}),
   }
 }
 
@@ -137,7 +142,7 @@ async function pickLatestSessionJsonl(dir: string): Promise<string | null> {
 interface ParsedSession {
   assistantText: string
   toolCalls: ToolCall[]
-  tokenUsage?: RunResult['tokenUsage']
+  tokenUsage?: NonNullable<RunResult['tokenUsage']>
 }
 
 async function parseSessionJsonl(filePath: string): Promise<ParsedSession> {
@@ -145,8 +150,8 @@ async function parseSessionJsonl(filePath: string): Promise<ParsedSession> {
   const lines = raw.split('\n').filter(Boolean)
   const assistantPieces: string[] = []
   const toolCalls: ToolCall[] = []
-  const resultByCallId = new Map<string, { text: string; isError?: boolean }>()
-  let tokenUsage: RunResult['tokenUsage'] | undefined
+  const resultByCallId = new Map<string, { text: string; isError: boolean }>()
+  let tokenUsage: NonNullable<RunResult['tokenUsage']> | undefined
 
   for (const line of lines) {
     let entry: unknown
@@ -216,7 +221,7 @@ async function parseSessionJsonl(filePath: string): Promise<ParsedSession> {
   return {
     assistantText: assistantPieces.join('').trim(),
     toolCalls,
-    tokenUsage,
+    ...(tokenUsage ? { tokenUsage } : {}),
   }
 }
 
