@@ -411,7 +411,10 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       prevWriteEndedWithBlankRow = out.endsWith('\n\n')
       prevWriteWasStreamingChunk = true
     } else {
-      write(toCRLF(indented + '\n\n'))
+      // renderMarkdown already terminates block output with one or more
+      // newlines. Normalize that suffix before adding the single blank row
+      // that separates scrollback content from the next input frame.
+      write(toCRLF(indented.replace(/\n+$/, '') + '\n\n'))
       prevWriteEndedWithBlankRow = true
       prevWriteWasStreamingChunk = false
     }
