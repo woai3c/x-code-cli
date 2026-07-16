@@ -1,8 +1,7 @@
 // @x-code-cli/cli — Agent state management hook
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  TOOL_SEARCH_TOOL_NAME,
   admitGoalInput,
   agentLoop,
   appendCheckpoint,
@@ -47,7 +46,6 @@ import type {
   CheckpointEntry,
   DiffStats,
   DisplayMessage,
-  DisplayToolCall,
   GoalState,
   GoalVerifier,
   LanguageModel,
@@ -58,9 +56,9 @@ import type {
   TokenUsage,
 } from '@x-code-cli/core'
 
-import { isCollapsibleReadOnlyTool } from '../utils.js'
+import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from './agent-tool-lifecycle.js'
 import { useAgentDisplayHelpers } from './use-agent-display-helpers.js'
-import { modelMessagesToDisplay, previewSubInput } from './use-agent-display.js'
+import { modelMessagesToDisplay } from './use-agent-display.js'
 import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
 
 export interface PendingPermission {
@@ -253,6 +251,39 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage)
 
+  const toolLifecycleCallbacks = useMemo(
+    () =>
+      createToolLifecycleCallbacks({
+        setState,
+        flushBuffer,
+        pendingToolsRef,
+        pendingEditDiffsRef,
+      }),
+    [flushBuffer],
+  )
+
+  const goalToolLifecycleCallbacks = useMemo(
+    () =>
+      createGoalToolLifecycleCallbacks({
+        setState,
+        flushBuffer,
+        pendingToolsRef,
+      }),
+    [flushBuffer],
+  )
+
+  const handleTextDelta = useCallback(
+    (delta: string) => {
+      if (delta) {
+        // Text generation ends any in-flight read chain. Avoid a state update
+        // for subsequent chunks after the first one has restored "Thinking".
+        setState((previous) => (previous.bufferingReads ? { ...previous, bufferingReads: false } : previous))
+      }
+      appendTextDelta(delta)
+    },
+    [appendTextDelta],
+  )
+
   // Keep the ref synchronized with state so abort() can decide between
   // `[Request interrupted by user]` and `... for tool use` without taking a
   // state dependency in its useCallback (which would re-bind the prop every
@@ -342,103 +373,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
       const callbacks: AgentCallbacks = {
         onTextDelta: (delta) => {
-          if (delta) {
-            sawTextDelta = true
-            // Text streaming breaks any in-flight read chain — flip the
-            // spinner back to "Thinking" so the user doesn't see
-            // "Reading…" while the model is actually generating prose.
-            // Wrapped in a freshness check so we don't burn a setState
-            // on every chunk; only the FIRST text delta after a read
-            // chain causes a flip.
-            setState((prev) => (prev.bufferingReads ? { ...prev, bufferingReads: false } : prev))
-          }
-          appendTextDelta(delta)
+          if (delta) sawTextDelta = true
+          handleTextDelta(delta)
         },
-        onToolCall: (toolCallId, toolName, input) => {
-          // Drain the streaming-text buffer AND register the live tool row
-          // in the same synchronous tick so React 18 auto-batching folds
-          // both setStates into one render → one ChatInput frame → one
-          // stdout.write. The previous 4ms `setTimeout` deferral was
-          // designed to skip the "Running…" frame for sub-5ms tools, but
-          // for slow tools (WebSearch, shell, network) it produced the
-          // exact double-write pattern (text-commit frame, then 4ms later
-          // tool-row frame) that surfaces as visible flicker on
-          // text→tool-call transitions. Fast tools now flash a brief
-          // "Running…" row before the result replaces it — acceptable
-          // tradeoff: the slow-tool case is the dominant one in real use,
-          // and the flash is shorter (~1 frame) than the previous flicker.
-          flushBuffer()
-          pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
-          // toolSearch is the internal deferred-tool loader — hide it from the
-          // UI entirely (matches Claude Code / Codex, which never surface their
-          // tool-search calls). No live "Running…" row and no scrollback line
-          // (the onToolResult push is skipped too); the spinner stays
-          // "Thinking…" while it runs, which is a sub-ms catalog lookup.
-          if (toolName === TOOL_SEARCH_TOOL_NAME) return
-          // Update sticky read-chain flag synchronously alongside the
-          // active-tool list. A collapsible tool extends the chain;
-          // anything else (Edit/Write/Shell/Task) breaks it so the
-          // spinner doesn't say "Reading…" while a write is happening.
-          const isReadOnly = isCollapsibleReadOnlyTool(toolName)
-          setState((prev) => ({
-            ...prev,
-            activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
-            bufferingReads: isReadOnly ? true : false,
-          }))
-        },
-        onToolProgress: (toolCallId, message) => {
-          setState((prev) => {
-            const idx = prev.activeToolCalls.findIndex((t) => t.id === toolCallId)
-            if (idx < 0) return prev
-            const next = prev.activeToolCalls.slice()
-            next[idx] = { ...next[idx], progress: message }
-            return { ...prev, activeToolCalls: next }
-          })
-        },
-        onFileEdit: (toolCallId, payload) => {
-          // Stash the structured patch so the upcoming onToolResult can
-          // attach it to the DisplayToolCall. Cleared in onToolResult so a
-          // permission-denied / errored re-attempt of the same toolCallId
-          // can't accidentally inherit a stale diff.
-          pendingEditDiffsRef.current.set(toolCallId, payload)
-        },
-        onToolResult: (toolCallId, result, isError) => {
-          const pending = pendingToolsRef.current.get(toolCallId)
-          pendingToolsRef.current.delete(toolCallId)
-          const editPayload = pendingEditDiffsRef.current.get(toolCallId)
-          pendingEditDiffsRef.current.delete(toolCallId)
-          // Hidden internal tool (toolSearch): onToolCall added no live row, so
-          // there's nothing to clear and no scrollback line to push. Bail after
-          // the pending-map cleanup above.
-          if (pending && pending.toolName === TOOL_SEARCH_TOOL_NAME) return
-          const durationMs = pending ? Date.now() - pending.startedAt : 0
-          setState((prev) => {
-            const tc: DisplayToolCall = {
-              id: `tc-${Date.now()}`,
-              toolName: pending?.toolName ?? 'unknown',
-              input: pending?.input ?? {},
-              output: result,
-              status: isError ? 'error' : 'completed',
-              durationMs,
-              ...(editPayload ? { editPayload } : {}),
-            }
-            return {
-              ...prev,
-              activeToolCalls: prev.activeToolCalls.filter((t) => t.id !== toolCallId),
-              shellOutput: '',
-              messages: [
-                ...prev.messages,
-                {
-                  id: `tool-${Date.now()}`,
-                  role: 'assistant',
-                  content: '',
-                  toolCalls: [tc],
-                  timestamp: Date.now(),
-                },
-              ],
-            }
-          })
-        },
+        ...toolLifecycleCallbacks,
         onAskPermission: (toolCall) => {
           return new Promise<'yes' | 'always' | 'no'>((resolve) => {
             permissionResolversRef.current.push(resolve)
@@ -541,33 +479,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // shape and applied auto-clear semantics; we just store what
           // it gives us so ChatInput can re-render the todo panel.
           setState((prev) => ({ ...prev, todos }))
-        },
-        onSubAgentEvent: (event) => {
-          if (event.kind === 'tool-call') {
-            setState((prev) => {
-              const idx = prev.activeToolCalls.findIndex((t) => t.id === event.toolCallId)
-              if (idx < 0) return prev
-              const tc = prev.activeToolCalls[idx]!
-              const label = `${event.subToolName}: ${previewSubInput((event.subInput as Record<string, unknown>) ?? {})}`
-              const history = [...(tc.subToolHistory ?? []), label]
-              const next = prev.activeToolCalls.slice()
-              next[idx] = { ...tc, progress: label, subToolHistory: history }
-              return { ...prev, activeToolCalls: next }
-            })
-          }
-          if (event.kind === 'end') {
-            const turnInfo = `${event.turnCount}t`
-            const tokInfo =
-              event.tokenUsage.totalTokens > 1000
-                ? `${(event.tokenUsage.totalTokens / 1000).toFixed(1)}k tok`
-                : `${event.tokenUsage.totalTokens} tok`
-            const durInfo =
-              event.durationMs > 1000 ? `${(event.durationMs / 1000).toFixed(1)}s` : `${event.durationMs}ms`
-            callbacks.onToolProgress(event.toolCallId, `Done (${turnInfo}, ${tokInfo}, ${durInfo})`)
-          }
-        },
-        onShellOutput: (chunk) => {
-          setState((prev) => ({ ...prev, shellOutput: prev.shellOutput + chunk }))
         },
         onUsageUpdate: (usage) => {
           setState((prev) => ({ ...prev, usage }))
@@ -709,7 +620,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         return null
       }
     },
-    [options, initialize, appendTextDelta, flushBuffer, appendMessage],
+    [options, initialize, flushBuffer, appendMessage, handleTextDelta, toolLifecycleCallbacks],
   )
 
   /** Resolve the first pending permission request and pop it from the queue */
@@ -767,52 +678,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const createGoalCallbacks = useCallback((): AgentCallbacks => {
     return {
       onTextDelta: appendTextDelta,
-      onToolCall: (toolCallId, toolName, input) => {
-        flushBuffer()
-        pendingToolsRef.current.set(toolCallId, { toolName, input, startedAt: Date.now() })
-        setState((prev) => ({
-          ...prev,
-          activeToolCalls: [...prev.activeToolCalls, { id: toolCallId, toolName, input }],
-        }))
-      },
-      onToolProgress: (toolCallId, message) => {
-        setState((prev) => {
-          const idx = prev.activeToolCalls.findIndex((t) => t.id === toolCallId)
-          if (idx < 0) return prev
-          const next = prev.activeToolCalls.slice()
-          next[idx] = { ...next[idx], progress: message }
-          return { ...prev, activeToolCalls: next }
-        })
-      },
-      onToolResult: (toolCallId, result, isError) => {
-        const pending = pendingToolsRef.current.get(toolCallId)
-        pendingToolsRef.current.delete(toolCallId)
-        const durationMs = pending ? Date.now() - pending.startedAt : 0
-        setState((prev) => {
-          const tc: DisplayToolCall = {
-            id: `tc-${Date.now()}`,
-            toolName: pending?.toolName ?? 'unknown',
-            input: pending?.input ?? {},
-            output: result,
-            status: isError ? 'error' : 'completed',
-            durationMs,
-          }
-          return {
-            ...prev,
-            activeToolCalls: prev.activeToolCalls.filter((t) => t.id !== toolCallId),
-            messages: [
-              ...prev.messages,
-              {
-                id: `tool-${Date.now()}`,
-                role: 'assistant',
-                content: '',
-                toolCalls: [tc],
-                timestamp: Date.now(),
-              },
-            ],
-          }
-        })
-      },
+      ...goalToolLifecycleCallbacks,
       onAskPermission: (toolCall) => {
         return new Promise<'yes' | 'always' | 'no'>((resolve) => {
           permissionResolversRef.current.push(resolve)
@@ -863,7 +729,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       },
       onError: (error) => setState((prev) => ({ ...prev, error: error.message })),
     }
-  }, [appendMessage, appendTextDelta, flushBuffer, options.mcpRegistry])
+  }, [appendMessage, appendTextDelta, goalToolLifecycleCallbacks, options.mcpRegistry])
 
   const ensureLoopState = useCallback((): LoopState => {
     if (!loopStateRef.current) {
