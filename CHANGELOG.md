@@ -1,3 +1,11 @@
+## v0.3.13 (2026-07-19)
+
+### Bug Fixes
+
+- render update hint in ChatInput footer instead of stderr (7967a38)
+- normalize assistant output spacing (f11172e)
+- preserve scenario working directory (a7b81c8)
+
 ## v0.3.12 (2026-07-11)
 
 ### Features
