@@ -2044,7 +2044,7 @@ export function ChatInput({
     if (notice) {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(notice, S_DIM))
+      cells.push(...ansiTextToCells(notice))
       leftCells = cells
     } else if (permissionMode === 'plan') {
       const cells: Cell[] = []

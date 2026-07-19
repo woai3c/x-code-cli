@@ -109,7 +109,7 @@ function compareVersions(a: string, b: string): number {
 export async function checkForUpdate(): Promise<void> {
   if (!process.stderr.isTTY) return
   const current = VERSION
-  if (current === '0.0.0-dev') return
+  if (!current || current === '0.0.0-dev') return
 
   // Check disk cache first
   try {
@@ -142,20 +142,50 @@ export async function checkForUpdate(): Promise<void> {
     fs.mkdirSync(path.dirname(UPDATE_CHECK_CACHE), { recursive: true })
     fs.writeFileSync(UPDATE_CHECK_CACHE, JSON.stringify({ checkedAt: Date.now(), latest }), 'utf-8')
 
-    if (compareVersions(latest, current) > 0) {
-      printUpdateHint(current, latest)
+    if (compareVersions(latest!, current) > 0) {
+      printUpdateHint(current, latest!)
     }
   } finally {
     clearTimeout(timeout)
   }
 }
 
+let pendingUpdateHint: string | null = null
+
+/** Callback registered by the TUI to receive update hints after mount.
+ *  checkForUpdate fires before Ink mounts most of the time, but the
+ *  async network-fetch path may complete after mount — this lets the
+ *  hint reach the UI without fighting ChatInput's cell-grid rendering. */
+let onUpdateHint: ((msg: string) => void) | null = null
+
+/** Register a handler for update hints. Called by App on mount so both
+ *  the pre-mount cache-hit path and the post-mount network-fetch path
+ *  render through ChatInput's message system instead of stderr. */
+export function registerUpdateHintHandler(handler: (msg: string) => void): void {
+  onUpdateHint = handler
+}
+
+/** Retrieve and clear any hint that arrived before the handler was
+ *  registered. Used by App on mount to catch the cache-hit case. */
+export function drainPendingUpdateHint(): string | null {
+  const hint = pendingUpdateHint
+  pendingUpdateHint = null
+  return hint
+}
+
 function printUpdateHint(current: string, latest: string): void {
-  console.error(
+  const msg =
     chalk.yellow('Update available:') +
-      ` ${chalk.gray(current)} → ${chalk.green(latest)}` +
-      chalk.gray('  Run ') +
-      chalk.cyan('pnpm add -g @x-code-cli/cli') +
-      chalk.gray(' to update.'),
-  )
+    ` ${chalk.gray(current)}` +
+    ` ${chalk.gray('\u2192')}` +
+    ` ${chalk.green(latest)}` +
+    chalk.gray('  Run ') +
+    chalk.cyan('npm install -g @x-code-cli/cli') +
+    chalk.gray(' to update.')
+  if (onUpdateHint) {
+    onUpdateHint(msg)
+    return
+  }
+  // Fallback: store so the TUI can pick it up once it mounts.
+  pendingUpdateHint = msg
 }

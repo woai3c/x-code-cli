@@ -33,6 +33,7 @@ import type {
   TokenUsage,
 } from '@x-code-cli/core'
 
+import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
 import { VERSION } from '../../version.js'
 import { createBrowserCommandHandler } from '../commands/browser.js'
 import { createDoctorCommandHandler } from '../commands/doctor.js'
@@ -492,6 +493,10 @@ export function App({
   // kept narrow on purpose so future use-cases have a single rendering
   // slot to share. Mirrors Claude Code's PromptInputFooter placement.
   const [notice, setNotice] = useState<string | null>(null)
+  // Track whether the current notice is an update hint (vs Ctrl+C notice).
+  // Needed because the update hint string contains ANSI escape codes and
+  // can't be distinguished from plain-text notices via startsWith.
+  const isUpdateNoticeRef = useRef(false)
   // Timestamp of the most recent Ctrl+C. While inside the arm window the
   // next Ctrl+C exits; outside it, Ctrl+C just re-arms (and cancels the
   // running turn if any). Mirrors Claude Code's `useExitOnCtrlCD` 2s window.
@@ -500,8 +505,11 @@ export function App({
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Auto-clear the notice after the arm window expires.
+  // Skip for update hints — they persist until the user sends their first
+  // message (cleared in handleSubmit via isUpdateNoticeRef).
   useEffect(() => {
     if (!notice) return
+    if (isUpdateNoticeRef.current) return
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
     noticeTimerRef.current = setTimeout(() => setNotice(null), ctrlCArmWindowMs)
     return () => {
@@ -549,6 +557,26 @@ export function App({
   useEffect(() => {
     onSessionInfoReady?.(getSessionInfo)
   }, [getSessionInfo]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wire the update-hint callback (from startup-prints) into ChatInput's
+  // footer `notice` slot, below the input box. This avoids the stderr
+  // vs cell-grid rendering conflict that caused the leading character
+  // ("U" in "Update") to be eaten.
+  //
+  // Two cases:
+  //   a) cache-hit: hint arrived before mount → drainPendingUpdateHint now
+  //   b) network-fetch: hint arrives later → registerUpdateHintHandler
+  useEffect(() => {
+    registerUpdateHintHandler((msg) => {
+      isUpdateNoticeRef.current = true
+      setNotice(msg)
+    })
+    const drained = drainPendingUpdateHint()
+    if (drained) {
+      isUpdateNoticeRef.current = true
+      setNotice(drained)
+    }
+  }, [])
 
   /** /resume — list every past session in this project and let the user
    *  pick one to load. Reuses the askQuestion picker (same dialog as
@@ -864,6 +892,13 @@ export function App({
   /** Echo a slash command to the message history (so the user can see what they typed) */
   /** Handle user input (including slash commands) */
   async function handleSubmit(text: string) {
+    // Clear any update hint on first user action — the user saw it,
+    // no need to keep it occupying the footer.
+    if (isUpdateNoticeRef.current) {
+      isUpdateNoticeRef.current = false
+      setNotice(null)
+    }
+
     // Slash commands
     if (text.startsWith('/')) {
       const parts = text.slice(1).trim().split(/\s+/)
