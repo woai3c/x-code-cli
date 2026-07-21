@@ -23,6 +23,7 @@ import {
   providerOf,
   resolveModelId,
   saveUserConfig,
+  supportsReasoningTier,
   wrapActivatedSkill,
 } from '@x-code-cli/core'
 import type {
@@ -1165,7 +1166,10 @@ export function App({
     }
 
     // ── Reasoning-tier picker ──
-    const tierConfig = PROVIDER_REASONING_TIERS[modelProvider]
+    // Only for models that actually honor a tier (e.g. thinkingLevel is
+    // Gemini 3-only, Kimi reasoningEffort is K3-only); others keep the
+    // binary /thinking toggle as their only knob.
+    const tierConfig = supportsReasoningTier(modelId) ? PROVIDER_REASONING_TIERS[modelProvider] : undefined
     if (tierConfig) {
       const tierAnswer = await askQuestion(
         `Reasoning effort for ${renderModelLabel(modelId)}:`,

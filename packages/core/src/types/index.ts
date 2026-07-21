@@ -343,7 +343,6 @@ export const MODEL_ALIASES: Record<string, string> = {
   opus: 'anthropic:claude-opus-4-8',
   haiku: 'anthropic:claude-haiku-4-5',
   gpt5: 'openai:gpt-5.6-sol',
-  gpt4: 'openai:gpt-5.6-luna',
   gemini: 'google:gemini-3.5-flash',
   deepseek: 'deepseek:deepseek-v4-flash',
   'deepseek-pro': 'deepseek:deepseek-v4-pro',
@@ -612,10 +611,10 @@ export const PROVIDER_KEY_URLS: Record<string, string> = {
 // ─── Multi-base-URL providers ───
 //
 // Providers that serve multiple endpoints for the same API (regional
-// platforms, GovCloud, etc.). When a user has configured an API key for
-// such a provider but hasn't set the corresponding *_BASE_URL env var,
-// the /model flow shows a picker so they can choose the right endpoint.
-// The chosen URL is persisted in UserConfig.baseUrls.
+// platforms, plan-specific gateways, etc.). When a user picks a model from
+// such a provider, the /model flow shows a picker so they can choose the
+// right endpoint. The chosen URL is persisted in UserConfig.baseUrls and
+// is the single source of truth — no env var involved.
 
 export const PROVIDER_BASE_URLS: Record<string, { options: readonly { label: string; url: string }[] }> = {
   moonshotai: {
@@ -636,13 +635,17 @@ export const PROVIDER_BASE_URLS: Record<string, { options: readonly { label: str
 //
 // Providers with no entry here (deepseek, alibaba, zhipu)
 // only support the binary /thinking toggle — skip the tier picker.
+//
+// `modelPattern` gates the tier to the models that actually honor it:
+// within a provider, only some model families expose the granular knob
+// (e.g. thinkingLevel is Gemini 3-only, Kimi's reasoningEffort is K3-only).
+// Models that don't match fall back to the binary /thinking toggle.
 
 export const PROVIDER_REASONING_TIERS: Record<
   string,
-  { key: string; options: readonly { label: string; value: string; description: string }[] }
+  { modelPattern?: RegExp; options: readonly { label: string; value: string; description: string }[] }
 > = {
   openai: {
-    key: 'reasoningEffort',
     options: [
       { label: 'Minimal', value: 'minimal', description: 'Bare-minimum reasoning' },
       { label: 'Low', value: 'low', description: 'Fast, concise reasoning' },
@@ -651,7 +654,6 @@ export const PROVIDER_REASONING_TIERS: Record<
     ],
   },
   anthropic: {
-    key: 'effort',
     options: [
       { label: 'Low', value: 'low', description: 'Minimal reasoning, fastest' },
       { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
@@ -659,21 +661,22 @@ export const PROVIDER_REASONING_TIERS: Record<
     ],
   },
   google: {
-    key: 'thinkingLevel',
+    // thinkingLevel is a Gemini 3 feature; Gemini 2.5 uses thinkingBudget.
+    modelPattern: /gemini-3/,
     options: [
       { label: 'Low', value: 'low', description: 'Lower latency, lower cost' },
       { label: 'High', value: 'high', description: 'Deeper reasoning, higher quality' },
     ],
   },
   xai: {
-    key: 'reasoningEffort',
     options: [
       { label: 'Low', value: 'low', description: 'Faster, cheaper responses' },
       { label: 'High', value: 'high', description: 'Deeper reasoning' },
     ],
   },
   moonshotai: {
-    key: 'reasoningEffort',
+    // reasoning_effort is K3-only; K2.x uses the binary thinking switch.
+    modelPattern: /kimi-k3/,
     options: [
       { label: 'Low', value: 'low', description: 'Faster, concise reasoning' },
       { label: 'High', value: 'high', description: 'Deeper reasoning' },

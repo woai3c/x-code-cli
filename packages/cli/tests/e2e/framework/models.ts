@@ -19,24 +19,10 @@ const PROVIDER_MODELS: Record<string, string[]> = {
     'anthropic:claude-sonnet-5',
     'anthropic:claude-haiku-4-5',
   ],
-  OPENAI_API_KEY: [
-    'openai:gpt-5.6-sol',
-    'openai:gpt-5.4-mini',
-    'openai:gpt-5.6-sol',
-    'openai:gpt-5.6-luna',
-    'openai:gpt-5.6-sol',
-    'openai:gpt-5.6-terra',
-  ],
+  OPENAI_API_KEY: ['openai:gpt-5.6-sol', 'openai:gpt-5.6-terra', 'openai:gpt-5.6-luna', 'openai:gpt-5.4-mini'],
   GOOGLE_GENERATIVE_AI_API_KEY: ['google:gemini-3.5-flash', 'google:gemini-2.5-pro', 'google:gemini-2.5-flash'],
   XAI_API_KEY: ['xai:grok-4.3', 'xai:grok-4.5'],
-  ALIBABA_API_KEY: [
-    'alibaba:qwen3.7-max',
-    'alibaba:qwen3-coder-plus',
-    'alibaba:qwq-plus',
-    'alibaba:qwen3.7-max',
-    'alibaba:qwen3.7-plus',
-    'alibaba:qwen3.7-plus',
-  ],
+  ALIBABA_API_KEY: ['alibaba:qwen3.7-max', 'alibaba:qwen3.7-plus', 'alibaba:qwen3-coder-plus', 'alibaba:qwq-plus'],
   ZHIPU_API_KEY: ['zhipu:glm-5.2', 'zhipu:glm-5', 'zhipu:glm-4.7'],
   MOONSHOT_API_KEY: ['moonshotai:kimi-k2.6', 'moonshotai:kimi-k3'],
 }
@@ -49,13 +35,12 @@ export const ALIASES: Record<string, string> = {
   opus: 'anthropic:claude-opus-4-8',
   haiku: 'anthropic:claude-haiku-4-5',
   gpt5: 'openai:gpt-5.6-sol',
-  gpt4: 'openai:gpt-5.6-sol',
   gemini: 'google:gemini-3.5-flash',
   deepseek: 'deepseek:deepseek-v4-flash',
   'deepseek-pro': 'deepseek:deepseek-v4-pro',
   qwen: 'alibaba:qwen3.7-max',
   glm: 'zhipu:glm-5.2',
-  kimi: 'moonshotai:kimi-k2.6',
+  kimi: 'moonshotai:kimi-k3',
 }
 
 export function resolveModelArg(input: string): string {

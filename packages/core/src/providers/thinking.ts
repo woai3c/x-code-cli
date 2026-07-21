@@ -29,9 +29,22 @@
 // and stays well under the 1M context window budget. Users on Opus who want
 // a wider budget can edit this and rebuild — exposing a `budget` slash arg
 // is over-engineering for a feature most users will leave at "on" or "off".
+import { PROVIDER_REASONING_TIERS } from '../types/index.js'
 import { providerOf } from './capabilities.js'
 
 const ANTHROPIC_BUDGET_TOKENS = 8000
+
+/** Whether the model exposes a granular reasoning-effort tier (vs. the
+ *  binary /thinking toggle). A provider has tiers but only some of its
+ *  model families honor them (thinkingLevel is Gemini 3-only, Kimi's
+ *  reasoningEffort is K3-only) — modelPattern in PROVIDER_REASONING_TIERS
+ *  gates that. Drives both the /model tier picker and the effort branch
+ *  in getThinkingProviderOptions. */
+export function supportsReasoningTier(modelId: string): boolean {
+  const config = PROVIDER_REASONING_TIERS[providerOf(modelId)]
+  if (!config) return false
+  return !config.modelPattern || config.modelPattern.test(modelId)
+}
 
 /**
  * Build the `providerOptions` entry needed to put the given model into the
@@ -62,8 +75,11 @@ export function getThinkingProviderOptions(
 ): Record<string, Record<string, unknown>> {
   const provider = providerOf(modelId)
 
-  // Tiered reasoning — user picked an explicit effort level.
-  if (effort) {
+  // Tiered reasoning — user picked an explicit effort level AND the model
+  // honors it. A stored tier for a model outside the tier's modelPattern
+  // (e.g. kimi-k2.6, gemini-2.5-pro) falls through to the binary toggle so
+  // /thinking keeps working there.
+  if (effort && supportsReasoningTier(modelId)) {
     switch (provider) {
       case 'openai':
         return { openai: { reasoningEffort: effort } }
@@ -74,13 +90,9 @@ export function getThinkingProviderOptions(
       case 'xai':
         return { xai: { reasoningEffort: effort } }
       case 'moonshotai':
-        // Kimi K3 uses the top-level `reasoning_effort` field (low/high/max);
-        // K2.6/K2.7-code may ignore it, but sending the option is harmless.
+        // Kimi K3 uses the top-level `reasoning_effort` field (low/high/max).
         return { moonshotai: { reasoningEffort: effort } }
       default:
-        // deepseek, alibaba, zhipu — no tier support, but
-        // keep the effort around in case they add it later. Fall through
-        // to the binary toggle below.
         break
     }
   }

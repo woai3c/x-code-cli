@@ -236,7 +236,7 @@ async function collectTurnResponse(
     // to `getContextWindow(modelId)` in the footer "N / M · X%" indicator.
     // Cumulative counters above remain for /usage billing summaries.
     state.tokenUsage.currentContextTokens = inputTokens + outputTokens
-    if (inputTokens > 0) state.lastInputTokens = inputTokens
+    if (raw.inputTokens != null) state.lastInputTokens = inputTokens
     callbacks.onUsageUpdate(state.tokenUsage)
 
     // ── Cache break detection ──
@@ -420,9 +420,9 @@ async function runTurn(
 
   // Per-provider prompt caching: Anthropic gets cache_control breakpoints on
   // the system prompt + last tool + last two messages (4 total, the API
-  // maximum); OpenAI gets a stable promptCacheKey keyed on sessionId;
-  // OpenAI-compatible providers rely on the system-prompt cache in LoopState
-  // keeping the prefix byte-stable.
+  // maximum); OpenAI and Moonshot get a stable cache key keyed on sessionId;
+  // the remaining OpenAI-compatible providers rely on the system-prompt
+  // cache in LoopState keeping the prefix byte-stable.
   const cached = applyCacheControl({
     system: systemPrompt,
     messages: state.messages,

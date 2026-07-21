@@ -90,6 +90,7 @@ export type {
 // Provider capabilities
 export { capabilitiesOf, modelSupportsVision, providerOf } from './providers/capabilities.js'
 export type { ProviderCapabilities } from './providers/capabilities.js'
+export { supportsReasoningTier } from './providers/thinking.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'
