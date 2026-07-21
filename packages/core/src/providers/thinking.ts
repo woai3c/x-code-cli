@@ -2,22 +2,26 @@
 //
 // Each provider exposes a different switch for "spend extra tokens reasoning
 // before producing output". The defaults across the eight providers we
-// support are inconsistent: Gemini and Kimi default ON; Claude Sonnet,
-// DeepSeek V4, Qwen, and most others default OFF; GPT-4.1/5.5 and
-// Grok-4.3 have no thinking concept at all on those exact model ids.
+// support are inconsistent: Gemini defaults ON; Claude Sonnet, DeepSeek V4,
+// Qwen, and most others default OFF.
 // The user-facing `/thinking on|off` toggle is meant to give one uniform
 // knob across all of them.
 //
 // We map the toggle to the closest equivalent in each provider's AI SDK:
 //
-//   anthropic   thinking: { type: 'enabled' | 'disabled', budgetTokens }
+//   anthropic   thinking: { type: 'enabled' | 'disabled', budgetTokens }  (binary)
+//              effort: 'low' | 'medium' | 'high'                          (tier)
 //   deepseek    thinking: { type: 'enabled' | 'disabled' }
-//   moonshotai  thinking: { type: 'enabled' | 'disabled' }
+//   moonshotai  thinking: { type: 'enabled' | 'disabled' }               (K2.x, binary)
+//              reasoningEffort: 'low' | 'high' | 'max'                   (K3, tier)
 //   alibaba     enableThinking: boolean
-//   google      thinkingConfig: { thinkingBudget: -1 (dynamic) | 0 (off) }
-//   xai         reasoningEffort: 'high' | 'low'         (grok-3-mini only)
-//   openai      reasoningEffort: 'high' | 'minimal'      (o-series only)
-//   zhipu       thinking: { type: 'enabled' | 'disabled' } (GLM-5/5.1;
+//   google      thinkingConfig: { thinkingBudget: -1 | 0 }               (Gemini 2.5, binary)
+//              thinkingConfig: { thinkingLevel: 'LOW' | 'HIGH' }          (Gemini 3, tier)
+//   xai         reasoningEffort: 'high' | 'low'                           (binary)
+//              reasoningEffort: 'low' | 'high'                            (tier)
+//   openai      reasoningEffort: 'high' | 'minimal'                      (binary)
+//              reasoningEffort: 'minimal' | 'low' | 'medium' | 'high'    (tier)
+//   zhipu       thinking: { type: 'enabled' | 'disabled' } (GLM-5/5.2;
 //                 GLM-4-Plus ignores it silently)
 //
 // The numeric budget for Anthropic is set generous-but-not-unbounded:
@@ -34,15 +38,54 @@ const ANTHROPIC_BUDGET_TOKENS = 8000
  * desired thinking state. Returns an empty object when the model has no
  * thinking knob (so callers can spread/merge unconditionally).
  *
- * `enabled` semantics:
+ * When `effort` is set (user picked a tier via /model), it takes priority
+ * over the `enabled` flag — tier is the user's explicit choice. The /thinking
+ * toggle is only used as a fallback for models without an explicit tier.
+ *
+ * `enabled` semantics (tier-less fallback):
  *   true  — opt INTO maximum reasoning the provider supports
  *   false — opt OUT (or pin to a low/disabled mode where the provider
  *           defaults to thinking-on and forces some always-on minimum,
  *           e.g. Gemini 2.5 Pro can't go below 128 tokens — we still
  *           ask for the lowest the SDK accepts)
+ *
+ * `effort` semantics (tiered model):
+ *   For providers with granular reasoning control (OpenAI, Anthropic, Google,
+ *   xAI, Moonshot), the effort string is mapped to the corresponding AI SDK key.
+ *   Providers without tier support (deepseek, alibaba, zhipu)
+ *   ignore `effort` and always use the binary `enabled` toggle.
  */
-export function getThinkingProviderOptions(modelId: string, enabled: boolean): Record<string, Record<string, unknown>> {
+export function getThinkingProviderOptions(
+  modelId: string,
+  enabled: boolean,
+  effort?: string,
+): Record<string, Record<string, unknown>> {
   const provider = providerOf(modelId)
+
+  // Tiered reasoning — user picked an explicit effort level.
+  if (effort) {
+    switch (provider) {
+      case 'openai':
+        return { openai: { reasoningEffort: effort } }
+      case 'anthropic':
+        return { anthropic: { effort } }
+      case 'google':
+        return { google: { thinkingConfig: { thinkingLevel: effort.toUpperCase() } } }
+      case 'xai':
+        return { xai: { reasoningEffort: effort } }
+      case 'moonshotai':
+        // Kimi K3 uses the top-level `reasoning_effort` field (low/high/max);
+        // K2.6/K2.7-code may ignore it, but sending the option is harmless.
+        return { moonshotai: { reasoningEffort: effort } }
+      default:
+        // deepseek, alibaba, zhipu — no tier support, but
+        // keep the effort around in case they add it later. Fall through
+        // to the binary toggle below.
+        break
+    }
+  }
+
+  // Binary /thinking toggle (no explicit tier, or provider without tiers).
   switch (provider) {
     case 'anthropic':
       return enabled
@@ -57,44 +100,25 @@ export function getThinkingProviderOptions(modelId: string, enabled: boolean): R
         : { deepseek: { thinking: { type: 'disabled' } } }
 
     case 'moonshotai':
-      // kimi-k2.5 is a thinking model by default; explicit `disabled`
-      // turns reasoning off on the provider side.
       return enabled
         ? { moonshotai: { thinking: { type: 'enabled' } } }
         : { moonshotai: { thinking: { type: 'disabled' } } }
 
     case 'alibaba':
-      // Hybrid Qwen ids honour `enableThinking` per-request; the
-      // dedicated reasoning ids (qwq-plus, qwen3-*-thinking-*) ignore
-      // an `enableThinking: false` request and keep thinking on.
       return { alibaba: { enableThinking: enabled } }
 
     case 'google':
-      // Gemini 2.5 Pro can't be fully turned off (min budget 128) — we
-      // still send `thinkingBudget: 0` for OFF and let the SDK clamp;
-      // 2.5 Flash and Lite respect 0 as "no thinking". `-1` is the SDK's
-      // sentinel for "dynamic budget — model decides", which is what
-      // Pro uses by default and what we want for ON anywhere.
       return enabled
         ? { google: { thinkingConfig: { thinkingBudget: -1 } } }
         : { google: { thinkingConfig: { thinkingBudget: 0 } } }
 
     case 'xai':
-      // Only grok-3-mini and grok-4-mini honour `reasoningEffort`; grok-3
-      // and grok-4 ignore it. Sending the option is harmless on the
-      // ignoring models — the SDK passes it through and the API silently
-      // discards it.
       return enabled ? { xai: { reasoningEffort: 'high' } } : { xai: { reasoningEffort: 'low' } }
 
     case 'openai':
-      // Only o-series and gpt-5 reasoning models use `reasoningEffort`;
-      // gpt-4.1 ignores it. Same harmless pass-through as xAI.
       return enabled ? { openai: { reasoningEffort: 'high' } } : { openai: { reasoningEffort: 'minimal' } }
 
     case 'zhipu':
-      // GLM-5/5.1 support thinking via the same pattern as DeepSeek;
-      // GLM-4-Plus does not. Sending the option is harmless on the
-      // non-supporting models — the API silently ignores it.
       return enabled ? { zhipu: { thinking: { type: 'enabled' } } } : { zhipu: { thinking: { type: 'disabled' } } }
 
     case 'custom':

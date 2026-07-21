@@ -124,7 +124,7 @@ Every hook receives a single JSON line on stdin. Top-level shape:
   "session": {
     // every event has this
     "cwd": "/abs/path/to/project",
-    "modelId": "anthropic:claude-sonnet-4-6",
+    "modelId": "anthropic:claude-sonnet-5",
   },
   "plugin": {
     // identifies which plugin's

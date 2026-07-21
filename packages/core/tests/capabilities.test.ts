@@ -8,16 +8,16 @@ describe('modelSupportsVision', () => {
   it('returns the catalog vision flag for listed vision models', () => {
     expect(modelSupportsVision('anthropic:claude-haiku-4-5')).toBe(true)
     expect(modelSupportsVision('moonshotai:kimi-k2.6')).toBe(true)
-    expect(modelSupportsVision('alibaba:qwen-vl-plus')).toBe(true)
-    expect(modelSupportsVision('moonshotai:moonshot-v1-32k-vision-preview')).toBe(true)
-    expect(modelSupportsVision('zhipu:glm-4v-flash')).toBe(true)
+    expect(modelSupportsVision('alibaba:qwen3-vl-flash')).toBe(true)
+    expect(modelSupportsVision('moonshotai:kimi-k2.6')).toBe(true)
+    expect(modelSupportsVision('zhipu:glm-4.6v')).toBe(true)
   })
 
   it('returns false for listed text-only models even on image-capable providers', () => {
     // alibaba / zhipu providers accept image parts at the API level, but these
     // specific models are text-only — the per-model flag must win.
     expect(modelSupportsVision('alibaba:qwen3.7-max')).toBe(false)
-    expect(modelSupportsVision('zhipu:glm-5.1')).toBe(false)
+    expect(modelSupportsVision('zhipu:glm-5.2')).toBe(false)
     expect(modelSupportsVision('deepseek:deepseek-v4-flash')).toBe(false)
   })
 
@@ -37,15 +37,15 @@ describe('modelSupportsVision', () => {
     // capabilitiesOf is intentionally provider-level; both Qwen models report
     // image:true there, and only modelSupportsVision distinguishes them.
     expect(capabilitiesOf('alibaba:qwen3.7-max').image).toBe(true)
-    expect(capabilitiesOf('alibaba:qwen-vl-plus').image).toBe(true)
+    expect(capabilitiesOf('alibaba:qwen3-vl-flash').image).toBe(true)
     expect(modelSupportsVision('alibaba:qwen3.7-max')).toBe(false)
-    expect(modelSupportsVision('alibaba:qwen-vl-plus')).toBe(true)
+    expect(modelSupportsVision('alibaba:qwen3-vl-flash')).toBe(true)
   })
 })
 
 describe('toolResultImage capability', () => {
   it('is true only for Anthropic — the one provider that carries images in tool-results', () => {
-    expect(capabilitiesOf('anthropic:claude-sonnet-4-6').toolResultImage).toBe(true)
+    expect(capabilitiesOf('anthropic:claude-sonnet-5').toolResultImage).toBe(true)
   })
 
   it('is false for providers that accept images only in USER messages', () => {
@@ -56,8 +56,8 @@ describe('toolResultImage capability', () => {
       'openai:gpt-5',
       'google:gemini-2.5-flash',
       'moonshotai:kimi-k2.6',
-      'alibaba:qwen-vl-plus',
-      'zhipu:glm-4v-flash',
+      'alibaba:qwen3-vl-flash',
+      'zhipu:glm-4.6v',
       'xai:grok-4.3',
       'deepseek:deepseek-v4',
       'custom:whatever',

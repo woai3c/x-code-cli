@@ -11,12 +11,13 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createXai } from '@ai-sdk/xai'
 import { createProviderRegistry } from 'ai'
 
-import { getProviderOptions } from '../config/index.js'
+import { getProviderOptions, loadUserConfig } from '../config/index.js'
 
 export function createModelRegistry() {
   const opts = getProviderOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers: Record<string, any> = {}
+  const config = loadUserConfig()
 
   if (opts.anthropic) providers.anthropic = createAnthropic({ fetch: permanentErrorFetch })
   if (opts.openai) providers.openai = createOpenAI({ fetch: permanentErrorFetch })
@@ -31,15 +32,31 @@ export function createModelRegistry() {
   }
   if (opts.zhipu) providers.zhipu = zhipu
   if (opts.moonshotai) {
-    // The SDK defaults to the international endpoint (api.moonshot.ai). Keys
-    // minted on the China platform (platform.moonshot.cn / platform.kimi.com)
-    // only authenticate against api.moonshot.cn — without an override they 401
-    // with "Invalid Authentication". MOONSHOT_BASE_URL lets those users point
-    // at the right endpoint (e.g. https://api.moonshot.cn/v1).
-    providers.moonshotai = createMoonshotAI({
-      fetch: permanentErrorFetch,
-      ...(process.env.MOONSHOT_BASE_URL ? { baseURL: process.env.MOONSHOT_BASE_URL } : {}),
-    })
+    // Base URL comes from the /model picker, persisted in config.baseUrls.
+    // No env-var escape hatch — the picker is the single source of truth,
+    // visible to the user and easy to change (just re-run /model).
+    const baseURL = config.baseUrls?.moonshotai
+
+    // Coding Plan (kimi.com/code/console) uses api.kimi.com/coding/v1, which is
+    // a plain OpenAI-compatible endpoint. The @ai-sdk/moonshotai provider
+    // injects per-request transforms (e.g. thinking config wrapping) that are
+    // incompatible with the Coding Plan's direct API — keys minted through the
+    // Coding Plan console authenticate only here and 401 against the moonshot.*
+    // endpoints. Route through createOpenAICompatible so the request goes
+    // through unmodified.
+    if (baseURL?.includes('api.kimi.com/coding')) {
+      providers.moonshotai = createOpenAICompatible({
+        name: 'moonshotai',
+        apiKey: opts.moonshotai,
+        baseURL,
+        fetch: permanentErrorFetch,
+      })
+    } else {
+      providers.moonshotai = createMoonshotAI({
+        fetch: permanentErrorFetch,
+        ...(baseURL ? { baseURL } : {}),
+      })
+    }
   }
 
   // Custom OpenAI compatible provider

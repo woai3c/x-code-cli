@@ -137,6 +137,16 @@ export interface UserConfig {
   /** Browser sub-agent settings. Absent / `enabled !== true` ⇒ the browser
    *  agent is not registered (the default). */
   browser?: BrowserConfig
+  /** Per-model reasoning effort levels chosen via the /model tier picker.
+   *  Key = full model id (e.g. "openai:gpt-5.6-sol"), value = effort label
+   *  (e.g. "medium"). When present, it overrides the /thinking toggle for
+   *  that model — tier knows what the user actually wants; /thinking is a
+   *  coarse fallback for models without an explicit tier. */
+  modelReasoningEffort?: Record<string, string>
+  /** Base URLs for multi-endpoint providers, chosen via the /model base-URL
+   *  picker. Key = provider key (e.g. "moonshotai"), value = full base URL
+   *  (e.g. "https://api.moonshot.cn/v1"). */
+  baseUrls?: Record<string, string>
 }
 
 /** Path to the user config file. Exposed so other modules that want to

@@ -8,6 +8,7 @@ import path from 'node:path'
 import { streamText } from 'ai'
 import type { LanguageModel, UserContent } from 'ai'
 
+import { loadUserConfig } from '../config/index.js'
 import { aggregateUserPromptSubmit } from '../hooks/bus.js'
 import type { HookEvent } from '../hooks/types.js'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
@@ -199,8 +200,24 @@ async function collectTurnResponse(
 
   const usage = await result.usage
   if (usage) {
-    state.tokenUsage.inputTokens += usage.inputTokens ?? 0
-    state.tokenUsage.outputTokens += usage.outputTokens ?? 0
+    // AI SDK v6 (createOpenAICompatible) returns inputTokens / outputTokens
+    // as objects { total, noCache, cacheRead, etc. }; older adapters
+    // (DeepSeek, Anthropic, etc.) return them as raw numbers. Normalize.
+    const raw = usage as Record<string, unknown>
+    const inputTokens =
+      typeof raw.inputTokens === 'number'
+        ? raw.inputTokens
+        : typeof raw.inputTokens === 'object' && raw.inputTokens !== null
+          ? (((raw.inputTokens as Record<string, unknown>).total as number) ?? 0)
+          : 0
+    const outputTokens =
+      typeof raw.outputTokens === 'number'
+        ? raw.outputTokens
+        : typeof raw.outputTokens === 'object' && raw.outputTokens !== null
+          ? (((raw.outputTokens as Record<string, unknown>).total as number) ?? 0)
+          : 0
+    state.tokenUsage.inputTokens += inputTokens
+    state.tokenUsage.outputTokens += outputTokens
     // AI SDK v6 normalizes provider cache fields into inputTokenDetails:
     //   cacheReadTokens  ← Anthropic cache_read_input_tokens / OpenAI cached_tokens
     //   cacheWriteTokens ← Anthropic cache_creation_input_tokens (others: 0)
@@ -218,8 +235,8 @@ async function collectTurnResponse(
     // prompt-the-model-saw plus what it just wrote — directly comparable
     // to `getContextWindow(modelId)` in the footer "N / M · X%" indicator.
     // Cumulative counters above remain for /usage billing summaries.
-    state.tokenUsage.currentContextTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
-    if (usage.inputTokens != null) state.lastInputTokens = usage.inputTokens
+    state.tokenUsage.currentContextTokens = inputTokens + outputTokens
+    if (inputTokens > 0) state.lastInputTokens = inputTokens
     callbacks.onUsageUpdate(state.tokenUsage)
 
     // ── Cache break detection ──
@@ -419,11 +436,21 @@ async function runTurn(
   // the provider-specific switch (Anthropic `thinking`, Google
   // `thinkingConfig`, Alibaba `enableThinking`, etc.) and merge it into the
   // existing per-call providerOptions. Models with no thinking concept
-  // (gpt-4.1, grok-3, glm-4-plus) get an empty entry — the SDK silently
+  // Models with no thinking concept get an empty entry — the SDK silently
   // ignores the unrelated keys. Defaults to off when undefined so a stale
   // config without the new field doesn't surprise users with a quality /
   // latency change on launch.
-  const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false)
+  //
+  // Tiered reasoning (via /model tier picker) takes priority over the binary
+  // /thinking toggle. If the user explicitly chose a reasoning effort level
+  // for this model (stored in config.modelReasoningEffort), we use it
+  // regardless of the /thinking state. /thinking only applies as a fallback
+  // for models without an explicit tier (including providers whose SDK
+  // doesn't expose a granular effort knob — deepseek, moonshot, alibaba,
+  // zhipu).
+  const config = loadUserConfig()
+  const effort = config.modelReasoningEffort?.[options.modelId]
+  const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false, effort)
   const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
 
   let result: StreamResult

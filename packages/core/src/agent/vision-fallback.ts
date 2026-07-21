@@ -37,14 +37,11 @@ export interface VisionProvider {
  *  deep analysis. */
 const VISION_MODELS: Record<string, { modelId: string; label: string }> = {
   google: { modelId: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  zhipu: { modelId: 'zhipu:glm-4v-flash', label: 'GLM-4V Flash' },
-  alibaba: { modelId: 'alibaba:qwen-vl-plus', label: 'Qwen-VL Plus' },
-  openai: { modelId: 'openai:gpt-4o-mini', label: 'GPT-4o Mini' },
+  zhipu: { modelId: 'zhipu:glm-4.6v', label: 'GLM-4.6V' },
+  alibaba: { modelId: 'alibaba:qwen3-vl-flash', label: 'Qwen3-VL Flash' },
+  openai: { modelId: 'openai:gpt-5.4-mini', label: 'GPT-5.4 Mini' },
   anthropic: { modelId: 'anthropic:claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-  moonshotai: {
-    modelId: 'moonshotai:moonshot-v1-32k-vision-preview',
-    label: 'Moonshot Vision Preview',
-  },
+  moonshotai: { modelId: 'moonshotai:kimi-k2.6', label: 'Kimi K2.6' },
   xai: { modelId: 'xai:grok-4.3', label: 'Grok 4.3' },
 }
 
@@ -52,7 +49,7 @@ const VISION_MODELS: Record<string, { modelId: string; label: string }> = {
  *  Free tiers and cheap-per-image models go first; heavier flagships
  *  last. Gemini 2.5 Flash leads because its free tier is the most
  *  generous (1500/day) and the model is also the strongest at the
- *  free price point. GLM-4V-Flash is second because it's truly free
+ *  free price point. GLM-4.6V is second because it's cheap/free
  *  and reachable from China without a proxy. */
 const VISION_PRIORITY = ['google', 'zhipu', 'alibaba', 'openai', 'anthropic', 'moonshotai', 'xai']
 

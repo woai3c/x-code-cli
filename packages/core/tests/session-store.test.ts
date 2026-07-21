@@ -80,12 +80,12 @@ describe('session-store: round-trip', () => {
       { role: 'assistant', content: 'Hi there' },
     ]
 
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'Hello')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'Hello')
     await flushPendingMessages(state)
     state.tokenUsage.inputTokens = 100
     state.tokenUsage.outputTokens = 20
     state.tokenUsage.totalTokens = 120
-    await appendUsage(state, 'anthropic:claude-sonnet-4-6')
+    await appendUsage(state, 'anthropic:claude-sonnet-5')
 
     const filePath = getSessionFilePath(state)
     const loaded = await loadSession(filePath)
@@ -106,7 +106,7 @@ describe('session-store: round-trip', () => {
     state.taskSlug = 'multi-flush'
 
     state.messages.push({ role: 'user', content: 'msg 1' })
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'msg 1')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'msg 1')
     await flushPendingMessages(state)
     expect(state.persistedMessageCount).toBe(1)
 
@@ -137,7 +137,7 @@ describe('session-store: compact boundary', () => {
       { role: 'user', content: 'q2' },
       { role: 'assistant', content: 'a2' },
     ]
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'q1')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'q1')
     await flushPendingMessages(state)
     expect(state.persistedMessageCount).toBe(4)
 
@@ -164,7 +164,7 @@ describe('session-store: compact boundary', () => {
     state.taskSlug = 'multi-boundary'
 
     state.messages = [{ role: 'user', content: 'q1' }]
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'q1')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'q1')
     await flushPendingMessages(state)
 
     // First boundary
@@ -209,7 +209,7 @@ describe('session-store: orphan tool-call sanitisation', () => {
         content: [{ type: 'tool-call', toolCallId: 'tc-orphan', toolName: 'shell', input: { command: 'failed' } }],
       },
     ] as never[]
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'work on something')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'work on something')
     await flushPendingMessages(state)
 
     const loaded = await loadSession(getSessionFilePath(state))
@@ -237,7 +237,7 @@ describe('session-store: orphan tool-call sanitisation', () => {
         ],
       },
     ] as never[]
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'do it')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'do it')
     await flushPendingMessages(state)
 
     const loaded = await loadSession(getSessionFilePath(state))
@@ -273,7 +273,7 @@ describe('session-store: malformed input', () => {
     state.sessionId = '20260101-120000-000'
     state.taskSlug = 'mixed-junk'
     state.messages = [{ role: 'user', content: 'real' }]
-    await appendHeader(state, 'anthropic:claude-sonnet-4-6', 'real')
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'real')
     await flushPendingMessages(state)
     // Append a corrupt line.
     const fp = getSessionFilePath(state)
@@ -338,9 +338,9 @@ describe('session-store: hydrateLoopState', () => {
       cacheCreationTokens: 0,
       currentContextTokens: 55,
     }
-    await appendHeader(s, 'anthropic:claude-sonnet-4-6', 'q')
+    await appendHeader(s, 'anthropic:claude-sonnet-5', 'q')
     await flushPendingMessages(s)
-    await appendUsage(s, 'anthropic:claude-sonnet-4-6')
+    await appendUsage(s, 'anthropic:claude-sonnet-5')
 
     const loaded = await loadSession(getSessionFilePath(s))
     const hydrated = hydrateLoopState(loaded!)
@@ -358,7 +358,7 @@ describe('session-store: hydrateLoopState', () => {
     const goal = createGoal(s, { objective: 'finish durable goal' })
     const input = admitGoalInput(s, { goalId: goal.id, kind: 'initial', content: 'start' })
 
-    await appendHeader(s, 'anthropic:claude-sonnet-4-6', 'finish durable goal')
+    await appendHeader(s, 'anthropic:claude-sonnet-5', 'finish durable goal')
     await appendGoalState(s)
     await appendGoalInput(s, input)
     const promoted = promoteNextGoalInput(s, goal.id)!

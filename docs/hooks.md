@@ -97,7 +97,7 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
   "session": {
     // 每个事件都有
     "cwd": "/abs/path/to/project",
-    "modelId": "anthropic:claude-sonnet-4-6",
+    "modelId": "anthropic:claude-sonnet-5",
   },
   "plugin": {
     // 标识哪个插件的 hook 正在跑

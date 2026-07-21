@@ -10,7 +10,7 @@ export interface SubAgentDefinition {
   tools?: string[]
   /** Tools to explicitly deny (applied after `tools`) */
   disallowedTools?: string[]
-  /** Model override (e.g. "anthropic:claude-sonnet-4-6"). Omit = inherit parent */
+  /** Model override (e.g. "anthropic:claude-sonnet-5"). Omit = inherit parent */
   model?: string
   /** Max agentic turns before forced stop */
   maxTurns: number

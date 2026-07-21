@@ -72,12 +72,7 @@ yarn global add @x-code-cli/cli
 
 **OpenAI 兼容接入**（自托管 vLLM / OpenRouter / 各种代理 / 公司内网网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，xc 会注册一个名为 `custom` 的 provider，模型 id 写成 `custom:<your-model-id>` 使用。
 
-**Moonshot（Kimi）国内 / 国际端点**：Moonshot 按区域分了两套平台，**Key 与端点绑定、不能混用**：
-
-- 国际：[platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) → 端点 `https://api.moonshot.ai/v1`（SDK 默认，无需额外设置）
-- 国内：[platform.moonshot.cn](https://platform.moonshot.cn) / [platform.kimi.com](https://platform.kimi.com) → 端点 `https://api.moonshot.cn/v1`
-
-国内平台申请的 Key 直接用会报 `Invalid Authentication`（401），因为它只认 `api.moonshot.cn`。此时额外设置环境变量 `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` 即可；国际 Key 无需设置。
+**Moonshot（Kimi）端点**：Kimi 有多套平台和端点（开放平台、Coding Plan 编程计划等），Key 与端点绑定。`/model` 选完 Kimi 模型后会自动弹出端点选择器，无需手动设置环境变量。
 
 ### 网页搜索 Key（可选）
 
@@ -185,7 +180,7 @@ xc -p "为该仓库生成 CHANGELOG"
 ```text
 xc [options] [prompt]
 
---model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-5.5）
+--model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-5.6-sol）
 --trust, -t           信任模式：跳过写操作确认
 --print, -p           非交互模式：输出结果后退出
 --plan                以 Plan 模式启动（只读探索，用户批准后才执行修改）
@@ -293,7 +288,7 @@ X-Code CLI 支持的 8 家厂商对思考 / 推理模式的默认行为存在差
 **DeepSeek 图片识别 — 视觉辅助模型**：DeepSeek 官方 API 不支持多模态视觉输入。当用户附加图片时，CLI 按以下流程自动调用其他厂商的视觉模型生成描述：
 
 1. 检测环境变量中是否配置了其他多模态厂商的 API Key（优先级顺序：Google → 智谱 → 阿里 → OpenAI → Anthropic → Moonshot → xAI）
-2. 若已配置，则使用对应厂商的轻量视觉模型（如 `gemini-2.5-flash`、`glm-4v-flash`）生成图片描述
+2. 若已配置，则使用对应厂商的轻量视觉模型（如 `gemini-2.5-flash`、`glm-4.6v`）生成图片描述
 3. 将描述文本注入至发送给 DeepSeek 的消息中，使其能够获取图片信息
 4. 终端输出 `⎿  Captioned image via google:gemini-2.5-flash` 标识所使用的辅助模型
 5. 若未配置任何视觉厂商，则回退至本地 tesseract OCR（仅提取图片中的文本）

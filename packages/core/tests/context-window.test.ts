@@ -10,8 +10,8 @@ import {
 
 describe('getContextWindow', () => {
   it('returns exact value for known models', () => {
-    expect(getContextWindow('anthropic:claude-opus-4-7')).toBe(1000000)
-    expect(getContextWindow('openai:gpt-4.1')).toBe(1047576)
+    expect(getContextWindow('anthropic:claude-opus-4-8')).toBe(1000000)
+    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(1047576)
     expect(getContextWindow('google:gemini-2.5-flash')).toBe(1000000)
     expect(getContextWindow('deepseek:deepseek-v4-flash')).toBe(1000000)
     expect(getContextWindow('alibaba:qwen-max')).toBe(32768)
@@ -30,26 +30,27 @@ describe('getContextWindow', () => {
 
 describe('getCompressionThreshold', () => {
   it('is context window * COMPRESSION_TRIGGER_RATIO', () => {
-    const window = getContextWindow('anthropic:claude-opus-4-7')
-    expect(getCompressionThreshold('anthropic:claude-opus-4-7')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
+    const window = getContextWindow('anthropic:claude-opus-4-8')
+    expect(getCompressionThreshold('anthropic:claude-opus-4-8')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
   })
 })
 
 describe('getMaxOutputTokens', () => {
   it('returns specific ceiling for known models', () => {
     expect(getMaxOutputTokens('deepseek:deepseek-v4-flash')).toBe(131072)
-    expect(getMaxOutputTokens('alibaba:qwen-turbo')).toBe(16384)
+    expect(getMaxOutputTokens('alibaba:qwen3.7-plus')).toBe(32000)
     expect(getMaxOutputTokens('alibaba:qwen-max')).toBe(8192)
   })
 
-  it('caps GLM-4V vision models at their low 1024 reply ceiling', () => {
-    // glm-4v-flash rejects max_tokens above 1024; the default 16384 would 400.
-    expect(getMaxOutputTokens('zhipu:glm-4v-flash')).toBe(1024)
-    expect(getMaxOutputTokens('zhipu:glm-4v-plus')).toBe(1024)
+  it('returns default for models without an explicit cap', () => {
+    // Current Zhipu vision models (glm-4.6v, glm-5v-turbo) don't have
+    // explicit max-output-token caps — they fall through to the default.
+    expect(getMaxOutputTokens('zhipu:glm-4.6v')).toBe(16384)
+    expect(getMaxOutputTokens('zhipu:glm-5v-turbo')).toBe(16384)
   })
 
   it('returns default for unknown models', () => {
-    expect(getMaxOutputTokens('openai:gpt-4.1')).toBe(16384)
+    expect(getMaxOutputTokens('openai:gpt-5.6-sol')).toBe(16384)
     expect(getMaxOutputTokens('unknownprovider:model')).toBe(16384)
   })
 })

@@ -266,11 +266,11 @@ describe('isWeakModel', () => {
     expect(isWeakModel('anthropic:claude-haiku-4-5')).toBe(true)
   })
   it('detects nano as weak', () => {
-    expect(isWeakModel('openai:gpt-4.1-nano')).toBe(true)
+    expect(isWeakModel('openai:gpt-5.4-nano')).toBe(true)
   })
   it('does not flag strong models', () => {
-    expect(isWeakModel('anthropic:claude-sonnet-4-6')).toBe(false)
-    expect(isWeakModel('openai:gpt-4.1')).toBe(false)
+    expect(isWeakModel('anthropic:claude-sonnet-5')).toBe(false)
+    expect(isWeakModel('openai:gpt-5.6-sol')).toBe(false)
     expect(isWeakModel('deepseek:deepseek-v4-pro')).toBe(false)
   })
 })

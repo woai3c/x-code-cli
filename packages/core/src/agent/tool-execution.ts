@@ -838,8 +838,8 @@ export async function deliverToolImages(
   // Pick the captioner. Prefer a SEPARATE configured vision provider (fast/free
   // models first) over the active model — the active model can be slow at
   // vision (Moonshot). Fall back to the active model only when it's the sole
-  // vision-capable option (e.g. a Kimi-only user): kimi-k2.6 is guaranteed
-  // reachable where moonshot-v1-*-vision-preview may not be on every endpoint.
+  // vision-capable option (e.g. a Kimi-only user): kimi-k2.6 is a capable
+  // vision model reachable on both international and China endpoints.
   const borrowed = pickVisionProvider()
   const activeCanCaption = modelSupportsVision(modelId) && capabilitiesOf(modelId).image
   const captionModelId =

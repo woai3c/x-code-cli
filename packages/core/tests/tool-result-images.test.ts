@@ -30,7 +30,7 @@ describe('deliverToolImages', () => {
   })
 
   it('passes images through untouched on Anthropic (native tool-result images)', async () => {
-    const r = await deliverToolImages(ctx('anthropic:claude-sonnet-4-6'), 'shot taken', IMG)
+    const r = await deliverToolImages(ctx('anthropic:claude-sonnet-5'), 'shot taken', IMG)
     expect(r.images).toEqual(IMG)
     expect(r.text).toBe('shot taken')
     expect(captionImageBuffer).not.toHaveBeenCalled()

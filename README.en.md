@@ -77,7 +77,7 @@ At least one provider key is required:
 - International: [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) → endpoint `https://api.moonshot.ai/v1` (the SDK default, nothing to configure)
 - China: [platform.moonshot.cn](https://platform.moonshot.cn) / [platform.kimi.com](https://platform.kimi.com) → endpoint `https://api.moonshot.cn/v1`
 
-A key minted on a China platform fails with `Invalid Authentication` (401) against the default endpoint because it only authenticates against `api.moonshot.cn`. Set `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` to point at it; international keys need nothing.
+Kimi has multiple platforms and endpoints (Open Platform, Coding Plan, etc.) — keys are bound to a specific endpoint. `/model` automatically shows an endpoint picker after you select a Kimi model; no manual env var needed.
 
 ### Web Search Keys (optional)
 
@@ -185,7 +185,7 @@ xc -p "Generate a CHANGELOG for this repository"
 ```text
 xc [options] [prompt]
 
---model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-5.5)
+--model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-5.6-sol)
 --trust, -t           Trust mode: skip write-operation confirmations
 --print, -p           Non-interactive mode: print result and exit
 --plan                Start in plan mode (read-only exploration; user must approve before code edits)
@@ -293,7 +293,7 @@ Per-provider support:
 **DeepSeek image handling — vision sub-agent**: The DeepSeek API does not support multimodal vision input. When the user attaches an image, the CLI automatically delegates image understanding to another configured provider:
 
 1. Checks whether any other multimodal provider key is configured in the environment (priority: Google → Zhipu → Alibaba → OpenAI → Anthropic → Moonshot → xAI)
-2. If found, invokes a lightweight vision model from that provider (e.g. `gemini-2.5-flash` or `glm-4v-flash`) to generate an image description
+2. If found, invokes a lightweight vision model from that provider (e.g. `gemini-2.5-flash` or `glm-4.6v`) to generate an image description
 3. Injects the description text into the message sent to DeepSeek so the image content remains accessible
 4. The terminal prints `⎿  Captioned image via google:gemini-2.5-flash` to indicate which sub-agent was used
 5. If no vision provider is configured, the CLI falls back to local `tesseract.js` OCR (text-in-image only)

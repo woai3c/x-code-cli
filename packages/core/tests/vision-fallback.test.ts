@@ -45,7 +45,7 @@ describe('pickVisionProvider', () => {
     process.env.ZHIPU_API_KEY = 'test'
     const sub = pickVisionProvider()
     expect(sub?.provider).toBe('zhipu')
-    expect(sub?.modelId).toBe('zhipu:glm-4v-flash')
+    expect(sub?.modelId).toBe('zhipu:glm-4.6v')
   })
 
   it('prefers Google over Zhipu when both are configured', () => {

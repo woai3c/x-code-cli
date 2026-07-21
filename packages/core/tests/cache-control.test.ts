@@ -17,7 +17,7 @@ describe('applyCacheControl', () => {
       const out = applyCacheControl({
         system: 'you are helpful',
         messages: baseMessages,
-        modelId: 'anthropic:claude-opus-4-7',
+        modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
       expect(out.system).toBeUndefined()
@@ -32,7 +32,7 @@ describe('applyCacheControl', () => {
       const out = applyCacheControl({
         system: 'sys',
         messages: baseMessages,
-        modelId: 'anthropic:claude-sonnet-4-6',
+        modelId: 'anthropic:claude-sonnet-5',
         sessionId: 'abc',
       })
       // Structure: [system, user1, assistant, user2]
@@ -64,7 +64,7 @@ describe('applyCacheControl', () => {
       applyCacheControl({
         system: 'sys',
         messages: frozenSource,
-        modelId: 'anthropic:claude-opus-4-7',
+        modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
       // Each original message object has no providerOptions mutation
@@ -87,7 +87,7 @@ describe('applyCacheControl', () => {
         system: 'sys',
         messages: baseMessages,
         tools,
-        modelId: 'anthropic:claude-opus-4-7',
+        modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
       expect(out.tools).toBeDefined()
@@ -105,7 +105,7 @@ describe('applyCacheControl', () => {
         system: 'sys',
         messages: baseMessages,
         tools,
-        modelId: 'anthropic:claude-opus-4-7',
+        modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
       expect(Object.keys(out.tools!)).toEqual(['read', 'write', 'edit', 'shell'])
@@ -117,7 +117,7 @@ describe('applyCacheControl', () => {
         system: 'sys',
         messages: baseMessages,
         tools,
-        modelId: 'anthropic:claude-opus-4-7',
+        modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
       expect((tools.write as { providerOptions?: unknown }).providerOptions).toBeUndefined()
@@ -134,7 +134,7 @@ describe('applyCacheControl', () => {
         system: 'sys',
         messages: baseMessages,
         tools,
-        modelId: 'anthropic:claude-opus-4-7',
+        modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
       const writeOpts = (
@@ -154,7 +154,7 @@ describe('applyCacheControl', () => {
       const out = applyCacheControl({
         system: 'sys',
         messages: baseMessages,
-        modelId: 'openai:gpt-4.1',
+        modelId: 'openai:gpt-5.6-sol',
         sessionId: 'session-xyz',
       })
       expect(out.providerOptions?.openai).toBeDefined()
@@ -167,7 +167,7 @@ describe('applyCacheControl', () => {
       const out = applyCacheControl({
         system: 'sys',
         messages: baseMessages,
-        modelId: 'openai:gpt-4.1',
+        modelId: 'openai:gpt-5.6-sol',
         sessionId: 'abc',
       })
       expect(out.system).toBe('sys')
@@ -180,7 +180,7 @@ describe('applyCacheControl', () => {
         system: 'sys',
         messages: baseMessages,
         tools,
-        modelId: 'openai:gpt-4.1',
+        modelId: 'openai:gpt-5.6-sol',
         sessionId: 'abc',
       })
       expect(out.tools).toBe(tools)
@@ -190,10 +190,10 @@ describe('applyCacheControl', () => {
   describe('openai-compatible (deepseek, moonshot, alibaba, zhipu)', () => {
     it.each([
       ['deepseek:deepseek-v4-pro'],
-      ['moonshotai:kimi-k2.5'],
+      ['moonshotai:kimi-k3'],
       ['alibaba:qwen3-coder-plus'],
-      ['zhipu:glm-4-plus'],
-      ['xai:grok-3'],
+      ['zhipu:glm-4.7'],
+      ['xai:grok-4.5'],
       ['google:gemini-2.5-pro'],
     ])('leaves everything untouched for %s', (modelId) => {
       const tools = { read: { description: 'r' } }

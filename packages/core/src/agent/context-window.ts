@@ -29,17 +29,14 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // Anthropic
   ['anthropic:claude-fable-5', 1000000],
   ['anthropic:claude-opus-4-8', 1000000],
-  ['anthropic:claude-opus-4-7', 1000000],
-  ['anthropic:claude-sonnet-4-6', 1000000],
+  ['anthropic:claude-sonnet-5', 1000000],
   ['anthropic:claude-haiku-4-5', 200000],
   // OpenAI
-  ['openai:gpt-5.5', 1047576],
+  ['openai:gpt-5.6-sol', 1047576],
+  ['openai:gpt-5.6-terra', 1047576],
+  ['openai:gpt-5.6-luna', 1047576],
   ['openai:gpt-5.4-mini', 1047576],
-  ['openai:gpt-4.1', 1047576],
-  ['openai:gpt-4.1-mini', 1047576],
-  ['openai:gpt-4.1-nano', 1047576],
-  ['openai:o3', 200000],
-  ['openai:o4-mini', 200000],
+  ['openai:gpt-5.4-nano', 1047576],
   // Google
   ['google:gemini-3.5-flash', 1000000],
   ['google:gemini-2.5-pro', 1000000],
@@ -47,27 +44,25 @@ const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // DeepSeek
   ['deepseek:deepseek-v4-flash', 1000000],
   ['deepseek:deepseek-v4-pro', 1000000],
-  // Alibaba — per DashScope docs: qwen-turbo and qwen3-coder-plus extend to 1M;
-  // qwen-max still caps at 32k (use qwen3-max for 256k). Values verified against
+  // Alibaba — per DashScope docs: qwen3.7-max and qwen3-coder-plus extend to 1M;
+  // qwen-max still caps at 32k. Values verified against
   // https://help.aliyun.com/zh/model-studio/models.
-  ['alibaba:qwen3.7-max', 131072],
-  ['alibaba:qwen-turbo', 1000000],
-  ['alibaba:qwen-plus', 131072],
-  ['alibaba:qwen-max', 32768],
-  ['alibaba:qwen3-max', 262144],
+  ['alibaba:qwen3.7-max', 1000000],
+  ['alibaba:qwen3.7-plus', 131072],
   ['alibaba:qwen3-coder-plus', 1000000],
   ['alibaba:qwq-plus', 131072],
-  // xAI
+  ['alibaba:qwen-max', 32768],
+  // xAI — grok-4.5 has 500k window; grok-4.3 has 1M.
+  ['xai:grok-4.5', 512000],
   ['xai:grok-4.3', 1000000],
-  ['xai:grok-3', 131072],
-  ['xai:grok-3-mini', 131072],
   // Zhipu
-  ['zhipu:glm-5.1', 200000],
+  ['zhipu:glm-5.2', 1000000],
   ['zhipu:glm-5', 200000],
-  ['zhipu:glm-4-plus', 128000],
+  ['zhipu:glm-4.7', 128000],
   // Moonshot
-  ['moonshotai:kimi-k2.6', 131072],
-  ['moonshotai:kimi-k2.5', 131072],
+  ['moonshotai:kimi-k3', 1000000],
+  ['moonshotai:kimi-k2.7-code', 262144],
+  ['moonshotai:kimi-k2.6', 262144],
 ])
 
 /** Provider-level fallback context windows. */
@@ -107,25 +102,13 @@ const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
   // We cap at a generous but conservative 131072 to avoid edge-case 400s.
   ['deepseek:deepseek-v4-flash', 131072],
   ['deepseek:deepseek-v4-pro', 131072],
-  // Alibaba — qwen-turbo rejects anything above 16384; other Qwen3 models
-  // support 32768 (non-thinking) / 81920 (thinking mode). We cap at the
-  // non-thinking ceiling so the request always succeeds. qwen-max only has a
-  // 32k context window, so we keep its output ceiling well below that.
-  ['alibaba:qwen-turbo', 16384],
-  ['alibaba:qwen-plus', 32000],
+  // Alibaba — Qwen3.7 models support 32768 (non-thinking) / 81920 (thinking).
+  // We cap at the non-thinking ceiling so the request always succeeds.
   ['alibaba:qwen-max', 8192],
-  ['alibaba:qwen3-max', 32000],
+  ['alibaba:qwen3.7-max', 32000],
+  ['alibaba:qwen3.7-plus', 32000],
   ['alibaba:qwen3-coder-plus', 32000],
   ['alibaba:qwq-plus', 32000],
-  // Zhipu GLM-4V vision models cap reply size very low — glm-4v-flash rejects
-  // anything above 1024 ("Range of max_tokens [1,1024]"); glm-4v-plus is the
-  // same family and shares that ceiling. These are captioner-class models (the
-  // browser screenshot helper auto-picks glm-4v-flash), but they're selectable
-  // as a main model too, so cap them or the request 400s on the first turn.
-  // NOTE: the caption path (vision-fallback) sends NO max_tokens, so borrowing
-  // glm-4v-flash to describe a screenshot is unaffected — only main-model use is.
-  ['zhipu:glm-4v-flash', 1024],
-  ['zhipu:glm-4v-plus', 1024],
 ])
 
 /** Resolve the max_tokens ceiling we send to the provider. */

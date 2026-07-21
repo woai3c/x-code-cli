@@ -222,7 +222,7 @@ describe('ingestFile image path with mocked vision sub-agent', () => {
     // an empty file destabilises the worker thread.
     vi.mocked(pickVisionProvider).mockReturnValue({
       provider: 'zhipu',
-      modelId: 'zhipu:glm-4v-flash',
+      modelId: 'zhipu:glm-4.6v',
       label: 'GLM-4V Flash',
     })
     vi.mocked(captionImage).mockRejectedValue(new Error('rate limit exceeded'))

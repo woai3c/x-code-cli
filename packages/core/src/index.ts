@@ -18,7 +18,14 @@ export type {
   LanguageModel,
 } from './types/index.js'
 
-export { MODEL_ALIASES, PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS, PROVIDER_MODELS } from './types/index.js'
+export {
+  MODEL_ALIASES,
+  PROVIDER_BASE_URLS,
+  PROVIDER_DETECTION_ORDER,
+  PROVIDER_KEY_URLS,
+  PROVIDER_MODELS,
+  PROVIDER_REASONING_TIERS,
+} from './types/index.js'
 export type { ProviderModel } from './types/index.js'
 
 // Config

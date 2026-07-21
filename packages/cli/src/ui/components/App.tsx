@@ -7,7 +7,9 @@ import { useApp } from 'ink'
 
 import {
   MODEL_ALIASES,
+  PROVIDER_BASE_URLS,
   PROVIDER_MODELS,
+  PROVIDER_REASONING_TIERS,
   createModelRegistry,
   estimateTokenCount,
   expandCommandBody,
@@ -18,6 +20,7 @@ import {
   loadSession,
   loadUserConfig,
   pickLatestSession,
+  providerOf,
   resolveModelId,
   saveUserConfig,
   wrapActivatedSkill,
@@ -1094,10 +1097,10 @@ export function App({
 
     // No arg → interactive picker. Enumerate models whose provider has a
     // configured API key so the list is actionable, not aspirational.
-    const providers = new Set(getAvailableProviders())
+    const availableProviders = new Set(getAvailableProviders())
     const choices: { id: string; label: string; description: string }[] = []
     for (const [provider, models] of Object.entries(PROVIDER_MODELS)) {
-      if (!providers.has(provider)) continue
+      if (!availableProviders.has(provider)) continue
       for (const m of models) {
         const marker = m.id === state.modelId ? `${GLYPH_BULLET} ` : '  '
         choices.push({ id: m.id, label: `${marker}${m.label}`, description: `${m.id} — ${m.description}` })
@@ -1131,7 +1134,8 @@ export function App({
       }
       // User chose "Other" or typed something free-form. Treat it as a
       // direct model id / alias so power users can still jump to exotic
-      // models the picker doesn't list.
+      // models the picker doesn't list. Skip tier/base-url dialogs for
+      // free-form entries — they're edge-case one-offs.
       const resolved = resolveModelId(answer)
       if (!resolved) {
         addCommandMessage(commandText, `Could not resolve model: ${answer}`)
@@ -1140,11 +1144,43 @@ export function App({
       commitModelChange(commandText, resolved)
       return
     }
-    if (picked.id === state.modelId) {
-      addCommandMessage(commandText, `Already on ${renderModelLabel(picked.id)} — no change.`)
-      return
+    const modelId = picked.id
+
+    // ── Base URL picker (multi-endpoint providers) ──
+    const modelProvider = providerOf(modelId)
+    const baseUrlConfig = PROVIDER_BASE_URLS[modelProvider]
+    if (baseUrlConfig) {
+      const baseAnswer = await askQuestion(
+        `Pick the API endpoint for ${modelProvider}:`,
+        baseUrlConfig.options.map((o) => ({ label: o.label, description: o.url })),
+        { noOther: true },
+      )
+      const chosen = baseUrlConfig.options.find((o) => o.label === baseAnswer)
+      if (chosen) {
+        const prev = loadUserConfig().baseUrls ?? {}
+        saveUserConfig({ baseUrls: { ...prev, [modelProvider]: chosen.url } })
+      }
+      // Esc cancel keeps working — config stays as-is (may be empty,
+      // may have a previous choice from an earlier picker session).
     }
-    commitModelChange(commandText, picked.id)
+
+    // ── Reasoning-tier picker ──
+    const tierConfig = PROVIDER_REASONING_TIERS[modelProvider]
+    if (tierConfig) {
+      const tierAnswer = await askQuestion(
+        `Reasoning effort for ${renderModelLabel(modelId)}:`,
+        tierConfig.options.map((o) => ({ label: o.label, description: o.description })),
+        { noOther: true },
+      )
+      const chosen = tierConfig.options.find((o) => o.label === tierAnswer)
+      if (chosen) {
+        const prev = loadUserConfig().modelReasoningEffort ?? {}
+        saveUserConfig({ modelReasoningEffort: { ...prev, [modelId]: chosen.value } })
+      }
+      // Esc cancel = no tier saved; /thinking toggle fallback applies.
+    }
+
+    commitModelChange(commandText, modelId)
   }
 
   /** Commit a thinking-mode change: update the live ref so the next

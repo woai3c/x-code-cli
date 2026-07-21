@@ -105,7 +105,7 @@ describe('agent loop', () => {
     const { state, turnCount } = await agentLoop(
       'Say hello',
       {} as any,
-      { modelId: 'anthropic:claude-sonnet-4-6', trustMode: false, maxTurns: 1, printMode: false },
+      { modelId: 'anthropic:claude-sonnet-5', trustMode: false, maxTurns: 1, printMode: false },
       mockCallbacks,
     )
 

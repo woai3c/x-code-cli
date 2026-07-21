@@ -38,8 +38,9 @@ const DEFERRAL_THRESHOLD_PERCENT = 0.1
  *  are matched case-insensitively against the full `provider:model` id. */
 const WEAK_MODEL_PATTERNS = [
   'haiku', // Claude Haiku — limited tool_reference support
-  'nano', // GPT-4.1-nano
-  'glm-4v', // Zhipu vision-only captioners
+  'nano', // GPT-5.4-nano
+  'glm-4v', // Zhipu vision-only captioners (glm-4v-*, glm-4.6v)
+  'glm-5v', // Zhipu vision-only captioners (glm-5v-*)
 ] as const
 
 /** Non-core built-in tools that are deferred (name-only until toolSearch loads
