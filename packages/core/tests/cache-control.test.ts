@@ -187,10 +187,36 @@ describe('applyCacheControl', () => {
     })
   })
 
-  describe('openai-compatible (deepseek, moonshot, alibaba, zhipu)', () => {
+  describe('moonshotai', () => {
+    it('sets prompt_cache_key to sessionId for cache-shard affinity', () => {
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        modelId: 'moonshotai:kimi-k3',
+        sessionId: 'session-xyz',
+      })
+      const opts = out.providerOptions?.moonshotai as { prompt_cache_key?: string }
+      expect(opts.prompt_cache_key).toBe('session-xyz')
+    })
+
+    it('keeps system prompt and messages untouched', () => {
+      const tools = { read: { description: 'r' } }
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'moonshotai:kimi-k3',
+        sessionId: 'abc',
+      })
+      expect(out.system).toBe('sys')
+      expect(out.messages).toEqual(baseMessages)
+      expect(out.tools).toBe(tools)
+    })
+  })
+
+  describe('openai-compatible (deepseek, alibaba, zhipu)', () => {
     it.each([
       ['deepseek:deepseek-v4-pro'],
-      ['moonshotai:kimi-k3'],
       ['alibaba:qwen3-coder-plus'],
       ['zhipu:glm-4.7'],
       ['xai:grok-4.5'],

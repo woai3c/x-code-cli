@@ -50,6 +50,12 @@ export function createModelRegistry() {
         apiKey: opts.moonshotai,
         baseURL,
         fetch: permanentErrorFetch,
+        // createOpenAICompatible only sends `stream_options.include_usage`
+        // when asked; without it the Coding Plan streams no usage chunk and
+        // the footer context-size readout stays at 0. The @ai-sdk/moonshotai
+        // route below hardcodes this already.
+        includeUsage: true,
+        convertUsage: moonshotConvertUsage,
       })
     } else {
       providers.moonshotai = createMoonshotAI({
@@ -66,10 +72,49 @@ export function createModelRegistry() {
       apiKey: opts.custom.apiKey,
       baseURL: opts.custom.baseURL,
       fetch: permanentErrorFetch,
+      // Same includeUsage rationale as the Coding Plan route above.
+      includeUsage: true,
     })
   }
 
   return createProviderRegistry(providers)
+}
+
+/**
+ * Usage converter for the Coding Plan (OpenAI-compatible) route. Mirrors the
+ * SDK's default conversion, but additionally reads Moonshot's proprietary
+ * TOP-LEVEL `cached_tokens` — the default only looks at OpenAI's
+ * `prompt_tokens_details.cached_tokens`, so cache-read tokens would
+ * otherwise always report 0 (the usage schema is a looseObject, so the
+ * top-level field survives validation and is readable here).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const moonshotConvertUsage = (usage: any) => {
+  if (usage == null) {
+    return {
+      inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+      raw: undefined,
+    }
+  }
+  const promptTokens = usage.prompt_tokens ?? 0
+  const completionTokens = usage.completion_tokens ?? 0
+  const cacheReadTokens = usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0
+  const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens ?? 0
+  return {
+    inputTokens: {
+      total: promptTokens,
+      noCache: promptTokens - cacheReadTokens,
+      cacheRead: cacheReadTokens,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: completionTokens,
+      text: completionTokens - reasoningTokens,
+      reasoning: reasoningTokens,
+    },
+    raw: usage,
+  }
 }
 
 /**

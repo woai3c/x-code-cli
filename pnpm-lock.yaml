@@ -111,8 +111,8 @@ importers:
         specifier: ^3.0.0
         version: 3.0.26(zod@3.25.76)
       '@ai-sdk/openai-compatible':
-        specifier: ^2.0.0
-        version: 2.0.28(zod@3.25.76)
+        specifier: ^2.0.50
+        version: 2.0.50(zod@3.25.76)
       '@ai-sdk/xai':
         specifier: ^3.0.0
         version: 3.0.48(zod@3.25.76)
@@ -4341,7 +4341,7 @@ snapshots:
 
   eventsource@3.0.7:
     dependencies:
-      eventsource-parser: 3.0.6
+      eventsource-parser: 3.1.0
 
   execa@9.6.1:
     dependencies:

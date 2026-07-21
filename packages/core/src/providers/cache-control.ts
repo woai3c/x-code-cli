@@ -21,7 +21,11 @@
 //                 We send the sessionId as the key so every turn in a
 //                 conversation maps to the same shard.
 //
-//   OpenAI-     — the DeepSeek / Moonshot / Alibaba / Zhipu / xAI / custom
+//   Moonshot    — automatic prefix caching + `prompt_cache_key: sessionId`
+//                 for session affinity (requests of one session hit the same
+//                 server-side cache shard), plus the byte-stable prefix below.
+//
+//   OpenAI-     — the DeepSeek / Alibaba / Zhipu / xAI / custom
 //   compatible    providers all offer automatic prefix caching with NO
 //                 explicit flags required. The only prerequisite is a
 //                 byte-stable prefix across turns: if the system prompt
@@ -134,6 +138,23 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
       tools: args.tools,
       providerOptions: {
         openai: { promptCacheKey: args.sessionId, store: false },
+      },
+    }
+  }
+
+  if (provider === 'moonshotai') {
+    // Moonshot's server-side prefix caching is automatic, but requests land
+    // on a per-key cache shard: pinning `prompt_cache_key` to the sessionId
+    // keeps every turn of a conversation on the same shard (same mechanism
+    // Kimi CLI uses). Both Moonshot routes forward it: the openai-compatible
+    // SDK spreads non-standard providerOptions keys into the request body
+    // verbatim, and @ai-sdk/moonshotai inherits that behavior.
+    return {
+      system: args.system,
+      messages: args.messages,
+      tools: args.tools,
+      providerOptions: {
+        moonshotai: { prompt_cache_key: args.sessionId },
       },
     }
   }
