@@ -68,7 +68,7 @@ yarn global add @x-code-cli/cli
 | `ALIBABA_API_KEY`              | 阿里通义（Qwen）    | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
 | `XAI_API_KEY`                  | xAI（Grok）         | [console.x.ai](https://console.x.ai/)                                       |
 | `ZHIPU_API_KEY`                | 智谱（GLM）         | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
-| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)       |
+| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [platform.moonshot.cn](https://platform.moonshot.cn/console/api-keys)       |
 
 **OpenAI 兼容接入**（自托管 vLLM / OpenRouter / 各种代理 / 公司内网网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，xc 会注册一个名为 `custom` 的 provider，模型 id 写成 `custom:<your-model-id>` 使用。
 
