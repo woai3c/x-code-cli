@@ -1,3 +1,14 @@
+## v0.3.14 (2026-07-21)
+
+### Features
+
+- moonshot prompt-cache shard affinity and usage reporting (a49ec65)
+- model tier selection, base URL picker, July 2026 catalog refresh (b968d30)
+
+### Bug Fixes
+
+- gate reasoning tiers to capable models, clean up catalog leftovers (6093e50)
+
 ## v0.3.13 (2026-07-19)
 
 ### Bug Fixes
