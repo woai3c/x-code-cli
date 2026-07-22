@@ -16,9 +16,13 @@ const scenario: Scenario = {
     ctx.expect.toolCalled(r, 'webFetch', { url: /example\.com/ })
     // 旧断言 /example|domain|.../ 在 prompt 里就有 "example.com"，模型不用真抓页面
     // 也能蒙混。这里改成 example.com 页面正文里独有的短语 — 凭常识/prompt 都拼不出来。
-    // 选 illustrative examples / literature without prior coordination 是因为这两句
-    // 1992 年至今稳定，且不是模型预训练里高频泛化的句式。
-    ctx.expect.assistantMentions(r, /illustrative examples|literature without prior coordination|may use this domain/i)
+    // 注意：IANA 已改版 example.com，旧文案 "illustrative examples / may use this
+    // domain" 换成了 "documentation examples / without needing permission /
+    // Avoid use in operations"。两组短语都保留，任一版本页面都能命中。
+    ctx.expect.assistantMentions(
+      r,
+      /illustrative examples|literature without prior coordination|may use this domain|documentation examples|without needing permission|avoid use in operations/i,
+    )
     ctx.expect.noToolErrors(r)
   },
 }
