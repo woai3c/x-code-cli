@@ -1,7 +1,7 @@
 // Tests for agent/messages.ts helpers
 import { describe, expect, it } from 'vitest'
 
-import { isToolErrorString, toolErrorFromUnknown, toolResultMessage, userMessage } from '../src/agent/messages.js'
+import { isToolErrorString, toolErrorFromUnknown, toolResultMessage } from '../src/agent/messages.js'
 
 describe('toolResultMessage', () => {
   it('builds a tool-role message with one tool-result content part', () => {
@@ -41,17 +41,6 @@ describe('toolResultMessage', () => {
     const msg = toolResultMessage('tc_3', 'shell', 'done', [])
     const part = (msg.content as Array<{ output: { type: string; value: string } }>)[0]
     expect(part.output).toEqual({ type: 'text', value: 'done' })
-  })
-})
-
-describe('userMessage', () => {
-  it('wraps a string', () => {
-    expect(userMessage('hi')).toEqual({ role: 'user', content: 'hi' })
-  })
-
-  it('preserves a parts array', () => {
-    const parts = [{ type: 'text' as const, text: 'hi' }]
-    expect(userMessage(parts)).toEqual({ role: 'user', content: parts })
   })
 })
 

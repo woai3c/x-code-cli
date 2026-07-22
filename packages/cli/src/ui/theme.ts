@@ -7,7 +7,7 @@
 // surface, which is the most visible code-display element. Now the
 // constants are derived at render time from the active theme.
 //
-// Each theme also pins a syntax palette (e.g. dark → one-dark,
+// Each theme also pins a syntax palette (e.g. dark → monokai,
 // dark-ansi → ansi). We expose the syntax-palette name on the theme
 // object so the startup wiring and `/theme` command stay in one place.
 import type { SyntaxThemeName } from './syntax-highlight.js'
@@ -18,12 +18,6 @@ import type { SyntaxThemeName } from './syntax-highlight.js'
 // All values are hex strings so Ink <Text color={...}> renders them on any
 // modern 24-bit terminal.
 
-/** Primary accent — Claude brand orange (`claude = rgb(215,119,87)`) */
-export const ACCENT = '#d77757'
-
-/** Muted accent — medium gray, used for secondary labels in the status bar */
-export const ACCENT_DIM = '#999999'
-
 /** System spinner blue (`claudeBlue_FOR_SYSTEM_SPINNER = rgb(147,165,255)`) */
 export const SPINNER_BLUE = '#93a5ff'
 
@@ -33,17 +27,8 @@ export const BLUE_PURPLE = '#99ccff'
 /** Success / completed / diff-added (`success = rgb(78,186,101)`) */
 export const SUCCESS = '#4eba65'
 
-/** Warning / permission prompt / pending (`warning = rgb(255,193,7)`) */
-export const WARNING = '#ffc107'
-
 /** Error / denied / diff-removed (`error = rgb(255,107,128)`) */
 export const ERROR = '#ff6b80'
-
-/** Muted elements — uses named ANSI gray for broad compatibility */
-export const DIM = 'gray'
-
-/** Subtle dark gray for borders/backgrounds (`subtle = rgb(80,80,80)`) */
-export const SUBTLE = '#505050'
 
 /** Prompt input top/bottom rules (`promptBorder = rgb(136,136,136)`) */
 export const PROMPT_BORDER = '#888888'
@@ -55,7 +40,7 @@ export interface ThemeColors {
   label: string
   description: string
   /** `#rrggbb` for 24-bit colors, or `'ansi:default'` for the ANSI-only
-   *  themes (which leave the bg as terminal default and use DIM/
+   *  themes (which leave the bg as terminal default and use dim styling/
    *  decoration-fg to mark `-` lines). render-diff translates these
    *  strings into the right chalk calls.
    *

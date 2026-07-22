@@ -16,12 +16,12 @@
 // get a `/* ... */` straddling exactly those lines.
 //
 // Theme system: a small set of named palettes (one-dark, monokai,
-// dracula, github-dark, solarized-dark, ansi, off). The active palette
-// is held in a module-level ref initialized from `~/.x-code/config.json`
-// at startup and flipped at runtime by `/syntax <name>`. Any rendering
-// path that wants the current palette calls `highlightLine` with no
-// theme arg — that picks up the live module ref. Tests and previews
-// can pass an explicit theme to bypass the global.
+// github-light, ansi). The active palette is held in a module-level
+// ref initialized from `~/.x-code/config.json` at startup and flipped
+// at runtime by `/theme` (each UI theme bundles a syntax palette). Any
+// rendering path that wants the current palette calls `highlightLine`
+// with no theme arg — that picks up the live module ref. Tests and
+// previews can pass an explicit theme to bypass the global.
 import { Chalk } from 'chalk'
 
 const c = new Chalk({ level: 3 })
@@ -39,29 +39,17 @@ const c = new Chalk({ level: 3 })
 type Token = 'keyword' | 'storage' | 'type' | 'string' | 'number' | 'comment' | 'function' | 'literal'
 
 /** Palette: a color (hex `#rrggbb`, ANSI name like `'magenta'`, or `null`
- *  to mean "leave fg alone — use terminal default"). Null is the trick
- *  that lets the `'off'` theme pass tokens through unchanged without
- *  needing a separate code path. */
+ *  to mean "leave fg alone — use terminal default"). */
 type ColorSpec = string | null
 type Palette = Record<Token, ColorSpec>
 
-/** Built-in syntax themes. Names are lowercase-kebab. `'off'` is a real
- *  entry — it disables every paint() call by setting every color to
- *  null.
+/** Built-in syntax themes. Names are lowercase-kebab.
  *
  *  Two palettes are CC-derived: `monokai` (CC's "Monokai Extended" —
  *  bundled with all dark `/theme` modes) and `github-light` (CC's
  *  "GitHub" — bundled with all light `/theme` modes). The other names
  *  predate the CC parity work. */
-export type SyntaxThemeName =
-  | 'one-dark'
-  | 'monokai'
-  | 'dracula'
-  | 'github-dark'
-  | 'github-light'
-  | 'solarized-dark'
-  | 'ansi'
-  | 'off'
+export type SyntaxThemeName = 'one-dark' | 'monokai' | 'github-light' | 'ansi'
 
 const THEMES: Record<SyntaxThemeName, Palette> = {
   // One Dark — Atom's signature theme. Calm, well-balanced contrast on
@@ -90,28 +78,6 @@ const THEMES: Record<SyntaxThemeName, Palette> = {
     function: '#a6e22e', // chartreuse — function/class titles (CC groups w/ types)
     literal: '#be84ff', // pastel purple
   },
-  // Dracula — popular dark theme with a pastel palette.
-  dracula: {
-    keyword: '#ff79c6', // pink
-    storage: '#ff79c6', // pink — Dracula groups storage with keyword
-    type: '#8be9fd', // cyan
-    string: '#f1fa8c', // pale yellow
-    number: '#bd93f9', // lavender
-    comment: '#6272a4', // blue-gray
-    function: '#50fa7b', // mint green
-    literal: '#bd93f9', // lavender
-  },
-  // GitHub Dark — matches GitHub.com's dark-mode code blocks.
-  'github-dark': {
-    keyword: '#ff7b72', // salmon
-    storage: '#ff7b72', // salmon
-    type: '#ffa657', // orange
-    string: '#a5d6ff', // light blue
-    number: '#79c0ff', // blue
-    comment: '#8b949e', // gray
-    function: '#d2a8ff', // lavender
-    literal: '#79c0ff', // blue
-  },
   // GitHub Light — values match CC's GITHUB_SCOPES (native-ts/color-diff/
   // index.ts:218-243) byte-for-byte. Tuned for LIGHT terminals: deep
   // saturated colors that read well on white. Bundled with the
@@ -125,17 +91,6 @@ const THEMES: Record<SyntaxThemeName, Palette> = {
     comment: '#969896', // medium gray
     function: '#795da3', // purple — function/class titles
     literal: '#0086b3', // teal
-  },
-  // Solarized Dark — Ethan Schoonover's much-imitated low-contrast theme.
-  'solarized-dark': {
-    keyword: '#859900', // moss green
-    storage: '#cb4b16', // burnt orange — separates declarations
-    type: '#b58900', // gold
-    string: '#2aa198', // teal
-    number: '#d33682', // magenta
-    comment: '#586e75', // slate
-    function: '#268bd2', // blue
-    literal: '#d33682', // magenta
   },
   // ANSI — uses the terminal's 16-color palette (named chalk colors).
   // Looks correct everywhere, even dumb terminals; trades fidelity for
@@ -161,80 +116,17 @@ const THEMES: Record<SyntaxThemeName, Palette> = {
     function: 'yellowBright',
     literal: 'blueBright',
   },
-  // Off — every token color is null so paint() is an identity. This
-  // keeps the hot path branchless: the rule loop still runs (cheap on
-  // ~60-line inputs), it just doesn't insert any escape codes.
-  off: {
-    keyword: null,
-    storage: null,
-    type: null,
-    string: null,
-    number: null,
-    comment: null,
-    function: null,
-    literal: null,
-  },
 }
-
-/** Display labels for the picker. Order is intentional — sorted by
- *  popularity so the first row of the picker is the most common pick. */
-export const SYNTAX_THEME_DESCRIPTIONS: { name: SyntaxThemeName; label: string; description: string }[] = [
-  { name: 'one-dark', label: 'One Dark', description: 'Atom signature — calm, balanced contrast (default)' },
-  { name: 'monokai', label: 'Monokai', description: 'Sublime classic — punchy, high saturation' },
-  { name: 'dracula', label: 'Dracula', description: 'Popular dark theme with pastel palette' },
-  { name: 'github-dark', label: 'GitHub Dark', description: "Match GitHub's dark-mode code blocks" },
-  { name: 'solarized-dark', label: 'Solarized Dark', description: 'Low-contrast, easy on the eyes' },
-  { name: 'ansi', label: 'ANSI', description: 'Use the terminal 16-color palette — works everywhere' },
-  { name: 'off', label: 'Off', description: 'Disable syntax highlighting entirely' },
-]
 
 export const DEFAULT_SYNTAX_THEME: SyntaxThemeName = 'one-dark'
 
 /** Active theme — read by `highlightLine` when no explicit theme arg is
  *  passed. Initialized to default; flipped by `setSyntaxTheme` on
- *  startup (from user config) and again when the user runs `/syntax`. */
+ *  startup (from user config) and again when the user runs `/theme`. */
 let currentTheme: SyntaxThemeName = DEFAULT_SYNTAX_THEME
 
 export function setSyntaxTheme(name: SyntaxThemeName): void {
   currentTheme = name
-}
-
-export function getSyntaxTheme(): SyntaxThemeName {
-  return currentTheme
-}
-
-/** Validate / coerce an arbitrary string into a SyntaxThemeName. Used
- *  when reading user config (which is `unknown`-typed) and parsing
- *  slash-command arguments. Returns null for anything we don't
- *  recognize so the caller can show a helpful error. */
-export function parseSyntaxThemeName(input: unknown): SyntaxThemeName | null {
-  if (typeof input !== 'string') return null
-  const normalized = input
-    .toLowerCase()
-    .trim()
-    .replace(/[\s_]+/g, '-')
-  // Common alias mappings — matches what users might type.
-  const aliases: Record<string, SyntaxThemeName> = {
-    onedark: 'one-dark',
-    one: 'one-dark',
-    atom: 'one-dark',
-    mono: 'monokai',
-    sublime: 'monokai',
-    drac: 'dracula',
-    gh: 'github-dark',
-    github: 'github-dark',
-    'gh-dark': 'github-dark',
-    solarized: 'solarized-dark',
-    sol: 'solarized-dark',
-    sold: 'solarized-dark',
-    none: 'off',
-    disable: 'off',
-    disabled: 'off',
-    plain: 'off',
-  }
-  if (normalized in aliases) return aliases[normalized]!
-  if (normalized in THEMES) return normalized as SyntaxThemeName
-  return null
 }
 
 // ─── Language detection ───
@@ -809,9 +701,9 @@ const RULES_BY_LANG: Record<Lang, () => Rule[]> = {
 
 /** Apply a color spec from the active palette. Hex strings go through
  *  `chalk.hex`; named ANSI colors go through chalk's named accessor; a
- *  null spec returns the text unchanged (used by `'off'` and by the
- *  identifier-classification fallthrough when a word doesn't match
- *  any known keyword/type pattern). */
+ *  null spec returns the text unchanged (used by the identifier-
+ *  classification fallthrough when a word doesn't match any known
+ *  keyword/type pattern). */
 export function applyColor(text: string, spec: ColorSpec): string {
   if (spec === null) return text
   if (spec.startsWith('#')) return c.hex(spec)(text)
@@ -884,11 +776,10 @@ function paint(text: string, token: Token, lang: Lang, palette: Palette, default
  *  visible width is identical to the input — only escape codes added,
  *  no character substitution.
  *
- *  When `lang` is null (file extension we don't recognize) or the active
- *  theme is `'off'`, the output (with no `defaultFg`) is identical to
- *  the input. With `defaultFg`, ALL chars get a fg color so unhighlighted
- *  text on the diff bg matches CC's brighter cream/dark-gray instead of
- *  the terminal default white. */
+ *  When `lang` is null (file extension we don't recognize), the output
+ *  (with no `defaultFg`) is identical to the input. With `defaultFg`,
+ *  ALL chars get a fg color so unhighlighted text on the diff bg matches
+ *  CC's brighter cream/dark-gray instead of the terminal default white. */
 export function highlightLine(
   line: string,
   lang: Lang | null,
@@ -905,14 +796,6 @@ export function highlightLine(
   }
 
   const palette = THEMES[theme ?? currentTheme]
-  // For `'off'` (all-null palette), there are no token colors to apply.
-  // But we still want defaultFg so unhighlighted text on diff bg has
-  // the right brightness. Skip the regex work — paint the whole line
-  // in defaultFg (or identity if no defaultFg).
-  if (palette === THEMES.off) {
-    return defaultFg ? applyColor(line, defaultFg) : line
-  }
-
   const rules = RULES_BY_LANG[lang]()
   let pos = 0
   let out = ''

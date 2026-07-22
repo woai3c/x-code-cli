@@ -17,7 +17,6 @@
 // This module replaces the old per-session `<id>.usage.json` and
 // `<id>.json` (LLM summary) files — both are now meta entries inside the
 // jsonl. /usage history and /resume both source from the same file.
-import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -648,14 +647,6 @@ async function readRange(filePath: string, offset: number, length: number): Prom
 export async function pickLatestSession(cwd: string = process.cwd()): Promise<SessionListEntry | null> {
   const all = await listSessions(cwd)
   return all[0] ?? null
-}
-
-/** Stable identifier for a session in picker UI. We can't use the filename
- *  directly (it can collide visually when multiple sessions share a slug)
- *  and the sessionId alone isn't unique across renames — but the file path
- *  is, by definition. Hashed to keep the choice label compact. */
-export function shortIdFor(filePath: string): string {
-  return createHash('sha1').update(filePath).digest('hex').slice(0, 8)
 }
 
 /** Build a LoopState seeded from a previously-saved session. The agent

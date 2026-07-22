@@ -82,7 +82,7 @@ interface PendingQuestion {
    *  dismissible pickers, interrupt text for `askUser`. */
   abortAnswer: string
   /** True when Esc should dismiss the dialog (resolves with empty string).
-   *  User-initiated pickers (`/syntax`, `/model`, …) set this — the user
+   *  User-initiated pickers (`/theme`, `/model`, …) set this — the user
    *  may have opened the menu just to look. AI-initiated questions
    *  (`onAskUser`, plan approval) leave it falsy so the model isn't
    *  silently fed an empty answer. */

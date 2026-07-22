@@ -25,7 +25,6 @@
 import crypto from 'node:crypto'
 
 import type { LoopState } from './loop-state.js'
-import { toolResultMessage } from './messages.js'
 
 /** Tool calls at or above this count in the rolling window trigger the soft
  *  synthetic nudge. */
@@ -130,11 +129,4 @@ export function recordToolCall(state: LoopState, toolName: string, input: unknow
   if (state.recentToolCalls.length > cap) {
     state.recentToolCalls.splice(0, state.recentToolCalls.length - cap)
   }
-}
-
-/** Build a synthetic tool-result message telling the model the call was
- *  blocked by the loop guard. The model sees this as if the tool returned it
- *  and usually adjusts on the next turn. */
-export function syntheticLoopBlockResult(toolName: string, toolCallId: string, message: string) {
-  return toolResultMessage(toolCallId, toolName, `[loop-guard] ${message}`)
 }

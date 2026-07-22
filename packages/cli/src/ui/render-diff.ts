@@ -167,7 +167,7 @@ function renderHunks(
   const themeColors = getThemeColors(uiTheme)
   // ANSI mode is detected by the `'ansi:default'` bg sentinel — those
   // themes can't paint hex bg (16-color compat), so they communicate
-  // remove rows via DIM instead. Mirrors CC color-diff/index.ts:924.
+  // remove rows via dim styling instead. Mirrors CC color-diff/index.ts:924.
   const isAnsiMode = themeColors.diffAdded === 'ansi:default'
   // CC paints unhighlighted text inside diff rows in `Theme.foreground`
   // (#f8f8f2 dark / #333333 light). Without it our unmatched chars

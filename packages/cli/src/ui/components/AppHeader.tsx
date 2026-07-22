@@ -11,7 +11,7 @@ import { GLYPH_HEADER_PIPE } from '../terminal-glyphs.js'
 const c = new Chalk({ level: 3 })
 
 /** Logo color — kept as the original soft sky-blue (`#89b4fa`) on purpose,
- *  independent of the main ACCENT which follows Claude Code's orange. */
+ *  independent of Claude Code's brand orange used elsewhere. */
 const LOGO_COLOR = '#89b4fa'
 
 // ── ASCII logos for different terminal widths ──

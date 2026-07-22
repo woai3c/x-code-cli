@@ -205,13 +205,3 @@ export async function readFileSafe(filePath: string): Promise<string> {
     return ''
   }
 }
-
-/** Read and parse a JSON file, return null on error */
-export async function readJsonSafe(filePath: string): Promise<Record<string, unknown> | null> {
-  try {
-    const content = await fs.readFile(filePath, 'utf-8')
-    return JSON.parse(content) as Record<string, unknown>
-  } catch {
-    return null
-  }
-}

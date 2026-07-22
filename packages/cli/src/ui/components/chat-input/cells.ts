@@ -40,7 +40,7 @@ export function textToCells(text: string, style: string): Cell[] {
 }
 
 /** Parse a string that already contains ANSI SGR escapes into Cell[]. Used
- *  by the select-options dialog's preview pane so a `/syntax` preview row
+ *  by the select-options dialog's preview pane so a `/theme` preview row
  *  built by render-diff (full of fg/bg color escapes) can be drawn into
  *  the cell buffer with each char carrying its correct active style.
  *

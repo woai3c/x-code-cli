@@ -44,9 +44,6 @@ importers:
       husky:
         specifier: ^9.0.0
         version: 9.1.7
-      ink-testing-library:
-        specifier: ^4.0.0
-        version: 4.0.0(@types/react@19.2.13)
       lint-staged:
         specifier: ^16.0.0
         version: 16.2.7
@@ -74,9 +71,6 @@ importers:
       chalk:
         specifier: ^5.4.0
         version: 5.6.2
-      diff:
-        specifier: ^8.0.0
-        version: 8.0.3
       ink:
         specifier: npm:@jrichman/ink@6.6.9
         version: '@jrichman/ink@6.6.9(@types/react@19.2.13)(react@19.2.4)'
@@ -128,9 +122,6 @@ importers:
       ai:
         specifier: ^6.0.0
         version: 6.0.77(zod@3.25.76)
-      chalk:
-        specifier: ^5.4.0
-        version: 5.6.2
       cheerio:
         specifier: ^1.0.0
         version: 1.2.0
@@ -167,10 +158,6 @@ importers:
       zod:
         specifier: ^3.25.76
         version: 3.25.76
-    devDependencies:
-      '@types/pdf-parse':
-        specifier: ^1.1.5
-        version: 1.1.5
 
 packages:
 
@@ -1006,9 +993,6 @@ packages:
 
   '@types/node@22.19.10':
     resolution: {integrity: sha512-tF5VOugLS/EuDlTBijk0MqABfP8UxgYazTLo3uIn3b4yJgg26QRbVYJYsDtHrjdDUIRfP70+VfhTTc+CE1yskw==}
-
-  '@types/pdf-parse@1.1.5':
-    resolution: {integrity: sha512-kBfrSXsloMnUJOKi25s3+hRmkycHfLK6A09eRGqF/N8BkQoPUmaCr+q8Cli5FnfohEz/rsv82zAiPz/LXtOGhA==}
 
   '@types/react@19.2.13':
     resolution: {integrity: sha512-KkiJeU6VbYbUOp5ITMIc7kBfqlYkKA5KhEHVrGMmUUMt7NeaZg65ojdPk+FtNrBAOXNVM5QM72jnADjM+XVRAQ==}
@@ -1883,15 +1867,6 @@ packages:
   ini@4.1.1:
     resolution: {integrity: sha512-QQnnxNyfvmHFIsj7gkPcYymR8Jdw/o7mp5ZFihxn6h8Ci6fh3Dx4E1gPjpQEpIuPo9XVNY/ZUwh4BPMjGyL01g==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
-
-  ink-testing-library@4.0.0:
-    resolution: {integrity: sha512-yF92kj3pmBvk7oKbSq5vEALO//o7Z9Ck/OaLNlkzXNeYdwfpxMQkSowGTFUCS5MSu9bWfSZMewGpp7bFc66D7Q==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@types/react': '>=18.0.0'
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
 
   ip-address@10.2.0:
     resolution: {integrity: sha512-/+S6j4E9AHvW9SWMSEY9Xfy66O5PWvVEJ08O0y5JGyEKQpojb0K0GKpz/v5HJ/G0vi3D2sjGK78119oXZeE0qA==}
@@ -3657,10 +3632,6 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
-  '@types/pdf-parse@1.1.5':
-    dependencies:
-      '@types/node': 22.19.10
-
   '@types/react@19.2.13':
     dependencies:
       csstype: 3.2.3
@@ -4608,10 +4579,6 @@ snapshots:
   inherits@2.0.4: {}
 
   ini@4.1.1: {}
-
-  ink-testing-library@4.0.0(@types/react@19.2.13):
-    optionalDependencies:
-      '@types/react': 19.2.13
 
   ip-address@10.2.0: {}
 

@@ -92,8 +92,6 @@ import {
 } from './chat-input/text-helpers.js'
 import type { MenuItem, PermissionRequest, SelectRequest, SlashCommand, SpinnerState } from './chat-input/types.js'
 
-export type { PermissionRequest, SelectRequest, SlashCommand, SpinnerState } from './chat-input/types.js'
-
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
 const MAX_VISIBLE_LINES = 10
@@ -915,7 +913,7 @@ export function ChatInput({
         const opt = selectRequest.options[selectIndex]
         const isFreeform = !!opt?.freeform
         // Esc dismisses user-initiated pickers (slash commands like
-        // /syntax, /model) — the user may have just been browsing and
+        // /theme, /model) — the user may have just been browsing and
         // shouldn't be forced to commit. AI-initiated dialogs leave
         // `dismissible` falsy so Esc is swallowed; otherwise the model
         // gets a silent empty answer back from its askUser call.
@@ -1933,7 +1931,7 @@ export function ChatInput({
       frame.push(hint)
 
       // Live preview pane. The focused option may carry a `preview`
-      // array of pre-rendered ANSI rows (e.g. the `/syntax` picker
+      // array of pre-rendered ANSI rows (e.g. the `/theme` picker
       // attaches a colored diff snippet per theme). Render below the
       // hint with one blank-row separator so the visual block reads as
       // "options \u2193 preview". When the focused option has no preview

@@ -57,7 +57,6 @@ vi.mock('../src/agent/session-store.js', () => ({
   listSessions: vi.fn().mockResolvedValue([]),
   loadSession: vi.fn().mockResolvedValue(null),
   pickLatestSession: vi.fn().mockResolvedValue(null),
-  shortIdFor: vi.fn().mockReturnValue(''),
 }))
 
 describe('agent loop', () => {

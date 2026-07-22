@@ -58,13 +58,13 @@ export interface SelectRequest {
    *
    *  `preview` carries pre-rendered ANSI lines that the dialog draws
    *  below the option list whenever this option is the focused one.
-   *  Used by the `/syntax` picker to show a live color sample of each
+   *  Used by the `/theme` picker to show a live color sample of each
    *  theme as the user arrows through. Each row should already be a
    *  complete ANSI-styled string — the dialog wraps it in a `RawAnsi`-
    *  like cell row without further processing. */
   options: { label: string; description: string; freeform?: boolean; preview?: string[] }[]
   onResolve: (answer: string) => void
-  /** True for user-initiated pickers (slash commands like `/syntax`,
+  /** True for user-initiated pickers (slash commands like `/theme`,
    *  `/model`) — Esc dismisses the dialog with an empty answer. AI-
    *  initiated dialogs (askUser tool, plan approval) leave this falsy:
    *  Esc is swallowed so the model isn't silently fed a blank answer. */
