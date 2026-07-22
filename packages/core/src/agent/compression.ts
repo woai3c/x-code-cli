@@ -105,6 +105,12 @@ export async function checkAndCompressContext(
       // pre-boundary, but the loader cuts at the latest boundary). The
       // boundary carries no summary text since nothing was summarised.
       void markBoundaryAndReflush(state)
+      // Messages changed size — the next API call cannot benefit from a
+      // prefix-cache hit on the old message array. Reset so the cache
+      // helper knows to re-prime and checkAndCompressContext doesn't
+      // re-trigger on a stale high lastInputTokens value next turn.
+      state.lastInputTokens = 0
+      state.expectCacheMiss = true
       emitCompactionHook(hookCtx, {
         name: 'PostCompact',
         trigger: 'proactive',
@@ -124,6 +130,8 @@ export async function checkAndCompressContext(
     )
     if (!stillOver) {
       void markBoundaryAndReflush(state)
+      state.lastInputTokens = 0
+      state.expectCacheMiss = true
       emitCompactionHook(hookCtx, {
         name: 'PostCompact',
         trigger: 'proactive',

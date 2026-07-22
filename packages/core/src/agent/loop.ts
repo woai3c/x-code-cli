@@ -692,8 +692,13 @@ export async function agentLoop(
   // Write the session header to its jsonl file (idempotent for resumes —
   // the header line already exists in that case and we skip). Must come
   // AFTER taskSlug resolution because the filename is `<slug>-<id>.jsonl`.
-  // Fire-and-forget — never blocks the loop on FS errors.
-  void appendHeader(state, options.modelId, taskTextForMeta || taskText)
+  // Awaited so the header is guaranteed on disk before the first
+  // flushPendingMessages inside the turn loop below — fire-and-forget
+  // creates a race where message lines can land before the header line,
+  // breaking loadSession's assumption that the header is always the first
+  // entry. appendHeader's I/O is internally catch-safe (appendRawLines
+  // swallows FS errors) so this won't throw.
+  await appendHeader(state, options.modelId, taskTextForMeta || taskText)
 
   const compressionThreshold = getCompressionThreshold(options.modelId)
 

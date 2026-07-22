@@ -1381,6 +1381,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     const before = estimateTokenCount(loopStateRef.current.messages)
     onProgress?.('Summarizing conversation...')
     loopStateRef.current.messages = await compressMessages(loopStateRef.current.messages, modelRef.current)
+    // Messages changed — mirror the auto-compression paths: reset the
+    // cache-hit signal so the next turn doesn't wrongly assume a prefix
+    // match, and reset lastInputTokens so checkAndCompressContext won't
+    // re-trigger on a stale high value. Also write a compact-boundary
+    // to the jsonl so the loader can pick up the post-compaction state.
+    loopStateRef.current.lastInputTokens = 0
+    loopStateRef.current.expectCacheMiss = true
+    void markBoundaryAndReflush(loopStateRef.current)
     const after = estimateTokenCount(loopStateRef.current.messages)
     return { beforeTokens: before, afterTokens: after }
   }, [])
