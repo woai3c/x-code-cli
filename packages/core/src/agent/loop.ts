@@ -962,5 +962,13 @@ export async function agentLoop(
  *  here — summaries now ride along on `compact-boundary` lines, not
  *  on a separate exit-time call. */
 export async function saveSession(state: LoopState, _model: LanguageModel): Promise<void> {
+  // agentLoop's final flush is fire-and-forget and pre-bumps
+  // persistedMessageCount so the guard inside flushPendingMessages
+  // skips on the next call.  That means the only actual write is the
+  // fire-and-forget one — if process.exit() fires before the append
+  // lands, the last turn's messages are lost.  Wait for any in-flight
+  // flush FIRST, then run our own drain to catch messages that arrived
+  // after the pre-bump (rare: goal runner input promotion).
+  await (state.pendingFlush ?? Promise.resolve())
   await flushPendingMessages(state)
 }

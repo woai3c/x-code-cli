@@ -245,7 +245,14 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
   const startCount = state.persistedMessageCount
   const flushEnd = state.messages.length
   state.persistedMessageCount = flushEnd
-  if (!(await appendRawLines(filePath, lines))) {
+  const writePromise = appendRawLines(filePath, lines)
+  // Stash on LoopState so saveSession can await this in-flight write
+  // before process.exit() kills it.  print mode calls saveSession
+  // (awaited) right after agentLoop returns; without this hook the pre-
+  // bump above makes saveSession a no-op and process.exit() races the
+  // fire-and-forget appendFile.
+  state.pendingFlush = writePromise
+  if (!(await writePromise)) {
     // Write failed — roll back so a later flush retries these messages,
     // but ONLY if no newer flush ran while we were awaiting: rewinding
     // past a count another flush already advanced would re-append its
@@ -254,6 +261,7 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
       state.persistedMessageCount = startCount
     }
   }
+  state.pendingFlush = null
 }
 
 /** Append a usage snapshot for the current turn. Called from the agent loop

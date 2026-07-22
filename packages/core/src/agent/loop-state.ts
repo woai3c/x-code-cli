@@ -70,6 +70,11 @@ export interface LoopState {
    *  "everything-after-last-boundary wins" rule reconstructs the same
    *  in-memory state on resume. See `agent/session-store.ts`. */
   persistedMessageCount: number
+  /** Promise of the most recent in-flight `appendRawLines` inside
+   *  `flushPendingMessages`. `saveSession` awaits this before running
+   *  its own flush — without it, print mode's `process.exit()` can
+   *  kill the fire-and-forget agentLoop final flush mid-write. */
+  pendingFlush: Promise<boolean> | null
 
   // ── Cache break detection ──
 
@@ -169,6 +174,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     todos: [],
     checkpoints: [],
     persistedMessageCount: 0,
+    pendingFlush: null,
     prevTurnCacheRead: 0,
     expectCacheMiss: false,
     readFileCache: new Map(),
