@@ -57,6 +57,32 @@ function prependContext(userMessage: UserContent, context: string): UserContent 
   return [{ type: 'text', text: block }, ...userMessage]
 }
 
+/** Drain the UI's mid-turn message queue into `state.messages` as ONE
+ *  merged user message. Multiple queued texts are joined rather than
+ *  pushed as consecutive user turns — back-to-back user messages break
+ *  some providers' tool-call sequencing (see prependContext). Returns
+ *  true when a message was injected. Called at tool-batch boundaries
+ *  and on `stop`, never mid-stream. */
+function drainQueuedInputs(state: LoopState, options: AgentOptions): boolean {
+  const queued = options.consumeQueuedInputs?.()
+  if (!queued?.length) return false
+  const text = queued
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .join('\n\n')
+  if (!text) return false
+  // Wrap with temporal context (Claude Code's wrapCommandText phrasing):
+  // without it the model can't tell a mid-turn steer from a post-task
+  // instruction and may abandon the unfinished half of the current task.
+  // Pure text — works on every provider, no API feature required.
+  const wrapped =
+    'The user sent a new message while you were working:\n' +
+    text +
+    "\n\nIMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it."
+  state.messages.push({ role: 'user', content: wrapped })
+  return true
+}
+
 /** Pull plain text out of a UserContent payload for slugification.
  *  UserContent can be a string OR a multi-part array (text/image/file
  *  parts after `buildUserContent` ingests `@path` references); we only
@@ -836,6 +862,11 @@ export async function agentLoop(
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
       if (options.abortSignal?.aborted) break
+      // Mid-turn steering: inject user messages queued while this tool
+      // batch ran. Safe only here — the batch's tool_results are all
+      // recorded, so the merged user message never interleaves with
+      // pending tool_result parts (providers reject that ordering).
+      drainQueuedInputs(state, options)
       continue
     }
 
@@ -864,6 +895,15 @@ export async function agentLoop(
     if (outcome.finishReason === 'content-filter') {
       callbacks.onError(new Error('Response stopped by the provider content filter.'))
     } else if (outcome.finishReason === 'stop') {
+      // Follow-up: the user queued messages while this turn was streaming.
+      // Inject and keep looping instead of returning to the UI — Codex's
+      // needs_follow_up equivalent. Messages that land after this drain
+      // (sub-millisecond race) stay queued; the UI's idle-drain submits
+      // them as a fresh agentLoop call.
+      if (drainQueuedInputs(state, options)) {
+        continuationAttempts = 0
+        continue
+      }
       completedNormally = true
     }
 

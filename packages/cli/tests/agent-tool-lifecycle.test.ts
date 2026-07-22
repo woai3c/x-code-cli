@@ -11,6 +11,8 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
     shellOutput: '',
     permissionQueue: [],
     pendingQuestion: null,
+    queuedMessages: [],
+    restoredDraft: null,
     usage: {
       inputTokens: 0,
       outputTokens: 0,

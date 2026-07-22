@@ -418,6 +418,8 @@ export function App({
   const {
     state,
     submit,
+    queueMessage,
+    popQueuedMessage,
     runGoal,
     pauseGoal,
     resumeGoal,
@@ -901,6 +903,26 @@ export function App({
     if (isUpdateNoticeRef.current) {
       isUpdateNoticeRef.current = false
       setNotice(null)
+    }
+
+    // Mid-turn queue: while a turn is in flight, plain text doesn't start
+    // a competing agentLoop (concurrent loops would corrupt the shared
+    // message history) — it lands in the pending queue and gets injected
+    // at the next tool boundary (see consumeQueuedInputs in use-agent).
+    // Slash commands still route normally below; ChatInput already gates
+    // which ones can arrive here mid-turn (currently only /goal).
+    if (state.isLoading && !text.startsWith('/')) {
+      const pendingSkill = pendingSkillRef.current
+      if (pendingSkill) {
+        pendingSkillRef.current = null
+        // Display/inject split: the pending list + scrollback show the
+        // user's own text; the model receives the skill envelope (same as
+        // the idle path's silent submit).
+        queueMessage(text, `${wrapActivatedSkill(pendingSkill)}\n\n${text}`)
+      } else {
+        queueMessage(text)
+      }
+      return
     }
 
     // Slash commands
@@ -1752,6 +1774,9 @@ export function App({
       }
       activeToolCalls={state.activeToolCalls}
       todos={state.todos}
+      queuedMessages={state.queuedMessages}
+      onPopQueued={popQueuedMessage}
+      draftRestore={state.restoredDraft}
       errorMessage={state.error}
       permission={
         permissionRequest

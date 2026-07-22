@@ -288,6 +288,20 @@ export interface AgentOptions {
    *  / ${CLAUDE_PLUGIN_ROOT} substitution) and submits as a model
    *  prompt. Absent ⇒ no plugin commands available. */
   commandRegistry?: CommandRegistry
+
+  // ── Mid-turn user message queue (steering) ──
+
+  /** Drain callback for user messages queued while the loop is running.
+   *  The agent loop calls this at safe boundaries — after a tool batch
+   *  finishes (before the next API request) and on a `stop` finish — and
+   *  injects any returned texts as ONE merged user message (wrapped with
+   *  a "sent while you were working" marker) into `state.messages`.
+   *  MUST have drain semantics: return the current queue contents and
+   *  clear it atomically, so a message is never injected twice. Return
+   *  undefined/empty when nothing is queued. Absent ⇒ mid-turn queueing
+   *  disabled (sub-agents, --print). Mirrors Codex's steer_input and
+   *  Claude Code's priority-'next' queue consumption. */
+  consumeQueuedInputs?: () => string[] | undefined
 }
 
 // ─── Knowledge ───

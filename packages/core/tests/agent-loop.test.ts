@@ -258,4 +258,124 @@ describe('agent loop', () => {
     expect(streamText).toHaveBeenCalledTimes(1)
     expect(mockCallbacks.onError).not.toHaveBeenCalled()
   })
+
+  it('injects queued user messages at the tool-call boundary', async () => {
+    // Steering: the user types while tools run. The queued text must land
+    // in state.messages BEFORE the next streamText call, merged into one
+    // user message — never interleaved with pending tool_results.
+    const stopResult = {
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any
+    vi.mocked(streamText)
+      .mockReturnValueOnce({
+        fullStream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text-delta', text: 'working' }
+          },
+        },
+        response: Promise.resolve({ messages: [{ role: 'assistant', content: 'working' }] }),
+        usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+        finishReason: Promise.resolve('tool-calls'),
+        toolCalls: Promise.resolve([]),
+      } as any)
+      .mockReturnValue(stopResult)
+
+    const consumeQueuedInputs = vi
+      .fn<() => string[] | undefined>()
+      .mockReturnValueOnce(['first queued', 'second queued'])
+      .mockReturnValue(undefined)
+
+    const { state, turnCount } = await agentLoop(
+      'start',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 10, printMode: false, consumeQueuedInputs },
+      mockCallbacks,
+    )
+
+    expect(turnCount).toBe(2)
+    const injected = state.messages.filter((m) => m.role === 'user').map((m) => m.content)
+    // Multiple queued texts merge into ONE user message (back-to-back user
+    // turns break some providers' tool-call sequencing), wrapped with the
+    // mid-turn temporal marker so the model knows it arrived mid-task.
+    const merged = injected.find((c) => typeof c === 'string' && c.includes('first queued\n\nsecond queued'))
+    expect(merged).toBeDefined()
+    expect(merged).toContain('while you were working')
+    expect(injected.filter((c) => typeof c === 'string' && c.includes('first queued')).length).toBe(1)
+    // The second API request must have carried the injected message.
+    const secondCallMessages = vi.mocked(streamText).mock.calls[1][0].messages as { role: string; content: unknown }[]
+    expect(
+      secondCallMessages.some(
+        (m) =>
+          m.role === 'user' && typeof m.content === 'string' && m.content.includes('first queued\n\nsecond queued'),
+      ),
+    ).toBe(true)
+  })
+
+  it('follows up on stop when messages are still queued', async () => {
+    // needs_follow_up: a message queued while the final reply streams must
+    // keep the loop alive instead of returning to the UI idle.
+    vi.mocked(streamText).mockReturnValue({
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'reply' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'reply' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const consumeQueuedInputs = vi
+      .fn<() => string[] | undefined>()
+      .mockReturnValueOnce(['late follow-up'])
+      .mockReturnValue(undefined)
+
+    const { state, turnCount } = await agentLoop(
+      'start',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 10, printMode: false, consumeQueuedInputs },
+      mockCallbacks,
+    )
+
+    expect(turnCount).toBe(2)
+    expect(streamText).toHaveBeenCalledTimes(2)
+    expect(
+      state.messages.some(
+        (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('late follow-up'),
+      ),
+    ).toBe(true)
+  })
+
+  it('runs without a queue when consumeQueuedInputs is absent', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const { turnCount } = await agentLoop(
+      'plain',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 10, printMode: false },
+      mockCallbacks,
+    )
+
+    expect(turnCount).toBe(1)
+    expect(mockCallbacks.onError).not.toHaveBeenCalled()
+  })
 })

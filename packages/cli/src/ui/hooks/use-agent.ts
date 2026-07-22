@@ -114,6 +114,21 @@ export interface ActiveToolCall {
   subToolHistory?: string[]
 }
 
+/** A user message submitted while a turn was in flight. Lives in the
+ *  pending list above the input box until the agent loop injects it at
+ *  the next tool boundary (steering) — then it becomes a regular user
+ *  message in scrollback. Mirrors Codex's QueuedUserMessage. */
+export interface QueuedMessage {
+  id: string
+  /** Display text — shown in the pending list and committed to scrollback. */
+  text: string
+  /** What the model actually sees, when it differs from the display text
+   *  (e.g. a queued `/skill` activation: scrollback shows the user's
+   *  request, the model receives the <activated_skill> envelope).
+   *  Defaults to `text` when absent. */
+  inject?: string
+}
+
 export interface AgentState {
   messages: DisplayMessage[]
   isLoading: boolean
@@ -121,6 +136,15 @@ export interface AgentState {
   shellOutput: string
   permissionQueue: PendingPermission[]
   pendingQuestion: PendingQuestion | null
+  /** Mid-turn queue: plain-text submits that arrived while `isLoading`.
+   *  Rendered by ChatInput above the spinner; drained by the agent loop
+   *  via `consumeQueuedInputs` (see AgentOptions in core). */
+  queuedMessages: QueuedMessage[]
+  /** One-shot draft restore request for ChatInput. Set when Esc aborts a
+   *  turn with messages still queued — they go back into the input box
+   *  (merged) instead of vanishing (Codex's input-restore semantics).
+   *  `nonce` lets ChatInput's effect distinguish consecutive restores. */
+  restoredDraft: { text: string; nonce: number } | null
   usage: TokenUsage
   error: string | null
   /** Live model id — mirrors modelIdRef so UI can re-render on /model change. */
@@ -168,6 +192,8 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   shellOutput: '',
   permissionQueue: [],
   pendingQuestion: null,
+  queuedMessages: [],
+  restoredDraft: null,
   usage: {
     inputTokens: 0,
     outputTokens: 0,
@@ -243,6 +269,65 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  before `controller.abort()` — otherwise the core loop stays blocked
    *  on the first shell while the UI still shows stale Yes/No. */
   const permissionResolversRef = useRef<Array<(decision: 'yes' | 'always' | 'no') => void>>([])
+
+  /** Source of truth for the mid-turn message queue. The React state
+   *  mirror (`state.queuedMessages`) drives ChatInput's pending list;
+   *  the ref exists because `consumeQueuedInputs` is called synchronously
+   *  by the agent loop between awaits — reading state there would see a
+   *  stale closure. Every mutation updates BOTH in the same tick. */
+  const queuedMessagesRef = useRef<QueuedMessage[]>([])
+  /** Monotonic id source for queued messages / draft restores. Date.now()
+   *  collides within the same millisecond (and `length` repeats after a
+   *  pop), which breaks React keys, pop-by-id, and nonce comparisons. */
+  const queueSeqRef = useRef(0)
+
+  /** Queue a plain-text submit that arrived while a turn was in flight.
+   *  The agent loop drains it at the next tool boundary (or on `stop`).
+   *  `inject` overrides what the model sees (display text stays clean). */
+  const queueMessage = useCallback((text: string, inject?: string) => {
+    const entry: QueuedMessage = { id: `queued-${queueSeqRef.current++}`, text, inject }
+    queuedMessagesRef.current = [...queuedMessagesRef.current, entry]
+    setState((prev) => ({ ...prev, queuedMessages: queuedMessagesRef.current }))
+  }, [])
+
+  /** Remove one queued message by id (ChatInput's ↑-to-pop-back editing). */
+  const popQueuedMessage = useCallback((id: string) => {
+    queuedMessagesRef.current = queuedMessagesRef.current.filter((m) => m.id !== id)
+    setState((prev) => ({ ...prev, queuedMessages: queuedMessagesRef.current }))
+  }, [])
+
+  /** Drain the queue: move every queued message into scrollback as a
+   *  regular user message and return the texts for injection into
+   *  `state.messages`. Passed to agentLoop as `consumeQueuedInputs` —
+   *  MUST stay atomic (read + clear in one synchronous step) so a
+   *  message can never be injected twice. */
+  const consumeQueuedInputs = useCallback((): string[] | undefined => {
+    const queued = queuedMessagesRef.current
+    if (queued.length === 0) return undefined
+    queuedMessagesRef.current = []
+    const now = Date.now()
+    setState((prev) => ({
+      ...prev,
+      queuedMessages: [],
+      messages: [
+        ...prev.messages,
+        ...queued.map((m) => ({ id: m.id, role: 'user' as const, content: m.text, timestamp: now })),
+      ],
+    }))
+    return queued.map((m) => m.inject ?? m.text)
+  }, [])
+
+  /** Move every still-queued message back into the input box as a single
+   *  merged draft (Codex's input_restore semantics — zero loss on Esc).
+   *  Used by abort() and by submit's aborted-completion path for messages
+   *  that raced in after abort() already ran. */
+  const restoreQueueToDraft = useCallback(() => {
+    const queued = queuedMessagesRef.current
+    if (queued.length === 0) return
+    queuedMessagesRef.current = []
+    const text = queued.map((m) => m.text).join('\n\n')
+    setState((prev) => ({ ...prev, queuedMessages: [], restoredDraft: { text, nonce: queueSeqRef.current++ } }))
+  }, [])
 
   /** Append a single message to `messages` (used by the stream buffer). */
   const appendMessage = useCallback((msg: DisplayMessage) => {
@@ -346,6 +431,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         toolFilter?: AgentOptions['toolFilter']
         maxTurns?: number
         signal?: AbortSignal
+        /** Skip the end-of-submit idle-drain. The goal runner drives its
+         *  own sequence of submit() calls — a fire-and-forget drain here
+         *  would race the runner's NEXT runAgentTurn, running two
+         *  agentLoops concurrently over the same LoopState.messages. */
+        skipIdleDrain?: boolean
       },
     ): Promise<AgentLoopResult | null> => {
       await initialize()
@@ -559,6 +649,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             // this read is just a no-op fallthrough.
             permissionMode: permissionModeRef.current,
             abortSignal: controller.signal,
+            // Mid-turn steering: messages the user queued while this turn
+            // runs are injected at tool boundaries / on stop. Stable
+            // callback — reads and clears queuedMessagesRef atomically.
+            consumeQueuedInputs,
           },
           callbacks,
           loopStateRef.current ?? undefined,
@@ -597,6 +691,23 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           goalStatus: finalGoal,
         }))
         externalSignal?.removeEventListener('abort', abortFromExternal)
+        if (controller.signal.aborted) {
+          // Esc path: anything queued after abort()'s own queue-restore
+          // (user hit Esc and Enter nearly simultaneously) would strand a
+          // "queued:" row with no spinner and no consumer. Fold it into
+          // the restored draft too — zero-loss like abort() itself.
+          restoreQueueToDraft()
+        } else if (!submitOptions?.skipIdleDrain && queuedMessagesRef.current.length > 0) {
+          // Idle-drain: a message queued after the loop's last boundary
+          // check (sub-millisecond race at turn end) would otherwise sit
+          // in the pending list until the user's next manual submit. Fire
+          // it as a fresh silent turn — consumeQueuedInputs already moved
+          // it into scrollback. Skipped for goal-runner submits (the
+          // runner owns the next turn; a concurrent drain would corrupt
+          // shared history).
+          const texts = consumeQueuedInputs()
+          if (texts?.length) void submitRef.current?.(texts.join('\n\n'), { silent: true })
+        }
         return agentResult
       } catch (err) {
         pendingToolsRef.current.clear()
@@ -620,8 +731,26 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         return null
       }
     },
-    [options, initialize, flushBuffer, appendMessage, handleTextDelta, toolLifecycleCallbacks],
+    [
+      options,
+      initialize,
+      flushBuffer,
+      appendMessage,
+      handleTextDelta,
+      toolLifecycleCallbacks,
+      consumeQueuedInputs,
+      restoreQueueToDraft,
+    ],
   )
+
+  /** Self-reference for the idle-drain follow-up fired from inside
+   *  submit()'s success path — a direct recursive call would make the
+   *  useCallback depend on itself. Synced every render; the trailing
+   *  drain always reaches the latest submit closure. */
+  const submitRef = useRef<typeof submit | null>(null)
+  useEffect(() => {
+    submitRef.current = submit
+  })
 
   /** Resolve the first pending permission request and pop it from the queue */
   const resolvePermission = useCallback((decision: 'yes' | 'always' | 'no') => {
@@ -785,6 +914,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
                 toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
                 maxTurns: turnOptions?.finalSummary ? 1 : undefined,
                 signal,
+                skipIdleDrain: true,
               })
               if (!result) throw new Error('Goal agent turn did not complete')
               return {
@@ -866,6 +996,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
               maxTurns: turnOptions?.finalSummary ? 1 : undefined,
               signal,
+              skipIdleDrain: true,
             })
             if (!result) throw new Error('Goal agent turn did not complete')
             return { ...result, text: extractLastAssistantText(result.state.messages) }
@@ -1059,8 +1190,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     // shell often sits here while the user thinks the UI is "frozen").
     drainPendingInteractions()
 
+    // Zero-loss queue restore (Codex's input_restore semantics): messages
+    // queued mid-turn but never injected go back into the input box as an
+    // editable draft instead of being silently dropped or auto-run after
+    // the interrupt. ChatInput applies `restoredDraft` on nonce change.
+    restoreQueueToDraft()
+
     controller.abort()
-  }, [drainPendingInteractions, flushBuffer, appendMessage])
+  }, [drainPendingInteractions, flushBuffer, appendMessage, restoreQueueToDraft])
 
   /** Save session and cleanup */
   const cleanup = useCallback(async () => {
@@ -1088,6 +1225,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       pendingToolsRef.current.clear()
       permissionResolversRef.current = []
       pendingQuestionRef.current = null
+      queuedMessagesRef.current = []
       resetBuffer()
       // Preserve the current live model id and approval mode when clearing
       // — user expects the model they just picked AND the plan-mode toggle
@@ -1134,6 +1272,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const resume = useCallback(
     (loaded: LoadedSession) => {
       pendingToolsRef.current.clear()
+      queuedMessagesRef.current = []
       resetBuffer()
       loopStateRef.current = hydrateLoopState(loaded, permissionModeRef.current)
       const converted = modelMessagesToDisplay(loaded.messages)
@@ -1143,6 +1282,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         shellOutput: '',
         error: null,
         todos: [],
+        // queuedMessagesRef was cleared above — keep the state mirror in
+        // sync or stale pending rows keep rendering until the next queue
+        // mutation overwrites them.
+        queuedMessages: [],
+        restoredDraft: null,
         messages: [...prev.messages, ...converted],
         usage: { ...loaded.tokenUsage },
         goalStatus: loaded.goal ? { ...loaded.goal } : null,
@@ -1312,6 +1456,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   return {
     state,
     submit,
+    queueMessage,
+    popQueuedMessage,
     runGoal,
     pauseGoal,
     resumeGoal,

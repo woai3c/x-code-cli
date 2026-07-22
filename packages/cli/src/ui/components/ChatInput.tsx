@@ -144,6 +144,17 @@ interface ChatInputProps {
    *  completed). Empty array hides the panel — zero visual cost when
    *  the model isn't using TodoWrite. */
   todos?: readonly TodoItem[]
+  /** Plain-text messages submitted while a turn is in flight, waiting for
+   *  injection at the agent loop's next tool boundary. Rendered as a dim
+   *  pending list above the spinner; ↑ on an empty input pops the tail
+   *  back into the input box for editing (LIFO, Codex Alt+Up style). */
+  queuedMessages?: readonly { id: string; text: string }[]
+  /** Remove one queued message after ↑ popped it back into the input. */
+  onPopQueued?: (id: string) => void
+  /** One-shot request to replace the input contents (Esc abort restoring
+   *  un-injected queued messages as a draft). Applied when `nonce`
+   *  changes, never on identity alone. */
+  draftRestore?: { text: string; nonce: number } | null
   /** Optional error string shown as a dedicated row above the spinner. */
   errorMessage?: string | null
   /** If non-null, render a Permission dialog inside our cell buffer AND
@@ -201,6 +212,9 @@ export function ChatInput({
   spinner,
   activeToolCalls,
   todos,
+  queuedMessages,
+  onPopQueued,
+  draftRestore,
   errorMessage,
   permission,
   selectRequest,
@@ -221,6 +235,21 @@ export function ChatInput({
     cursorRef.current = cursor
   }, [cursor, text])
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
+  // One-shot draft restore (Esc abort with un-injected queued messages).
+  // Keyed on `nonce` so consecutive restores with identical text still
+  // apply; identity changes from unrelated re-renders don't re-trigger.
+  // NOTE: deliberately does NOT touch the history-nav refs — capturing
+  // them in an effect trips react-hooks/immutability on their (pre-
+  // existing) mutations elsewhere, and a mid-nav restore is a harmless
+  // edge case.
+  const lastDraftNonceRef = useRef(0)
+  useEffect(() => {
+    if (!draftRestore || draftRestore.nonce === lastDraftNonceRef.current) return
+    lastDraftNonceRef.current = draftRestore.nonce
+    dispatch({ type: 'SET_TEXT', text: draftRestore.text, cursor: draftRestore.text.length })
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same one-shot restore; clears paste refs alongside the text.
+    setPastedContents({})
+  }, [draftRestore])
   const [completionIndex, setCompletionIndex] = useState(0)
   const [atCompletionIndex, setAtCompletionIndex] = useState(0)
   // Tracks the trigger-key (atIdx + query) the user dismissed via Esc.
@@ -595,10 +624,15 @@ export function ChatInput({
   const handleSubmit = (override?: string) => {
     const raw = override ?? text
     if (!raw.trim()) return
-    // Block submit while the agent is still thinking. Keystrokes still flow
-    // (the keyboard stays enabled so users can pre-type the next prompt) —
-    // only Enter is suppressed, matching Claude Code's behavior.
-    if (spinner && !raw.trimStart().toLowerCase().startsWith('/goal')) return
+    // While the agent is still thinking, slash commands stay blocked —
+    // running /compact or /resume mid-turn would corrupt shared state.
+    // `/goal` is the carve-out (pause/cancel/steer act ON the running
+    // turn). Plain text flows through and is queued by the parent for
+    // injection at the next tool boundary, matching Claude Code / Codex.
+    if (spinner) {
+      const lower = raw.trimStart().toLowerCase()
+      if (lower.startsWith('/') && !lower.startsWith('/goal')) return
+    }
     const expanded = override ? raw : expandPasteRefs(raw, pastedContents)
     // Record the pre-expansion form in input history (Up/Down recall) so
     // that restoring an entry doesn't unfold the entire paste block back
@@ -1109,7 +1143,18 @@ export function ChatInput({
         // Cursor first; fall through to history nav only when the cursor was
         // already on the logical first line (so multi-line drafts and recalled
         // entries can still be edited row-by-row).
-        if (!moveCursorVertically(-1)) navigateHistoryUp()
+        if (!moveCursorVertically(-1)) {
+          // Mid-turn queue pop wins over history recall on an empty input:
+          // the user most likely wants to edit what they just queued
+          // (LIFO — Codex's Alt+Up equivalent).
+          const tail = text.length === 0 && queuedMessages?.length ? queuedMessages[queuedMessages.length - 1] : null
+          if (tail) {
+            dispatch({ type: 'SET_TEXT', text: tail.text, cursor: tail.text.length })
+            onPopQueued?.(tail.id)
+          } else {
+            navigateHistoryUp()
+          }
+        }
         return
       }
       if (key === 'down') {
@@ -1596,6 +1641,25 @@ export function ChatInput({
         const cells: Cell[] = textToCells(` ${glyph} ${spinner.label}...`, S_SPINNER)
         if (meta) cells.push(...textToCells(meta, S_DIM))
         frame.push(cells)
+      }
+    }
+
+    // Queued mid-turn user messages: dim one-line previews pinned between
+    // the spinner and the input box — the closest visual anchor to where
+    // the user just typed. One blank row above separates the block from
+    // the spinner; below it hugs the input separator directly (two-sided
+    // margins read as excessive padding here). The rows vanish the moment
+    // the loop injects them — they reappear in scrollback as regular user
+    // messages via consumeQueuedInputs.
+    if (queuedMessages && queuedMessages.length > 0) {
+      frame.push([])
+      for (const q of queuedMessages) {
+        const preview = q.text.replace(/\s+/g, ' ').trim()
+        const cells: Cell[] = []
+        cells.push({ char: ' ', style: S_NONE, width: 1 })
+        cells.push(...textToCells('queued: ', S_GRAY_90))
+        cells.push(...textToCells(preview, S_DIM))
+        frame.push(truncateCellRow(cells, Math.max(20, termWidth - 1)))
       }
     }
 
