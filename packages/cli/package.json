@@ -1,6 +1,6 @@
 {
   "name": "@x-code-cli/cli",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "repository": {
     "type": "git",
     "url": "https://github.com/woai3c/x-code-cli",

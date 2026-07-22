@@ -1,3 +1,15 @@
+## v0.3.15 (2026-07-22)
+
+### Features
+
+- mid-turn message queue (steering) while the agent is running (6adb56a)
+
+### Bug Fixes
+
+- await in-flight flush in saveSession to prevent process.exit() race (94efe83)
+- fix session header/message race, and compaction state consistency (e314525)
+- close flushPendingMessages double-append race (490ef4d)
+
 ## v0.3.14 (2026-07-21)
 
 ### Features
