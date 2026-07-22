@@ -236,8 +236,23 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
   // persistedMessageCount alone so a future repeat-with-real-messages
   // doesn't think it already covered the range.
   if (lines.length === 0) return
-  if (await appendRawLines(filePath, lines)) {
-    state.persistedMessageCount = state.messages.length
+  // Bump the counter BEFORE the await. agentLoop's final flush is
+  // fire-and-forget and print mode's saveSession flush starts immediately
+  // after — with the counter bumped post-await, both pass the guard above
+  // and the tail messages land in the jsonl twice (observed in e2e
+  // transcripts). Capture the end index too: messages pushed while the
+  // write is in flight belong to the NEXT flush, not this one.
+  const startCount = state.persistedMessageCount
+  const flushEnd = state.messages.length
+  state.persistedMessageCount = flushEnd
+  if (!(await appendRawLines(filePath, lines))) {
+    // Write failed — roll back so a later flush retries these messages,
+    // but ONLY if no newer flush ran while we were awaiting: rewinding
+    // past a count another flush already advanced would re-append its
+    // lines (the very duplicate-tail bug this pre-bump fixes).
+    if (state.persistedMessageCount === flushEnd) {
+      state.persistedMessageCount = startCount
+    }
   }
 }
 
