@@ -9,9 +9,22 @@ import { createMoonshotAI } from '@ai-sdk/moonshotai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createXai } from '@ai-sdk/xai'
-import { createProviderRegistry } from 'ai'
+import { createProviderRegistry, customProvider } from 'ai'
 
 import { getProviderOptions, loadUserConfig } from '../config/index.js'
+
+const KIMI_CODING_MODEL_IDS = {
+  'kimi-k3': 'k3',
+  'kimi-k2.7-code': 'kimi-for-coding',
+  'kimi-k2.7-code-highspeed': 'kimi-for-coding-highspeed',
+  // Coding Plan exposes K2.6 by disabling thinking on kimi-for-coding rather
+  // than through a standalone model id.
+  'kimi-k2.6': 'kimi-for-coding',
+} as const
+
+export function kimiCodingModelId(modelId: string): string {
+  return KIMI_CODING_MODEL_IDS[modelId as keyof typeof KIMI_CODING_MODEL_IDS] ?? modelId
+}
 
 export function createModelRegistry() {
   const opts = getProviderOptions()
@@ -45,7 +58,7 @@ export function createModelRegistry() {
     // endpoints. Route through createOpenAICompatible so the request goes
     // through unmodified.
     if (baseURL?.includes('api.kimi.com/coding')) {
-      providers.moonshotai = createOpenAICompatible({
+      const codingProvider = createOpenAICompatible({
         name: 'moonshotai',
         apiKey: opts.moonshotai,
         baseURL,
@@ -56,6 +69,15 @@ export function createModelRegistry() {
         // route below hardcodes this already.
         includeUsage: true,
         convertUsage: moonshotConvertUsage,
+      })
+      providers.moonshotai = customProvider({
+        languageModels: {
+          'kimi-k3': codingProvider(kimiCodingModelId('kimi-k3')),
+          'kimi-k2.7-code': codingProvider(kimiCodingModelId('kimi-k2.7-code')),
+          'kimi-k2.7-code-highspeed': codingProvider(kimiCodingModelId('kimi-k2.7-code-highspeed')),
+          'kimi-k2.6': codingProvider(kimiCodingModelId('kimi-k2.6')),
+        },
+        fallbackProvider: codingProvider,
       })
     } else {
       providers.moonshotai = createMoonshotAI({

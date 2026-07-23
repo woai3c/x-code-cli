@@ -9,8 +9,8 @@
 // The tool itself does NOT branch on provider capability — that would
 // couple the tool layer to the currently-active model. Instead, every
 // binary result goes out as content parts and the provider-compat layer
-// strips them (falling back to OCR'd text) before they reach a provider
-// that can't handle them.
+// either keeps it in the tool result, reattaches it as a user image, or
+// replaces it with OCR for a text-only model.
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -303,8 +303,8 @@ Usage:
         if (kind === 'image') {
           const buffer = await fs.readFile(filePath)
           // Content tool result: the provider-compat sanitizer decides whether
-          // this image survives to the model (multimodal) or gets replaced
-          // with an OCR text block (DeepSeek etc.). We attach both an
+          // this image stays in the tool result, moves to a following user
+          // message, or gets replaced with OCR (DeepSeek etc.). We attach both an
           // `image-data` part (for providers that can see it) and a trailing
           // text part with the file path (so the model always has a textual
           // anchor to reference).

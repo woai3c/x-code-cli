@@ -568,6 +568,75 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
   })
 })
 
+describe('processToolCalls tool media ordering', () => {
+  it('keeps Kimi tool images in canonical tool-result history', async () => {
+    const toolName = 'canvas__render'
+    const ids = ['tc-image-1', 'tc-image-2']
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'render both' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: ids.map((toolCallId) => ({
+          type: 'tool-call',
+          toolCallId,
+          toolName,
+          input: {},
+        })),
+      } as ModelMessage,
+    )
+
+    let imageIndex = 0
+    const mcpRegistry = {
+      get: (name: string) =>
+        name === toolName
+          ? {
+              callableName: toolName,
+              rawName: 'render',
+              serverName: 'canvas',
+              description: 'render an image',
+              inputSchema: {},
+            }
+          : undefined,
+      callTool: vi.fn(async () => ({
+        text: 'rendered',
+        isError: false,
+        images: [{ data: `AAAA${++imageIndex}`, mediaType: 'image/png' }],
+      })),
+    } as unknown as NonNullable<AgentOptions['mcpRegistry']>
+
+    await processToolCalls(
+      ids.map((toolCallId) => ({ toolName, toolCallId, input: {} })),
+      state,
+      {
+        ...options,
+        modelId: 'moonshotai:kimi-k3',
+        trustMode: true,
+        mcpRegistry,
+      },
+      makeCallbacks(),
+      stubModel,
+    )
+
+    const tail = state.messages.slice(2)
+    expect(tail.map((message) => message.role)).toEqual(['tool', 'tool'])
+    for (const [index, message] of tail.entries()) {
+      const output = (
+        message.content as Array<{
+          output: { type: string; value: unknown }
+        }>
+      )[0]!.output
+      expect(output).toEqual({
+        type: 'content',
+        value: [
+          { type: 'text', text: 'rendered' },
+          { type: 'media', data: `AAAA${index + 1}`, mediaType: 'image/png' },
+        ],
+      })
+    }
+  })
+})
+
 describe('partitionToolCalls', () => {
   const tc = (toolName: string, toolCallId: string) => ({ toolName, toolCallId, input: {} })
 

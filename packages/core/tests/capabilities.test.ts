@@ -7,9 +7,9 @@ import { capabilitiesOf, modelSupportsVision } from '../src/providers/capabiliti
 describe('modelSupportsVision', () => {
   it('returns the catalog vision flag for listed vision models', () => {
     expect(modelSupportsVision('anthropic:claude-haiku-4-5')).toBe(true)
+    expect(modelSupportsVision('moonshotai:kimi-k3')).toBe(true)
     expect(modelSupportsVision('moonshotai:kimi-k2.6')).toBe(true)
     expect(modelSupportsVision('alibaba:qwen3-vl-flash')).toBe(true)
-    expect(modelSupportsVision('moonshotai:kimi-k2.6')).toBe(true)
     expect(modelSupportsVision('zhipu:glm-4.6v')).toBe(true)
   })
 
@@ -43,27 +43,22 @@ describe('modelSupportsVision', () => {
   })
 })
 
-describe('toolResultImage capability', () => {
-  it('is true only for Anthropic — the one provider that carries images in tool-results', () => {
-    expect(capabilitiesOf('anthropic:claude-sonnet-5').toolResultImage).toBe(true)
+describe('toolImageTransport capability', () => {
+  it('uses native tool-result media where the provider SDK preserves it', () => {
+    for (const id of ['anthropic:claude-sonnet-5', 'openai:gpt-5.6-sol', 'google:gemini-2.5-flash']) {
+      expect(capabilitiesOf(id).toolImageTransport, id).toBe('tool-result')
+    }
   })
 
-  it('is false for providers that accept images only in USER messages', () => {
-    // These report image:true (a pasted image works in a user message) but
-    // their API JSON.stringifies tool-result content, so a screenshot returned
-    // FROM a tool degrades to base64 text. Must be captioned, not embedded.
-    for (const id of [
-      'openai:gpt-5',
-      'google:gemini-2.5-flash',
-      'moonshotai:kimi-k2.6',
-      'alibaba:qwen3-vl-flash',
-      'zhipu:glm-4.6v',
-      'xai:grok-4.3',
-      'deepseek:deepseek-v4',
-      'custom:whatever',
-      'unknownprovider:whatever',
-    ]) {
-      expect(capabilitiesOf(id).toolResultImage, id).toBe(false)
+  it('reattaches media in a following user message for Chat Completions providers', () => {
+    for (const id of ['moonshotai:kimi-k2.6', 'alibaba:qwen3-vl-flash', 'zhipu:glm-4.6v', 'xai:grok-4.3']) {
+      expect(capabilitiesOf(id).toolImageTransport, id).toBe('user-message')
+    }
+  })
+
+  it('marks text-only and unknown providers unsupported', () => {
+    for (const id of ['deepseek:deepseek-v4', 'custom:whatever', 'unknownprovider:whatever']) {
+      expect(capabilitiesOf(id).toolImageTransport, id).toBe('unsupported')
     }
   })
 })

@@ -1,6 +1,11 @@
 // @x-code-cli/core — Message types and helpers
 import type { ModelMessage } from 'ai'
 
+export interface ToolImage {
+  data: string
+  mediaType: string
+}
+
 /** Create a tool result message. When `images` are supplied (e.g. browser
  *  screenshots from an MCP tool) the output switches to the multimodal
  *  `content` form so a vision-capable model actually sees them; the text
@@ -12,7 +17,7 @@ export function toolResultMessage(
   toolCallId: string,
   toolName: string,
   result: string,
-  images?: ReadonlyArray<{ data: string; mediaType: string }>,
+  images?: readonly ToolImage[],
 ): ModelMessage {
   const output =
     images && images.length > 0
@@ -33,6 +38,23 @@ export function toolResultMessage(
         toolName,
         output,
       },
+    ],
+  }
+}
+
+/** Reattach tool-returned media for Chat Completions providers whose `tool`
+ *  role is text-only. AI SDK's internal ImagePart expects raw base64 plus a
+ *  media type; its provider converter adds the data-URL prefix on the wire. */
+export function toolMediaUserMessage(images: readonly ToolImage[]): ModelMessage {
+  return {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Attached media from tool result:' },
+      ...images.map((image) => ({
+        type: 'image' as const,
+        image: image.data,
+        mediaType: image.mediaType,
+      })),
     ],
   }
 }

@@ -91,7 +91,7 @@ const DEFAULT_CAPTION_PROMPT =
  * sibling of `captionImage` (which reads a file then delegates here). Used by
  * the MCP tool-result path to turn browser screenshots into text for providers
  * whose tool-result channel can't carry a real image (see
- * capabilities.toolResultImage). `prompt` overrides the default caption
+ * capabilities.toolImageTransport). `prompt` overrides the default caption
  * instruction so callers can ask for, e.g., pixel coordinates.
  */
 export async function captionImageBuffer(

@@ -215,16 +215,15 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
 
   // Browser prompt is model-aware. A text-only model can't screenshot at all
   // (explicit "don't screenshot" note). A vision model gets screenshot
-  // guidance — but HOW the shot comes back differs by provider: Anthropic
-  // returns the image inline, everyone else gets a text description (see
-  // tool-execution `deliverToolImages`), so they need the caption-mode
-  // addendum. Non-browser agents get their prompt verbatim.
+  // guidance. Native tool-result providers and Chat Completions providers
+  // that reattach media as a following user message both expose the raw image;
+  // only an unsupported transport needs the caption-mode addendum.
   const browserPromptSuffix =
     agentDef.name !== 'browser'
       ? ''
       : !browserVision
         ? BROWSER_TREE_ONLY_NOTE
-        : capabilitiesOf(subModelId).toolResultImage
+        : capabilitiesOf(subModelId).toolImageTransport !== 'unsupported'
           ? BROWSER_VISION_ADDENDUM
           : BROWSER_VISION_CAPTION_ADDENDUM
   const subSystemPrompt = buildSubAgentSystemPrompt({

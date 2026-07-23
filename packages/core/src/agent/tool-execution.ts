@@ -19,6 +19,7 @@ import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
+import type { ToolImage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { runSubAgent } from './sub-agents/runner.js'
 import { runToolSearch } from './tool-search/resolve.js'
@@ -210,7 +211,7 @@ function pushToolResult(
   toolName: string,
   output: string,
   isError = false,
-  images?: ReadonlyArray<{ data: string; mediaType: string }>,
+  images?: readonly ToolImage[],
 ): void {
   state.messages.push(toolResultMessage(toolCallId, toolName, output, images))
   // Clear the progress reporter for manually-dispatched tools (shell,
@@ -245,7 +246,7 @@ async function pushSuccessfulToolResult(
   ctx: HandlerCtx,
   output: string,
   isError: boolean,
-  images?: ReadonlyArray<{ data: string; mediaType: string }>,
+  images?: readonly ToolImage[],
 ): Promise<void> {
   let effectiveOutput = output
   if (ctx.options.hookBus?.has('PostToolUse')) {
@@ -804,44 +805,40 @@ const SCREENSHOT_CAPTION_PROMPT =
 /**
  * Decide how an MCP tool's returned image(s) reach the model.
  *
- * Only Anthropic can carry an image part inside a tool-result message; every
- * OpenAI-compatible provider `JSON.stringify`s tool-result content, turning a
- * screenshot into a base64 STRING that the model can't see and that blows past
- * the context limit (a 1 MB PNG ≈ 400k text tokens — see capabilities
- * `toolResultImage`). So for everyone except Anthropic we caption the image to
- * text with a vision model and fold that into the tool-result text, dropping
- * the binary. The captioner prefers a SEPARATE configured vision provider
- * (pickVisionProvider lists free/fast models first — Gemini Flash, GLM-4V-Flash)
- * because the active model can be very slow at vision (Moonshot's Kimi takes
- * minutes on a full screenshot); it falls back to the active model only when
- * that's the only vision-capable option. The whole caption is bounded by a
- * timeout so a slow provider degrades to "work from the tree" instead of
- * freezing the UI for minutes.
+ * Providers fall into three transport families:
+ *   - Native tool-result media: Anthropic, OpenAI Responses, Gemini.
+ *   - Text-only tool role but multimodal user role: Kimi and other
+ *     Chat Completions providers. Canonical history keeps tool media intact;
+ *     the request projection moves it to one following user message.
+ *   - No vision support: caption with a configured vision model, preserving
+ *     the existing text fallback for DeepSeek and other text-only models.
  *
- * Returns the (possibly augmented) text plus the images that should still be
- * attached natively (empty unless the provider is Anthropic).
+ * In every native path base64 remains binary image data inside a typed image
+ * block. It must never be JSON-stringified into ordinary prompt text.
  */
 export async function deliverToolImages(
   ctx: HandlerCtx,
   text: string,
-  images: ReadonlyArray<{ data: string; mediaType: string }> | undefined,
-): Promise<{ text: string; images?: ReadonlyArray<{ data: string; mediaType: string }> }> {
+  images: readonly ToolImage[] | undefined,
+): Promise<{ text: string; images?: readonly ToolImage[] }> {
   if (!images || images.length === 0) return { text, images }
 
   const modelId = ctx.options.modelId
-  // Native path: Anthropic tool-results carry image blocks, and the model can
-  // actually see them. Pass through untouched — best fidelity, cheapest.
-  if (capabilitiesOf(modelId).toolResultImage && modelSupportsVision(modelId)) {
+  const caps = capabilitiesOf(modelId)
+  const activeCanView = caps.image && modelSupportsVision(modelId)
+  if (activeCanView && caps.toolImageTransport !== 'unsupported') {
+    // Keep canonical history in the tool-result shape so stale screenshot
+    // pruning can still remove old binary payloads. Chat Completions providers
+    // reattach the media only in their request projection.
     return { text, images }
   }
 
-  // Pick the captioner. Prefer a SEPARATE configured vision provider (fast/free
-  // models first) over the active model — the active model can be slow at
-  // vision (Moonshot). Fall back to the active model only when it's the sole
-  // vision-capable option (e.g. a Kimi-only user): kimi-k2.6 is a capable
-  // vision model reachable on both international and China endpoints.
+  // Pick the captioner for a genuinely text-only active model. Prefer a
+  // separate configured vision provider (fast/free models first) and fall
+  // back to the active model only for an unusual transport configuration that
+  // accepts user images but cannot carry or reattach tool media.
   const borrowed = pickVisionProvider()
-  const activeCanCaption = modelSupportsVision(modelId) && capabilitiesOf(modelId).image
+  const activeCanCaption = activeCanView
   const captionModelId =
     borrowed && providerOf(borrowed.modelId) !== providerOf(modelId)
       ? borrowed.modelId
@@ -997,9 +994,6 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
   reportProgress(toolCallId, `Calling ${entry.serverName}/${entry.rawName}`)
   try {
     const result = await registry.callTool(toolName, ctx.input, options.abortSignal)
-    // Images can't ride a tool-result on most providers — caption to text for
-    // all but Anthropic so a screenshot doesn't degrade to base64 and blow the
-    // context window.
     const delivered = await deliverToolImages(ctx, result.text, result.images)
     await pushSuccessfulToolResult(ctx, truncateToolResult(delivered.text), result.isError, delivered.images)
   } catch (err) {

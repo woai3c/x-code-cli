@@ -84,8 +84,8 @@ export interface McpCallResult {
   /** True iff the server marked the call as an error (MCP `isError` flag). */
   isError: boolean
   /** Image content blocks the tool returned (base64 data + IANA media type).
-   *  Absent / empty for the common text-only result. Carried into the
-   *  tool_result message as `media` parts when the active model can see
-   *  images; OCR'd down to text otherwise (downgradeBinaryPartsForProvider). */
+   *  Absent / empty for the common text-only result. Provider compatibility
+   *  decides whether they stay in the tool result, move to a following user
+   *  message, or become a text fallback. */
   images?: Array<{ data: string; mediaType: string }>
 }

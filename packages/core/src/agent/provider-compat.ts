@@ -5,8 +5,10 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
-import { capabilitiesOf } from '../providers/capabilities.js'
+import { capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
 import { ocrImage } from './file-ingest.js'
+import { toolMediaUserMessage } from './messages.js'
+import type { ToolImage } from './messages.js'
 
 /**
  * Ensure all assistant messages have a reasoning content part.
@@ -56,6 +58,98 @@ export function ensureReasoningContentParts(messages: ModelMessage[], modelId: s
 // OCR on every turn.
 
 type MaybeOutput = { type?: string; value?: unknown; filename?: string }
+
+/**
+ * Move image parts out of tool results for multimodal Chat Completions
+ * providers. Their `tool` role accepts only text, while the following `user`
+ * role accepts typed image content. This also catches AI-SDK auto-executed
+ * tools such as readFile, which bypass deliverToolImages.
+ *
+ * Images from one contiguous tool-result group become one user message after
+ * the whole group, preserving strict assistant -> all tool results ordering.
+ * Returns a request-only projection without mutating canonical history, so
+ * stale screenshot pruning can still remove old binary payloads.
+ */
+export function reattachToolResultImagesForProvider(messages: ModelMessage[], modelId: string): ModelMessage[] {
+  const caps = capabilitiesOf(modelId)
+  if (caps.toolImageTransport !== 'user-message' || !caps.image || !modelSupportsVision(modelId)) {
+    return messages
+  }
+
+  const rewritten: ModelMessage[] = []
+  let pendingImages: ToolImage[] = []
+  let movedAny = false
+
+  const flushImages = () => {
+    if (pendingImages.length === 0) return
+    rewritten.push(toolMediaUserMessage(pendingImages))
+    pendingImages = []
+  }
+
+  for (const message of messages) {
+    if (message.role !== 'tool' || !Array.isArray(message.content)) {
+      flushImages()
+      rewritten.push(message)
+      continue
+    }
+
+    let changed = false
+    const content = message.content.map((part) => {
+      if (part.type !== 'tool-result') return part
+      const output = (part as { output?: MaybeOutput }).output
+      if (!output || output.type !== 'content' || !Array.isArray(output.value)) return part
+
+      const retained: unknown[] = []
+      for (const entry of output.value as Array<{
+        type?: string
+        data?: string
+        mediaType?: string
+        text?: string
+      }>) {
+        const isImage = entry.type === 'image-data' || (entry.type === 'media' && entry.mediaType?.startsWith('image/'))
+        if (isImage && typeof entry.data === 'string' && typeof entry.mediaType === 'string') {
+          pendingImages.push({ data: entry.data, mediaType: entry.mediaType })
+          movedAny = true
+        } else {
+          retained.push(entry)
+        }
+      }
+
+      if (retained.length === output.value.length) return part
+      changed = true
+      let nextOutput: MaybeOutput
+      if (
+        retained.length > 0 &&
+        retained.every(
+          (entry) => typeof entry === 'object' && entry !== null && (entry as { type?: string }).type === 'text',
+        )
+      ) {
+        nextOutput = {
+          ...output,
+          type: 'text',
+          value: retained
+            .map((entry) => (entry as { text?: string }).text ?? '')
+            .filter(Boolean)
+            .join('\n'),
+        }
+      } else if (retained.length > 0) {
+        nextOutput = { ...output, value: retained }
+      } else {
+        nextOutput = {
+          ...output,
+          type: 'text',
+          value: '[Tool returned media attached in the following message]',
+        }
+      }
+      return { ...part, output: nextOutput }
+    })
+
+    rewritten.push(changed ? ({ ...message, content } as ModelMessage) : message)
+  }
+
+  flushImages()
+  return movedAny ? rewritten : messages
+}
 
 // Cap OCR cache so a long session that pages through many distinct images
 // doesn't grow the heap unboundedly. Map preserves insertion order, so we
@@ -125,14 +219,15 @@ function imagePartToBuffer(part: { image: unknown; mediaType?: string }): Buffer
  */
 export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], modelId: string): Promise<void> {
   const caps = capabilitiesOf(modelId)
-  if (caps.image && caps.pdf) return
+  const acceptsImages = caps.image && modelSupportsVision(modelId)
+  if (acceptsImages && caps.pdf) return
 
   for (const msg of messages) {
     // User messages — content may be an array of TextPart | ImagePart | FilePart.
     if (msg.role === 'user' && Array.isArray(msg.content)) {
       const rewritten: typeof msg.content = []
       for (const part of msg.content) {
-        if (part.type === 'image' && !caps.image) {
+        if (part.type === 'image' && !acceptsImages) {
           const buffer = imagePartToBuffer(part as { image: unknown; mediaType?: string })
           const text = buffer ? await ocrBuffer(buffer) : '[image omitted]'
           rewritten.push({
@@ -176,7 +271,7 @@ export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], 
           // 'image-data' as a belt-and-suspenders guard) and OCR for
           // text-only providers so they don't 400 on the binary.
           const isImageEntry = entry.type === 'media' || entry.type === 'image-data'
-          if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true) && !caps.image) {
+          if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true) && !acceptsImages) {
             const data = entry.data ?? ''
             let text = '[image omitted]'
             try {

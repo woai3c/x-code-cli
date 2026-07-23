@@ -28,6 +28,7 @@ import {
   initMemories,
   loadPersistedRules,
   markBoundaryAndReflush,
+  modelSupportsVision,
   pauseGoal as pauseCoreGoal,
   recordVerificationFailure,
   resetVerificationFailures,
@@ -615,15 +616,21 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // vision sub-agent caption emitted) as `⎿`-prefixed gray lines so
         // the user can see when a non-vision model's image was forwarded
         // to a sub-agent (Gemini, GLM-4V, etc.) instead of being OCR'd.
-        const content = await buildUserContent(text, capabilitiesOf(modelIdRef.current), (notice) => {
-          appendMessage({
-            id: `ingest-notice-${Date.now()}`,
-            role: 'assistant',
-            content: notice,
-            timestamp: Date.now(),
-            kind: 'command-result',
-          })
-        })
+        const modelId = modelIdRef.current
+        const providerCaps = capabilitiesOf(modelId)
+        const content = await buildUserContent(
+          text,
+          modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
+          (notice) => {
+            appendMessage({
+              id: `ingest-notice-${Date.now()}`,
+              role: 'assistant',
+              content: notice,
+              timestamp: Date.now(),
+              kind: 'command-result',
+            })
+          },
+        )
 
         // agentLoop returns { state, turnCount } — we only keep the state
         // (long-lived session). turnCount is per-invocation and the main

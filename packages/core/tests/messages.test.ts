@@ -1,7 +1,12 @@
 // Tests for agent/messages.ts helpers
 import { describe, expect, it } from 'vitest'
 
-import { isToolErrorString, toolErrorFromUnknown, toolResultMessage } from '../src/agent/messages.js'
+import {
+  isToolErrorString,
+  toolErrorFromUnknown,
+  toolMediaUserMessage,
+  toolResultMessage,
+} from '../src/agent/messages.js'
 
 describe('toolResultMessage', () => {
   it('builds a tool-role message with one tool-result content part', () => {
@@ -41,6 +46,22 @@ describe('toolResultMessage', () => {
     const msg = toolResultMessage('tc_3', 'shell', 'done', [])
     const part = (msg.content as Array<{ output: { type: string; value: string } }>)[0]
     expect(part.output).toEqual({ type: 'text', value: 'done' })
+  })
+})
+
+describe('toolMediaUserMessage', () => {
+  it('wraps base64 bytes in typed image parts instead of prompt text', () => {
+    expect(toolMediaUserMessage([{ data: 'AAAA', mediaType: 'image/png' }])).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Attached media from tool result:' },
+        {
+          type: 'image',
+          image: 'AAAA',
+          mediaType: 'image/png',
+        },
+      ],
+    })
   })
 })
 

@@ -5,11 +5,9 @@
 // pipeline (to decide inline-vs-OCR) and provider-compat (to strip binary
 // parts before sending to providers that would reject them).
 //
-// Provider-level, not model-level. Some providers (alibaba, zhipu) have
-// separate vision-only model ids — users who pick a text-only Qwen/GLM
-// variant and paste an image will still get API errors. That's a deliberate
-// simplification: model-level capability tracking would require per-id
-// tables that go stale quickly.
+// Provider capabilities describe the wire API. modelSupportsVision applies
+// the curated per-model flag on top, so text-only Qwen/GLM variants still
+// downgrade images even though their provider accepts multimodal content.
 import { MODEL_ALIASES, PROVIDER_MODELS } from '../types/index.js'
 
 export interface ProviderCapabilities {
@@ -19,31 +17,36 @@ export interface ProviderCapabilities {
   pdf: boolean
   /** Provider has a dedicated /files upload endpoint (file_id references). */
   filesApi: boolean
-  /** Provider's API can carry image parts INSIDE tool-result messages (not just
-   *  user messages). Only Anthropic does this cleanly: OpenAI Chat Completions
-   *  — and therefore every OpenAI-compatible provider (DeepSeek / Moonshot /
-   *  Alibaba / Zhipu / xAI / custom) — `JSON.stringify`s tool-result content,
-   *  which turns an image part into a base64 STRING the model can't see and
-   *  that explodes the token count (a 1 MB PNG ≈ 400k text tokens). Google's
-   *  functionResponse is JSON-only too. So a screenshot returned from an MCP
-   *  tool must be captioned to text for everyone except Anthropic — see
-   *  tool-execution.ts `deliverToolImages`. */
-  toolResultImage: boolean
+  /** How images returned by tools must be represented on this provider.
+   *
+   *  `tool-result`: the provider SDK preserves image content inside the tool
+   *  result (Anthropic, OpenAI Responses, Gemini).
+   *  `user-message`: the Chat Completions tool role is text-only, so keep the
+   *  tool result textual and attach the image in a following user message.
+   *  `unsupported`: the provider cannot receive images at all. */
+  toolImageTransport: 'tool-result' | 'user-message' | 'unsupported'
 }
 
 const CAPS: Record<string, ProviderCapabilities> = {
-  anthropic: { image: true, pdf: true, filesApi: true, toolResultImage: true },
-  openai: { image: true, pdf: true, filesApi: true, toolResultImage: false },
-  google: { image: true, pdf: true, filesApi: true, toolResultImage: false },
-  xai: { image: true, pdf: true, filesApi: true, toolResultImage: false },
-  moonshotai: { image: true, pdf: true, filesApi: true, toolResultImage: false },
-  alibaba: { image: true, pdf: true, filesApi: true, toolResultImage: false },
-  zhipu: { image: true, pdf: true, filesApi: true, toolResultImage: false },
-  deepseek: { image: false, pdf: false, filesApi: false, toolResultImage: false },
+  anthropic: { image: true, pdf: true, filesApi: true, toolImageTransport: 'tool-result' },
+  openai: { image: true, pdf: true, filesApi: true, toolImageTransport: 'tool-result' },
+  google: { image: true, pdf: true, filesApi: true, toolImageTransport: 'tool-result' },
+  xai: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
+  moonshotai: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
+  alibaba: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
+  zhipu: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
+  deepseek: { image: false, pdf: false, filesApi: false, toolImageTransport: 'unsupported' },
   // Custom OpenAI-compatible endpoints are conservative-by-default —
   // users who know their endpoint supports vision can override via env
   // (X_CODE_CUSTOM_SUPPORTS_IMAGE=1) if we ever add that.
-  custom: { image: false, pdf: false, filesApi: false, toolResultImage: false },
+  custom: { image: false, pdf: false, filesApi: false, toolImageTransport: 'unsupported' },
+}
+
+const NO_CAPABILITIES: ProviderCapabilities = {
+  image: false,
+  pdf: false,
+  filesApi: false,
+  toolImageTransport: 'unsupported',
 }
 
 /** Extract `provider` from a `provider:model` id. Returns `unknown` if the
@@ -56,7 +59,7 @@ export function providerOf(modelId: string): string {
 /** Look up capabilities for a model id. Unknown providers default to text-only
  *  — safer than assuming vision support. */
 export function capabilitiesOf(modelId: string): ProviderCapabilities {
-  return CAPS[providerOf(modelId)] ?? { image: false, pdf: false, filesApi: false, toolResultImage: false }
+  return CAPS[providerOf(modelId)] ?? NO_CAPABILITIES
 }
 
 /** Can this specific MODEL natively see images? Unlike `capabilitiesOf` (which

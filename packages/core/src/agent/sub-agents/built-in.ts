@@ -215,13 +215,10 @@ Visual fallback (available this session):
 - Screenshot the VIEWPORT, not the full page — do NOT set fullPage. A full-page screenshot of a long page is a huge image that burns a lot of tokens. If the target is below the fold, scroll to it first, then screenshot the viewport.
 - The pattern is see-then-act: take a screenshot to locate the target, then act on it with a coordinate click/drag. After it changes the page, take a fresh screenshot (and/or snapshot) before the next action — same one-action-at-a-time rule as the tree.`
 
-/** Appended when visual browsing is live but the active provider can't carry
- *  an image inside a tool-result (every provider except Anthropic — see
- *  capabilities.toolResultImage). The screenshot tool still works, but instead
- *  of an inline image the agent gets back a TEXT description (a vision model
- *  looked at the shot on its behalf — see tool-execution `deliverToolImages`).
- *  Same tree-first discipline; the difference is "you read a description, not
- *  the pixels", and coordinates are approximate. */
+/** Appended only when visual browsing is live through a caption fallback
+ *  because the active model cannot receive raw images. Providers that accept
+ *  tool media natively or via a following user image message use
+ *  BROWSER_VISION_ADDENDUM instead. */
 export const BROWSER_VISION_CAPTION_ADDENDUM = `
 
 Visual inspection (available this session, returned as text):

@@ -1,8 +1,5 @@
 // Tests for deliverToolImages — how an MCP tool's returned image reaches the
-// model. Only Anthropic carries an image inside a tool-result; everyone else
-// must caption it to text (a raw screenshot would JSON.stringify to base64 and
-// blow the context window). The captioner is mocked here; the real one makes a
-// live API call.
+// model without ever degrading base64 bytes into ordinary prompt text.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { deliverToolImages } from '../src/agent/tool-execution.js'
@@ -29,35 +26,31 @@ describe('deliverToolImages', () => {
     vi.mocked(pickVisionProvider).mockReturnValue(null)
   })
 
-  it('passes images through untouched on Anthropic (native tool-result images)', async () => {
-    const r = await deliverToolImages(ctx('anthropic:claude-sonnet-5'), 'shot taken', IMG)
+  it('passes images through in tool results on native transports', async () => {
+    for (const modelId of ['anthropic:claude-sonnet-5', 'openai:gpt-5.6-sol', 'google:gemini-2.5-flash']) {
+      const r = await deliverToolImages(ctx(modelId), 'shot taken', IMG)
+      expect(r.images, modelId).toEqual(IMG)
+      expect(r.text, modelId).toBe('shot taken')
+    }
+    expect(captionImageBuffer).not.toHaveBeenCalled()
+  })
+
+  it('keeps Kimi images in canonical tool history for request-time reattachment', async () => {
+    const r = await deliverToolImages(ctx('moonshotai:kimi-k3'), 'shot taken', IMG)
     expect(r.images).toEqual(IMG)
     expect(r.text).toBe('shot taken')
     expect(captionImageBuffer).not.toHaveBeenCalled()
   })
 
-  it('falls back to the active vision model when no separate vision provider is configured (Kimi-only user)', async () => {
-    // pickVisionProvider returns null (beforeEach) → no borrowable provider →
-    // caption with the active model itself, which is guaranteed reachable.
-    const r = await deliverToolImages(ctx('moonshotai:kimi-k2.6'), 'shot taken', IMG)
-    expect(r.images).toBeUndefined()
-    expect(r.text).toContain('shot taken')
-    expect(r.text).toContain('A MAP OF BERLIN')
-    expect(captionImageBuffer).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(captionImageBuffer).mock.calls[0]?.[2]).toBe('moonshotai:kimi-k2.6')
-  })
-
-  it('prefers a separate fast vision provider over a slow active vision model', async () => {
-    // A Kimi user who also has a Gemini key: caption with Gemini (fast/free),
-    // not the slow active Kimi.
+  it('does not borrow a separate vision provider when the active Kimi model can view the image', async () => {
     vi.mocked(pickVisionProvider).mockReturnValue({
       provider: 'google',
       modelId: 'google:gemini-2.5-flash',
       label: 'Gemini 2.5 Flash',
     })
-    const r = await deliverToolImages(ctx('moonshotai:kimi-k2.6'), 'shot taken', IMG)
-    expect(r.images).toBeUndefined()
-    expect(vi.mocked(captionImageBuffer).mock.calls[0]?.[2]).toBe('google:gemini-2.5-flash')
+    const r = await deliverToolImages(ctx('moonshotai:kimi-k3'), 'shot taken', IMG)
+    expect(r.images).toEqual(IMG)
+    expect(captionImageBuffer).not.toHaveBeenCalled()
   })
 
   it('borrows a configured vision provider when the active model is text-only', async () => {

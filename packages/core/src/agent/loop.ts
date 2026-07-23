@@ -34,7 +34,11 @@ import type { LoopState } from './loop-state.js'
 import { runMemoryExtractor } from './memory-extractor.js'
 import { toolErrorString } from './messages.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
-import { downgradeBinaryPartsForProvider, ensureReasoningContentParts } from './provider-compat.js'
+import {
+  downgradeBinaryPartsForProvider,
+  ensureReasoningContentParts,
+  reattachToolResultImagesForProvider,
+} from './provider-compat.js'
 import { appendCheckpoint, appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
 import { createCheckpoint } from './snapshot.js'
 import { drainStreamResult } from './stream-utils.js'
@@ -438,11 +442,16 @@ async function runTurn(
     collapseStaleToolResults(state.messages, options.collapseStaleToolResults)
   }
 
+  // Chat Completions providers keep the tool role text-only and receive raw
+  // tool images in one following user message. This also handles images from
+  // auto-executed tools such as readFile, which bypass manual tool dispatch.
+  const requestMessages = reattachToolResultImagesForProvider(state.messages, options.modelId)
+
   // Text-only providers (DeepSeek, custom) would 400 on any surviving
   // image/file parts. Rewrite those parts to OCR'd text in-place before
   // the stream starts. Multimodal providers short-circuit inside the
   // helper based on their capability flags.
-  await downgradeBinaryPartsForProvider(state.messages, options.modelId)
+  await downgradeBinaryPartsForProvider(requestMessages, options.modelId)
 
   // Per-provider prompt caching: Anthropic gets cache_control breakpoints on
   // the system prompt + last tool + last two messages (4 total, the API
@@ -451,7 +460,7 @@ async function runTurn(
   // cache in LoopState keeping the prefix byte-stable.
   const cached = applyCacheControl({
     system: systemPrompt,
-    messages: state.messages,
+    messages: requestMessages,
     tools: effectiveTools,
     modelId: options.modelId,
     sessionId: state.sessionId,
