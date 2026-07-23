@@ -1,3 +1,10 @@
+## v0.3.16 (2026-07-23)
+
+### Bug Fixes
+
+- make project state initialization idempotent (1856bbd)
+- route multimodal tool images by provider (316e2ff)
+
 ## v0.3.15 (2026-07-22)
 
 ### Features
