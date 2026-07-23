@@ -876,12 +876,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   const prepareGoalSession = useCallback(async (ls: LoopState, firstPrompt: string) => {
     if (!ls.taskSlug) {
-      ls.taskSlug = await generateTaskSlug(
-        firstPrompt,
-        modelRef.current,
-        modelIdRef.current,
-        abortControllerRef.current?.signal,
-      )
+      ls.taskSlug = generateTaskSlug(firstPrompt)
     }
     await appendHeader(ls, modelIdRef.current, firstPrompt)
   }, [])
@@ -1258,8 +1253,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   /** Mid-session resume: hot-swap the agent state to a previously-saved
    *  session. Hydrates loopStateRef from the jsonl so the next agent
-   *  submit appends to the SAME file (filename derives from sessionId +
-   *  taskSlug, both preserved by hydrate). Live model and approval mode
+   *  submit appends to the SAME file (the exact path is preserved by
+   *  hydrate, including legacy slug-prefixed paths). Live model and approval mode
    *  carry over from the current session; the resumed session's stored
    *  `modelId` is informational only (in /usage-history).
    *

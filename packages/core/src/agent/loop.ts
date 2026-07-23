@@ -642,28 +642,17 @@ export async function agentLoop(
   // `state` and accumulate across the whole CLI session.
   let turn = 0
 
-  // Derive the session task-slug ONCE per session, on the first turn.
-  // Drives session-usage filenames (`<slug>-<sessionId>.usage.json`)
-  // and (when in plan mode) plan-file names. Set-once: changing it
-  // mid-session would orphan the file the previous turn already wrote
-  // to.
+  // Derive the task slug locally. It is used for plan-file names and
+  // retained in session metadata for legacy lookup compatibility.
   //
-  // For non-ASCII first messages (CJK, emoji-only) `generateTaskSlug`
-  // makes one isolated generateText round-trip to summarize the task
-  // into 2-4 English words; for ASCII messages it short-circuits to a
-  // local slugify with no network. We kick it off in parallel with
-  // knowledge / git-stat below so the round-trip overlaps with disk
-  // work and doesn't add serial latency to the first turn. The
-  // resulting slug is awaited before any session-usage write or plan
-  // file is created (well before the first runTurn), so paths are
-  // never written with a stale empty slug.
+  // Session naming is local-only metadata and must never delay the first
+  // model request. Non-ASCII input can produce an empty slug, in which case
+  // session and plan files use their timestamp-only fallback.
   const taskText = userContentToText(userMessage)
   // Strip <activated_skill> XML blocks so the session slug and firstPrompt
   // reflect the user's real intent rather than injected skill content.
   const taskTextForMeta = taskText.replace(/<activated_skill\b[^>]*>[\s\S]*?<\/activated_skill>/gi, '').trim()
-  const taskSlugPromise: Promise<string> = state.taskSlug
-    ? Promise.resolve(state.taskSlug)
-    : generateTaskSlug(taskTextForMeta || taskText, model, options.modelId, options.abortSignal)
+  if (!state.taskSlug) state.taskSlug = generateTaskSlug(taskTextForMeta || taskText)
 
   // Session continuation is handled explicitly by the UI: if the user accepts
   // the resume prompt, the pending work is embedded directly in their first
@@ -681,12 +670,6 @@ export async function agentLoop(
   state.knowledgeContext = fullKnowledgeContext
   state.isGitRepo = isGitRepo
 
-  // Resolve the slug now — must be set before any persistUsageSnapshot
-  // (per-turn) or plan-file write below. `generateTaskSlug` returns ''
-  // on failure, in which case session/plan files fall back to the
-  // pure-timestamp naming we had before this helper existed.
-  state.taskSlug = await taskSlugPromise
-
   // Lazy plan-file path derivation. We derive ONCE per plan-mode
   // session (the first turn that's in plan mode without a path
   // already set) from the user's task text. Re-deriving on every
@@ -698,9 +681,8 @@ export async function agentLoop(
     state.currentPlanPath = makePlanFilePath(taskText, { slug: state.taskSlug })
   }
 
-  // Write the session header to its jsonl file (idempotent for resumes —
-  // the header line already exists in that case and we skip). Must come
-  // AFTER taskSlug resolution because the filename is `<slug>-<id>.jsonl`.
+  // Write the session header to its timestamp-named jsonl file (idempotent
+  // for resumes — the header line already exists in that case and we skip).
   // Awaited so the header is guaranteed on disk before the first
   // flushPendingMessages inside the turn loop below — fire-and-forget
   // creates a race where message lines can land before the header line,

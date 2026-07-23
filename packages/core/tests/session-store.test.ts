@@ -57,16 +57,19 @@ afterEach(() => {
 })
 
 describe('session-store: filename derivation', () => {
-  it('uses slug-id when slug is non-empty', () => {
+  it('uses only the timestamp-shaped session id for new sessions', () => {
     const state = { sessionId: '20260101-120000-000', taskSlug: 'fix-login' }
     const p = getSessionFilePath(state, tempDir)
-    expect(p.endsWith('fix-login-20260101-120000-000.jsonl')).toBe(true)
+    expect(p.endsWith('20260101-120000-000.jsonl')).toBe(true)
   })
 
-  it('falls back to id-only when slug is empty (CJK first message)', () => {
-    const state = { sessionId: '20260101-120000-000', taskSlug: '' }
-    const p = getSessionFilePath(state, tempDir)
-    expect(p.endsWith('20260101-120000-000.jsonl')).toBe(true)
+  it('preserves a pinned legacy slug-prefixed path', () => {
+    const legacyPath = join(tempDir, '.x-code', 'sessions', 'fix-login-20260101-120000-000.jsonl')
+    const state = {
+      sessionId: '20260101-120000-000',
+      sessionFilePath: legacyPath,
+    }
+    expect(getSessionFilePath(state, tempDir)).toBe(legacyPath)
   })
 })
 
@@ -345,6 +348,7 @@ describe('session-store: hydrateLoopState', () => {
     const loaded = await loadSession(getSessionFilePath(s))
     const hydrated = hydrateLoopState(loaded!)
     expect(hydrated.sessionId).toBe('20260101-120000-000')
+    expect(hydrated.sessionFilePath).toBe(loaded!.filePath)
     expect(hydrated.taskSlug).toBe('continue')
     expect(hydrated.messages).toHaveLength(2)
     expect(hydrated.tokenUsage.inputTokens).toBe(50)

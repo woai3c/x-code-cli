@@ -115,6 +115,7 @@ export { USER_XCODE_DIR, XCODE_DIR, debugLog, setPluginDebugMirror } from './uti
 export { LruCache } from './utils/lru-cache.js'
 export { mediaTypeFor } from './utils/media-type.js'
 export { extractText } from './utils/message-helpers.js'
+export { ensureProjectStorageDir } from './project-storage.js'
 
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'

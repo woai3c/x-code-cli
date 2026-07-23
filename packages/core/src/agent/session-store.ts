@@ -1,8 +1,6 @@
 // @x-code-cli/core — Per-session JSONL transcript store.
 //
-// One file per session: `.x-code/sessions/<slug>-<sessionId>.jsonl` (slug is
-// the same human-readable token used by plan files; falls back to
-// timestamp-only naming when the user's first message has no ASCII content).
+// One file per session: `.x-code/sessions/<sessionId>.jsonl`.
 // The file is append-only; everything we record about a session — header,
 // each ModelMessage, periodic token-usage snapshots, compaction boundaries,
 // abort markers — lives as one JSON object per line.
@@ -23,6 +21,7 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
+import { ensureProjectStorageDir } from '../project-storage.js'
 import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
 import type { GoalInput, GoalState, GoalVerificationResult } from './goal/types.js'
@@ -36,16 +35,14 @@ function sessionsDir(cwd: string = process.cwd()): string {
   return path.join(cwd, XCODE_DIR, SESSIONS_SUBDIR)
 }
 
-/** Build the on-disk filename for a session. Same shape as plan files
- *  (`<slug>-<id>.<ext>`) so `ls .x-code/sessions/` and `ls .x-code/plans/`
- *  scan the same way. Empty slug (CJK-only first message) collapses to
- *  pure-timestamp naming, matching the plan-file fallback. */
+/** Build the on-disk filename for a session. New sessions use only their
+ * timestamp-shaped id. Hydrated sessions pin `sessionFilePath` so legacy
+ * slug-prefixed files continue appending in place after an upgrade. */
 export function getSessionFilePath(
-  state: { sessionId: string; taskSlug: string },
+  state: { sessionId: string; sessionFilePath?: string | null },
   cwd: string = process.cwd(),
 ): string {
-  const base = state.taskSlug ? `${state.taskSlug}-${state.sessionId}` : state.sessionId
-  return path.join(sessionsDir(cwd), `${base}.jsonl`)
+  return state.sessionFilePath ?? path.join(sessionsDir(cwd), `${state.sessionId}.jsonl`)
 }
 
 // ── Entry types written to the jsonl ────────────────────────────────────
@@ -155,7 +152,7 @@ async function appendLine(filePath: string, entry: Entry): Promise<void> {
 async function appendRawLines(filePath: string, lines: string[]): Promise<boolean> {
   if (lines.length === 0) return true
   try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await ensureProjectStorageDir(path.dirname(filePath))
     await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
     return true
   } catch {
@@ -187,6 +184,7 @@ export async function appendHeader(
   cwd: string = process.cwd(),
 ): Promise<void> {
   const filePath = getSessionFilePath(state, cwd)
+  state.sessionFilePath = filePath
   try {
     await fs.access(filePath)
     return // file already exists — header preserved from original session
@@ -650,14 +648,15 @@ export async function pickLatestSession(cwd: string = process.cwd()): Promise<Se
 }
 
 /** Build a LoopState seeded from a previously-saved session. The agent
- *  loop accepts `existingState` and will continue appending to the same
- *  jsonl file (filename derives from `sessionId` + `taskSlug`, both
- *  preserved here). `persistedMessageCount` is set to the loaded length
+ *  loop accepts `existingState` and will continue appending to the exact
+ *  loaded jsonl path, including legacy slug-prefixed filenames.
+ *  `persistedMessageCount` is set to the loaded length
  *  so the very first flush after the next user submit only appends NEW
  *  messages — the loaded tail is already on disk. */
 export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionMode = 'default'): LoopState {
   const state = createLoopState(initialMode)
   state.sessionId = loaded.sessionId
+  state.sessionFilePath = loaded.filePath
   state.taskSlug = loaded.taskSlug
   state.startedAt = loaded.startedAt
   state.messages = loaded.messages.slice()

@@ -140,10 +140,6 @@ vite.config.ts.timestamp-*
 
 .claude
 
-# x-code-cli per-user state — sessions, auto-memory, plans, local prefs.
-# Each contributor's conversations/prefs differ; never share these.
-.x-code/
-
 # @playwright/mcp runtime artifacts (page snapshots / saved output) from the
 # browser sub-agent. Written under the CLI's working dir; never source.
 .playwright-mcp/
@@ -153,3 +149,6 @@ packages/cli/tests/e2e/.state/
 
 # Copied into packages at publish time by CI — not source
 tmp
+
+# X-Code CLI project-local state (sessions, history, plans, memory, and local settings)
+.x-code

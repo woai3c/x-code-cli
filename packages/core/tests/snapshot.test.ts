@@ -31,6 +31,7 @@ import {
   appendCheckpoint,
   appendHeader,
   flushPendingMessages,
+  getSessionFilePath,
   hydrateLoopState,
   loadSession,
   markBoundaryAndReflush,
@@ -256,8 +257,7 @@ describe('rewind persistence: appendCheckpoint + loadSession roundtrip', () => {
     expect(ckpt).not.toBeNull()
     await appendCheckpoint(state, ckpt!)
 
-    const sessionFile = path.join(tempDir, XCODE_DIR, 'sessions', `fix-bug-${state.sessionId}.jsonl`)
-    const loaded = await loadSession(sessionFile)
+    const loaded = await loadSession(getSessionFilePath(state, tempDir))
     expect(loaded).not.toBeNull()
     expect(loaded!.checkpoints).toHaveLength(1)
     expect(loaded!.checkpoints[0]!.ckptId).toBe(ckpt!.ckptId)
@@ -294,8 +294,7 @@ describe('rewind persistence: appendCheckpoint + loadSession roundtrip', () => {
     const post = await createCheckpoint(state, 'after', tempDir)
     await appendCheckpoint(state, post!)
 
-    const sessionFile = path.join(tempDir, XCODE_DIR, 'sessions', `compact-test-${state.sessionId}.jsonl`)
-    const loaded = await loadSession(sessionFile)
+    const loaded = await loadSession(getSessionFilePath(state, tempDir))
     expect(loaded).not.toBeNull()
     // Only the post-boundary checkpoint should be visible.
     expect(loaded!.checkpoints).toHaveLength(1)

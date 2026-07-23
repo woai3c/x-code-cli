@@ -72,17 +72,14 @@ export function printNoWebSearchKeyHint(): void {
 /** Print a copy-pasteable resume hint after Ink has unmounted and the
  *  terminal has been reset. Mirrors Claude Code's exit behavior so a
  *  user closing the chat sees exactly how to come back to the same
- *  thread. We prefer the slug-prefixed id when available because it's
- *  human-skimmable in `ls` output; we fall back to the bare sessionId
- *  for slug-less sessions (CJK-only first messages).
+ *  thread. Session ids are timestamp-shaped and match new jsonl filenames.
  *
  *  Suppressed when the session has no messages yet (user launched but
  *  never submitted) — we'd be pointing at an empty jsonl. */
 export function printResumeHint(): void {
   const info = getSessionExitInfo()
   if (!info) return
-  const key = info.taskSlug ? `${info.taskSlug}-${info.sessionId}` : info.sessionId
-  const cmd = chalk.cyan(`xc --resume ${key}`)
+  const cmd = chalk.cyan(`xc --resume ${info.sessionId}`)
   const dim = chalk.gray
   process.stdout.write(`${dim('Resume this session:')} ${cmd}\n`)
 }

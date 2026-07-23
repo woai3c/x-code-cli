@@ -24,6 +24,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { ensureProjectStorageDir } from '@x-code-cli/core'
+
 import type { PastedContents } from './paste-refs.js'
 
 const HISTORY_FILE = '.x-code/history.jsonl'
@@ -89,7 +91,7 @@ export async function appendInputHistory(entry: InputHistoryEntry, cwd: string =
   const file = historyPath(cwd)
   const line = JSON.stringify(entry) + '\n'
   try {
-    await fs.mkdir(path.dirname(file), { recursive: true })
+    await ensureProjectStorageDir(path.dirname(file))
     await fs.appendFile(file, line, { encoding: 'utf-8' })
   } catch {
     /* best-effort */

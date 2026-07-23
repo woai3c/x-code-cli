@@ -14,6 +14,10 @@ export interface LoopState {
   /** Real input-token count from the most recent API response, used to trigger compression. */
   lastInputTokens: number
   sessionId: string
+  /** Exact transcript path. Null for new sessions until appendHeader pins
+   *  the timestamp-only path; hydrated legacy sessions preserve their
+   *  original slug-prefixed path so resume keeps appending in place. */
+  sessionFilePath: string | null
   startedAt: string
   filesModified: Set<string>
   /** Rolling record of recently executed tool calls, keyed by a hash of the
@@ -36,13 +40,9 @@ export interface LoopState {
    *  `enterPlanMode` and re-used for the remainder of that plan-mode
    *  session. Cleared on exit. */
   currentPlanPath: string | null
-  /** Lowercase-hyphen slug derived from the user's first message, used
-   *  to give session-usage files a human-skimmable name (mirrors how
-   *  plan files are named). Empty string when the first message had no
-   *  ASCII content (e.g. CJK-only) — session file then falls back to
-   *  pure timestamp. Set ONCE on the first agentLoop turn and never
-   *  changed; renaming mid-session would orphan the previous turn's
-   *  on-disk usage file. */
+  /** Lowercase-hyphen slug derived locally from the user's first message.
+   *  Used for readable plan filenames and retained in session metadata for
+   *  legacy resume lookups; transcript filenames are timestamp-only. */
   taskSlug: string
   /** Current checklist maintained by the model via the `todoWrite`
    *  tool. Full-replacement semantics — every todoWrite call rewrites
@@ -160,6 +160,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     },
     lastInputTokens: 0,
     sessionId: generateSessionId(),
+    sessionFilePath: null,
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
     recentToolCalls: [],

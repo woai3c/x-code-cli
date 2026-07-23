@@ -493,8 +493,8 @@ async function main() {
  *  path. Accepts the same forms a user might paste from the post-exit
  *  hint we print:
  *    - bare sessionId (`20260101-120000-000`)
- *    - slug (`fix-login`)
- *    - full filename stem (`fix-login-20260101-120000-000`)
+ *    - legacy slug (`fix-login`)
+ *    - legacy filename stem (`fix-login-20260101-120000-000`)
  *  Exact matches are preferred; if nothing exact matches, falls back
  *  to a prefix match against the sessionId (long enough to disambiguate).
  *  Returns the file path of the first match, newest first, or null. */
