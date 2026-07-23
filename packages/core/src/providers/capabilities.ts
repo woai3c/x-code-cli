@@ -49,6 +49,49 @@ const NO_CAPABILITIES: ProviderCapabilities = {
   toolImageTransport: 'unsupported',
 }
 
+// ── Image format policy (session-poisoning defense) ───────────────────────
+//
+// Providers accept only PNG / JPEG / GIF / WebP image parts. An unsupported
+// part (AVIF, HEIC, BMP, TIFF, or mislabeled bytes) is rejected with a 400 —
+// and because messages persist in the session, every subsequent request
+// fails too (Kimi CLI's image-format-policy calls this "session poisoning").
+// This closed set is the single source of truth; file-ingest gates at
+// ingestion and the agent loop strips on a 400 so a bad image can never
+// wedge a session. A new format is only ever sent once added here.
+
+const MODEL_ACCEPTED_IMAGE_MIMES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+/** Lowercase, drop MIME parameters, apply the `image/jpg` alias. */
+export function normalizeImageMime(mime: string): string {
+  const base = (mime.split(';', 1)[0] ?? '').trim().toLowerCase()
+  return base === 'image/jpg' ? 'image/jpeg' : base
+}
+
+export function isModelAcceptedImageMime(mime: string): boolean {
+  return MODEL_ACCEPTED_IMAGE_MIMES.has(normalizeImageMime(mime))
+}
+
+/** Sniff the real MIME from magic bytes; null when unrecognized. Bytes are
+ *  authoritative — a mislabeled file (AVIF renamed to .png) must be judged
+ *  by what it IS, because the provider decodes bytes, not filenames. */
+export async function sniffImageMime(buffer: Buffer): Promise<string | null> {
+  try {
+    const { fileTypeFromBuffer } = await import('file-type')
+    const detected = await fileTypeFromBuffer(buffer)
+    return detected?.mime ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Text notice standing in for a refused / stripped image so the model knows
+ *  what happened and the session history stays free of parts the provider
+ *  rejects. */
+export function buildUnsupportedImageNotice(mime: string, name?: string): string {
+  const what = name ? `"${name}" uses unsupported image format ${mime}` : `unsupported image format ${mime}`
+  return `[Image omitted: ${what}. Providers accept only PNG, JPEG, GIF, and WebP — convert it to PNG or JPEG and try again.]`
+}
+
 /** Extract `provider` from a `provider:model` id. Returns `unknown` if the
  *  separator is missing (defensive — shouldn't happen with resolved ids). */
 export function providerOf(modelId: string): string {

@@ -17,6 +17,12 @@ import path from 'node:path'
 import type { FilePart, ImagePart, TextPart } from 'ai'
 
 import type { ProviderCapabilities } from '../providers/capabilities.js'
+import {
+  buildUnsupportedImageNotice,
+  isModelAcceptedImageMime,
+  normalizeImageMime,
+  sniffImageMime,
+} from '../providers/capabilities.js'
 import { USER_XCODE_DIR } from '../utils.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
@@ -414,7 +420,18 @@ export async function ingestFile(
     if (caps.pdf) {
       try {
         const buffer = await fs.readFile(ref.absolutePath)
-        return [{ type: 'file', data: buffer, mediaType: 'application/pdf', filename: path.basename(ref.absolutePath) }]
+        // base64 string, not the Buffer: this part is persisted to the session
+        // jsonl via JSON.stringify, and a Buffer round-trips as
+        // {"type":"Buffer","data":[...]} — which fails the SDK's ModelMessage
+        // schema on resume.
+        return [
+          {
+            type: 'file',
+            data: buffer.toString('base64'),
+            mediaType: 'application/pdf',
+            filename: path.basename(ref.absolutePath),
+          },
+        ]
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         return [{ type: 'text', text: `[Failed to attach PDF ${ref.raw}: ${msg}]` }]
@@ -438,9 +455,19 @@ export async function ingestFile(
   if (caps.image) {
     try {
       const buffer = await fs.readFile(ref.absolutePath)
+      // Gate on the sniffed bytes, not the extension: an unsupported format
+      // (AVIF, BMP, TIFF, HEIC) or a mislabeled file would be rejected by the
+      // provider with a 400 — and since the message persists in the session,
+      // every later request would fail too (session poisoning).
+      const sniffed = await sniffImageMime(buffer)
+      const effectiveMime = sniffed ?? mediaTypeFor(ref.absolutePath)
+      if (!isModelAcceptedImageMime(effectiveMime)) {
+        return [{ type: 'text', text: buildUnsupportedImageNotice(effectiveMime, ref.absolutePath) }]
+      }
       return [
         { type: 'text', text: `<<file path="${ref.absolutePath}" kind="image">>` },
-        { type: 'image', image: buffer, mediaType: mediaTypeFor(ref.absolutePath) },
+        // base64 string, not the Buffer — see the PDF branch above for why.
+        { type: 'image', image: buffer.toString('base64'), mediaType: normalizeImageMime(effectiveMime) },
       ]
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

@@ -31,7 +31,9 @@ async function appendXcodeToGitignore(cwd: string): Promise<void> {
  * this mkdir operation created the top-level .x-code directory. */
 export async function ensureProjectStorageDir(directory: string): Promise<void> {
   try {
-    const createdDir = await fs.mkdir(directory, { recursive: true })
+    // mode 0o700: sessions / memory may contain pasted secrets — owner-only
+    // (ignored on Windows, where mkdir has no permission model).
+    const createdDir = await fs.mkdir(directory, { recursive: true, mode: 0o700 })
     if (createdDir !== undefined && path.basename(createdDir) === XCODE_DIR) {
       await appendXcodeToGitignore(path.dirname(createdDir))
     }

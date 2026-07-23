@@ -119,6 +119,47 @@ describe('ingestFile', () => {
     }
   })
 
+  it('attaches images as base64 strings, not Buffers (session-jsonl-safe)', async () => {
+    // Regression: the image part used to carry the raw Buffer, which
+    // JSON.stringify persists as {"type":"Buffer","data":[...]} — a shape the
+    // SDK's ModelMessage schema rejects, so resuming any session with an
+    // image attachment failed every subsequent request.
+    const png = path.join(tmpDir, 'real.png')
+    await fs.writeFile(png, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    try {
+      const parts = await ingestFile({ raw: `@${png}`, absolutePath: png }, multimodalCaps)
+      const imagePart = parts.find((p) => p.type === 'image')
+      expect(imagePart).toBeDefined()
+      if (imagePart?.type === 'image') {
+        expect(typeof imagePart.image).toBe('string')
+        expect(imagePart.image).toBe(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'))
+        // Must survive a JSON round-trip unchanged.
+        expect(JSON.parse(JSON.stringify(imagePart))).toEqual(imagePart)
+      }
+    } finally {
+      await fs.rm(png, { force: true })
+    }
+  })
+
+  it('refuses provider-rejected image formats judged by magic bytes, not extension', async () => {
+    // BMP bytes in a .png file: the extension says "ok", the bytes say
+    // "provider will 400 on this". Sniffing must win — otherwise the bad
+    // part lands in the session and poisons every subsequent request.
+    const bmp = path.join(tmpDir, 'disguised-bmp.png')
+    await fs.writeFile(bmp, Buffer.from([0x42, 0x4d, 0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00]))
+    try {
+      const parts = await ingestFile({ raw: `@${bmp}`, absolutePath: bmp }, multimodalCaps)
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.type).toBe('text')
+      if (parts[0]?.type === 'text') {
+        expect(parts[0].text).toMatch(/unsupported image format image\/bmp/i)
+        expect(parts[0].text).toMatch(/PNG, JPEG, GIF, and WebP/)
+      }
+    } finally {
+      await fs.rm(bmp, { force: true })
+    }
+  })
+
   it('returns an error text part for missing files', async () => {
     const missing = path.join(tmpDir, 'missing.md')
     const parts = await ingestFile({ raw: `@${missing}`, absolutePath: missing }, multimodalCaps)

@@ -29,6 +29,34 @@ export function isContextTooLongError(err: unknown): boolean {
   return false
 }
 
+/** Substrings that signal the provider rejected an image in the request.
+ *  Observed phrasings: Anthropic "Could not process image", OpenAI and
+ *  OpenAI-compatible "Invalid image data" / "invalid_image", Gemini
+ *  "image_parse_error", plus size-limit variants. Kept image-specific so a
+ *  generic 400 (bad tool input, unknown parameter) never triggers the
+ *  strip-and-retry path. */
+const IMAGE_DATA_PATTERNS = [
+  'could not process image',
+  'could not process the image',
+  'invalid image',
+  'invalid_image',
+  'image_parse_error',
+  'error processing image',
+  'failed to process image',
+  'failed to decode image',
+  'image too large',
+  'image exceeds',
+  'unsupported image',
+] as const
+
+/** True when the provider's error says the image payload itself is bad. The
+ *  agent loop uses this to strip binary parts from history and retry once —
+ *  without it the rejected part poisons every subsequent request. */
+export function isImageDataError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return IMAGE_DATA_PATTERNS.some((pattern) => msg.includes(pattern))
+}
+
 export interface ClassifiedError {
   message: string
   retryable: boolean

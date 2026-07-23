@@ -4,7 +4,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
 import type { ModelMessage } from 'ai'
 
-import { reattachToolResultImagesForProvider } from '../src/agent/provider-compat.js'
+import { reattachToolResultImagesForProvider, stripBinaryPartsFromMessages } from '../src/agent/provider-compat.js'
 import { collapseStaleToolResults } from '../src/agent/tool-result-pruning.js'
 
 function imageToolResult(toolCallId: string, data: string, toolName = 'readFile'): ModelMessage {
@@ -26,6 +26,56 @@ function imageToolResult(toolCallId: string, data: string, toolName = 'readFile'
     ],
   }
 }
+
+describe('stripBinaryPartsFromMessages', () => {
+  it('replaces user image/file parts and tool-result media with text notices', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at this' },
+          { type: 'image', image: 'AAAA', mediaType: 'image/png' },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-1',
+            toolName: 'browser',
+            output: {
+              type: 'content',
+              value: [
+                { type: 'text', text: 'screenshot' },
+                { type: 'media', data: 'BBBB', mediaType: 'image/png' },
+              ],
+            },
+          },
+        ],
+      },
+    ] as unknown as ModelMessage[]
+
+    expect(stripBinaryPartsFromMessages(messages)).toBe(true)
+
+    const userContent = messages[0]!.content as Array<{ type: string; text?: string }>
+    expect(userContent.map((p) => p.type)).toEqual(['text', 'text'])
+    expect(userContent[1]!.text).toContain('Image omitted')
+    const toolParts = messages[1]!.content as Array<{ output: { value: Array<{ type: string; text?: string }> } }>
+    const output = toolParts[0]!.output.value
+    expect(output.map((e) => e.type)).toEqual(['text', 'text'])
+    expect(output[1]!.text).toContain('Image omitted')
+  })
+
+  it('returns false and changes nothing when there are no binary parts', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+    ]
+    expect(stripBinaryPartsFromMessages(messages)).toBe(false)
+    expect(messages[0]).toEqual({ role: 'user', content: 'hello' })
+  })
+})
 
 describe('reattachToolResultImagesForProvider', () => {
   it('moves a contiguous Kimi tool-image group into one following user message', () => {

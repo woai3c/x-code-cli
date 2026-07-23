@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { ModelMessage } from 'ai'
 
 import { capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
+import { buildUnsupportedImageNotice } from '../providers/capabilities.js'
 import { ocrImage } from './file-ingest.js'
 import { toolMediaUserMessage } from './messages.js'
 import type { ToolImage } from './messages.js'
@@ -209,6 +210,55 @@ function imagePartToBuffer(part: { image: unknown; mediaType?: string }): Buffer
     }
   }
   return null
+}
+
+/** Replace EVERY binary part in the conversation with a text notice, in
+ *  place. This is the 400-recovery path in the agent loop: when a provider
+ *  rejects an image (corrupt bytes, size limit, a format that slipped past
+ *  the ingestion gate), the offending part stays in history and would fail
+ *  EVERY later request — session poisoning. Strip all binary parts once and
+ *  retry the turn. Returns true only when something actually changed, so the
+ *  caller can tell "retry is worthwhile" from "the bad part isn't in a shape
+ *  we recognize — report the error instead of looping". */
+export function stripBinaryPartsFromMessages(messages: ModelMessage[]): boolean {
+  let changed = false
+  const fileNotice = (mediaType?: string) =>
+    `[File attachment omitted (${mediaType ?? 'binary'}) — the provider rejected it; removed so the session can continue.]`
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue
+    if (msg.role === 'user' || msg.role === 'assistant') {
+      let msgChanged = false
+      const rewritten = (msg.content as Array<{ type: string; mediaType?: string }>).map((part) => {
+        if (part.type === 'image') {
+          msgChanged = true
+          return { type: 'text', text: buildUnsupportedImageNotice(part.mediaType ?? 'unknown') }
+        }
+        if (part.type === 'file') {
+          msgChanged = true
+          return { type: 'text', text: fileNotice(part.mediaType) }
+        }
+        return part
+      })
+      if (msgChanged) {
+        changed = true
+        ;(msg as { content: unknown }).content = rewritten
+      }
+    } else if (msg.role === 'tool') {
+      for (const part of msg.content) {
+        if (part.type !== 'tool-result') continue
+        const output = (part as { output?: MaybeOutput }).output
+        if (!output || output.type !== 'content' || !Array.isArray(output.value)) continue
+        const entries = output.value as Array<{ type?: string; mediaType?: string }>
+        if (!entries.some((e) => e?.type !== 'text' && e?.type !== 'custom')) continue
+        output.value = entries.map((entry) => {
+          if (entry?.type === 'text' || entry?.type === 'custom') return entry
+          changed = true
+          return { type: 'text', text: buildUnsupportedImageNotice(entry?.mediaType ?? 'unknown') }
+        }) as never
+      }
+    }
+  }
+  return changed
 }
 
 /**

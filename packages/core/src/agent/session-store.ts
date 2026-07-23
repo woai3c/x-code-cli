@@ -145,20 +145,76 @@ async function appendLine(filePath: string, entry: Entry): Promise<void> {
   await appendRawLines(filePath, [JSON.stringify(entry)])
 }
 
+/** Per-file write queues with batching (Claude Code's sessionStorage model).
+ *  All appends are fire-and-forget (flushPendingMessages / appendUsage /
+ *  appendCheckpoint), so several writes to the SAME file are routinely in
+ *  flight at once. Concurrent appends are not atomic — on Windows they
+ *  interleave and overwrite, producing glued / split jsonl lines that the
+ *  loader then has to skip (observed: a 500 KB msg line torn apart by a
+ *  checkpoint line landing mid-write). The queue serializes them; whatever
+ *  piles up while one appendFile is in flight is merged into a SINGLE
+ *  follow-up append, so a turn-end burst (messages + usage + checkpoint)
+ *  costs two syscalls instead of N. */
+interface PendingWrite {
+  lines: string[]
+  resolve: (ok: boolean) => void
+}
+
+interface FileWriteQueue {
+  pending: PendingWrite[]
+  writing: boolean
+}
+
+const writeQueues = new Map<string, FileWriteQueue>()
+/** Files already chmod'd this process — avoids a redundant syscall on every
+ *  append. */
+const chmodDone = new Set<string>()
+
+async function drainWriteQueue(filePath: string, queue: FileWriteQueue): Promise<void> {
+  queue.writing = true
+  try {
+    // Yield once so enqueue calls issued in the same tick (the common
+    // turn-end burst) coalesce into the first batch too.
+    await Promise.resolve()
+    while (queue.pending.length > 0) {
+      const batch = queue.pending.splice(0)
+      const lines = batch.flatMap((w) => w.lines)
+      let ok = true
+      try {
+        await ensureProjectStorageDir(path.dirname(filePath))
+        await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
+        // Transcripts can contain secrets pasted into prompts — restrict to
+        // owner-only. No-op on Windows, where chmod only toggles read-only.
+        if (!chmodDone.has(filePath)) {
+          chmodDone.add(filePath)
+          await fs.chmod(filePath, 0o600).catch(() => {})
+        }
+      } catch {
+        // Persistence is best-effort — never block the agent loop on FS errors.
+        ok = false
+      }
+      for (const w of batch) w.resolve(ok)
+    }
+  } finally {
+    queue.writing = false
+  }
+}
+
 /** Batch-append pre-serialised jsonl rows. Returns true on success so
  *  callers can keep "only advance state when disk write succeeded" — e.g.
  *  markBoundaryAndReflush mustn't clear the in-memory checkpoint list
  *  unless the boundary actually landed on disk. */
-async function appendRawLines(filePath: string, lines: string[]): Promise<boolean> {
-  if (lines.length === 0) return true
-  try {
-    await ensureProjectStorageDir(path.dirname(filePath))
-    await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
-    return true
-  } catch {
-    // Persistence is best-effort — never block the agent loop on FS errors.
-    return false
+function appendRawLines(filePath: string, lines: string[]): Promise<boolean> {
+  if (lines.length === 0) return Promise.resolve(true)
+  let queue = writeQueues.get(filePath)
+  if (!queue) {
+    queue = { pending: [], writing: false }
+    writeQueues.set(filePath, queue)
   }
+  return new Promise<boolean>((resolve) => {
+    queue.pending.push({ lines, resolve })
+    if (!queue.writing) void drainWriteQueue(filePath, queue)
+  })
 }
 
 /** Try to read the current git branch from `.git/HEAD`. Cheap, fully sync
@@ -483,6 +539,11 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   }
   if (!header) return null
 
+  // Repair binary parts that older builds persisted as JSON-serialized
+  // Buffers — without this the resumed transcript fails the SDK's
+  // ModelMessage schema on the very first request.
+  normalizeSerializedBinaryParts(messages)
+
   return {
     sessionId: header.sessionId,
     taskSlug: header.taskSlug,
@@ -501,6 +562,64 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
 }
 
 type ToolCallPart = { type?: string; toolCallId?: string }
+
+/** Restore a binary payload that was persisted as a JSON-serialized Buffer /
+ *  Uint8Array back to a base64 string. Older builds put raw Buffer instances
+ *  into image/file parts; JSON.stringify turns those into
+ *  `{"type":"Buffer","data":[...]}` (Buffer) or `{"0":137,"1":80,...}`
+ *  (Uint8Array) — both fail the SDK's ModelMessage schema on resume, killing
+ *  every request in the resumed session. Returns undefined when the shape
+ *  isn't a recognizable serialized binary. */
+function serializedBinaryToBase64(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const obj = value as Record<string, unknown>
+  if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+    return Buffer.from(obj.data as number[]).toString('base64')
+  }
+  const keys = Object.keys(obj)
+  if (keys.length > 0 && keys.every((k) => /^\d+$/.test(k))) {
+    return Buffer.from(keys.sort((a, b) => Number(a) - Number(b)).map((k) => obj[k] as number)).toString('base64')
+  }
+  return undefined
+}
+
+/** Walk loaded messages in place and repair binary parts corrupted by JSON
+ *  serialization (see serializedBinaryToBase64). Covers user/assistant image
+ *  and file parts plus tool-result `content` entries. */
+function normalizeSerializedBinaryParts(messages: ModelMessage[]): void {
+  const fixPart = (part: unknown): void => {
+    if (!part || typeof part !== 'object') return
+    const p = part as Record<string, unknown>
+    if (p.type === 'image' && typeof p.image !== 'string') {
+      const restored = serializedBinaryToBase64(p.image)
+      if (restored !== undefined) p.image = restored
+    } else if (p.type === 'file' && typeof p.data !== 'string') {
+      const restored = serializedBinaryToBase64(p.data)
+      if (restored !== undefined) p.data = restored
+    }
+  }
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue
+    if (msg.role === 'user' || msg.role === 'assistant') {
+      for (const part of msg.content) fixPart(part)
+    } else if (msg.role === 'tool') {
+      for (const part of msg.content as Array<{ type?: string; output?: { type?: string; value?: unknown } }>) {
+        if (part?.type !== 'tool-result') continue
+        const output = part.output
+        if (output?.type !== 'content' || !Array.isArray(output.value)) continue
+        for (const entry of output.value as Array<{ type?: string; data?: unknown }>) {
+          if (
+            (entry?.type === 'media' || entry?.type === 'image-data' || entry?.type === 'file-data') &&
+            typeof entry.data !== 'string'
+          ) {
+            const restored = serializedBinaryToBase64(entry.data)
+            if (restored !== undefined) entry.data = restored
+          }
+        }
+      }
+    }
+  }
+}
 
 /** Drop trailing assistant tool_calls that have no matching tool_result
  *  later in the array. Providers reject any orphan with "tool_use without

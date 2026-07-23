@@ -26,7 +26,7 @@ import { toolSearch } from '../tools/tool-search.js'
 import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog } from '../utils.js'
-import { classifyApiError, isContextTooLongError } from './api-errors.js'
+import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
@@ -38,6 +38,7 @@ import {
   downgradeBinaryPartsForProvider,
   ensureReasoningContentParts,
   reattachToolResultImagesForProvider,
+  stripBinaryPartsFromMessages,
 } from './provider-compat.js'
 import { appendCheckpoint, appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
 import { createCheckpoint } from './snapshot.js'
@@ -541,6 +542,15 @@ async function runTurn(
     drainStreamResult(result)
 
     if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
+    if (isImageDataError(err)) {
+      // The provider rejected an image in history. Left in place it would
+      // fail EVERY later request (session poisoning — same failure class as
+      // the ingestion gate in file-ingest). Strip all binary parts to text
+      // notices and retry once. stripBinaryPartsFromMessages returns false
+      // when nothing matched — then the bad part isn't in a shape we
+      // recognize, so fall through and report instead of looping forever.
+      if (stripBinaryPartsFromMessages(state.messages)) return { kind: 'retry' }
+    }
     if (isContextTooLongError(err)) {
       const compressed = await handleContextTooLong(state, model, callbacks, {
         hookBus: options.hookBus,

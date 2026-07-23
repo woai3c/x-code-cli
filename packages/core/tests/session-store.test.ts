@@ -19,7 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { mkdtempSync, rmSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -245,6 +245,93 @@ describe('session-store: orphan tool-call sanitisation', () => {
 
     const loaded = await loadSession(getSessionFilePath(state))
     expect(loaded!.messages).toHaveLength(3)
+  })
+})
+
+describe('session-store: serialized binary part repair', () => {
+  // Older builds put raw Buffer instances into attachment parts;
+  // JSON.stringify turned them into {"type":"Buffer","data":[...]} (or the
+  // numeric-keys Uint8Array form), which fails the SDK's ModelMessage schema
+  // on resume. loadSession must restore them to base64 strings.
+  it('restores image/file parts persisted as JSON-serialized Buffers', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-000'
+    state.taskSlug = 'buffer-image'
+    state.messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look' },
+          { type: 'image', image: { type: 'Buffer', data: [137, 80, 78, 71] }, mediaType: 'image/png' },
+          { type: 'file', data: { type: 'Buffer', data: [37, 80, 68, 70] }, mediaType: 'application/pdf' },
+        ],
+      },
+    ] as never[]
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'look')
+    await flushPendingMessages(state)
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    const content = loaded!.messages[0].content as Array<Record<string, unknown>>
+    expect(content[1].image).toBe(Buffer.from([137, 80, 78, 71]).toString('base64'))
+    expect(content[2].data).toBe(Buffer.from([37, 80, 68, 70]).toString('base64'))
+  })
+
+  it('restores the numeric-keys Uint8Array form and tool-result media entries', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-000'
+    state.taskSlug = 'uint8-image'
+    state.messages = [
+      {
+        role: 'user',
+        content: [{ type: 'image', image: { 0: 137, 1: 80, 2: 78 }, mediaType: 'image/png' }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-1',
+            toolName: 'browser',
+            output: {
+              type: 'content',
+              value: [{ type: 'media', data: { type: 'Buffer', data: [255, 216, 255] }, mediaType: 'image/jpeg' }],
+            },
+          },
+        ],
+      },
+    ] as never[]
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'img')
+    await flushPendingMessages(state)
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    const userContent = loaded!.messages[0].content as Array<Record<string, unknown>>
+    expect(userContent[0].image).toBe(Buffer.from([137, 80, 78]).toString('base64'))
+    const toolContent = loaded!.messages[1].content as Array<{
+      output: { value: Array<{ data: unknown }> }
+    }>
+    expect(toolContent[0].output.value[0].data).toBe(Buffer.from([255, 216, 255]).toString('base64'))
+  })
+})
+
+describe('session-store: concurrent appends', () => {
+  it('serializes fire-and-forget writes so lines never interleave', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-000'
+    state.taskSlug = 'race'
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'race')
+
+    // A large message widens the window in which concurrent appendFile calls
+    // would interleave without the per-file write queue.
+    state.messages = [{ role: 'user', content: 'x'.repeat(2 * 1024 * 1024) }]
+    await Promise.all([flushPendingMessages(state), appendUsage(state, 'm'), appendUsage(state, 'm')])
+
+    const raw = await readFile(getSessionFilePath(state), 'utf-8')
+    const lines = raw.split('\n').filter((l) => l.trim())
+    // header + 1 msg + 2 usage entries, every one a complete JSON document.
+    expect(lines).toHaveLength(4)
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow()
+    }
   })
 })
 

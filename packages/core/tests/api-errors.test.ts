@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { classifyApiError, extractHttpStatus, isContextTooLongError } from '../src/agent/api-errors.js'
+import {
+  classifyApiError,
+  extractHttpStatus,
+  isContextTooLongError,
+  isImageDataError,
+} from '../src/agent/api-errors.js'
 
 describe('extractHttpStatus', () => {
   it('extracts "status code NNN"', () => {
@@ -26,6 +31,27 @@ describe('isContextTooLongError', () => {
   })
   it('detects HTTP 413 (permanentErrorFetch rewrites context overflow to 413)', () => {
     expect(isContextTooLongError(new Error('Request failed with status code 413'))).toBe(true)
+  })
+})
+
+describe('isImageDataError', () => {
+  it('detects Anthropic phrasing', () => {
+    expect(isImageDataError(new Error('400 Could not process the image'))).toBe(true)
+  })
+  it('detects OpenAI phrasing', () => {
+    expect(isImageDataError(new Error('Invalid image data (400)'))).toBe(true)
+  })
+  it('detects size-limit phrasing', () => {
+    expect(isImageDataError(new Error('image too large: max 5MB per image'))).toBe(true)
+  })
+  it('detects Gemini parse error', () => {
+    expect(isImageDataError(new Error('image_parse_error: unable to decode'))).toBe(true)
+  })
+  it('does not fire on generic 400s', () => {
+    expect(isImageDataError(new Error('400 Bad Request: unknown parameter foo'))).toBe(false)
+  })
+  it('does not fire on rate limits', () => {
+    expect(isImageDataError(new Error('Request failed with status code 429'))).toBe(false)
   })
 })
 
