@@ -1,3 +1,9 @@
+## v0.3.17 (2026-07-23)
+
+### Bug Fixes
+
+- stop binary image parts from poisoning sessions (af836b1)
+
 ## v0.3.16 (2026-07-23)
 
 ### Bug Fixes
