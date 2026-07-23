@@ -20,7 +20,7 @@ import { generateText } from 'ai'
 import { getAvailableProviders } from '../config/index.js'
 import { createModelRegistry } from '../providers/registry.js'
 import { debugLog } from '../utils.js'
-import { LruCache } from '../utils/lru-cache.js'
+import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 
 export interface VisionProvider {
@@ -100,7 +100,7 @@ export async function captionImageBuffer(
   modelId: string,
   opts: { prompt?: string; abortSignal?: AbortSignal } = {},
 ): Promise<string> {
-  const key = `${modelId}:${buffer.length}:${buffer.subarray(0, 64).toString('base64')}`
+  const key = `${modelId}:${bufferFingerprint(buffer)}`
   const cached = captionCache.get(key)
   if (cached != null) {
     debugLog('vision-fallback.cache-hit', `${modelId} ${buffer.length}B`)

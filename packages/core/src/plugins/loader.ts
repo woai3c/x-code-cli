@@ -28,6 +28,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { isDir, isFile } from '../utils.js'
 import { EnableState } from './enable-state.js'
 import { listInstalledPlugins } from './installer.js'
 import { ManifestParseError, discoverManifest, parseManifest } from './manifest.js'
@@ -286,22 +287,4 @@ export async function resolveContributions(plugin: LoadedPlugin): Promise<Resolv
   }
 
   return result
-}
-
-async function isDir(p: string): Promise<boolean> {
-  try {
-    const s = await fs.stat(p)
-    return s.isDirectory()
-  } catch {
-    return false
-  }
-}
-
-async function isFile(p: string): Promise<boolean> {
-  try {
-    const s = await fs.stat(p)
-    return s.isFile()
-  } catch {
-    return false
-  }
 }

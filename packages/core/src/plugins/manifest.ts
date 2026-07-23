@@ -16,6 +16,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { fileExists } from '../utils.js'
 import { GEMINI_MANIFEST_REL, MANIFEST_CANDIDATES } from './paths.js'
 import type { ManifestFormat, PluginManifest } from './types.js'
 
@@ -159,16 +160,5 @@ export async function parseManifest(manifestPath: string): Promise<PluginManifes
     // Normalise the author union — internal callers only deal with the
     // object form. String authors are turned into `{ name: <string> }`.
     author: typeof data.author === 'string' ? { name: data.author } : data.author,
-  }
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────
-
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p)
-    return true
-  } catch {
-    return false
   }
 }

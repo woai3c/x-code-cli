@@ -41,24 +41,6 @@ export const toolRegistry = {
   killShell,
 }
 
-export {
-  readFile,
-  writeFile,
-  edit,
-  shell,
-  glob,
-  grep,
-  listDir,
-  webSearch,
-  webFetch,
-  askUser,
-  enterPlanMode,
-  exitPlanMode,
-  todoWrite,
-  shellOutput,
-  killShell,
-}
-
 export { BackgroundShellRegistry } from './background-shell.js'
 export type { BackgroundShell } from './background-shell.js'
 export { createCreateGoalTool } from './create-goal.js'

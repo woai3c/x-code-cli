@@ -39,7 +39,7 @@ export interface PluginCommandDeps {
   bumpSkillRegistryVersion: () => void
 }
 
-function formatPluginSource(s: PluginSource | undefined): string {
+export function formatPluginSource(s: PluginSource | undefined): string {
   if (!s) return '(unknown)'
   if (s.kind === 'local') return `local: ${s.path}`
   if (s.kind === 'git') return `git: ${s.url}${s.ref ? `#${s.ref}` : ''}`

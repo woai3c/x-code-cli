@@ -187,11 +187,43 @@ export function debugLog(tag: string, content: string): void {
   }
 }
 
+/** Detect AbortError from streamText / fetch / execa. Also returns true when
+ *  the signal is already flipped — some providers wrap the underlying
+ *  AbortError into their own class but still flip the signal first. */
+export function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) return true
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return true
+    if (/aborted|AbortError/i.test(err.message)) return true
+  }
+  return false
+}
+
 /** Check if a file exists */
 export async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath)
     return true
+  } catch {
+    return false
+  }
+}
+
+/** Check if path is a directory (returns false on error) */
+export async function isDir(p: string): Promise<boolean> {
+  try {
+    const s = await fs.stat(p)
+    return s.isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/** Check if path is a regular file (returns false on error) */
+export async function isFile(p: string): Promise<boolean> {
+  try {
+    const s = await fs.stat(p)
+    return s.isFile()
   } catch {
     return false
   }

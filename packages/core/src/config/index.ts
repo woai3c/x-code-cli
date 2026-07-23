@@ -153,10 +153,6 @@ export interface UserConfig {
  *  read the same JSON (e.g. the MCP loader for the `mcpServers` field)
  *  honour the X_CODE_HOME override automatically. */
 export function getUserConfigPath(): string {
-  return userConfigPath()
-}
-
-function userConfigPath(): string {
   return path.join(userXcodeDir(), 'config.json')
 }
 
@@ -164,7 +160,7 @@ function userConfigPath(): string {
  *  parse error, wrong shape) so callers don't have to null-check. */
 export function loadUserConfig(): UserConfig {
   try {
-    const raw = fsSync.readFileSync(userConfigPath(), 'utf-8')
+    const raw = fsSync.readFileSync(getUserConfigPath(), 'utf-8')
     const parsed = JSON.parse(raw) as unknown
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed as UserConfig
@@ -179,11 +175,11 @@ export function loadUserConfig(): UserConfig {
 export function saveUserConfig(update: Partial<UserConfig>): void {
   const merged: UserConfig = { ...loadUserConfig(), ...update }
   try {
-    // mkdir the SAME root userConfigPath() points at — otherwise an
+    // mkdir the SAME root getUserConfigPath() points at — otherwise an
     // X_CODE_HOME override creates `~/.x-code/` but writes to the override
     // and the write silently fails on a missing parent.
     fsSync.mkdirSync(userXcodeDir(), { recursive: true })
-    fsSync.writeFileSync(userConfigPath(), JSON.stringify(merged, null, 2) + '\n', 'utf-8')
+    fsSync.writeFileSync(getUserConfigPath(), JSON.stringify(merged, null, 2) + '\n', 'utf-8')
   } catch {
     // Best-effort: don't crash the UI if the config dir is read-only.
   }

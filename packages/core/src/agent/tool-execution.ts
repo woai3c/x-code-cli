@@ -13,7 +13,7 @@ import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
 import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
-import { debugLog } from '../utils.js'
+import { debugLog, isAbortError } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
@@ -24,18 +24,6 @@ import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan
 import { runSubAgent } from './sub-agents/runner.js'
 import { runToolSearch } from './tool-search/resolve.js'
 import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
-
-/** Detect AbortError from any source. Kept local (duplicates the helper
- *  in loop.ts) because making it a shared utility would force a new
- *  module just for six lines. Same logic both places. */
-function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
-  if (signal?.aborted) return true
-  if (err instanceof Error) {
-    if (err.name === 'AbortError') return true
-    if (/aborted|AbortError/i.test(err.message)) return true
-  }
-  return false
-}
 
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {

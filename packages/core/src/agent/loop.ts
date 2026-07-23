@@ -25,7 +25,7 @@ import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
 import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
-import { debugLog } from '../utils.js'
+import { debugLog, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
@@ -302,19 +302,6 @@ type TurnOutcome =
   /** User aborted the request (Esc / Ctrl+C). NOT reported to onError —
    *  the UI shows a `[Request interrupted by user]` notice instead. */
   | { kind: 'aborted' }
-
-/** AbortError from streamText / fetch is the SDK's signal that we cancelled
- *  the request. We also accept any error that lands while abortSignal is
- *  already aborted — some providers wrap the underlying AbortError into their
- *  own error class but still flip the signal first. */
-function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
-  if (signal?.aborted) return true
-  if (err instanceof Error) {
-    if (err.name === 'AbortError') return true
-    if (/aborted|AbortError/i.test(err.message)) return true
-  }
-  return false
-}
 
 /** Build the BASE tool set for this loop. "Base" = everything directly loaded
  *  on every turn; the per-turn `composeTurnTools` call then splices in any

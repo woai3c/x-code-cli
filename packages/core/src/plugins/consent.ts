@@ -29,6 +29,7 @@ import path from 'node:path'
 import { parseHookConfig } from '../hooks/config-schema.js'
 import type { HookEventName } from '../hooks/types.js'
 import { parseServersBlock } from '../mcp/config-schema.js'
+import { isDir, isFile } from '../utils.js'
 import { extractMcpServersBlock } from './integration.js'
 import type { PluginManifest, PluginSource } from './types.js'
 
@@ -157,24 +158,6 @@ export async function probePluginRoot(rootDir: string): Promise<RootProbe> {
     hasRootMcpFile,
     rootHookEvents,
     hasRootHooksFile,
-  }
-}
-
-async function isDir(p: string): Promise<boolean> {
-  try {
-    const s = await fs.stat(p)
-    return s.isDirectory()
-  } catch {
-    return false
-  }
-}
-
-async function isFile(p: string): Promise<boolean> {
-  try {
-    const s = await fs.stat(p)
-    return s.isFile()
-  } catch {
-    return false
   }
 }
 

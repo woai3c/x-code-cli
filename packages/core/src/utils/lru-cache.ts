@@ -1,3 +1,11 @@
+/** Cheap collision-resistant fingerprint for a buffer: `${byteLength}:${first64Base64}`.
+ *  Suitable as cache keys when exact content identity matters more than
+ *  cryptographic strength. Callers that need a per-model or per-provider
+ *  namespace should prefix the returned string. */
+export function bufferFingerprint(buffer: Buffer): string {
+  return `${buffer.length}:${buffer.subarray(0, 64).toString('base64')}`
+}
+
 /** Minimal generic LRU cache backed by a Map (insertion-order iteration).
  *  Supports optional TTL. Not thread-safe (Node is single-threaded so this
  *  is fine for in-process caching). */

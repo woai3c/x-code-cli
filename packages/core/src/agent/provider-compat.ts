@@ -7,6 +7,7 @@ import type { ModelMessage } from 'ai'
 
 import { capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
 import { buildUnsupportedImageNotice } from '../providers/capabilities.js'
+import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
 import { ocrImage } from './file-ingest.js'
 import { toolMediaUserMessage } from './messages.js'
 import type { ToolImage } from './messages.js'
@@ -152,34 +153,11 @@ export function reattachToolResultImagesForProvider(messages: ModelMessage[], mo
   return movedAny ? rewritten : messages
 }
 
-// Cap OCR cache so a long session that pages through many distinct images
-// doesn't grow the heap unboundedly. Map preserves insertion order, so we
-// can evict the oldest entry by reading `keys().next()` — that's our LRU.
-// Re-inserting a hit (via delete+set) bumps it to the most-recent slot.
-const OCR_CACHE_LIMIT = 50
-const ocrCache = new Map<string, string>()
-
-function ocrCacheGet(key: string): string | undefined {
-  const hit = ocrCache.get(key)
-  if (hit === undefined) return undefined
-  // Touch: move to most-recent slot.
-  ocrCache.delete(key)
-  ocrCache.set(key, hit)
-  return hit
-}
-
-function ocrCacheSet(key: string, value: string): void {
-  if (ocrCache.has(key)) ocrCache.delete(key)
-  ocrCache.set(key, value)
-  if (ocrCache.size > OCR_CACHE_LIMIT) {
-    const oldest = ocrCache.keys().next().value
-    if (oldest !== undefined) ocrCache.delete(oldest)
-  }
-}
+const ocrCache = new LruCache<string>({ maxEntries: 50 })
 
 async function ocrBuffer(buffer: Buffer): Promise<string> {
-  const key = `${buffer.length}:${buffer.subarray(0, 64).toString('base64')}`
-  const cached = ocrCacheGet(key)
+  const key = bufferFingerprint(buffer)
+  const cached = ocrCache.get(key)
   if (cached != null) return cached
 
   // tesseract.js takes a path, URL, or Buffer. Buffers work but some
@@ -188,7 +166,7 @@ async function ocrBuffer(buffer: Buffer): Promise<string> {
   try {
     await fs.writeFile(tmp, buffer)
     const text = await ocrImage(tmp)
-    ocrCacheSet(key, text)
+    ocrCache.set(key, text)
     return text
   } finally {
     await fs.unlink(tmp).catch(() => {})

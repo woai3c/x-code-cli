@@ -10,7 +10,7 @@ import type { HookBus } from '../../hooks/bus.js'
 import type { HookEvent } from '../../hooks/types.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, isAbortError } from '../../utils.js'
 import { type BrowserMcp, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
@@ -451,15 +451,6 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
       aborted: false,
     }
   }
-}
-
-function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
-  if (signal?.aborted) return true
-  if (err instanceof Error) {
-    if (err.name === 'AbortError') return true
-    if (/aborted|AbortError/i.test(err.message)) return true
-  }
-  return false
 }
 
 function zeroUsage(): TokenUsage {

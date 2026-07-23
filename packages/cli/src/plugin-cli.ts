@@ -29,6 +29,8 @@ import {
 } from '@x-code-cli/core'
 import type { ConsentPreview, PluginScope, PluginSource } from '@x-code-cli/core'
 
+import { formatPluginSource } from './ui/commands/plugin.js'
+
 const chalk = new Chalk()
 
 export async function runPluginCli(args: string[]): Promise<number> {
@@ -104,13 +106,6 @@ function printUsage(): void {
   )
 }
 
-function formatSource(s: PluginSource | undefined): string {
-  if (!s) return '(unknown)'
-  if (s.kind === 'local') return `local: ${s.path}`
-  if (s.kind === 'git') return `git: ${s.url}${s.ref ? `#${s.ref}` : ''}`
-  return `github:${s.owner}/${s.repo}${s.ref ? `#${s.ref}` : ''}`
-}
-
 // ── list / info ────────────────────────────────────────────────────────
 
 async function cliList(args: string[] = []): Promise<number> {
@@ -134,7 +129,7 @@ async function cliList(args: string[] = []): Promise<number> {
     console.log(`Installed plugins (${installed.length}):`)
     const namePad = Math.max(...installed.map((p) => p.id.length), 8) + 2
     for (const p of installed) {
-      console.log(`  ${p.id.padEnd(namePad)} v${p.version}  ${formatSource(p.source)}`)
+      console.log(`  ${p.id.padEnd(namePad)} v${p.version}  ${formatPluginSource(p.source)}`)
     }
     return 0
   }
@@ -154,7 +149,7 @@ async function cliList(args: string[] = []): Promise<number> {
   const namePad = Math.max(...filtered.map((p) => p.id.length), 8) + 2
   for (const p of filtered) {
     const badge = p.enabled ? '[on] ' : '[off]'
-    console.log(`  ${badge} ${p.id.padEnd(namePad)} v${p.manifest.version}  ${formatSource(p.source)}`)
+    console.log(`  ${badge} ${p.id.padEnd(namePad)} v${p.manifest.version}  ${formatPluginSource(p.source)}`)
   }
   return 0
 }
@@ -177,7 +172,7 @@ async function cliInfo(args: string[]): Promise<number> {
   if (plugin.manifest.description) console.log(plugin.manifest.description)
   console.log()
   console.log(`Enabled:     ${plugin.enabled ? 'yes' : 'no'}`)
-  console.log(`Source:      ${formatSource(plugin.source)}`)
+  console.log(`Source:      ${formatPluginSource(plugin.source)}`)
   console.log(`Marketplace: ${plugin.marketplace}`)
   console.log(`Root dir:    ${plugin.rootDir}`)
   console.log(`Manifest:    ${plugin.manifestPath} (${plugin.manifestFormat})`)
@@ -212,7 +207,7 @@ async function cliInstall(args: string[]): Promise<number> {
   const parsed = await parseInstallSource(raw)
   if (!parsed) return 1
 
-  console.log(`Installing from ${formatSource(parsed.source)} ...`)
+  console.log(`Installing from ${formatPluginSource(parsed.source)} ...`)
   try {
     const result = await installPlugin({
       source: parsed.source,
@@ -246,7 +241,7 @@ async function promptConsent(preview: ConsentPreview): Promise<boolean> {
   lines.push(chalk.bold.yellow(`About to install: ${preview.pluginId} v${preview.version}`))
   if (preview.description) lines.push(`  ${preview.description}`)
   lines.push('')
-  lines.push(`  Source:      ${formatSource(preview.source)}`)
+  lines.push(`  Source:      ${formatPluginSource(preview.source)}`)
   lines.push(
     `  Marketplace: ${preview.marketplace}${preview.fromReservedMarketplace ? ' [reserved/official]' : ''}${preview.verified ? ' [verified]' : ''}`,
   )
@@ -545,7 +540,7 @@ async function cliUpdate(args: string[]): Promise<number> {
     console.error(`Plugin '${id}' not installed.`)
     return 1
   }
-  console.log(`Reinstalling ${id} from ${formatSource(rec.source)} ...`)
+  console.log(`Reinstalling ${id} from ${formatPluginSource(rec.source)} ...`)
   const outcome = await updateOnePlugin(rec)
   return outcome === 'failed' ? 1 : 0
 }
