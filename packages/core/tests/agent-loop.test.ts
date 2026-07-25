@@ -50,6 +50,8 @@ vi.mock('../src/agent/session-store.js', () => ({
   appendHeader: vi.fn().mockResolvedValue(undefined),
   appendUsage: vi.fn().mockResolvedValue(undefined),
   appendInterrupted: vi.fn().mockResolvedValue(undefined),
+  appendStepStats: vi.fn().mockResolvedValue(undefined),
+  appendCheckpoint: vi.fn().mockResolvedValue(undefined),
   flushPendingMessages: vi.fn().mockResolvedValue(undefined),
   markBoundaryAndReflush: vi.fn().mockResolvedValue(undefined),
   getSessionFilePath: vi.fn().mockReturnValue(''),

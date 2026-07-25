@@ -254,6 +254,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const thinkingRef = useRef<boolean>(options.thinking ?? false)
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  /** Deferred interrupt notice text. Set by abort(), consumed by submit()'s
+   *  post-agentLoop path once processToolCalls has fully drained. This avoids
+   *  pushing a user-role message into state.messages while tool_results are
+   *  still being appended (which breaks assistant→tool ordering). */
+  const pendingAbortNoticeRef = useRef<string | null>(null)
   const goalCoordinatorRef = useRef(createGoalRunCoordinator())
   const initializedRef = useRef(false)
   const pendingQuestionRef = useRef<PendingQuestion | null>(null)
@@ -706,6 +711,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         }))
         externalSignal?.removeEventListener('abort', abortFromExternal)
         if (controller.signal.aborted) {
+          // NOW safe to push the interrupt notice into state.messages:
+          // agentLoop has returned, meaning processToolCalls has fully
+          // drained and all tool_results are in place. Pushing earlier
+          // (inside abort()) would interleave a user message between the
+          // assistant's tool_calls and their results, breaking providers.
+          const noticeText = pendingAbortNoticeRef.current
+          if (noticeText && loopStateRef.current) {
+            loopStateRef.current.messages.push({ role: 'user', content: noticeText })
+            void appendInterrupted(loopStateRef.current)
+            void flushPendingMessages(loopStateRef.current)
+          }
+          pendingAbortNoticeRef.current = null
+
           // Esc path: anything queued after abort()'s own queue-restore
           // (user hit Esc and Enter nearly simultaneously) would strand a
           // "queued:" row with no spinner and no consumer. Fold it into
@@ -734,6 +752,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // `[Request interrupted by user]` notice that abort() already
         // wrote into messages is the user-visible signal we want.
         const wasAborted = controller.signal.aborted
+        if (wasAborted) {
+          const noticeText = pendingAbortNoticeRef.current
+          if (noticeText && loopStateRef.current) {
+            loopStateRef.current.messages.push({ role: 'user', content: noticeText })
+            void appendInterrupted(loopStateRef.current)
+            void flushPendingMessages(loopStateRef.current)
+          }
+          pendingAbortNoticeRef.current = null
+        }
         setState((prev) => ({
           ...prev,
           isLoading: false,
@@ -1166,32 +1193,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       kind: 'command-result',
     })
 
-    // Mirror the notice into the agent loop's message history so the next
-    // turn's API call has explicit context that the previous turn was
-    // user-interrupted — without it the model would see an unfinished
-    // assistant message and might silently try to resume.
-    if (loopStateRef.current) {
-      if (loopStateRef.current.goal?.status === 'active') {
-        try {
-          pauseCoreGoal(loopStateRef.current)
-          void appendGoalState(loopStateRef.current)
-          void goalCoordinatorRef.current.interrupt(loopStateRef.current.goal.id)
-          setState((prev) => ({
-            ...prev,
-            goalStatus: loopStateRef.current?.goal ? { ...loopStateRef.current.goal } : null,
-          }))
-        } catch {
-          // A non-active terminal goal does not need abort-time state changes.
-        }
+    // Defer the state.messages mutation until agentLoop returns. Pushing
+    // the user-role notice NOW would interleave it between assistant
+    // tool_calls and their tool_results (processToolCalls is still running
+    // and will push synthetic results after the abort signal fires). That
+    // breaks the strict assistant→tool ordering providers require and causes
+    // "Tool result is missing for tool call ..." on the next request.
+    //
+    // Store the notice text; submit()'s post-loop abort path will push it
+    // and persist once processToolCalls has fully drained.
+    pendingAbortNoticeRef.current = noticeText
+
+    if (loopStateRef.current?.goal?.status === 'active') {
+      try {
+        pauseCoreGoal(loopStateRef.current)
+        void appendGoalState(loopStateRef.current)
+        void goalCoordinatorRef.current.interrupt(loopStateRef.current.goal.id)
+        setState((prev) => ({
+          ...prev,
+          goalStatus: loopStateRef.current?.goal ? { ...loopStateRef.current.goal } : null,
+        }))
+      } catch {
+        // A non-active terminal goal does not need abort-time state changes.
       }
-      loopStateRef.current.messages.push({ role: 'user', content: noticeText })
-      // Persist the abort to the jsonl: drop an `interrupted` meta line
-      // (informational — picker can show "interrupted" tags) and flush
-      // the unsaved tail (which now includes the notice we just pushed)
-      // so resume picks up exactly where the user stopped. Both are
-      // fire-and-forget; never block the abort path on FS errors.
-      void appendInterrupted(loopStateRef.current)
-      void flushPendingMessages(loopStateRef.current)
     }
 
     // Unblock any `await onAskPermission` in the core loop (parallel tool
