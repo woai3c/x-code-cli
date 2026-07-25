@@ -1382,16 +1382,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (loopStateRef.current.messages.length <= KEEP_RECENT) return null
     const before = estimateTokenCount(loopStateRef.current.messages)
     onProgress?.('Summarizing conversation...')
-    loopStateRef.current.messages = await compressMessages(loopStateRef.current.messages, modelRef.current)
+
+    // Extract previous summary for incremental update + file tracking
+    const ls = loopStateRef.current
+    const firstMsg = ls.messages[0]
+    const prefix = '[Previous conversation summary]\n'
+    const previousSummary =
+      firstMsg?.role === 'user' && typeof firstMsg.content === 'string' && firstMsg.content.startsWith(prefix)
+        ? firstMsg.content.slice(prefix.length)
+        : undefined
+    const modified = [...ls.filesModified]
+    const read = [...ls.readFileCache.keys()].filter((p) => !ls.filesModified.has(p))
+    const filesTracked = { modified, read }
+
+    ls.messages = await compressMessages(ls.messages, modelRef.current, previousSummary, filesTracked)
     // Messages changed — mirror the auto-compression paths: reset the
     // cache-hit signal so the next turn doesn't wrongly assume a prefix
     // match, and reset lastInputTokens so checkAndCompressContext won't
     // re-trigger on a stale high value. Also write a compact-boundary
     // to the jsonl so the loader can pick up the post-compaction state.
-    loopStateRef.current.lastInputTokens = 0
-    loopStateRef.current.expectCacheMiss = true
-    void markBoundaryAndReflush(loopStateRef.current)
-    const after = estimateTokenCount(loopStateRef.current.messages)
+    ls.lastInputTokens = 0
+    ls.expectCacheMiss = true
+    void markBoundaryAndReflush(ls)
+    const after = estimateTokenCount(ls.messages)
     return { beforeTokens: before, afterTokens: after }
   }, [])
 

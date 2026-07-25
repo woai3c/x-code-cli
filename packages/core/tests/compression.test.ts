@@ -6,6 +6,7 @@ import type { LanguageModel, ModelMessage } from 'ai'
 
 import {
   KEEP_RECENT,
+  KEEP_RECENT_TOKENS,
   checkAndCompressContext,
   compressMessages,
   handleContextTooLong,
@@ -50,12 +51,16 @@ function makeCallbacks(overrides: Partial<AgentCallbacks> = {}): AgentCallbacks 
 
 const fakeModel = {} as LanguageModel
 
+// Each message pair is ~10K chars → ~3.3K tokens. This ensures a
+// modest count exceeds KEEP_RECENT_TOKENS (20K) so compaction triggers.
+const PAD_SIZE = 5000
+
 function padMessages(count: number): ModelMessage[] {
   const msgs: ModelMessage[] = []
   for (let i = 0; i < count; i++) {
     msgs.push(
-      { role: 'user', content: `message ${i} ${'x'.repeat(500)}` },
-      { role: 'assistant', content: `reply ${i} ${'y'.repeat(500)}` },
+      { role: 'user', content: `message ${i} ${'x'.repeat(PAD_SIZE)}` },
+      { role: 'assistant', content: `reply ${i} ${'y'.repeat(PAD_SIZE)}` },
     )
   }
   return msgs
@@ -66,7 +71,7 @@ function padMessages(count: number): ModelMessage[] {
 describe('compressMessages', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('returns messages unchanged when there are fewer than KEEP_RECENT', async () => {
+  it('returns messages unchanged when they all fit in the keep window', async () => {
     const msgs: ModelMessage[] = [
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
@@ -78,7 +83,8 @@ describe('compressMessages', () => {
 
   it('calls generateText and returns summary + recent messages', async () => {
     vi.mocked(generateText).mockResolvedValue({ text: 'Summary of old conversation' } as any)
-    const msgs = padMessages(KEEP_RECENT + 2)
+    // 10 pairs × ~10K chars = ~100K chars → ~33K tokens, exceeds 20K budget
+    const msgs = padMessages(10)
     const result = await compressMessages(msgs, fakeModel)
 
     expect(generateText).toHaveBeenCalledOnce()
@@ -108,7 +114,7 @@ describe('checkAndCompressContext', () => {
   it('emits progress phases and compressed message with token stats on full compression', async () => {
     vi.mocked(generateText).mockResolvedValue({ text: 'compressed summary' } as any)
     const state = createLoopState()
-    state.messages = padMessages(KEEP_RECENT + 4)
+    state.messages = padMessages(10)
     state.lastInputTokens = 999_999
 
     const cb = makeCallbacks()
@@ -128,7 +134,7 @@ describe('checkAndCompressContext', () => {
   it('works when onCompressionProgress is undefined', async () => {
     vi.mocked(generateText).mockResolvedValue({ text: 'summary' } as any)
     const state = createLoopState()
-    state.messages = padMessages(KEEP_RECENT + 4)
+    state.messages = padMessages(10)
     state.lastInputTokens = 999_999
 
     const cb = makeCallbacks()
@@ -141,7 +147,7 @@ describe('checkAndCompressContext', () => {
   it('resets lastInputTokens and sets expectCacheMiss after deep compression', async () => {
     vi.mocked(generateText).mockResolvedValue({ text: 'summary' } as any)
     const state = createLoopState()
-    state.messages = padMessages(KEEP_RECENT + 4)
+    state.messages = padMessages(10)
     state.lastInputTokens = 999_999
 
     await checkAndCompressContext(state, fakeModel, 1, makeCallbacks())
@@ -166,7 +172,7 @@ describe('handleContextTooLong', () => {
   it('emits progress and compressed message with token stats', async () => {
     vi.mocked(generateText).mockResolvedValue({ text: 'compressed' } as any)
     const state = createLoopState()
-    state.messages = padMessages(KEEP_RECENT + 4)
+    state.messages = padMessages(10)
 
     const cb = makeCallbacks()
     const result = await handleContextTooLong(state, fakeModel, cb)
@@ -181,7 +187,7 @@ describe('handleContextTooLong', () => {
   it('resets lastInputTokens and sets expectCacheMiss', async () => {
     vi.mocked(generateText).mockResolvedValue({ text: 'compressed' } as any)
     const state = createLoopState()
-    state.messages = padMessages(KEEP_RECENT + 4)
+    state.messages = padMessages(10)
 
     await handleContextTooLong(state, fakeModel, makeCallbacks())
 
