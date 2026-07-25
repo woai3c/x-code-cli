@@ -1,3 +1,9 @@
+## v0.3.21 (2026-07-25)
+
+### Bug Fixes
+
+- orphan tool call error (215eab9)
+
 ## v0.3.20 (2026-07-25)
 
 ### Bug Fixes
