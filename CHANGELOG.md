@@ -1,3 +1,9 @@
+## v0.3.20 (2026-07-25)
+
+### Bug Fixes
+
+- interrupting the browser use tool caused unmatched tool call pairs (55d3d68)
+
 ## v0.3.19 (2026-07-25)
 
 ### Features
