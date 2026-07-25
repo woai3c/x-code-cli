@@ -40,6 +40,15 @@ packages/
 
 **Permissions**: 3-level model (always-allow / ask / deny). Shell commands classified via `shell-utils.ts` with quote-aware compound-command splitting and LRU cache.
 
+**Shared internal modules** (`core/src/`):
+
+- `frontmatter.ts` — unified YAML frontmatter parser (commands, skills, sub-agents). `coerceTypes` option enables array/number parsing (sub-agents only).
+- `registry-diff.ts` — `diffNamedEntries()` for all registry `reload()` methods.
+- `settings-io.ts` — fault-tolerant JSON settings read/modify/write (skills + plugins).
+- `utils.ts:generateTimestampId` — canonical `YYYYMMDD-HHMMSS-mmm` for session/checkpoint IDs.
+
+**User directory resolution**: `userXcodeDir()` for all file I/O (respects `X_CODE_HOME`). The frozen `USER_XCODE_DIR` constant is only for byte-stable system-prompt content and log init.
+
 ## Conventions
 
 - **ESM only** (`"type": "module"`), `.js` extensions on relative imports even in `.ts` files (NodeNext).
@@ -49,6 +58,7 @@ packages/
 - **`.x-code/` at repo root is gitignored** — session summaries, auto-memory, local prefs, custom sub-agent definitions. Tests redirect via `X_CODE_HOME`.
 - **`DEBUG_STDOUT=1 xc`** writes to `~/.x-code/logs/debug.log` (10 MB rolling). `debugLog()` in core is a no-op without it.
 - **Tests use vitest** with globals (`describe`, `it`, `expect`, `vi` available without imports). Test files ignored by eslint.
+- **API export snapshot** (`packages/core/tests/api-exports.test.ts`) locks the `@x-code-cli/core` public export list. Run `pnpm test -- -u` to update after intentional changes.
 
 ## Gotchas
 

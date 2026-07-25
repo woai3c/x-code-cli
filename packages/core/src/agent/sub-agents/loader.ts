@@ -8,7 +8,8 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { USER_XCODE_DIR, XCODE_DIR } from '../../utils.js'
+import { parseFrontmatter } from '../../frontmatter.js'
+import { XCODE_DIR, userXcodeDir } from '../../utils.js'
 import type { SubAgentDefinition } from './types.js'
 
 const frontmatterSchema = z.object({
@@ -20,66 +21,6 @@ const frontmatterSchema = z.object({
   maxTurns: z.number().int().positive().optional(),
   shellRestrictions: z.array(z.string()).optional(),
 })
-
-/** Minimal YAML frontmatter parser. Handles the subset we need:
- *  string scalars, number scalars, and inline/flow arrays.
- *  No dependency on gray-matter — keeps the install lean. */
-function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: string } | null {
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
-  if (!match) return null
-
-  const yamlBlock = match[1]!
-  const body = match[2]!
-  const data: Record<string, unknown> = {}
-
-  // Fold YAML continuation lines: an indented non-empty line is joined to
-  // the previous line with a single space. Matches the folded-scalar form
-  // commonly used for long `description:` values in agent frontmatter.
-  const foldedLines: string[] = []
-  for (const line of yamlBlock.split(/\r?\n/)) {
-    if (/^\s/.test(line) && line.trim() && foldedLines.length > 0) {
-      foldedLines[foldedLines.length - 1] += ' ' + line.trim()
-    } else {
-      foldedLines.push(line)
-    }
-  }
-
-  for (const line of foldedLines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    const colonIdx = trimmed.indexOf(':')
-    if (colonIdx < 1) continue
-
-    const key = trimmed.slice(0, colonIdx).trim()
-    let value: string | number | string[] = trimmed.slice(colonIdx + 1).trim()
-
-    // Inline array: [a, b, c]
-    if (value.startsWith('[') && value.endsWith(']')) {
-      const inner = value.slice(1, -1)
-      data[key] = inner
-        .split(',')
-        .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
-        .filter(Boolean)
-      continue
-    }
-
-    // Strip quotes
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-
-    // Number
-    if (/^\d+$/.test(value)) {
-      data[key] = parseInt(value, 10)
-      continue
-    }
-
-    data[key] = value
-  }
-
-  return { data, body }
-}
 
 async function loadAgentsFromDir(
   dir: string,
@@ -101,7 +42,7 @@ async function loadAgentsFromDir(
 
     try {
       const raw = await fs.readFile(filePath, 'utf-8')
-      const parsed = parseFrontmatter(raw)
+      const parsed = parseFrontmatter(raw, { coerceTypes: true })
       if (!parsed) {
         console.error(`[sub-agents] Skipping ${filePath}: no valid YAML frontmatter`)
         continue
@@ -153,7 +94,7 @@ export async function loadCustomAgents(opts: LoadCustomAgentsOptions = {}): Prom
     return [...overrideAgents, ...(await loadAgentsFromExtras(opts.extraDirs))]
   }
 
-  const userDir = path.join(USER_XCODE_DIR, 'agents')
+  const userDir = path.join(userXcodeDir(), 'agents')
   const projectDir = path.join(process.cwd(), XCODE_DIR, 'agents')
 
   const userAgents = await loadAgentsFromDir(userDir, 'user')

@@ -21,10 +21,8 @@
 // ignored. Writes (`/init`, future tooling) always target AGENTS.md.
 import path from 'node:path'
 
-import { USER_XCODE_DIR, fileExists, readFileSafe } from '../utils.js'
+import { fileExists, readFileSafe, userXcodeDir } from '../utils.js'
 import { getAutoMemory } from './auto-memory.js'
-
-const USER_DIR = USER_XCODE_DIR
 
 /** Filenames recognised at each directory, tried in order. The first one
  *  found wins for that directory; the rest are skipped. AGENTS.md is our
@@ -84,7 +82,7 @@ export async function buildKnowledgeContext(options?: { sessionContext?: string 
   // CLAUDE.md so users with an existing `~/.x-code/CLAUDE.md` (or one
   // copied over from Claude Code's home) get it picked up without
   // having to rename.
-  const userKnowledge = await readKnowledgeFile(USER_DIR)
+  const userKnowledge = await readKnowledgeFile(userXcodeDir())
   if (userKnowledge) {
     sections.push(`### User Preferences (~/.x-code/${userKnowledge.fileName})\n${userKnowledge.content}`)
   }

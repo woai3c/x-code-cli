@@ -9,10 +9,10 @@
 // while keeping it disabled elsewhere, remove the name from the user-scope
 // list. The settings files are session-immutable: SkillRegistry filters
 // on this list at startup, so toggle/remove takes effect on next launch.
-import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { mutateSettingsFile, readSettingsFile } from '../settings-io.js'
+import { XCODE_DIR, userXcodeDir } from '../utils.js'
 
 export type SkillSettingsScope = 'user' | 'project'
 
@@ -21,50 +21,28 @@ export interface SkillSettings {
 }
 
 export function skillSettingsPath(scope: SkillSettingsScope): string {
-  if (scope === 'user') return path.join(USER_XCODE_DIR, 'settings.json')
+  if (scope === 'user') return path.join(userXcodeDir(), 'settings.json')
   return path.join(process.cwd(), XCODE_DIR, 'settings.local.json')
 }
 
 async function readSettings(scope: SkillSettingsScope): Promise<SkillSettings> {
-  const file = skillSettingsPath(scope)
-  try {
-    const raw = await fs.readFile(file, 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object') return {}
-    const obj = parsed as Record<string, unknown>
-    const list = Array.isArray(obj.disabledSkills)
-      ? obj.disabledSkills.filter((s): s is string => typeof s === 'string')
-      : []
-    return { disabledSkills: list }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    // Malformed JSON: ignore + return empty so a broken settings file never
-    // blocks startup. The user can fix the file and re-launch.
-    return {}
-  }
+  const obj = await readSettingsFile(skillSettingsPath(scope))
+  const list = Array.isArray(obj.disabledSkills)
+    ? (obj.disabledSkills as unknown[]).filter((s): s is string => typeof s === 'string')
+    : []
+  return { disabledSkills: list }
 }
 
 async function writeSettings(scope: SkillSettingsScope, settings: SkillSettings): Promise<void> {
   const file = skillSettingsPath(scope)
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  // Read-modify-write: settings.json may carry unrelated fields later. We
-  // re-read the raw object, splice in the updated `disabledSkills` array,
-  // and write back so a future schema addition isn't clobbered.
-  let existing: Record<string, unknown> = {}
-  try {
-    const raw = await fs.readFile(file, 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object') existing = parsed as Record<string, unknown>
-  } catch {
-    // ignore — first write
-  }
-  const list = settings.disabledSkills ?? []
-  if (list.length === 0) {
-    delete existing.disabledSkills
-  } else {
-    existing.disabledSkills = list
-  }
-  await fs.writeFile(file, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
+  await mutateSettingsFile(file, (existing) => {
+    const list = settings.disabledSkills ?? []
+    if (list.length === 0) {
+      delete existing.disabledSkills
+    } else {
+      existing.disabledSkills = list
+    }
+  })
 }
 
 export async function loadDisabledSkillsSet(): Promise<Set<string>> {

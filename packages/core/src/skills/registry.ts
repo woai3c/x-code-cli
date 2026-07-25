@@ -15,6 +15,7 @@
 // every other code path that captured `options.skillRegistry` (agent
 // loop's buildTools, App.tsx's slash-command tab completion, …) stays
 // pointed at the right thing without needing to be re-wired.
+import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
 import { type LoadSkillsOptions, loadSkills } from './loader.js'
 import { loadDisabledSkillsSet } from './settings.js'
 
@@ -45,12 +46,7 @@ export interface SkillEntry extends SkillDefinition {
 /** Summary returned by `reloadSkillRegistry()`. Drives the message
  *  surface in /skill refresh — caller can show "added: a, b" /
  *  "removed: c" / "unchanged: d, e" the same way /mcp refresh does. */
-export interface SkillReloadSummary {
-  added: string[]
-  removed: string[]
-  changed: string[]
-  unchanged: string[]
-}
+export type SkillReloadSummary = ReloadSummary
 
 export class SkillRegistry {
   private byName: Map<string, SkillEntry>
@@ -77,27 +73,15 @@ export class SkillRegistry {
     for (const skill of skills) {
       next.set(skill.name, { ...skill, disabled: disabled.has(skill.name) })
     }
-
-    const summary: SkillReloadSummary = { added: [], removed: [], changed: [], unchanged: [] }
-    for (const [name, entry] of next) {
-      const prev = previous.get(name)
-      if (!prev) {
-        summary.added.push(name)
-      } else if (
+    const summary = diffNamedEntries(
+      previous,
+      next,
+      (prev, entry) =>
         prev.description !== entry.description ||
         prev.content !== entry.content ||
         prev.source !== entry.source ||
-        prev.disabled !== entry.disabled
-      ) {
-        summary.changed.push(name)
-      } else {
-        summary.unchanged.push(name)
-      }
-    }
-    for (const name of previous.keys()) {
-      if (!next.has(name)) summary.removed.push(name)
-    }
-
+        prev.disabled !== entry.disabled,
+    )
     this.byName = next
     return summary
   }

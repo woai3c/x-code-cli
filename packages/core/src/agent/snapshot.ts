@@ -24,7 +24,7 @@ import type { Stats } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { XCODE_DIR } from '../utils.js'
+import { XCODE_DIR, fileExists, generateTimestampId } from '../utils.js'
 import type { LoopState } from './loop-state.js'
 
 const FILE_HISTORY_SUBDIR = 'file-history'
@@ -96,26 +96,6 @@ function blobPath(sessionId: string, hash: string, cwd: string): string {
   return path.join(blobsDir(sessionId, cwd), hash)
 }
 
-/** Local-time YYYYMMDD-HHMMSS-mmm, matching the sessionId shape so a
- *  directory listing of checkpoints sorts chronologically. */
-function genCkptId(now: Date = new Date()): string {
-  const pad = (n: number, w = 2) => String(n).padStart(w, '0')
-  return (
-    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}` +
-    `-${pad(now.getMilliseconds(), 3)}`
-  )
-}
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p)
-    return true
-  } catch {
-    return false
-  }
-}
-
 /** Distinguish "file truly doesn't exist" from "couldn't stat for any other
  *  reason (EACCES, EPERM, EBUSY...)". Mislabeling a permission-protected file
  *  as ENOENT would mark it `absent` and silently try to unlink it on restore —
@@ -133,7 +113,7 @@ async function statSafe(p: string): Promise<StatOutcome> {
 
 async function writeBlobIfMissing(sessionId: string, hash: string, content: Buffer, cwd: string): Promise<void> {
   const p = blobPath(sessionId, hash, cwd)
-  if (await exists(p)) return
+  if (await fileExists(p)) return
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, content)
 }
@@ -152,7 +132,7 @@ export async function createCheckpoint(
   userPromptPreview: string,
   cwd: string = process.cwd(),
 ): Promise<CheckpointEntry | null> {
-  const ckptId = genCkptId()
+  const ckptId = generateTimestampId()
   const ts = new Date().toISOString()
   const messageCount = state.messages.length
   const files: Record<string, ManifestFileEntry> = {}

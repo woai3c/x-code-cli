@@ -22,6 +22,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { readSettingsFile } from '../settings-io.js'
 import { XCODE_DIR, userXcodeDir } from '../utils.js'
 import type { PluginScope } from './types.js'
 
@@ -43,28 +44,15 @@ export function settingsPathForScope(scope: PluginScope, cwd: string = process.c
 }
 
 async function readSettings(scope: PluginScope, cwd: string): Promise<PluginSettingsFile> {
-  const file = settingsPathForScope(scope, cwd)
-  try {
-    const raw = await fs.readFile(file, 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object') return {}
-    const obj = parsed as Record<string, unknown>
-    if (obj.enabledPlugins && typeof obj.enabledPlugins === 'object' && !Array.isArray(obj.enabledPlugins)) {
-      // Coerce values to boolean defensively — settings.json may have been
-      // hand-edited and the wrong type here shouldn't crash the loader.
-      const out: Record<string, boolean> = {}
-      for (const [k, v] of Object.entries(obj.enabledPlugins)) {
-        if (typeof v === 'boolean') out[k] = v
-      }
-      return { enabledPlugins: out }
+  const obj = await readSettingsFile(settingsPathForScope(scope, cwd))
+  if (obj.enabledPlugins && typeof obj.enabledPlugins === 'object' && !Array.isArray(obj.enabledPlugins)) {
+    const out: Record<string, boolean> = {}
+    for (const [k, v] of Object.entries(obj.enabledPlugins as Record<string, unknown>)) {
+      if (typeof v === 'boolean') out[k] = v
     }
-    return {}
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    // Malformed JSON: ignore + return empty so a broken settings file never
-    // blocks startup. The user can fix the file and re-launch.
-    return {}
+    return { enabledPlugins: out }
   }
+  return {}
 }
 
 /** Resolved per-plugin enable state, plus which scope decided it (for
@@ -124,16 +112,7 @@ export async function setPluginEnabled(
   cwd: string = process.cwd(),
 ): Promise<'changed' | 'noop'> {
   const file = settingsPathForScope(scope, cwd)
-  await fs.mkdir(path.dirname(file), { recursive: true })
-
-  let existing: Record<string, unknown> = {}
-  try {
-    const raw = await fs.readFile(file, 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object') existing = parsed as Record<string, unknown>
-  } catch {
-    // first write — file may not exist yet
-  }
+  const existing = await readSettingsFile(file)
 
   const currentMap =
     existing.enabledPlugins && typeof existing.enabledPlugins === 'object' && !Array.isArray(existing.enabledPlugins)
@@ -144,6 +123,7 @@ export async function setPluginEnabled(
   currentMap[pluginId] = enabled
   existing.enabledPlugins = currentMap
 
+  await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.writeFile(file, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
   return 'changed'
 }
@@ -156,14 +136,7 @@ export async function clearPluginEntry(
   cwd: string = process.cwd(),
 ): Promise<'changed' | 'noop'> {
   const file = settingsPathForScope(scope, cwd)
-  let existing: Record<string, unknown> = {}
-  try {
-    const raw = await fs.readFile(file, 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object') existing = parsed as Record<string, unknown>
-  } catch {
-    return 'noop'
-  }
+  const existing = await readSettingsFile(file)
 
   if (
     !existing.enabledPlugins ||

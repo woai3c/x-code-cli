@@ -7,20 +7,12 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import {
-  HookBus,
-  HookConfigParseError,
-  HookRegistry,
-  aggregatePostToolUse,
-  aggregatePreToolUse,
-  aggregateUserPromptSubmit,
-  buildHookRegistry,
-  buildVariableContext,
-  executeHook,
-  expandVariables,
-  parseHookConfig,
-} from '../src/hooks/index.js'
-import type { HookEvent, RegisteredHook } from '../src/hooks/index.js'
+import { HookBus, aggregatePostToolUse, aggregatePreToolUse, aggregateUserPromptSubmit } from '../src/hooks/bus.js'
+import { HookConfigParseError, parseHookConfig } from '../src/hooks/config-schema.js'
+import { executeHook } from '../src/hooks/executor.js'
+import { HookRegistry, buildHookRegistry } from '../src/hooks/registry.js'
+import type { HookEvent, RegisteredHook } from '../src/hooks/types.js'
+import { buildVariableContext, expandVariables } from '../src/hooks/variables.js'
 
 // ── variables ───────────────────────────────────────────────────────────
 

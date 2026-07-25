@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { KnowledgeCategory, KnowledgeFact } from '../types/index.js'
-import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { XCODE_DIR, userXcodeDir } from '../utils.js'
 
 const MAX_LOAD_LINES = 200
 
@@ -180,7 +180,7 @@ function parseMemoryFile(content: string): KnowledgeFact[] {
 // working directory (e.g. embedding in a daemon or test harness), we get a
 // fresh instance bound to the right file rather than silently reusing the
 // stale one. User-scope memory is a true singleton — its path is fixed by
-// USER_XCODE_DIR.
+// userXcodeDir().
 
 const projectMemories = new Map<string, AutoMemory>()
 let userMemory: AutoMemory | null = null
@@ -200,7 +200,7 @@ export function getAutoMemory(scope: 'project' | 'user'): AutoMemory {
     return mem
   }
   if (!userMemory) {
-    userMemory = new AutoMemory(path.join(USER_XCODE_DIR, 'memory', 'auto.md'))
+    userMemory = new AutoMemory(path.join(userXcodeDir(), 'memory', 'auto.md'))
   }
   return userMemory
 }

@@ -88,7 +88,7 @@ export type TrustChoice = 'trust' | 'skip' | 'exit'
  *    'skip'  — load only user-level mcpServers
  *    'exit'  — caller should terminate the CLI */
 export async function promptForTrust(
-  projectPath: string,
+  _projectPath: string,
   serverSummaries: Array<{ name: string; preview: string }>,
   askUser: (question: string, options: Array<{ label: string; description: string }>) => Promise<string>,
 ): Promise<TrustChoice> {

@@ -21,7 +21,7 @@ const REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 
 /** Expand all ${VAR} references in a single string. */
 export function expandEnvString(input: string, env: NodeJS.ProcessEnv = process.env): string {
-  return input.replace(REF_RE, (match, name: string, fallback?: string) => {
+  return input.replace(REF_RE, (_match, name: string, fallback?: string) => {
     const v = env[name]
     if (v !== undefined && v !== '') return v
     if (fallback !== undefined) return fallback

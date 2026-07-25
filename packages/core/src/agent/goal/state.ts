@@ -186,7 +186,7 @@ export function resetVerificationFailures(goal: GoalState): void {
   goal.updatedAt = new Date().toISOString()
 }
 
-export function verificationFailureFingerprint(results: GoalVerificationResult[]): string {
+function verificationFailureFingerprint(results: GoalVerificationResult[]): string {
   return results
     .filter((result) => !result.ok)
     .map((result) => {

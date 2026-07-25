@@ -13,7 +13,8 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { USER_XCODE_DIR, XCODE_DIR } from '../utils.js'
+import { parseFrontmatter } from '../frontmatter.js'
+import { XCODE_DIR, userXcodeDir } from '../utils.js'
 import type { SkillDefinition } from './registry.js'
 
 const SKILL_FILENAME = 'SKILL.md'
@@ -80,49 +81,6 @@ async function listSkillFiles(skillDir: string): Promise<string[]> {
 
   await walk(skillDir)
   return out.sort()
-}
-
-/** Minimal YAML frontmatter parser — reuses the same subset logic as
- *  sub-agent loader: string scalars only, no dependency on gray-matter. */
-function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: string } | null {
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
-  if (!match) return null
-
-  const yamlBlock = match[1]!
-  const body = match[2]!
-  const data: Record<string, unknown> = {}
-
-  // Fold YAML continuation lines: an indented non-empty line is joined to
-  // the previous line with a single space. Mirrors the folded-scalar form
-  // used by skill SKILL.md files where a long `description:` is wrapped
-  // with 2-space indented continuations.
-  const foldedLines: string[] = []
-  for (const line of yamlBlock.split(/\r?\n/)) {
-    if (/^\s/.test(line) && line.trim() && foldedLines.length > 0) {
-      foldedLines[foldedLines.length - 1] += ' ' + line.trim()
-    } else {
-      foldedLines.push(line)
-    }
-  }
-
-  for (const line of foldedLines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    const colonIdx = trimmed.indexOf(':')
-    if (colonIdx < 1) continue
-
-    const key = trimmed.slice(0, colonIdx).trim()
-    let value: string = trimmed.slice(colonIdx + 1).trim()
-
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-
-    data[key] = value
-  }
-
-  return { data, body }
 }
 
 async function loadSkillsFromDir(
@@ -205,7 +163,7 @@ export async function loadSkills(opts: LoadSkillsOptions = {}): Promise<SkillDef
     return [...overrideSkills, ...(await loadFromExtras(opts.extraDirs))]
   }
 
-  const userDir = path.join(USER_XCODE_DIR, 'skills')
+  const userDir = path.join(userXcodeDir(), 'skills')
   const projectDir = path.join(process.cwd(), XCODE_DIR, 'skills')
 
   const userSkills = await loadSkillsFromDir(userDir, 'user')

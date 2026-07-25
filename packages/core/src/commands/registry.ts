@@ -7,16 +7,12 @@
 import fs from 'node:fs'
 
 import { pluginDataDir } from '../plugins/paths.js'
+import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
 import { type LoadCommandsOptions, loadPluginCommands } from './loader.js'
 import type { CommandDefinition } from './types.js'
 
 /** Diff returned by reload — drives the /plugin refresh message. */
-export interface CommandReloadSummary {
-  added: string[]
-  removed: string[]
-  changed: string[]
-  unchanged: string[]
-}
+export type CommandReloadSummary = ReloadSummary
 
 export class CommandRegistry {
   private byName: Map<string, CommandDefinition>
@@ -47,17 +43,11 @@ export class CommandRegistry {
     const previous = this.byName
     const next = new Map<string, CommandDefinition>()
     for (const c of commands) next.set(c.name, c)
-    const summary: CommandReloadSummary = { added: [], removed: [], changed: [], unchanged: [] }
-    for (const [name, cmd] of next) {
-      const prev = previous.get(name)
-      if (!prev) summary.added.push(name)
-      else if (prev.body !== cmd.body || prev.pluginId !== cmd.pluginId || prev.pluginRoot !== cmd.pluginRoot)
-        summary.changed.push(name)
-      else summary.unchanged.push(name)
-    }
-    for (const name of previous.keys()) {
-      if (!next.has(name)) summary.removed.push(name)
-    }
+    const summary = diffNamedEntries(
+      previous,
+      next,
+      (prev, cmd) => prev.body !== cmd.body || prev.pluginId !== cmd.pluginId || prev.pluginRoot !== cmd.pluginRoot,
+    )
     this.byName = next
     return summary
   }

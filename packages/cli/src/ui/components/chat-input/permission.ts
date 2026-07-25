@@ -36,7 +36,7 @@ const PERMISSION_LEVEL_STYLE: Record<string, { label: string; style: string }> =
  *  so a single oversized field can't swallow every other key. The outer
  *  truncate-to-terminal-width in `permissionContentCells` then caps the
  *  whole row. */
-export function mcpInputPreview(input: Record<string, unknown>): string {
+function mcpInputPreview(input: Record<string, unknown>): string {
   const keys = Object.keys(input)
   if (keys.length === 0) return '(no args)'
   const PER_VALUE_MAX = 60

@@ -118,7 +118,7 @@ const THEMES: Record<SyntaxThemeName, Palette> = {
   },
 }
 
-export const DEFAULT_SYNTAX_THEME: SyntaxThemeName = 'one-dark'
+const DEFAULT_SYNTAX_THEME: SyntaxThemeName = 'one-dark'
 
 /** Active theme — read by `highlightLine` when no explicit theme arg is
  *  passed. Initialized to default; flipped by `setSyntaxTheme` on

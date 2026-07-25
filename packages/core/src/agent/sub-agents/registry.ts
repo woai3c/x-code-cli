@@ -5,18 +5,14 @@
 // agents from disk are async. Same-name custom agents override built-ins
 // (project > user > built-in).
 import { loadUserConfig } from '../../config/index.js'
+import { type ReloadSummary, diffNamedEntries } from '../../registry-diff.js'
 import { browserAgent, builtInAgents } from './built-in.js'
 import { type LoadCustomAgentsOptions, loadCustomAgents } from './loader.js'
 import type { SubAgentDefinition } from './types.js'
 
 /** Diff summary returned by reload — drives the message surface for
  *  /plugin refresh. */
-export interface SubAgentReloadSummary {
-  added: string[]
-  removed: string[]
-  changed: string[]
-  unchanged: string[]
-}
+export type SubAgentReloadSummary = ReloadSummary
 
 export class SubAgentRegistry {
   private agents: Map<string, SubAgentDefinition>
@@ -57,17 +53,11 @@ export class SubAgentRegistry {
     const previous = this.agents
     const next = new Map<string, SubAgentDefinition>()
     for (const a of agents) next.set(a.name, a)
-    const summary: SubAgentReloadSummary = { added: [], removed: [], changed: [], unchanged: [] }
-    for (const [name, agent] of next) {
-      const prev = previous.get(name)
-      if (!prev) summary.added.push(name)
-      else if (prev.prompt !== agent.prompt || prev.source !== agent.source || prev.pluginId !== agent.pluginId)
-        summary.changed.push(name)
-      else summary.unchanged.push(name)
-    }
-    for (const name of previous.keys()) {
-      if (!next.has(name)) summary.removed.push(name)
-    }
+    const summary = diffNamedEntries(
+      previous,
+      next,
+      (prev, agent) => prev.prompt !== agent.prompt || prev.source !== agent.source || prev.pluginId !== agent.pluginId,
+    )
     this.agents = next
     return summary
   }

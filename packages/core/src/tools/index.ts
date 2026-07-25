@@ -43,7 +43,6 @@ export const toolRegistry = {
 
 export { BackgroundShellRegistry } from './background-shell.js'
 export type { BackgroundShell } from './background-shell.js'
-export { createCreateGoalTool } from './create-goal.js'
 export { createGetGoalTool } from './get-goal.js'
 export { createUpdateGoalTool } from './update-goal.js'
 

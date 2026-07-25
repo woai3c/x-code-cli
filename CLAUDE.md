@@ -101,6 +101,24 @@ A user's Esc cancels the in-flight turn without exiting; Ctrl+C double-press exi
 
 When changing tool execution code, **always thread `options.abortSignal` through** — orphan tool_calls (without tool_results) cause the next API request to fail with "tool_use without tool_result".
 
+### Shared internal modules
+
+Several cross-cutting concerns live in dedicated files under `core/src/`:
+
+- **`frontmatter.ts`** — unified YAML frontmatter parser for commands, skills, and sub-agent `.md` files. Supports folded continuation lines, inline arrays, integer scalars (the latter two gated by `coerceTypes` option — only sub-agents use it).
+- **`registry-diff.ts`** — `diffNamedEntries(previous, next, isChanged)` powers the `reload()` method of CommandRegistry, SubAgentRegistry, and SkillRegistry.
+- **`settings-io.ts`** — fault-tolerant JSON read/modify/write for `settings.json` files shared between skills and plugins.
+- **`utils.ts:generateTimestampId`** — the canonical `YYYYMMDD-HHMMSS-mmm` generator used by session IDs and checkpoint IDs.
+
+### User directory resolution
+
+Two symbols co-exist for the user-scope `.x-code/` path:
+
+- `USER_XCODE_DIR` (frozen constant) — only for byte-stable system-prompt content and log-directory init.
+- `userXcodeDir()` (reads `X_CODE_HOME` at call time) — for all actual file I/O. This allows tests to redirect via env var.
+
+Do **not** use `USER_XCODE_DIR` for new file reads/writes.
+
 ### Knowledge & memory
 
 `buildKnowledgeContext` (in `core/src/knowledge`) merges five layers, in order:
@@ -136,6 +154,7 @@ When adding a provider, also update `packages/core/tests/config.test.ts:PROVIDER
 - **Comments**: heavy comments are reserved for _why_ (especially terminal-protocol workarounds in `ChatInput.tsx` and `use-prompt-input.ts`). The codebase reads as a series of "we tried X first, then Y broke, so we do Z" notes — keep that style when adding new edge-case handling.
 - **Per-user state**: `.x-code/` at repo root is **gitignored** and holds session summaries / auto-memory / local prefs / custom sub-agent definitions (`.x-code/agents/*.md`). Tests redirect this via `process.env.X_CODE_HOME = <tmpdir>`.
 - **Logging**: `DEBUG_STDOUT=1 xc` writes to `~/.x-code/logs/debug.log` (10 MB rolling). `debugLog()` calls in core are no-ops without that env var.
+- **API export snapshot**: `packages/core/tests/api-exports.test.ts` locks the public export list of `@x-code-cli/core`. If you intentionally add/remove exports, run `pnpm test -- -u` to update the snapshot. Unintentional changes will fail in CI.
 - **Don't auto-commit.** Typecheck / build / tests passing is **not** authorization to commit — the user verifies UI and runtime behavior in the live CLI before anything lands in history. After making changes, stop, summarize what changed, and wait for an explicit go-ahead.
   - Phrases that DO authorize: `提交`, `commit`, `commit it`, `提交一下`, `ok ship it`.
   - Phrases that do **not**: `good`, `looks right`, `可以的`, `继续`, `不错` — those mean "the work looks done", not "land it in git".

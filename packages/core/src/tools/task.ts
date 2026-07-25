@@ -15,7 +15,7 @@ import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
  *  Called once per session when constructing the system prompt cache.
  *  The listing of available agents is embedded in the description so
  *  the model knows what subagent_type values are valid. */
-export function buildTaskToolDescription(registry: SubAgentRegistry): string {
+function buildTaskToolDescription(registry: SubAgentRegistry): string {
   const agents = registry.list()
   const agentList = agents.map((a) => `  - ${a.name}: ${a.description}`).join('\n')
 

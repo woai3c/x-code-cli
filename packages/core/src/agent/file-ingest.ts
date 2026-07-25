@@ -23,7 +23,7 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { USER_XCODE_DIR } from '../utils.js'
+import { userXcodeDir } from '../utils.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
 
@@ -34,7 +34,7 @@ import { captionImage, pickVisionProvider } from './vision-fallback.js'
  *  Centralizing under `~/.x-code/tessdata/` makes the download a one-time
  *  cost shared across every project on the machine. */
 async function tesseractCacheDir(): Promise<string> {
-  const dir = path.join(USER_XCODE_DIR, 'tessdata')
+  const dir = path.join(userXcodeDir(), 'tessdata')
   await fs.mkdir(dir, { recursive: true })
   return dir
 }

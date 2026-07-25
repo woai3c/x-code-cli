@@ -237,3 +237,14 @@ export async function readFileSafe(filePath: string): Promise<string> {
     return ''
   }
 }
+
+/** Local-time YYYYMMDD-HHMMSS-mmm timestamp suitable for session IDs,
+ *  checkpoint IDs, and directory listings that sort chronologically. */
+export function generateTimestampId(now: Date = new Date()): string {
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0')
+  return (
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}` +
+    `-${pad(now.getMilliseconds(), 3)}`
+  )
+}

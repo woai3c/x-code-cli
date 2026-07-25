@@ -81,7 +81,7 @@ export function generateTaskSlug(taskText: string): string {
 /** Make sure the plan directory exists. Recursive mkdir so we don't have
  *  to also ensure `.x-code/` separately — first plan written in a fresh
  *  project gets the parent created automatically. */
-export async function ensurePlanDir(): Promise<void> {
+async function ensurePlanDir(): Promise<void> {
   await fs.mkdir(plansDir(), { recursive: true })
 }
 

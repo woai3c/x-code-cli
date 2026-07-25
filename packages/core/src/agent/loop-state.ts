@@ -4,6 +4,7 @@ import type { ModelMessage } from 'ai'
 import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
+import { generateTimestampId } from '../utils.js'
 import type { GoalInput, GoalState } from './goal/types.js'
 import type { CheckpointEntry } from './snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
@@ -138,14 +139,6 @@ export interface LoopState {
  *  which was unreadable in `ls .x-code/sessions/` — the timestamp shape
  *  matches plan-file naming so the two directory listings sort and
  *  scan the same way. */
-function generateSessionId(now: Date = new Date()): string {
-  const pad = (n: number, w = 2) => String(n).padStart(w, '0')
-  return (
-    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}` +
-    `-${pad(now.getMilliseconds(), 3)}`
-  )
-}
 
 export function createLoopState(initialMode: PermissionMode = 'default'): LoopState {
   return {
@@ -159,7 +152,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
       currentContextTokens: 0,
     },
     lastInputTokens: 0,
-    sessionId: generateSessionId(),
+    sessionId: generateTimestampId(),
     sessionFilePath: null,
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
