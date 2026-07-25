@@ -276,4 +276,24 @@ describe('repairOrphanToolCalls', () => {
       expect(messages[i].role).not.toBe(messages[i - 1].role)
     }
   })
+
+  it('relocates user message wedged between assistant tool_calls and tool results', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'do stuff' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', input: {} },
+          { type: 'tool-call', toolCallId: 'tc2', toolName: 'task', input: {} },
+        ],
+      } as ModelMessage,
+      toolResultMsg('tc1', 'shell', 'done'),
+      { role: 'user', content: '[Request interrupted by user for tool use]' } as ModelMessage,
+      toolResultMsg('tc2', 'task', 'sub-agent result'),
+    ]
+    repairOrphanToolCalls(messages)
+    // user message must come AFTER all tool results
+    const roles = messages.map((m) => m.role)
+    expect(roles).toEqual(['user', 'assistant', 'tool', 'tool', 'user'])
+  })
 })

@@ -75,6 +75,52 @@ type ToolResultLike = {
  * Mutates `messages` in place. Idempotent (running twice is a no-op).
  */
 export function repairOrphanToolCalls(messages: ModelMessage[]): void {
+  // ── Pre-pass: fix interleaved user messages ──
+  // A user message wedged between an assistant's tool_calls and the
+  // corresponding tool_results causes AI_MissingToolResultsError (the
+  // SDK validates strict assistant→tool ordering). This happens when
+  // abort() pushed a notice into state.messages while processToolCalls
+  // was still appending results. Move such user messages AFTER the
+  // tool results block to restore valid ordering.
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (!msg || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue
+    const hasToolCall = (msg.content as Array<{ type?: string }>).some((p) => p?.type === 'tool-call')
+    if (!hasToolCall) continue
+    // Scan forward: expect tool messages, but tolerate interleaved user
+    // messages (the abort-race artifact). Collect the range of tool + user
+    // messages that belong to this assistant's tool-call batch.
+    let j = i + 1
+    const displaced: number[] = [] // indices of user messages to relocate
+    while (j < messages.length) {
+      const r = messages[j]?.role
+      if (r === 'tool') {
+        j++
+        continue
+      }
+      if (r === 'user') {
+        displaced.push(j)
+        j++
+        continue
+      }
+      break // next assistant or unknown role — stop scanning
+    }
+    if (displaced.length === 0) continue
+    // Relocate: splice displaced user messages out and re-insert them
+    // just after the tool results block (index `j` after removal shifts).
+    const extracted = displaced.map((idx) => messages[idx]!)
+    // Remove in reverse order so earlier indices stay valid.
+    for (let k = displaced.length - 1; k >= 0; k--) {
+      messages.splice(displaced[k]!, 1)
+    }
+    // Insert after the last tool message (which shifted left by the
+    // number of removals that preceded it).
+    const insertAt = j - displaced.length
+    messages.splice(insertAt, 0, ...extracted)
+    // Advance outer loop past the repaired block.
+    i = insertAt + extracted.length - 1
+  }
+
   // Collect every tool_call_id that appears in an assistant message.
   const expected = new Set<string>()
   const toolNameById = new Map<string, string>()
