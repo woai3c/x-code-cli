@@ -9,6 +9,24 @@ import type { GoalInput, GoalState } from './goal/types.js'
 import type { CheckpointEntry } from './snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
 
+/** Per-user-submit token snapshot. Each `agentLoop` invocation pushes one
+ *  entry recording the delta tokens and tool calls for that step. Persisted
+ *  to the session jsonl so `/resume` restores the full step history. */
+export interface StepStats {
+  /** First 80 chars of the user message */
+  prompt: string
+  /** Input tokens consumed by this step (delta, not cumulative) */
+  inputTokens: number
+  /** Output tokens consumed by this step (delta, not cumulative) */
+  outputTokens: number
+  /** Number of API turns (streamText rounds) in this step */
+  turnCount: number
+  /** Number of tool calls dispatched in this step */
+  toolCallCount: number
+  /** ISO timestamp when the step started */
+  startedAt: string
+}
+
 export interface LoopState {
   messages: ModelMessage[]
   tokenUsage: TokenUsage
@@ -117,6 +135,11 @@ export interface LoopState {
    *  recovery can continue at a safe boundary. */
   goalInputs: GoalInput[]
 
+  /** Per-step token usage snapshots. One entry per `agentLoop` invocation
+   *  (= one user submit). Persisted to the session jsonl; restored on
+   *  `/resume`. Cleared on `/clear`. */
+  stepStats: StepStats[]
+
   // ── Deferred tools / toolSearch (top-level agent only) ──
 
   /** Catalog of deferred tools the model can discover via `toolSearch` but
@@ -176,5 +199,6 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     goal: null,
     goalInputs: [],
     activatedTools: new Set(),
+    stepStats: [],
   }
 }

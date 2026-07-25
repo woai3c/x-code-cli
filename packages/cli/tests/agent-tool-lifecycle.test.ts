@@ -30,6 +30,7 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
     goalStatus: null,
     goalRunnerActive: false,
     goalVerificationActive: false,
+    stepStats: [],
     ...overrides,
   }
 }

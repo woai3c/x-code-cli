@@ -34,6 +34,7 @@ import type {
   LanguageModel,
   LoadedSession,
   SkillDefinition,
+  StepStats,
   TokenUsage,
 } from '@x-code-cli/core'
 
@@ -48,7 +49,7 @@ import { createSkillCommandHandler } from '../commands/skill.js'
 import { useAgent } from '../hooks/use-agent.js'
 import { buildThemePreview } from '../render-diff.js'
 import { setSyntaxTheme } from '../syntax-highlight.js'
-import { GLYPH_BULLET } from '../terminal-glyphs.js'
+import { GLYPH_BULLET, GLYPH_RESULT_BRACKET } from '../terminal-glyphs.js'
 import { DEFAULT_THEME, THEMES, type ThemeName, getTheme, getThemeColors, parseThemeName, setTheme } from '../theme.js'
 import { parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
@@ -200,6 +201,7 @@ function formatUsageReport(
   modelId: string,
   source: 'live' | 'snapshot' | 'history',
   sessionName?: string,
+  stepStats?: StepStats[],
 ): string {
   const fmt = (n: number) => n.toLocaleString('en-US')
   const hitRatio = usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
@@ -221,6 +223,20 @@ function formatUsageReport(
     '',
     'Cache numbers depend on the provider — DeepSeek/Moonshot/Qwen may report 0 even when prefix caching is active.',
   )
+  if (stepStats && stepStats.length > 0) {
+    lines.push('', '**Steps:**', '')
+    const idxWidth = String(stepStats.length).length
+    for (let i = 0; i < stepStats.length; i++) {
+      const s = stepStats[i]!
+      const prompt = s.prompt || '(empty)'
+      const label = `[${String(i + 1).padStart(idxWidth)}]`
+      const pad = ' '.repeat(label.length + 1)
+      lines.push(
+        `${label} ${prompt}`,
+        `${pad}${GLYPH_RESULT_BRACKET}  Input: ${fmt(s.inputTokens)}  Output: ${fmt(s.outputTokens)}  Turns: ${s.turnCount}  Tools: ${s.toolCallCount}`,
+      )
+    }
+  }
   return lines.join('\n')
 }
 
@@ -1560,6 +1576,7 @@ export function App({
     let modelId = state.modelId
     let source: 'live' | 'snapshot' = 'live'
     let sessionName: string | undefined
+    let steps: StepStats[] | undefined = state.stepStats.length > 0 ? state.stepStats : undefined
     const info = getSessionInfo()
     if (info?.firstPrompt) {
       sessionName = info.firstPrompt
@@ -1571,9 +1588,10 @@ export function App({
         modelId = latest.modelId
         source = 'snapshot'
         sessionName = latest.firstPrompt.slice(0, 80) || undefined
+        steps = undefined
       }
     }
-    addInfoMessage(formatUsageReport(usage, modelId, source, sessionName))
+    addInfoMessage(formatUsageReport(usage, modelId, source, sessionName, steps))
   }
 
   async function handleUsageHistory() {

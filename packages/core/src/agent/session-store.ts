@@ -26,7 +26,7 @@ import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
 import type { GoalInput, GoalState, GoalVerificationResult } from './goal/types.js'
 import { createLoopState } from './loop-state.js'
-import type { LoopState } from './loop-state.js'
+import type { LoopState, StepStats } from './loop-state.js'
 import type { CheckpointEntry } from './snapshot.js'
 
 const SESSIONS_SUBDIR = 'sessions'
@@ -128,6 +128,13 @@ interface GoalVerificationEntry {
   ts: string
 }
 
+interface StepStatsEntry {
+  t: 'meta'
+  kind: 'step-stats'
+  step: StepStats
+  ts: string
+}
+
 type Entry =
   | HeaderEntry
   | MsgEntry
@@ -138,6 +145,7 @@ type Entry =
   | GoalEntry
   | GoalInputEntry
   | GoalVerificationEntry
+  | StepStatsEntry
 
 // ── Append helpers (fire-and-forget; never throw) ───────────────────────
 
@@ -333,6 +341,21 @@ export async function appendUsage(state: LoopState, modelId: string): Promise<vo
   await appendLine(filePath, entry)
 }
 
+/** Append a per-step usage snapshot. Called from agentLoop after each
+ *  user-submit completes. Accumulates across the session — loadSession
+ *  collects every entry to rebuild the full step history on resume. */
+export async function appendStepStats(state: LoopState, step: StepStats): Promise<void> {
+  if (!state.sessionId) return
+  const filePath = getSessionFilePath(state)
+  const entry: StepStatsEntry = {
+    t: 'meta',
+    kind: 'step-stats',
+    step,
+    ts: new Date().toISOString(),
+  }
+  await appendLine(filePath, entry)
+}
+
 /** Mark a compaction event and re-flush the (just-shrunk) message array.
  *  After this returns, the jsonl post-last-boundary content equals
  *  `state.messages` exactly — `loadSession` reconstructs the same in-memory
@@ -457,6 +480,8 @@ export interface LoadedSession {
   /** Rewind checkpoints surviving the last compact-boundary (if any).
    *  The backing file manifests live under `.x-code/file-history/<sid>/`. */
   checkpoints: CheckpointEntry[]
+  /** Per-step token usage snapshots accumulated across the session. */
+  stepStats: StepStats[]
   /** Path of the jsonl file so the agent loop can keep appending to the
    *  same file when the user resumes. */
   filePath: string
@@ -495,6 +520,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   let checkpoints: CheckpointEntry[] = []
   let goal: GoalState | null = null
   const goalInputs: GoalInput[] = []
+  const stepStats: StepStats[] = []
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -531,6 +557,8 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         if (!goal.verificationResults.some((result) => result.ts === entry.result.ts)) {
           goal.verificationResults.push(entry.result)
         }
+      } else if (entry.kind === 'step-stats') {
+        stepStats.push(entry.step)
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg') {
@@ -557,6 +585,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     goal,
     goalInputs,
     checkpoints,
+    stepStats,
     filePath,
   }
 }
@@ -785,5 +814,6 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.checkpoints = loaded.checkpoints.slice()
   state.goal = loaded.goal ? structuredClone(loaded.goal) : null
   state.goalInputs = loaded.goalInputs.map((input) => ({ ...input }))
+  state.stepStats = loaded.stepStats.slice()
   return state
 }

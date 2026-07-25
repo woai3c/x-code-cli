@@ -30,7 +30,7 @@ import { classifyApiError, isContextTooLongError, isImageDataError } from './api
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
-import type { LoopState } from './loop-state.js'
+import type { LoopState, StepStats } from './loop-state.js'
 import { runMemoryExtractor } from './memory-extractor.js'
 import { toolErrorString } from './messages.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
@@ -40,7 +40,7 @@ import {
   reattachToolResultImagesForProvider,
   stripBinaryPartsFromMessages,
 } from './provider-compat.js'
-import { appendCheckpoint, appendHeader, appendUsage, flushPendingMessages } from './session-store.js'
+import { appendCheckpoint, appendHeader, appendStepStats, appendUsage, flushPendingMessages } from './session-store.js'
 import { createCheckpoint } from './snapshot.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
@@ -639,6 +639,12 @@ export async function agentLoop(
   // `state` and accumulate across the whole CLI session.
   let turn = 0
 
+  // ── Per-step usage tracking ──
+  const stepStartedAt = new Date().toISOString()
+  const baselineInput = state.tokenUsage.inputTokens
+  const baselineOutput = state.tokenUsage.outputTokens
+  let stepToolCallCount = 0
+
   // Derive the task slug locally. It is used for plan-file names and
   // retained in session metadata for legacy lookup compatibility.
   //
@@ -851,6 +857,7 @@ export async function agentLoop(
         callbacks.onError(new Error(classifyApiError(err).message))
         break
       }
+      stepToolCallCount += toolCalls.length
       await processToolCalls(toolCalls, state, options, callbacks, model)
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
@@ -936,6 +943,23 @@ export async function agentLoop(
       onWrite: callbacks.onMemoryWrite,
     })
   }
+
+  // ── Record per-step stats ──
+  // Sub-agents get a fresh LoopState (no stepStats array on the parent)
+  // and their token deltas fold into the parent via runner.ts's additive
+  // accumulation — so the parent step's delta naturally includes sub-agent
+  // cost. Only skip the push for the denied-by-hook early return above
+  // (turnCount === 0 there, but we already returned).
+  const stepEntry: StepStats = {
+    prompt: (taskTextForMeta || taskText).slice(0, 80),
+    inputTokens: state.tokenUsage.inputTokens - baselineInput,
+    outputTokens: state.tokenUsage.outputTokens - baselineOutput,
+    turnCount: turn,
+    toolCallCount: stepToolCallCount,
+    startedAt: stepStartedAt,
+  }
+  state.stepStats.push(stepEntry)
+  void appendStepStats(state, stepEntry)
 
   return { state, turnCount: turn }
 }

@@ -53,6 +53,7 @@ import type {
   LoadedSession,
   LoopState,
   PermissionMode,
+  StepStats,
   TodoItem,
   TokenUsage,
 } from '@x-code-cli/core'
@@ -176,6 +177,9 @@ export interface AgentState {
   goalStatus: GoalState | null
   goalRunnerActive: boolean
   goalVerificationActive: boolean
+  /** Per-step token usage snapshots from each agentLoop invocation.
+   *  Populated after each submit completes; drives /usage step detail. */
+  stepStats: StepStats[]
 }
 
 export interface RunGoalCommand {
@@ -210,6 +214,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   goalStatus: null,
   goalRunnerActive: false,
   goalVerificationActive: false,
+  stepStats: [],
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
@@ -225,6 +230,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     permissionMode: options.permissionMode ?? 'default',
     messages: initialSession ? modelMessagesToDisplay(initialSession.messages) : initialState.messages,
     usage: initialSession ? { ...initialSession.tokenUsage } : initialState.usage,
+    stepStats: initialSession ? initialSession.stepStats.slice() : initialState.stepStats,
     goalStatus: initialSession?.goal ? { ...initialSession.goal } : null,
   })
 
@@ -696,6 +702,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           bufferingReads: false,
           compressionLabel: null,
           goalStatus: finalGoal,
+          stepStats: loopStateRef.current?.stepStats.slice() ?? prev.stepStats,
         }))
         externalSignal?.removeEventListener('abort', abortFromExternal)
         if (controller.signal.aborted) {
@@ -1291,6 +1298,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         restoredDraft: null,
         messages: [...prev.messages, ...converted],
         usage: { ...loaded.tokenUsage },
+        stepStats: loaded.stepStats.slice(),
         goalStatus: loaded.goal ? { ...loaded.goal } : null,
       }))
     },
