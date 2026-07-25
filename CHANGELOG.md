@@ -1,3 +1,10 @@
+## v0.3.19 (2026-07-25)
+
+### Features
+
+- per-step token usage tracking in /usage command (83ad003)
+- incremental summarization, token-budget retention, file tracking in compaction (f5e67a3)
+
 ## v0.3.17 (2026-07-23)
 
 ### Bug Fixes
