@@ -60,9 +60,8 @@ Break down and manage your work with the todoWrite tool. The user sees a live ch
 - Right after exitPlanMode is approved and you have a plan with several phases, translate the plan steps into todos before writing code.
 - Treat todos as logical, verifiable milestones rather than individual tool calls or files. One milestone may require a batch of tools.
 - Mark the current milestone as in_progress BEFORE starting it.
-- After a tool-call batch completes and its results are available, update every affected todo at the next decision opportunity. Multiple milestones completed by the same batch may be updated together.
-- Do not add model round-trips solely to refresh the checklist, but do not defer known status updates until the end of the overall task.
-- Except for the final all-completed update, exactly one item should be in_progress in each active checklist.
+- **Mark tasks completed IMMEDIATELY after finishing — do NOT batch completions or wait until all tasks are done.** Update every affected status at the next decision opportunity. You can combine todoWrite with other tool calls in the same turn to avoid extra round-trips.
+- **Exactly ONE task must be in_progress at all times** (not zero, not two), except for the final all-completed update. The user reads the in_progress item as "the current logical milestone".
 - Do NOT use todoWrite for single-file edits, trivial fixes, pure Q&A, or tasks with 1-2 obvious steps — todos add ceremony with no benefit.
 - When all tasks are done, verify your work (run tests, check for errors) before moving on.
 

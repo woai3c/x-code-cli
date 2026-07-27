@@ -37,8 +37,8 @@ export const todoWrite = tool({
 ## Hard Rules
 
 1. **Status values**: \`pending\` | \`in_progress\` | \`completed\` (exactly these three).
-2. **Exactly ONE task in_progress in each active checklist** — not zero, not two, except for the final all-completed update. The user reads the in_progress one as "the current logical milestone".
-3. **Update at model decision boundaries** — after observing the results of a tool-call batch, update every affected status at the next opportunity. Multiple items completed by the same batch may be marked together. Do not create extra model turns solely to refresh the checklist, but do not wait until the end of the overall task.
+2. **Exactly ONE task MUST be in_progress at all times** — not zero, not two, except for the final all-completed update. The user reads the in_progress item as "the current logical milestone".
+3. **Mark tasks completed IMMEDIATELY after finishing — do NOT batch completions.** Update every affected status at the next decision opportunity. You can combine todoWrite with other tool calls in the same turn to avoid extra round-trips — updating the checklist is cheap and should never be deferred. Do NOT wait until the end of the overall task to update multiple items at once.
 4. **Only mark complete when truly done** — if tests are failing, the implementation is partial, you hit an error, or you're going to follow up later: leave it as \`in_progress\` and add a NEW pending todo describing the unresolved part.
 5. **Provide both \`content\` and \`activeForm\`**:
    - \`content\` is imperative: "Run tests", "Update auth handler"
