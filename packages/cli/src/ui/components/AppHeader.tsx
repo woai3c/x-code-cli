@@ -24,12 +24,7 @@ const LOGO_WIDE = `
   ██╔╝ ██╗      ╚██████╗╚██████╔╝██████╔╝███████╗
   ╚═╝  ╚═╝       ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
 
-const LOGO_COMPACT = `
-  ╔═╗       ╔═╗╔═╗╔╦╗╔═╗
-  ╔╩╦╝ ───── ║  ║ ║ ║║║╣ 
-  ╩ ╚═       ╚═╝╚═╝═╩╝╚═╝`
-
-const LOGO_TINY = '  X-Code'
+const LOGO_NARROW = '  ╳ X-Code CLI'
 
 /**
  * Return how many terminal rows the startup banner occupies. Needed by
@@ -48,15 +43,8 @@ export function getHeaderRowCount(modelId: string): number {
 export function renderHeader(modelId: string): string {
   const cols = process.stdout.columns ?? 80
 
-  // Pick logo based on terminal width
-  let logo: string
-  if (cols >= 52) {
-    logo = LOGO_WIDE
-  } else if (cols >= 30) {
-    logo = LOGO_COMPACT
-  } else {
-    logo = LOGO_TINY
-  }
+  const isWide = cols >= 52
+  const logo = isWide ? LOGO_WIDE : LOGO_NARROW
 
   // Extract provider and model from "provider:model-name"
   const [provider, ...modelParts] = modelId.split(':')
@@ -75,12 +63,13 @@ export function renderHeader(modelId: string): string {
   // require terminal-specific opt-in, which we don't surface here.
   const isMac = process.platform === 'darwin'
   const abortKey = isMac ? '⌃C' : 'Ctrl+C'
-  const newlineHint = isMac ? '⌥⏎ or \\⏎ for newline' : 'Alt+Enter or \\+Enter for newline'
+  const newlineKey = isMac ? '⌥⏎ or \\⏎' : 'Alt+Enter or \\+Enter'
 
   const lines = [
     c.hex(LOGO_COLOR).bold(logo),
-    ` ${c.dim(`v${VERSION}`)} ${c.dim(GLYPH_HEADER_PIPE)} ${c.hex(LOGO_COLOR)(provider)} ${c.dim('/')} ${c.hex(LOGO_COLOR).bold(modelName)}`,
-    ` ${c.dim(`Type /help for commands, ${abortKey} to abort, ${newlineHint}`)}`,
+    '', // breathing room between logo and status info
+    `  ${c.dim(`v${VERSION}`)} ${c.dim(GLYPH_HEADER_PIPE)} ${c.dim('model:')} ${c.hex(LOGO_COLOR)(`${provider}/${modelName}`)}`,
+    `  ${c.dim(`/help commands · ${abortKey} abort · ${newlineKey} newline`)}`,
     '', // blank line after header
   ]
 
