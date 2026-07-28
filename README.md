@@ -2,81 +2,79 @@
 
 # X-Code CLI
 
-**终端里的开源 AI 编程助手——用自然语言驱动代码阅读、修改、调试与构建。**
+**A model-agnostic coding agent CLI with Claude Code-compatible extensions.**
+
+Use Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, or any OpenAI-compatible model in one open-source agent workflow.
 
 [![npm version](https://img.shields.io/npm/v/@x-code-cli/cli)](https://www.npmjs.com/package/@x-code-cli/cli)
 [![license](https://img.shields.io/github/license/woai3c/x-code-cli)](./LICENSE)
 
-[简体中文](./README.md) · [English](./README.en.md)
+English · [简体中文](./README.zh-CN.md)
 
-![](./assets/hello.png)
+![](./assets/hello.en.png)
 
 </div>
 
-## 什么是 X-Code CLI？
-
-X-Code CLI（`xc`）是一个运行在终端的 AI 编程 Agent，通过自然语言与代码库交互，完成开发任务。它不绑定单一厂商——支持 Anthropic、OpenAI、DeepSeek、Google、阿里、xAI、智谱、Moonshot 共 8 家主流 LLM 提供商，以及任意 OpenAI 兼容接口。
-
-```text
-自然语言提示词
-      ↓
-   X-Code CLI（14 个内置工具 + 子 Agent + MCP 扩展）
-      ↓
-   代码修改 / Shell 执行 / 搜索 / 计划 / 任务追踪 / …
+```bash
+npm install -g @x-code-cli/cli
+xc
 ```
 
-## 为什么选 X-Code CLI？
+## Why X-Code CLI?
 
-- **多模型自由切换** — 8 家厂商 + 自定义 OpenAI 兼容接口，`/model` 一键切换
-- **14 个内置工具** — 文件读写、Shell 执行、代码搜索、网页抓取、任务追踪等
-- **子 Agent 委派** — 研究、审查、规划、验收等子任务独立运行，保持主对话简洁
-- **Plan 模式** — 先制定方案，经批准后再修改代码
-- **插件 + MCP 生态** — 与 Claude Code 插件生态字节级兼容，可直接安装
-- **开源免费** — MIT 协议，完全本地运行
+**Model agnostic** — Switch between Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, and any OpenAI-compatible endpoint. One workflow, any model.
 
-## 安装
+**Claude Code-compatible extensions** — Reuse plugins, skills, sub-agents, MCP servers, and hooks built for Claude Code. The plugin loader recognizes both `.x-code-plugin/` and `.claude-plugin/` formats.
+
+**Open and controllable** — Open source, BYOK, local execution, configurable 3-level permission model. You decide what the agent can do.
+
+**Complete agent runtime** — Planning, auto-memory, context compression, sub-agents, browser automation, and durable goal loops — not just a chat wrapper.
+
+> X-Code CLI is an independent open-source project and is not affiliated with Anthropic.
+
+## Install
 
 ```bash
 npm install -g @x-code-cli/cli
 
-# 或
+# Or
 pnpm add -g @x-code-cli/cli
 ```
 
-安装完成后，使用 `xc` 或 `x-code` 命令启动。
+After installation, launch with the `xc` or `x-code` command.
 
-## 配置 API Key
+## Configure API Keys
 
-> **X-Code CLI 不内置免费模型，须配置至少一个厂商的 API Key。**
+> **X-Code CLI does not bundle a free model. At least one provider API key must be configured.**
 >
-> **推荐 [DeepSeek](https://platform.deepseek.com/)**：价格低、国内访问稳定、注册赠送初始额度，适合首次试用。
+> **Recommended: [DeepSeek](https://platform.deepseek.com/)** — affordable, free credits on signup, sufficient coding capability for everyday use.
 
-| 环境变量                       | 厂商                | 注册地址                                                                    |
-| ------------------------------ | ------------------- | --------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`            | Anthropic（Claude） | [console.anthropic.com](https://console.anthropic.com/)                     |
-| `OPENAI_API_KEY`               | OpenAI（GPT）       | [platform.openai.com/api-keys](https://platform.openai.com/api-keys)        |
-| `DEEPSEEK_API_KEY`             | DeepSeek            | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)    |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google（Gemini）    | [aistudio.google.com/apikey](https://aistudio.google.com/apikey)            |
-| `ALIBABA_API_KEY`              | 阿里通义（Qwen）    | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
-| `XAI_API_KEY`                  | xAI（Grok）         | [console.x.ai](https://console.x.ai/)                                       |
-| `ZHIPU_API_KEY`                | 智谱（GLM）         | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
-| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [platform.moonshot.cn](https://platform.moonshot.cn/console/api-keys)       |
+| Variable                       | Provider           | Sign up                                                                     |
+| ------------------------------ | ------------------ | --------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`            | Anthropic (Claude) | [console.anthropic.com](https://console.anthropic.com/)                     |
+| `OPENAI_API_KEY`               | OpenAI (GPT)       | [platform.openai.com/api-keys](https://platform.openai.com/api-keys)        |
+| `DEEPSEEK_API_KEY`             | DeepSeek           | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)    |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google (Gemini)    | [aistudio.google.com/apikey](https://aistudio.google.com/apikey)            |
+| `ALIBABA_API_KEY`              | Alibaba (Qwen)     | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
+| `XAI_API_KEY`                  | xAI (Grok)         | [console.x.ai](https://console.x.ai/)                                       |
+| `ZHIPU_API_KEY`                | Zhipu (GLM)        | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
+| `MOONSHOT_API_KEY`             | Moonshot (Kimi)    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)       |
 
-**OpenAI 兼容接入**（vLLM / OpenRouter / 代理网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，模型 ID 写成 `custom:<your-model-id>`。
+**OpenAI-compatible escape hatch** (vLLM / OpenRouter / internal gateways): set both `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`, then address models as `custom:<your-model-id>`.
 
 <details>
-<summary><b>各 Shell 配置方式</b>（点击展开）</summary>
+<summary><b>Shell configuration examples</b> (click to expand)</summary>
 
-以下示例使用 `ANTHROPIC_API_KEY`，请替换为实际厂商变量名。
+The examples below use `ANTHROPIC_API_KEY`; substitute your provider's variable name.
 
-**bash（Linux / Git Bash / WSL）**
+**bash (Linux / Git Bash / WSL)**
 
 ```bash
 echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-**zsh（macOS 默认）**
+**zsh (macOS default)**
 
 ```bash
 echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc
@@ -89,163 +87,175 @@ source ~/.zshrc
 set -Ux ANTHROPIC_API_KEY sk-ant-...
 ```
 
-**Windows PowerShell（用户级，永久生效）**
+**Windows PowerShell (user-level, persistent)**
 
 ```powershell
 [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', 'sk-ant-...', 'User')
-# 重启 PowerShell 后生效
+# Restart PowerShell to take effect
 ```
 
-**Windows CMD（用户级，永久生效）**
+**Windows CMD (user-level, persistent)**
 
 ```cmd
 setx ANTHROPIC_API_KEY "sk-ant-..."
-:: 重启 CMD 后生效
+:: Restart CMD to take effect
 ```
 
-> 临时使用：`export X=...`（bash）或 `$env:X = '...'`（PowerShell），终端关闭后失效。
+> For temporary use: `export X=...` (bash) or `$env:X = '...'` (PowerShell); discarded when the terminal closes.
 >
-> 项目级配置：在项目根目录放置 `.env` 文件，`xc` 会从当前目录向上逐层加载。
+> Per-project: place a `.env` file in the project root. `xc` walks up from the current directory.
 
 </details>
 
 <details>
-<summary><b>网页搜索 Key（可选）</b></summary>
+<summary><b>Web search keys (optional)</b></summary>
 
-启用 `web_search` 工具需任选一项配置，两家均提供免费额度：
+To enable the `web_search` tool, configure either of the following. Both offer a free tier:
 
-| 环境变量         | 提供方                                        | 免费额度                  | 注册门槛         |
-| ---------------- | --------------------------------------------- | ------------------------- | ---------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | 每月 ~1,000 次            | 邮箱，无需信用卡 |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | 每月 ~1,000 次（$5 额度） | 需绑定信用卡     |
+| Variable         | Provider                                      | Free quota         | Signup         |
+| ---------------- | --------------------------------------------- | ------------------ | -------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | ~1,000 requests/mo | Email, no card |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | ~1,000 requests/mo | Card required  |
 
-> 推荐首次配 Tavily：注册简便，返回格式针对 LLM 优化。同时配置时优先 Tavily，未配时自动回退 Brave。
+> Tavily is recommended for first-time setup: simpler signup, LLM-optimized responses. When both are set, Tavily is preferred and Brave serves as fallback.
 
 </details>
 
-## 快速上手
+<details>
+<summary><b>Moonshot (Kimi) endpoint note</b></summary>
+
+Moonshot operates region-separated platforms — a key is bound to the endpoint it was created on:
+
+- International: [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) → `https://api.moonshot.ai/v1` (SDK default)
+- China: [platform.moonshot.cn](https://platform.moonshot.cn) → `https://api.moonshot.cn/v1`
+
+After selecting a Kimi model via `/model`, an endpoint picker appears automatically.
+
+</details>
+
+## Quick Start
 
 ```bash
 cd your-project
 
-xc                                          # 启动交互式会话
-xc "解释项目的整体架构"                       # 带提示词运行
-xc -m sonnet "重构 formatDate 函数"           # 指定模型
-xc -t                                        # 信任模式：跳过写操作确认
-xc --plan "重构数据库连接层"                   # 先出方案，批准后再改
-xc -c                                        # 恢复最近一次会话
-xc -p "为该仓库生成 CHANGELOG"                # 非交互模式，适用于脚本
+xc                                             # Interactive session
+xc "Explain the overall architecture"          # Run with a prompt
+xc -m sonnet "Refactor the formatDate function" # Specify a model
+xc -t                                           # Trust mode: skip write confirmations
+xc --plan "Refactor the database layer"         # Plan first, execute after approval
+xc -c                                           # Resume the most recent session
+xc -p "Generate a CHANGELOG for this repo"      # Non-interactive, suitable for scripts
 ```
 
-## 核心功能
+## Key Features
 
-### 智能开发
+### Intelligent Development
 
-- **14 个内置工具** — 文件读写、Shell 执行、代码搜索（Grep / Glob）、网页抓取、子 Agent 委派、Todo 追踪等
-- **子 Agent** — 内置 5 个（explore / general-purpose / plan / code-reviewer / goal-verifier），支持自定义
-- **Plan 模式** — `--plan` 或 `/plan` 进入只读探索，Agent 先制定方案、批准后再执行
-- **持续目标循环** — `/goal` 自动执行→验证→修复，直到验证通过或触发停止条件
-- **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
-- **视觉辅助** — DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
+- **Built-in tools** — file I/O, shell execution, code search (Grep / Glob), web fetch, sub-agent delegation, todo tracking, and more
+- **Sub-agents** — ships with 5 (explore / general-purpose / plan / code-reviewer / goal-verifier), supports custom agents
+- **Plan mode** — `--plan` or `/plan` enters read-only exploration; the agent designs a plan, then executes after approval
+- **Durable goal loops** — `/goal` runs execute → verify → repair cycles until passing or hitting a stop condition
+- **File attachments** — `@path` or bare absolute paths auto-ingest text / code / PDF / docx / xlsx / pptx / images
+- **Vision sub-agent** — text-only providers (e.g. DeepSeek) can borrow a configured vision model for image understanding
 
-### 上下文管理
+### Context Management
 
-- **知识库系统** — 分层加载 `AGENTS.md`（兼容 `CLAUDE.md`），子包可覆盖根级约定
-- **自动记忆** — 每轮对话后自动保存用户偏好、纠正反馈等长期事实，下次会话自动加载
-- **会话恢复** — `--continue` 恢复最近会话，`--resume` 打开选择器或按 ID 直达
-- **上下文压缩** — 长对话自动压缩；loop-guard 检测循环调用；prompt cache 复用前缀
-- **三级权限模型** — 默认安全，写操作前请求确认；`--trust` 跳过
+- **Knowledge system** — layered `AGENTS.md` loading (compatible with `CLAUDE.md`), subpackages override root
+- **Auto-memory** — durable facts (preferences, corrections, project state) saved after each turn, loaded next session
+- **Session resumption** — `--continue` resumes the last session, `--resume` opens a picker or jumps by ID
+- **Context compression** — long conversations auto-compress; loop-guard detects cycles; prompt cache reuses prefixes
+- **3-level permission model** — safe by default, prompts before writes; `--trust` bypasses
 
-### 扩展生态
+### Extension Ecosystem
 
-- **MCP 集成** — 支持 stdio + HTTP（含 OAuth），`/mcp` 管理，服务器工具自动并入 Agent 工具集
-- **插件系统** — skill / sub-agent / MCP / hooks 打包分发；与 Claude Code 插件格式兼容
-- **Skills** — `SKILL.md` 描述可复用工作流模板，`/<skill-name>` 触发
-- **自定义斜杠命令** — markdown 文件放进 `~/.x-code/commands/` 或项目级目录，`/<name>` 直接使用
-- **Hooks** — 10 个生命周期事件回调，用 shell 命令拦截/改写 Agent 行为
-- **浏览器自动化** — `/browser on` 启用真实浏览器子 Agent（Playwright 驱动），默认关闭
+- **MCP integration** — stdio + HTTP (with OAuth), `/mcp` management, server tools merge into agent toolset
+- **Plugin system** — bundle skills / sub-agents / MCP / hooks; byte-compatible with Claude Code plugin format
+- **Skills** — reusable workflow templates as `SKILL.md`, triggered via `/<skill-name>`
+- **Custom slash commands** — drop markdown into `~/.x-code/commands/` or project scope, invoke with `/<name>`
+- **Hooks** — 10 lifecycle event callbacks to intercept or rewrite agent behavior via shell commands
+- **Browser automation** — `/browser on` enables a real-browser sub-agent (Playwright-powered), off by default
 
-### 终端体验
+### Terminal Experience
 
-- **流式输出** — 边生成边显示
-- **主题切换** — `/theme` 控制 diff 配色和语法高亮风格
-- **统一思考模式** — `/thinking on|off` 将各厂商的 thinking 参数统一为单一开关
-- **多行输入** — `Alt+Enter` 或行尾 `\` 插入换行
-- **历史回溯** — 空输入框时 `↑`/`↓` 召回已提交的提示词
-- **跨平台** — Windows、macOS、Linux
+- **Streaming output** — results render as they are generated
+- **Theme switching** — `/theme` controls diff colors and syntax-highlight palette
+- **Unified thinking mode** — `/thinking on|off` consolidates provider-specific reasoning parameters
+- **Multiline input** — `Alt+Enter` or trailing `\` inserts a newline
+- **Input history** — `↑`/`↓` on empty prompt recalls previous messages
+- **Cross-platform** — Windows, macOS, Linux
 
-## 命令行参数
+## CLI Options
 
 ```text
 xc [options] [prompt]
 
---model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-5.6-sol）
---trust, -t           信任模式：跳过写操作确认
---print, -p           非交互模式：输出结果后退出
---plan                Plan 模式（只读探索，批准后才执行）
---continue, -c        恢复最近一次会话
---resume, -r [id]     恢复会话：无参数打开选择器，指定 ID 直达
---max-turns <n>       Agent 循环轮次上限（默认无上限）
---no-plugins          禁用插件系统（排障用）
---no-hooks            跳过所有 hook 执行
---plugin-debug        把 plugin/hook 调试日志镜像到 stderr
---version, -v         显示版本号
---help, -h            显示帮助信息
+--model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-5.6-sol)
+--trust, -t           Trust mode: skip write-operation confirmations
+--print, -p           Non-interactive mode: print result and exit
+--plan                Start in plan mode (read-only; user approves before edits)
+--continue, -c        Resume the most recent session (no picker)
+--resume, -r [id]     Resume a session: no argument opens the picker
+--max-turns <n>       Agent loop turn cap per submit (default: unlimited)
+--no-plugins          Disable the plugin system (built-in only; for triage)
+--no-hooks            Skip all hook execution
+--plugin-debug        Mirror plugin/hook debug logs to stderr
+--version, -v         Show version
+--help, -h            Show help
 ```
 
-### 非交互子命令
+### Non-interactive subcommands
 
 ```text
-xc plugin <subcommand>            管理插件（list / install / uninstall / enable / disable / search / update / info / doctor / marketplace）
-xc plugin install [--yes] <src>   安装插件；非 TTY 默认拒绝，--yes 跳过确认
-xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove / refresh / info）
+xc plugin <subcommand>            Manage plugins (list / install / uninstall / enable / disable / search / update / info / doctor / marketplace)
+xc plugin install [--yes] <src>   Install a plugin; --yes skips confirmation
+xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add / remove / refresh / info)
 ```
 
-## 斜杠命令
+## Slash Commands
 
-| 命令                  | 说明                                                    |
-| --------------------- | ------------------------------------------------------- |
-| `/help`               | 查看所有可用命令                                        |
-| `/model [alias]`      | 切换模型或查看可用模型列表                              |
-| `/thinking [on\|off]` | 启用 / 禁用思考模式                                     |
-| `/theme [name]`       | 切换 UI 主题                                            |
-| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式                                   |
-| `/goal [目标]`        | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)） |
-| `/usage`              | 查看本次会话 Token 用量                                 |
-| `/usage-history`      | 列出历史会话用量                                        |
-| `/clear`              | 清空当前会话                                            |
-| `/compact`            | 手动压缩上下文                                          |
-| `/resume`             | 从历史会话中选择恢复                                    |
-| `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）             |
-| `/init`               | 分析代码库后创建或更新 `AGENTS.md`                      |
-| `/review [PR号]`      | 评审 GitHub PR（需本地装好 `gh`）                       |
-| `/memory`             | 查看自动记忆条目                                        |
-| `/skill <sub>`        | 管理 Skills                                             |
-| `/mcp <sub>`          | 管理 MCP 服务器                                         |
-| `/plugin <sub>`       | 管理插件与 marketplace                                  |
-| `/browser [on\|off]`  | 开关浏览器子 Agent（默认关闭）                          |
-| `/doctor`             | 一键诊断运行环境                                        |
-| `/exit`               | 保存会话并退出                                          |
+| Command               | Description                                                          |
+| --------------------- | -------------------------------------------------------------------- |
+| `/help`               | Show available commands                                              |
+| `/model [alias]`      | Switch model or list available models                                |
+| `/thinking [on\|off]` | Enable / disable thinking mode                                       |
+| `/theme [name]`       | Switch UI theme                                                      |
+| `/plan [on\|off]`     | Enable / disable plan mode                                           |
+| `/goal [objective]`   | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
+| `/usage`              | Show current-session token usage                                     |
+| `/usage-history`      | List past session usage                                              |
+| `/clear`              | Clear the current conversation                                       |
+| `/compact`            | Manually compress context                                            |
+| `/resume`             | Pick a past session to resume                                        |
+| `/rewind`             | Roll back to a previous message (restores files + truncates history) |
+| `/init`               | Create or update `AGENTS.md` at project root                         |
+| `/review [PR#]`       | Review a GitHub PR (requires `gh`)                                   |
+| `/memory`             | List auto-memory entries                                             |
+| `/skill <sub>`        | Manage Skills                                                        |
+| `/mcp <sub>`          | Manage MCP servers                                                   |
+| `/plugin <sub>`       | Manage plugins and marketplaces                                      |
+| `/browser [on\|off]`  | Toggle the browser sub-agent (off by default)                        |
+| `/doctor`             | Diagnose the runtime environment                                     |
+| `/exit`               | Save session and exit                                                |
 
-## 详细文档
+## Detailed Docs
 
-README 是入门视图，每个功能的完整用法在 [`docs/`](./docs/) 下（中文 `*.md`，英文 `*.en.md`）：
+This README is the entry view. Each feature has a focused doc under [`docs/`](./docs/) (Chinese `*.md`, English `*.en.md`):
 
-| 文档                                                     | 内容                                 |
-| -------------------------------------------------------- | ------------------------------------ |
-| [`docs/skills.md`](./docs/skills.md)                     | 可复用工作流模板                     |
-| [`docs/goal.md`](./docs/goal.md)                         | 持续目标循环（`/goal`）              |
-| [`docs/sub-agents.md`](./docs/sub-agents.md)             | 内置 / 自定义子 Agent（`task` 工具） |
-| [`docs/mcp.md`](./docs/mcp.md)                           | MCP 服务器配置                       |
-| [`docs/knowledge.md`](./docs/knowledge.md)               | 知识库（5 层加载）与自动记忆         |
-| [`docs/plugins.md`](./docs/plugins.md)                   | 插件安装 / 管理                      |
-| [`docs/marketplace.md`](./docs/marketplace.md)           | 插件市场订阅 / 自建                  |
-| [`docs/hooks.md`](./docs/hooks.md)                       | Agent 生命周期 Hook                  |
-| [`docs/plugin-authoring.md`](./docs/plugin-authoring.md) | 插件开发指南                         |
+| Doc                                                            | What it covers               |
+| -------------------------------------------------------------- | ---------------------------- |
+| [`docs/skills.en.md`](./docs/skills.en.md)                     | Reusable workflow templates  |
+| [`docs/goal.en.md`](./docs/goal.en.md)                         | Durable goal loops (`/goal`) |
+| [`docs/sub-agents.en.md`](./docs/sub-agents.en.md)             | Built-in / custom sub-agents |
+| [`docs/mcp.en.md`](./docs/mcp.en.md)                           | MCP server configuration     |
+| [`docs/knowledge.en.md`](./docs/knowledge.en.md)               | Knowledge base & auto-memory |
+| [`docs/plugins.en.md`](./docs/plugins.en.md)                   | Plugin management            |
+| [`docs/marketplace.en.md`](./docs/marketplace.en.md)           | Plugin marketplace           |
+| [`docs/hooks.en.md`](./docs/hooks.en.md)                       | Agent lifecycle hooks        |
+| [`docs/plugin-authoring.en.md`](./docs/plugin-authoring.en.md) | Plugin authoring guide       |
 
-## 故障排查
+## Troubleshooting
 
-临时设置 `DEBUG_STDOUT=1` 启动即可捕获调试日志：
+Set `DEBUG_STDOUT=1` to capture a debug log:
 
 ```bash
 # bash / zsh
@@ -261,15 +271,9 @@ $env:DEBUG_STDOUT=1; xc
 set DEBUG_STDOUT=1 && xc
 ```
 
-日志路径：`~/.x-code/logs/debug.log`（Windows: `%USERPROFILE%\.x-code\logs\debug.log`），单文件 10 MB，滚动备份 ~20 MB。
+Log path: `~/.x-code/logs/debug.log` (Windows: `%USERPROFILE%\.x-code\logs\debug.log`), 10 MB per file, ~20 MB total with rotation.
 
-## 配套小册
-
-想深入了解实现原理，可参考掘金配套小册：[**《从零打造一个 AI Agent CLI》**](https://juejin.cn/book/7639017024882278440?suid=1433418893103645&source=h5)，以本仓库源码为参照，逐章拆解 Agent Loop、多厂商适配、终端渲染、权限模型等。
-
-**QQ 交流群：455053594**
-
-## 从源码运行
+## Build From Source
 
 ```bash
 git clone https://github.com/woai3c/x-code-cli.git
@@ -278,11 +282,17 @@ pnpm install
 pnpm dev
 ```
 
-> 修改源码后需 `pnpm build` 或 `pnpm dev`。自动监听可在 `packages/core` 下运行 `pnpm dev`（`tsc -b --watch`）。
+> Source changes require `pnpm build` or `pnpm dev`. For auto-watch, run `pnpm dev` inside `packages/core` (`tsc -b --watch`).
 
-## 反馈与贡献
+## Companion Book (Chinese)
 
-欢迎通过 Issue 和 Pull Request 反馈：<https://github.com/woai3c/x-code-cli>
+For a deep dive into the implementation, check out the companion Juejin booklet: [**《从零打造一个 AI Agent CLI》**](https://juejin.cn/book/7639017024882278440?suid=1433418893103645&source=h5) — walks through the agent loop, multi-provider adapter, terminal rendering, permission model, and more using this codebase as reference.
+
+**QQ Group: 455053594**
+
+## Feedback & Contributing
+
+Issues and pull requests are welcome: <https://github.com/woai3c/x-code-cli>
 
 ## License
 
