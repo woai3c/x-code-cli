@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -51,6 +53,37 @@ jobs:
 
       - name: Extract latest changelog section
         run: awk '/^## v/{c++} c==1' CHANGELOG.md > RELEASE_NOTES.md
+
+      - name: Append contributors to release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          prev_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname \
+            | grep -v "^${tag}$" | head -1 || true)"
+          range="${prev_tag:+${prev_tag}..}${tag}"
+
+          contributors="$(
+            git log --no-merges --pretty='format:%aN%x1f%aE' "$range" \
+              | awk -F$'\x1f' '!seen[tolower($2)]++ { print $1 "\x1f" $2 }' \
+              | sort -t$'\x1f' -k1,1f \
+              | while IFS=$'\x1f' read -r name email; do
+                  gh_user="$(
+                    gh api "/search/users?q=${email}+in:email" \
+                      --jq '.items[0].login // empty' 2>/dev/null || true
+                  )"
+                  if [ -n "$gh_user" ]; then
+                    echo "- @${gh_user}"
+                  else
+                    echo "- ${name}"
+                  fi
+                done
+          )"
+
+          if [ -n "$contributors" ]; then
+            printf '\n## Contributors\n\n%s\n' "$contributors" >> RELEASE_NOTES.md
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
