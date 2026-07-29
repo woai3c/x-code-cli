@@ -1,3 +1,9 @@
+## v0.3.23 (2026-07-29)
+
+### Features
+
+- optimize api key cache strategy for xai and alibaba (48778d3)
+
 ## v0.3.21 (2026-07-25)
 
 ### Bug Fixes
