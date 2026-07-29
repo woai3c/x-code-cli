@@ -15,11 +15,12 @@ import type { ModelMessage } from 'ai'
 export const COMPRESSION_TRIGGER_RATIO = 0.8
 
 /**
- * Rough chars-per-token ratio for pre-call estimation. Most English text is
- * ~4 chars/token; CJK and code can be lower. We use 3.0 (aggressive) so the
- * estimate over-counts slightly, making the safety net trigger earlier.
+ * Rough UTF-8-bytes-per-token ratio for pre-call estimation. Most English
+ * text is ~4 bytes/token, while CJK characters occupy three UTF-8 bytes and
+ * are often close to one token each. Using bytes instead of JavaScript string
+ * length keeps the estimate conservative across both English and CJK.
  */
-const CHARS_PER_TOKEN_ESTIMATE = 3.0
+const BYTES_PER_TOKEN_ESTIMATE = 3.0
 
 /** Default context window when both model- and provider-level lookups miss. */
 const DEFAULT_CONTEXT_WINDOW = 128000
@@ -116,21 +117,75 @@ export function getMaxOutputTokens(modelId: string): number {
   return MODEL_MAX_OUTPUT_TOKENS.get(modelId) ?? DEFAULT_MAX_OUTPUT_TOKENS
 }
 
-/**
- * Estimate total token count from messages using character length.
- * This is intentionally conservative (over-counting) to serve as a safety net
- * that fires before the real API limit is hit.
- */
-export function estimateTokenCount(messages: ModelMessage[]): number {
-  let chars = 0
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      chars += msg.content.length
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content as Array<{ type: string; text?: string }>) {
-        if (typeof part.text === 'string') chars += part.text.length
+type ContentPartLike = {
+  type?: string
+  text?: string
+  input?: unknown
+  output?: unknown
+}
+
+function textBytes(value: string): number {
+  return Buffer.byteLength(value, 'utf8')
+}
+
+function jsonBytes(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value)
+    return serialized === undefined ? 0 : textBytes(serialized)
+  } catch {
+    return textBytes(String(value))
+  }
+}
+
+/** Estimate the textual bytes carried by an AI SDK tool-result output.
+ *  Binary media payloads are intentionally skipped: their provider-side token
+ *  cost is not proportional to base64 length, while any adjacent text remains
+ *  countable. */
+function toolOutputBytes(output: unknown): number {
+  if (typeof output === 'string') return textBytes(output)
+  if (!output || typeof output !== 'object') return 0
+
+  const typed = output as { type?: string; value?: unknown }
+  if (typed.type === 'content' && Array.isArray(typed.value)) {
+    let bytes = 0
+    for (const entry of typed.value as Array<{ type?: string; text?: string }>) {
+      if (typeof entry?.text === 'string') {
+        bytes += textBytes(entry.text)
+      } else if (entry?.type !== 'media' && entry?.type !== 'image' && entry?.type !== 'file') {
+        bytes += jsonBytes(entry)
       }
     }
+    return bytes
   }
-  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE)
+
+  if (typeof typed.value === 'string') return textBytes(typed.value)
+  if (typed.value !== undefined) return jsonBytes(typed.value)
+  return jsonBytes(output)
+}
+
+function messageTextBytes(message: ModelMessage): number {
+  if (typeof message.content === 'string') return textBytes(message.content)
+  if (!Array.isArray(message.content)) return 0
+
+  let bytes = 0
+  for (const part of message.content as ContentPartLike[]) {
+    if (typeof part?.text === 'string') bytes += textBytes(part.text)
+    if (part?.type === 'tool-call' && part.input !== undefined) bytes += jsonBytes(part.input)
+    if (part?.type === 'tool-result') bytes += toolOutputBytes(part.output)
+  }
+  return bytes
+}
+
+/** Estimate one message's token contribution. Shared by the total context
+ *  estimator and the recent-tail selector so tool calls/results and CJK text
+ *  cannot make the two compression decisions disagree. */
+export function estimateMessageTokenCount(message: ModelMessage): number {
+  return Math.ceil(messageTextBytes(message) / BYTES_PER_TOKEN_ESTIMATE)
+}
+
+/** Estimate total token count from message text and structured tool payloads. */
+export function estimateTokenCount(messages: ModelMessage[]): number {
+  let bytes = 0
+  for (const message of messages) bytes += messageTextBytes(message)
+  return Math.ceil(bytes / BYTES_PER_TOKEN_ESTIMATE)
 }

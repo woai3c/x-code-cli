@@ -89,4 +89,64 @@ describe('estimateTokenCount', () => {
     const tokens = estimateTokenCount(messages)
     expect(tokens).toBe(Math.ceil(5 / 3.0))
   })
+
+  it('counts CJK text by UTF-8 bytes', () => {
+    const messages = [{ role: 'user' as const, content: '天气不错' }]
+    const tokens = estimateTokenCount(messages)
+    expect(tokens).toBe(4)
+  })
+
+  it('counts structured tool-result text', () => {
+    const messages = [
+      {
+        role: 'tool' as const,
+        content: [
+          {
+            type: 'tool-result' as const,
+            toolCallId: 'call-1',
+            toolName: 'readFile',
+            output: { type: 'text' as const, value: 'x'.repeat(300) },
+          },
+        ],
+      },
+    ]
+    const tokens = estimateTokenCount(messages)
+    expect(tokens).toBe(100)
+  })
+
+  it('counts tool-call input and ignores binary tool-result media', () => {
+    const messages = [
+      {
+        role: 'assistant' as const,
+        content: [
+          {
+            type: 'tool-call' as const,
+            toolCallId: 'call-1',
+            toolName: 'readFile',
+            input: { path: 'src/index.ts' },
+          },
+        ],
+      },
+      {
+        role: 'tool' as const,
+        content: [
+          {
+            type: 'tool-result' as const,
+            toolCallId: 'call-1',
+            toolName: 'readFile',
+            output: {
+              type: 'content' as const,
+              value: [
+                { type: 'text' as const, text: 'visible text' },
+                { type: 'media' as const, data: 'x'.repeat(10_000), mediaType: 'image/png' },
+              ],
+            },
+          },
+        ],
+      },
+    ]
+    const countedText = JSON.stringify({ path: 'src/index.ts' }) + 'visible text'
+    const tokens = estimateTokenCount(messages)
+    expect(tokens).toBe(Math.ceil(Buffer.byteLength(countedText, 'utf8') / 3.0))
+  })
 })

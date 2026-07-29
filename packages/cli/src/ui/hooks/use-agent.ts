@@ -21,6 +21,7 @@ import {
   createGoal as createCoreGoal,
   createGoalRunCoordinator,
   createLoopState,
+  debugLog,
   flushPendingMessages,
   generateTaskSlug,
   getDiffStatsForCheckpoint,
@@ -254,6 +255,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const thinkingRef = useRef<boolean>(options.thinking ?? false)
   const loopStateRef = useRef<LoopState | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  /** Identifies the controller owned by `/compact`. Manual compression uses
+   *  the shared loading/abort UI, but cancelling it must not append a normal
+   *  conversation interrupt message or mutate the model-message history. */
+  const manualCompressionControllerRef = useRef<AbortController | null>(null)
   /** Deferred interrupt notice text. Set by abort(), consumed by submit()'s
    *  post-agentLoop path once processToolCalls has fully drained. This avoids
    *  pushing a user-role message into state.messages while tool_results are
@@ -1177,6 +1182,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     const controller = abortControllerRef.current
     if (!controller || controller.signal.aborted) return
 
+    if (manualCompressionControllerRef.current === controller) {
+      controller.abort()
+      return
+    }
+
     // Drain the stream buffer first — appendMessage runs synchronously via
     // setState so the partial assistant reply lands BEFORE the interrupt
     // notice in scrollback order.
@@ -1408,37 +1418,103 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   )
 
   /** Manual context compression */
-  const compact = useCallback(async (onProgress?: (description: string) => void) => {
-    if (!loopStateRef.current) return null
-    const { estimateTokenCount, KEEP_RECENT } = await import('@x-code-cli/core')
-    if (loopStateRef.current.messages.length <= KEEP_RECENT) return null
-    const before = estimateTokenCount(loopStateRef.current.messages)
-    onProgress?.('Summarizing conversation...')
-
-    // Extract previous summary for incremental update + file tracking
+  const compact = useCallback(async () => {
     const ls = loopStateRef.current
-    const firstMsg = ls.messages[0]
-    const prefix = '[Previous conversation summary]\n'
-    const previousSummary =
-      firstMsg?.role === 'user' && typeof firstMsg.content === 'string' && firstMsg.content.startsWith(prefix)
-        ? firstMsg.content.slice(prefix.length)
-        : undefined
-    const modified = [...ls.filesModified]
-    const read = [...ls.readFileCache.keys()].filter((p) => !ls.filesModified.has(p))
-    const filesTracked = { modified, read }
+    if (!ls) return { status: 'nothing' as const, reason: 'no-conversation' as const }
+    const { estimateTokenCount, KEEP_RECENT, KEEP_RECENT_TOKENS } = await import('@x-code-cli/core')
 
-    ls.messages = await compressMessages(ls.messages, modelRef.current, previousSummary, filesTracked)
-    // Messages changed — mirror the auto-compression paths: reset the
-    // cache-hit signal so the next turn doesn't wrongly assume a prefix
-    // match, and reset lastInputTokens so checkAndCompressContext won't
-    // re-trigger on a stale high value. Also write a compact-boundary
-    // to the jsonl so the loader can pick up the post-compaction state.
-    ls.lastInputTokens = 0
-    ls.expectCacheMiss = true
-    void markBoundaryAndReflush(ls)
-    const after = estimateTokenCount(ls.messages)
-    return { beforeTokens: before, afterTokens: after }
-  }, [])
+    const before = estimateTokenCount(ls.messages)
+    if (ls.messages.length <= KEEP_RECENT) {
+      return {
+        status: 'nothing' as const,
+        reason: 'too-few-messages' as const,
+        estimatedTokens: before,
+        messageCount: ls.messages.length,
+        minimumMessages: KEEP_RECENT + 1,
+      }
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    manualCompressionControllerRef.current = controller
+    setState((prev) => ({
+      ...prev,
+      isLoading: true,
+      compressionLabel: 'Summarizing conversation',
+      error: null,
+    }))
+    debugLog('compression.manual.start', `messages=${ls.messages.length} tokens=${before}`)
+
+    try {
+      // Extract previous summary for incremental update + file tracking
+      const firstMsg = ls.messages[0]
+      const prefix = '[Previous conversation summary]\n'
+      const previousSummary =
+        firstMsg?.role === 'user' && typeof firstMsg.content === 'string' && firstMsg.content.startsWith(prefix)
+          ? firstMsg.content.slice(prefix.length)
+          : undefined
+      const modified = [...ls.filesModified]
+      const read = [...ls.readFileCache.keys()].filter((p) => !ls.filesModified.has(p))
+      const filesTracked = { modified, read }
+
+      const originalMessages = ls.messages
+      const compressedMessages = await compressMessages(
+        originalMessages,
+        modelRef.current,
+        previousSummary,
+        filesTracked,
+        controller.signal,
+      )
+      if (controller.signal.aborted) {
+        debugLog('compression.manual.cancelled', `tokens=${before}`)
+        return { status: 'cancelled' as const }
+      }
+      if (compressedMessages === originalMessages) {
+        debugLog('compression.manual.skipped', `messages=${ls.messages.length} tokens=${before}`)
+        return {
+          status: 'nothing' as const,
+          reason: 'within-retention-window' as const,
+          estimatedTokens: before,
+          retentionTokens: KEEP_RECENT_TOKENS,
+        }
+      }
+      ls.messages = compressedMessages
+      // Messages changed — mirror the auto-compression paths: reset the
+      // cache-hit signal so the next turn doesn't wrongly assume a prefix
+      // match, and reset lastInputTokens so checkAndCompressContext won't
+      // re-trigger on a stale high value. Also write a compact-boundary
+      // to the jsonl so the loader can pick up the post-compaction state.
+      ls.lastInputTokens = 0
+      ls.expectCacheMiss = true
+      await markBoundaryAndReflush(ls)
+      const after = estimateTokenCount(ls.messages)
+      // Include the system prompt overhead so the reported numbers match
+      // the footer's "N / M · X%" indicator (which shows the full context
+      // the API actually received, not just the message body).
+      const sysCost = ls.systemPromptCache ? Math.ceil(Buffer.byteLength(ls.systemPromptCache, 'utf8') / 3) : 0
+      debugLog('compression.manual.complete', `before=${before} after=${after} sysCost=${sysCost}`)
+      return {
+        status: 'compressed' as const,
+        estimatedTokensBefore: before + sysCost,
+        estimatedTokensAfter: after + sysCost,
+      }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        debugLog('compression.manual.cancelled', `tokens=${before}`)
+        return { status: 'cancelled' as const }
+      }
+      const message = classifyApiError(err).message
+      debugLog('compression.manual.error', message)
+      return { status: 'failed' as const, message }
+    } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null
+      if (manualCompressionControllerRef.current === controller) manualCompressionControllerRef.current = null
+      setState((prev) => ({ ...prev, isLoading: false, compressionLabel: null }))
+      // Plain text submitted while the spinner was visible enters the
+      // mid-turn queue. `/compact` has no agent loop to consume it, so put it
+      // back in the editable input instead of leaving a stranded queue row.
+      restoreQueueToDraft()
+    }
+  }, [restoreQueueToDraft])
 
   /** Switch model at runtime */
   const switchModel = useCallback((newModelId: string, newModel: LanguageModel) => {

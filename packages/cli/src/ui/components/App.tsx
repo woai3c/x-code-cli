@@ -51,7 +51,7 @@ import { buildThemePreview } from '../render-diff.js'
 import { setSyntaxTheme } from '../syntax-highlight.js'
 import { GLYPH_BULLET, GLYPH_RESULT_BRACKET } from '../terminal-glyphs.js'
 import { DEFAULT_THEME, THEMES, type ThemeName, getTheme, getThemeColors, parseThemeName, setTheme } from '../theme.js'
-import { parseBooleanArg } from '../utils.js'
+import { formatCompactionResult, formatTokenCount, parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
 import { rebuildPalette } from './chat-input/palette.js'
@@ -1558,13 +1558,28 @@ export function App({
 
   async function handleCompact() {
     const result = await compact()
-    if (!result) {
-      addCommandResult('Nothing to compress — conversation is too short.')
-      return
+    switch (result.status) {
+      case 'nothing':
+        if (result.reason === 'no-conversation') {
+          addCommandResult('Nothing to compress — no active conversation.')
+        } else if (result.reason === 'too-few-messages') {
+          addCommandResult(
+            `Nothing to compress — ${result.messageCount} model message${result.messageCount === 1 ? '' : 's'}; at least ${result.minimumMessages} are required.`,
+          )
+        } else {
+          addCommandResult(
+            `Nothing to compress — conversation is ~${formatTokenCount(result.estimatedTokens)} tokens and fits within the ~${formatTokenCount(result.retentionTokens)} recent-message window.`,
+          )
+        }
+        return
+      case 'cancelled':
+        addCommandResult('Compression cancelled.')
+        return
+      case 'failed':
+        addCommandResult(`Compression failed: ${result.message}`)
+        return
     }
-    const beforeK = Math.round(result.beforeTokens / 1000)
-    const afterK = Math.round(result.afterTokens / 1000)
-    addCommandResult(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
+    addCommandResult(formatCompactionResult(result.estimatedTokensBefore, result.estimatedTokensAfter))
   }
 
   async function handleUsage() {

@@ -162,6 +162,11 @@ export function formatTokenCount(tokens: number): string {
   return String(tokens)
 }
 
+export function formatCompactionResult(tokensBefore: number, tokensAfter: number): string {
+  const removed = Math.max(0, tokensBefore - tokensAfter)
+  return `Conversation compressed (estimated): before ~${formatTokenCount(tokensBefore)}; removed ~${formatTokenCount(removed)}; after ~${formatTokenCount(tokensAfter)}.`
+}
+
 export interface ReadGroupSummary {
   label: string
   detail?: string

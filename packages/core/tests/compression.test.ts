@@ -93,6 +93,63 @@ describe('compressMessages', () => {
     expect(result[0].content).toContain('Summary of old conversation')
     expect(result.length).toBeLessThan(msgs.length)
   })
+
+  it('passes the abort signal to the summary request', async () => {
+    vi.mocked(generateText).mockResolvedValue({ text: 'summary' } as any)
+    const controller = new AbortController()
+
+    await compressMessages(padMessages(10), fakeModel, undefined, undefined, controller.signal)
+
+    expect(generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: controller.signal,
+      }),
+    )
+  })
+
+  it('compresses old structured tool results that exceed the recent-token window', async () => {
+    vi.mocked(generateText).mockResolvedValue({ text: 'tool result summary' } as any)
+    const msgs: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'readFile', input: { path: 'old-a.txt' } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'call-1',
+            toolName: 'readFile',
+            output: { type: 'text', value: 'a'.repeat(35_000) },
+          },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'call-2', toolName: 'readFile', input: { path: 'old-b.txt' } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'call-2',
+            toolName: 'readFile',
+            output: { type: 'text', value: 'b'.repeat(35_000) },
+          },
+        ],
+      },
+      { role: 'user', content: 'What did those files contain?' },
+      { role: 'assistant', content: 'They contained test data.' },
+    ]
+
+    const result = await compressMessages(msgs, fakeModel)
+
+    expect(generateText).toHaveBeenCalledOnce()
+    expect(result).not.toBe(msgs)
+    expect(result[0].content).toContain('tool result summary')
+  })
 })
 
 // ── checkAndCompressContext (proactive) ──

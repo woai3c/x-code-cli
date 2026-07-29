@@ -17,7 +17,7 @@ import type { HookBus } from '../hooks/bus.js'
 import { generateSessionSummary } from '../knowledge/session.js'
 import type { AgentCallbacks } from '../types/index.js'
 import { debugLog } from '../utils.js'
-import { estimateTokenCount } from './context-window.js'
+import { estimateMessageTokenCount, estimateTokenCount } from './context-window.js'
 import { lightCompactMessages, truncateOldToolResults } from './light-compact.js'
 import type { LoopState } from './loop-state.js'
 import { markBoundaryAndReflush } from './session-store.js'
@@ -105,21 +105,14 @@ export async function compressMessages(
   model: LanguageModel,
   previousSummary?: string,
   filesTracked?: { modified: string[]; read: string[] },
+  abortSignal?: AbortSignal,
 ): Promise<ModelMessage[]> {
   // Walk from newest to oldest accumulating estimated tokens until we
   // hit KEEP_RECENT_TOKENS. This replaces the old fixed-count slice.
   let keepCount = 0
   let tokenBudget = 0
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    let msgTokens = 0
-    if (typeof msg.content === 'string') {
-      msgTokens = Math.ceil(msg.content.length / 3)
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content as Array<{ type: string; text?: string }>) {
-        if (typeof part.text === 'string') msgTokens += Math.ceil(part.text.length / 3)
-      }
-    }
+    const msgTokens = estimateMessageTokenCount(messages[i])
     if (tokenBudget + msgTokens > KEEP_RECENT_TOKENS && keepCount >= MIN_KEEP_MESSAGES) break
     tokenBudget += msgTokens
     keepCount++
@@ -151,6 +144,7 @@ export async function compressMessages(
 
   const { text: summary } = await generateText({
     model,
+    abortSignal,
     system: systemPrompt,
     messages: messagesToSummarize,
   })
@@ -248,9 +242,14 @@ export async function checkAndCompressContext(
   callbacks.onCompressionProgress?.('Generating session summary...')
   let summaryText = ''
   try {
-    const summary = await generateSessionSummary(state.messages, model, state.sessionId, state.startedAt, [
-      ...state.filesModified,
-    ])
+    const summary = await generateSessionSummary(
+      state.messages,
+      model,
+      state.sessionId,
+      state.startedAt,
+      [...state.filesModified],
+      hookCtx?.abortSignal,
+    )
     summaryText = summary.summary
   } catch {
     // Summary generation failed — fall through with empty text. The
@@ -268,7 +267,7 @@ export async function checkAndCompressContext(
   // Build file-tracking metadata from state.filesModified + readFileCache
   const filesTracked = buildFilesTracked(state)
 
-  state.messages = await compressMessages(state.messages, model, previousSummary, filesTracked)
+  state.messages = await compressMessages(state.messages, model, previousSummary, filesTracked, hookCtx?.abortSignal)
   state.lastInputTokens = 0
   state.expectCacheMiss = true
   const tokensAfter = estimateTokenCount(state.messages)
@@ -308,7 +307,7 @@ export async function handleContextTooLong(
   const previousSummary = extractPreviousSummary(state.messages)
   const filesTracked = buildFilesTracked(state)
 
-  state.messages = await compressMessages(state.messages, model, previousSummary, filesTracked)
+  state.messages = await compressMessages(state.messages, model, previousSummary, filesTracked, hookCtx?.abortSignal)
   state.lastInputTokens = 0
   state.expectCacheMiss = true
   const tokensAfter = estimateTokenCount(state.messages)
