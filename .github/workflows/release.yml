@@ -40,7 +40,7 @@ jobs:
           cp LICENSE packages/core/LICENSE
           cp LICENSE packages/cli/LICENSE
           cp README.md packages/cli/README.md
-          cp README.en.md packages/cli/README.en.md
+          cp README.zh-CN.md packages/cli/README.zh-CN.md
 
       - name: Publish to npm
         run: |
