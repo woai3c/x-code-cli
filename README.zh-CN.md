@@ -15,20 +15,15 @@
 
 </div>
 
-```bash
-npm install -g @x-code-cli/cli
-xc
-```
-
 ## 为什么选 X-Code CLI？
 
-**不绑定模型** — 支持 Claude、GPT、Gemini、DeepSeek、Qwen、Kimi 及任意 OpenAI 兼容接口，`/model` 一键切换。同一套工作流，任意模型。
+**不绑定模型** — 通过 `/model` 随时切换提供商，也可以接入任意 OpenAI 兼容接口。同一套工作流，任意模型。
 
 **兼容 Claude Code 扩展生态** — 直接复用为 Claude Code 构建的插件、Skills、子 Agent、MCP 服务器和 Hooks。插件加载器同时识别 `.x-code-plugin/` 和 `.claude-plugin/` 格式。
 
 **开源可控** — 开源、BYOK、本地执行、三级权限模型可配置。你决定 Agent 能做什么。
 
-**完整的 Agent 运行时** — 规划、自动记忆、上下文压缩、子 Agent、浏览器自动化、持续目标循环——不只是对话封装。
+**完整的 Agent 运行时** — 不只是对话封装，而是覆盖规划、执行、记忆、上下文管理和任务验证的完整开发工作流。
 
 > X-Code CLI 是独立的开源项目，与 Anthropic 无关。
 
@@ -58,7 +53,7 @@ pnpm add -g @x-code-cli/cli
 | `ALIBABA_API_KEY`              | 阿里通义（Qwen）    | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
 | `XAI_API_KEY`                  | xAI（Grok）         | [console.x.ai](https://console.x.ai/)                                       |
 | `ZHIPU_API_KEY`                | 智谱（GLM）         | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
-| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [platform.moonshot.cn](https://platform.moonshot.cn/console/api-keys)       |
+| `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [按服务选择](#moonshot-kimi-endpoints)                                      |
 
 **OpenAI 兼容接入**（vLLM / OpenRouter / 代理网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，模型 ID 写成 `custom:<your-model-id>`。
 
@@ -121,18 +116,27 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 </details>
 
+<details id="moonshot-kimi-endpoints">
+<summary><b>Moonshot（Kimi）端点说明</b></summary>
+
+Moonshot/Kimi 提供三套独立的凭证与端点，API Key 只能用于签发它的服务：
+
+- Kimi Code 订阅计划：[Kimi Code 控制台](https://www.kimi.com/code/console) → `https://api.kimi.com/coding/v1`
+- 国内开放平台：[platform.kimi.com](https://platform.kimi.com/console/api-keys) → `https://api.moonshot.cn/v1`
+- 国际开放平台：[platform.kimi.ai](https://platform.kimi.ai/console/api-keys) → `https://api.moonshot.ai/v1`
+
+通过 `/model` 选择 Kimi 模型后，X-Code CLI 会自动显示端点选择器。
+
+</details>
+
 ## 快速上手
 
 ```bash
 cd your-project
 
-xc                                          # 启动交互式会话
-xc "解释项目的整体架构"                       # 带提示词运行
-xc -m sonnet "重构 formatDate 函数"           # 指定模型
-xc -t                                        # 信任模式：跳过写操作确认
-xc --plan "重构数据库连接层"                   # 先出方案，批准后再改
-xc -c                                        # 恢复最近一次会话
-xc -p "为该仓库生成 CHANGELOG"                # 非交互模式，适用于脚本
+xc                                   # 启动交互式会话
+xc "解释项目的整体架构"                # 带提示词运行
+xc -m sonnet "重构 formatDate 函数"    # 指定模型
 ```
 
 ## 核心功能
@@ -261,12 +265,6 @@ set DEBUG_STDOUT=1 && xc
 
 日志路径：`~/.x-code/logs/debug.log`（Windows: `%USERPROFILE%\.x-code\logs\debug.log`），单文件 10 MB，滚动备份 ~20 MB。
 
-## 配套小册
-
-想深入了解实现原理，可参考掘金配套小册：[**《从零打造一个 AI Agent CLI》**](https://juejin.cn/book/7639017024882278440?suid=1433418893103645&source=h5)，以本仓库源码为参照，逐章拆解 Agent Loop、多厂商适配、终端渲染、权限模型等。
-
-**QQ 交流群：455053594**
-
 ## 从源码运行
 
 ```bash
@@ -277,6 +275,12 @@ pnpm dev
 ```
 
 > 修改源码后需 `pnpm build` 或 `pnpm dev`。自动监听可在 `packages/core` 下运行 `pnpm dev`（`tsc -b --watch`）。
+
+## 配套小册
+
+想深入了解实现原理，可参考掘金配套小册：[**《从零打造一个 AI Agent CLI》**](https://juejin.cn/book/7639017024882278440?suid=1433418893103645&source=h5)，以本仓库源码为参照，逐章拆解 Agent Loop、多厂商适配、终端渲染、权限模型等。
+
+**QQ 交流群：455053594**
 
 ## 反馈与贡献
 

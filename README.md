@@ -15,20 +15,15 @@ English · [简体中文](./README.zh-CN.md)
 
 </div>
 
-```bash
-npm install -g @x-code-cli/cli
-xc
-```
-
 ## Why X-Code CLI?
 
-**Model agnostic** — Switch between Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, and any OpenAI-compatible endpoint. One workflow, any model.
+**Model agnostic** — Switch providers at any time with `/model`, or connect any OpenAI-compatible endpoint. One workflow, any model.
 
 **Claude Code-compatible extensions** — Reuse plugins, skills, sub-agents, MCP servers, and hooks built for Claude Code. The plugin loader recognizes both `.x-code-plugin/` and `.claude-plugin/` formats.
 
 **Open and controllable** — Open source, BYOK, local execution, configurable 3-level permission model. You decide what the agent can do.
 
-**Complete agent runtime** — Planning, auto-memory, context compression, sub-agents, browser automation, and durable goal loops — not just a chat wrapper.
+**Complete agent runtime** — More than a chat wrapper: it covers planning, execution, memory, context management, and task verification.
 
 > X-Code CLI is an independent open-source project and is not affiliated with Anthropic.
 
@@ -58,7 +53,7 @@ After installation, launch with the `xc` or `x-code` command.
 | `ALIBABA_API_KEY`              | Alibaba (Qwen)     | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/apiKey) |
 | `XAI_API_KEY`                  | xAI (Grok)         | [console.x.ai](https://console.x.ai/)                                       |
 | `ZHIPU_API_KEY`                | Zhipu (GLM)        | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
-| `MOONSHOT_API_KEY`             | Moonshot (Kimi)    | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys)       |
+| `MOONSHOT_API_KEY`             | Moonshot (Kimi)    | [Choose a service](#moonshot-kimi-endpoints)                                |
 
 **OpenAI-compatible escape hatch** (vLLM / OpenRouter / internal gateways): set both `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`, then address models as `custom:<your-model-id>`.
 
@@ -121,13 +116,14 @@ To enable the `web_search` tool, configure either of the following. Both offer a
 
 </details>
 
-<details>
+<details id="moonshot-kimi-endpoints">
 <summary><b>Moonshot (Kimi) endpoint note</b></summary>
 
-Moonshot operates region-separated platforms — a key is bound to the endpoint it was created on:
+Moonshot/Kimi credentials come from three separate services. A key only works with the endpoint of the service that issued it:
 
-- International: [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) → `https://api.moonshot.ai/v1` (SDK default)
-- China: [platform.moonshot.cn](https://platform.moonshot.cn) → `https://api.moonshot.cn/v1`
+- Kimi Code plan: [Kimi Code console](https://www.kimi.com/code/console) → `https://api.kimi.com/coding/v1`
+- China Open Platform: [platform.kimi.com](https://platform.kimi.com/console/api-keys) → `https://api.moonshot.cn/v1`
+- International Open Platform: [platform.kimi.ai](https://platform.kimi.ai/console/api-keys) → `https://api.moonshot.ai/v1`
 
 After selecting a Kimi model via `/model`, an endpoint picker appears automatically.
 
@@ -138,13 +134,9 @@ After selecting a Kimi model via `/model`, an endpoint picker appears automatica
 ```bash
 cd your-project
 
-xc                                             # Interactive session
-xc "Explain the overall architecture"          # Run with a prompt
+xc                                              # Interactive session
+xc "Explain the overall architecture"           # Run with a prompt
 xc -m sonnet "Refactor the formatDate function" # Specify a model
-xc -t                                           # Trust mode: skip write confirmations
-xc --plan "Refactor the database layer"         # Plan first, execute after approval
-xc -c                                           # Resume the most recent session
-xc -p "Generate a CHANGELOG for this repo"      # Non-interactive, suitable for scripts
 ```
 
 ## Key Features
