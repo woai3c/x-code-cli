@@ -214,26 +214,116 @@ describe('applyCacheControl', () => {
     })
   })
 
-  describe('openai-compatible (deepseek, alibaba, zhipu)', () => {
-    it.each([
-      ['deepseek:deepseek-v4-pro'],
-      ['alibaba:qwen3-coder-plus'],
-      ['zhipu:glm-4.7'],
-      ['xai:grok-4.5'],
-      ['google:gemini-2.5-pro'],
-    ])('leaves everything untouched for %s', (modelId) => {
+  describe('xai', () => {
+    it('sends x-grok-conv-id header with sessionId', () => {
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        modelId: 'xai:grok-4.5',
+        sessionId: 'session-xyz',
+      })
+      expect(out.headers).toEqual({ 'x-grok-conv-id': 'session-xyz' })
+    })
+
+    it('keeps system prompt, messages and tools untouched', () => {
       const tools = { read: { description: 'r' } }
       const out = applyCacheControl({
         system: 'sys',
         messages: baseMessages,
         tools,
-        modelId,
+        modelId: 'xai:grok-4.5',
         sessionId: 'abc',
       })
       expect(out.system).toBe('sys')
       expect(out.messages).toEqual(baseMessages)
-      expect(out.providerOptions).toBeUndefined()
       expect(out.tools).toBe(tools)
+      expect(out.providerOptions).toBeUndefined()
     })
+  })
+
+  describe('alibaba', () => {
+    it('folds system prompt into messages with cache_control', () => {
+      const out = applyCacheControl({
+        system: 'you are helpful',
+        messages: baseMessages,
+        modelId: 'alibaba:qwen3-coder-plus',
+        sessionId: 'abc',
+      })
+      expect(out.system).toBeUndefined()
+      expect(out.messages[0].role).toBe('system')
+      expect(out.messages[0].content).toBe('you are helpful')
+      const sysOpts = (out.messages[0] as { providerOptions?: { alibaba?: { cacheControl?: { type: string } } } })
+        .providerOptions?.alibaba?.cacheControl
+      expect(sysOpts?.type).toBe('ephemeral')
+    })
+
+    it('tags the last two non-system messages with cache_control', () => {
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        modelId: 'alibaba:qwen3-coder-plus',
+        sessionId: 'abc',
+      })
+      const lastTwo = out.messages.slice(-2)
+      for (const m of lastTwo) {
+        const opts = (m as { providerOptions?: { alibaba?: { cacheControl?: { type: string } } } }).providerOptions
+          ?.alibaba?.cacheControl
+        expect(opts?.type).toBe('ephemeral')
+      }
+      const earliest = out.messages[1]
+      const earliestOpts = (earliest as { providerOptions?: Record<string, unknown> }).providerOptions
+      expect(earliestOpts).toBeUndefined()
+    })
+
+    it('tags only the last tool with cache_control', () => {
+      const tools = {
+        read: { description: 'read a file' },
+        write: { description: 'write a file' },
+        edit: { description: 'edit a file' },
+      }
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        tools,
+        modelId: 'alibaba:qwen3-coder-plus',
+        sessionId: 'abc',
+      })
+      expect(out.tools).toBeDefined()
+      expect((out.tools!.read as { providerOptions?: unknown }).providerOptions).toBeUndefined()
+      expect((out.tools!.write as { providerOptions?: unknown }).providerOptions).toBeUndefined()
+      const lastOpts = (out.tools!.edit as { providerOptions?: { alibaba?: { cacheControl?: { type: string } } } })
+        .providerOptions?.alibaba?.cacheControl
+      expect(lastOpts?.type).toBe('ephemeral')
+    })
+
+    it('does not set top-level providerOptions', () => {
+      const out = applyCacheControl({
+        system: 'sys',
+        messages: baseMessages,
+        modelId: 'alibaba:qwen3-coder-plus',
+        sessionId: 'abc',
+      })
+      expect(out.providerOptions).toBeUndefined()
+    })
+  })
+
+  describe('implicit-only (deepseek, zhipu, google)', () => {
+    it.each([['deepseek:deepseek-v4-pro'], ['zhipu:glm-4.7'], ['google:gemini-2.5-pro']])(
+      'leaves everything untouched for %s',
+      (modelId) => {
+        const tools = { read: { description: 'r' } }
+        const out = applyCacheControl({
+          system: 'sys',
+          messages: baseMessages,
+          tools,
+          modelId,
+          sessionId: 'abc',
+        })
+        expect(out.system).toBe('sys')
+        expect(out.messages).toEqual(baseMessages)
+        expect(out.providerOptions).toBeUndefined()
+        expect(out.tools).toBe(tools)
+      },
+    )
   })
 })

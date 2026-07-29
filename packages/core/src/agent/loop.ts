@@ -485,6 +485,7 @@ async function runTurn(
       tools: cached.tools ?? effectiveTools,
       maxRetries: 3,
       abortSignal: options.abortSignal,
+      headers: cached.headers,
       // Explicit ceiling so provider defaults don't silently truncate long
       // replies. Most providers clamp a too-high value, but some reject it
       // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;

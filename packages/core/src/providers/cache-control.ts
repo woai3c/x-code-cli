@@ -25,14 +25,24 @@
 //                 for session affinity (requests of one session hit the same
 //                 server-side cache shard), plus the byte-stable prefix below.
 //
-//   OpenAI-     — the DeepSeek / Alibaba / Zhipu / xAI / custom
-//   compatible    providers all offer automatic prefix caching with NO
-//                 explicit flags required. The only prerequisite is a
-//                 byte-stable prefix across turns: if the system prompt
-//                 rebuilds with a fresh timestamp every turn, every request
-//                 misses the cache. We therefore cache the system prompt
-//                 once per session in LoopState (see loop-state.ts) and use
-//                 the same string on every subsequent turn.
+//   xAI         — automatic prefix caching. Chat Completions API uses the
+//                 `x-grok-conv-id` HTTP header to route requests with the
+//                 same conversation ID to the same server, maximizing cache
+//                 hits. Responses API uses `prompt_cache_key` in the body
+//                 instead. We use Chat Completions, so we send the header.
+//
+//   Alibaba     — supports both implicit caching (automatic 80% discount,
+//                 no flags needed) and explicit caching via `cache_control:
+//                 { type: 'ephemeral' }` markers (10% of input price on
+//                 hits, 125% write cost). Explicit caching is deterministic
+//                 and uses the same breakpoint protocol as Anthropic — up
+//                 to 4 markers per request. We tag system prompt, last tool,
+//                 and last two messages (same as Anthropic) for 10× savings.
+//                 @ai-sdk/alibaba reads `providerOptions.alibaba.cacheControl`.
+//
+//   OpenAI-     — the DeepSeek / Zhipu / custom providers all offer automatic
+//   compatible    prefix caching with NO explicit flags required. The only
+//                 prerequisite is a byte-stable prefix across turns.
 //
 //   Google      — Gemini uses implicit caching; no per-request flags we can
 //                 usefully set from the SDK. Left as a no-op.
@@ -68,18 +78,20 @@ export interface CacheControlArgs {
 }
 
 export interface CacheControlResult {
-  /** Possibly-undefined: for Anthropic we fold the system prompt into the
-   *  messages array to attach cache_control; in that case streamText must be
-   *  called without a separate `system` param. */
+  /** Possibly-undefined: for Anthropic/Alibaba we fold the system prompt into
+   *  the messages array to attach cache_control; in that case streamText must
+   *  be called without a separate `system` param. */
   system?: string
   messages: ModelMessage[]
-  /** For Anthropic, a shallow-cloned tools record with cache_control attached
-   *  to the last entry. Other providers get the input record returned as-is
-   *  (or undefined if none was passed). */
+  /** For Anthropic/Alibaba, a shallow-cloned tools record with cache_control
+   *  attached to the last entry. Other providers get the input record returned
+   *  as-is (or undefined if none was passed). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools?: Record<string, any>
   /** Top-level providerOptions to pass through to streamText. */
   providerOptions?: Record<string, unknown>
+  /** HTTP headers to pass through to streamText (e.g. xAI's x-grok-conv-id). */
+  headers?: Record<string, string>
 }
 
 /** Attach the given providerOptions entry to a message non-destructively. */
@@ -101,6 +113,17 @@ function anthropicSystemMessage(system: string): ModelMessage {
     content: system,
     providerOptions: {
       anthropic: { cacheControl: { type: 'ephemeral' } },
+    },
+  } as unknown as ModelMessage
+}
+
+/** Build a system-role message with Alibaba cache_control attached. */
+function alibabaSystemMessage(system: string): ModelMessage {
+  return {
+    role: 'system',
+    content: system,
+    providerOptions: {
+      alibaba: { cacheControl: { type: 'ephemeral' } },
     },
   } as unknown as ModelMessage
 }
@@ -159,19 +182,53 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     }
   }
 
+  if (provider === 'xai') {
+    // xAI Chat Completions API uses the `x-grok-conv-id` HTTP header for
+    // sticky routing — requests with the same conv-id hit the same server
+    // where their cache entries live. Without it, requests may land on
+    // cache-cold servers. We use sessionId as the conv-id so every turn
+    // in a conversation routes to the same cache shard.
+    return {
+      system: args.system,
+      messages: args.messages,
+      tools: args.tools,
+      headers: { 'x-grok-conv-id': args.sessionId },
+    }
+  }
+
+  if (provider === 'alibaba') {
+    // Alibaba supports explicit caching via `cache_control: { type: 'ephemeral' }`
+    // markers, same protocol as Anthropic — up to 4 breakpoints per request.
+    // Explicit cache hits cost 10% of input price (vs 80% implicit discount),
+    // with a 125% write cost. We tag system prompt + last tool + last 2
+    // messages — identical layout to Anthropic.
+    const nonSystemTail = args.messages.slice(-MESSAGE_CACHE_BREAKPOINTS)
+    const tailSet = new Set(nonSystemTail)
+    const tagged = args.messages.map((m) =>
+      tailSet.has(m) ? tagMessage(m, 'alibaba', { cacheControl: { type: 'ephemeral' } }) : m,
+    )
+    return {
+      system: undefined,
+      messages: [alibabaSystemMessage(args.system), ...tagged],
+      tools: tagLastToolAlibaba(args.tools),
+    }
+  }
+
   // OpenAI-compatible & Gemini: no explicit flags, just rely on stable prefix.
   // Callers must ensure buildSystemPrompt is cached in LoopState so the same
   // system string is re-sent every turn.
   return { system: args.system, messages: args.messages, tools: args.tools }
 }
 
-/** Shallow-clone `tools` and attach an Anthropic cache_control breakpoint to
- *  the last entry, so the entire tools schema enters one cached prefix slot.
- *  Returns the input unchanged when there are no tools — Anthropic rejects
- *  empty `cache_control` on a non-existent block and there's nothing to
- *  cache anyway. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function tagLastTool(tools: Record<string, any> | undefined): Record<string, any> | undefined {
+/** Shallow-clone `tools` and attach a cache_control breakpoint to the last
+ *  entry for the given provider, so the entire tools schema enters one cached
+ *  prefix slot. Returns the input unchanged when there are no tools. */
+function tagLastToolForProvider(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tools: Record<string, any> | undefined,
+  provider: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Record<string, any> | undefined {
   if (!tools) return tools
   const names = Object.keys(tools)
   if (names.length === 0) return tools
@@ -182,8 +239,20 @@ function tagLastTool(tools: Record<string, any> | undefined): Record<string, any
     ...lastTool,
     providerOptions: {
       ...existing,
-      anthropic: { ...(existing.anthropic ?? {}), cacheControl: { type: 'ephemeral' } },
+      [provider]: { ...(existing[provider] ?? {}), cacheControl: { type: 'ephemeral' } },
     },
   }
   return { ...tools, [lastName]: tagged }
+}
+
+/** Anthropic cache_control on last tool. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function tagLastTool(tools: Record<string, any> | undefined): Record<string, any> | undefined {
+  return tagLastToolForProvider(tools, 'anthropic')
+}
+
+/** Alibaba cache_control on last tool. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function tagLastToolAlibaba(tools: Record<string, any> | undefined): Record<string, any> | undefined {
+  return tagLastToolForProvider(tools, 'alibaba')
 }
