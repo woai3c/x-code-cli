@@ -1,3 +1,13 @@
+## v0.3.25 (2026-07-29)
+
+### Features
+
+- add semantic color token system for TUI chrome (dac949c)
+
+### Bug Fixes
+
+- use UTF-8 bytes for token estimation and include system prompt in /compact display (17c66dd)
+
 ## v0.3.23 (2026-07-29)
 
 ### Features
