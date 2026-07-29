@@ -10,28 +10,11 @@
 // Each theme also pins a syntax palette (e.g. dark → monokai,
 // dark-ansi → ansi). We expose the syntax-palette name on the theme
 // object so the startup wiring and `/theme` command stay in one place.
-import type { SyntaxThemeName } from './syntax-highlight.js'
-
-// @x-code-cli/cli — Shared UI colour tokens
 //
-// Palette mirrors Claude Code's dark theme (`src/utils/theme.ts` darkTheme).
-// All values are hex strings so Ink <Text color={...}> renders them on any
-// modern 24-bit terminal.
-
-/** System spinner blue (`claudeBlue_FOR_SYSTEM_SPINNER = rgb(147,165,255)`) */
-export const SPINNER_BLUE = '#93a5ff'
-
-/** Light blue-purple — permission dialogs, suggestions, highlights (`permission = rgb(153,204,255)`) */
-export const BLUE_PURPLE = '#99ccff'
-
-/** Success / completed / diff-added (`success = rgb(78,186,101)`) */
-export const SUCCESS = '#4eba65'
-
-/** Error / denied / diff-removed (`error = rgb(255,107,128)`) */
-export const ERROR = '#ff6b80'
-
-/** Prompt input top/bottom rules (`promptBorder = rgb(136,136,136)`) */
-export const PROMPT_BORDER = '#888888'
+// UI chrome colors (spinner, borders, success/error, selection…) do NOT
+// live here — they're semantic tokens in `ui/tokens.ts`, which resolves
+// dark/light/ansi values from `getTheme()` at call time.
+import type { SyntaxThemeName } from './syntax-highlight.js'
 
 export type ThemeName = 'dark' | 'light' | 'dark-daltonized' | 'light-daltonized' | 'dark-ansi' | 'light-ansi'
 

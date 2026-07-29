@@ -22,9 +22,7 @@
 // rendering path that wants the current palette calls `highlightLine`
 // with no theme arg — that picks up the live module ref. Tests and
 // previews can pass an explicit theme to bypass the global.
-import { Chalk } from 'chalk'
-
-const c = new Chalk({ level: 3 })
+import { chalk as c } from './tokens.js'
 
 // ─── Themes ───
 

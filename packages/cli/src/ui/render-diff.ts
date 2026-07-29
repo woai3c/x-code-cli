@@ -14,16 +14,13 @@
 //   - create path (`renderCreatePreview`): first N lines of new content,
 //     no diff bg (the whole file is "new" — bg coloring every row would
 //     be visual noise), but same syntax highlighting and gutter style.
-import { Chalk } from 'chalk'
-
 import type { EditDiffHunk, EditDiffPayload } from '@x-code-cli/core'
 
 import { type SyntaxThemeName, applyColor, detectLanguage, highlightLine } from './syntax-highlight.js'
 import { sliceByWidth, visualWidth } from './text-width.js'
 import { type ThemeName, getThemeColors } from './theme.js'
+import { chalk as c } from './tokens.js'
 import { RESULT_INDENT } from './utils.js'
-
-const c = new Chalk({ level: 3 })
 
 /** Apply a theme's diff bg color to text. Three value shapes:
  *   - `'#rrggbb'` — true-color hex, via chalk.bgHex

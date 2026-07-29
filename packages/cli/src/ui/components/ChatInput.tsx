@@ -64,21 +64,23 @@ import { type Cell, ansiTextToCells, cellsEqual, renderRowToAnsi, textToCells } 
 import {
   BSU,
   ESU_HIDE,
-  S_ACCENT_DIM,
-  S_BLUE_PURPLE,
-  S_BLUE_PURPLE_BOLD,
   S_BOLD,
+  S_BORDER,
+  S_BORDER_FOCUS,
   S_CURSOR,
   S_DIM,
+  S_ERROR,
   S_ERROR_BOLD,
-  S_GRAY,
   S_GRAY_90,
   S_NONE,
+  S_PRIMARY,
+  S_PRIMARY_BOLD,
   S_RESET,
   S_SPINNER,
   S_SUCCESS,
   S_SUCCESS_DOT,
   S_SUCCESS_DOT_DIM,
+  S_WARNING,
   S_WARNING_BOLD,
 } from './chat-input/palette.js'
 import { formatElapsed, permissionContentCells, permissionTitle } from './chat-input/permission.js'
@@ -1352,8 +1354,12 @@ export function ChatInput({
 
     const PROMPT_WIDTH = 2
     const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
-    const sepChar = '\u2500'
+    const sepChar = '─'
     const sepText = sepChar.repeat(Math.max(0, termWidth - 1))
+    // Rule color follows the approval mode (CC's promptBorder state):
+    // plan → primary, acceptEdits → warning, default → border gray.
+    const frameStyle =
+      permissionMode === 'plan' ? S_BORDER_FOCUS : permissionMode === 'acceptEdits' ? S_WARNING : S_BORDER
 
     // ── Input display lines (with soft-wrap + viewport windowing) ──
     // Raw lines are split by explicit `\n` only. Each raw line is then
@@ -1448,10 +1454,9 @@ export function ChatInput({
 
     // Error line (if any)
     if (errorMessage) {
-      const S_ERR = '\x1b[38;2;244;113;116m' // red-ish
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`Error: ${errorMessage}`, S_ERR))
+      cells.push(...textToCells(`Error: ${errorMessage}`, S_ERROR))
       frame.push(cells)
     }
 
@@ -1577,7 +1582,7 @@ export function ChatInput({
             const maxPreviewLen = Math.max(40, termWidth - decoration - safetyMargin)
             const trimmed =
               preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + GLYPH_ELLIPSIS : preview
-            row1.push(...textToCells(`(${trimmed})`, S_BLUE_PURPLE))
+            row1.push(...textToCells(`(${trimmed})`, S_PRIMARY))
           }
           frame.push(row1)
 
@@ -1687,7 +1692,7 @@ export function ChatInput({
         yesCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes`, S_SUCCESS))
       } else {
         yesCells.push(...textToCells('      ', S_NONE))
-        yesCells.push(...textToCells('Yes', S_ACCENT_DIM))
+        yesCells.push(...textToCells('Yes', S_DIM))
       }
       frame.push(yesCells)
 
@@ -1698,7 +1703,7 @@ export function ChatInput({
           alwaysCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes, don't ask again for: ${ruleLabel}`, S_SUCCESS))
         } else {
           alwaysCells.push(...textToCells('      ', S_NONE))
-          alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_ACCENT_DIM))
+          alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_DIM))
         }
         frame.push(alwaysCells)
       }
@@ -1709,7 +1714,7 @@ export function ChatInput({
         noCells.push(...textToCells(`${GLYPH_SELECT_POINTER} No`, S_ERROR_BOLD))
       } else {
         noCells.push(...textToCells('      ', S_NONE))
-        noCells.push(...textToCells('No', S_ACCENT_DIM))
+        noCells.push(...textToCells('No', S_DIM))
       }
       frame.push(noCells)
     }
@@ -1830,11 +1835,11 @@ export function ChatInput({
           const opt = opts[i]!
           const active = i === selectIndex
           const idx = `${i + 1}.`.padEnd(maxIdxWidth + 2)
-          const labelStyle = active ? S_BLUE_PURPLE : S_NONE
+          const labelStyle = active ? S_PRIMARY : S_NONE
           const cells: Cell[] = []
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           if (active) {
-            cells.push(...textToCells(`${GLYPH_SELECT_POINTER} `, S_BLUE_PURPLE))
+            cells.push(...textToCells(`${GLYPH_SELECT_POINTER} `, S_PRIMARY))
           } else {
             cells.push(...textToCells('  ', S_NONE))
           }
@@ -1856,7 +1861,7 @@ export function ChatInput({
             const descCells: Cell[] = []
             descCells.push({ char: ' ', style: S_NONE, width: 1 })
             descCells.push(...textToCells(' '.repeat(descIndent), S_NONE))
-            descCells.push(...textToCells(opt.description, S_ACCENT_DIM))
+            descCells.push(...textToCells(opt.description, S_DIM))
             frame.push(truncateCellRow(descCells, maxRowWidth))
           }
         }
@@ -1880,13 +1885,13 @@ export function ChatInput({
           const cells: Cell[] = []
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           if (active) {
-            cells.push(...textToCells(`${GLYPH_SELECT_POINTER} `, S_BLUE_PURPLE))
+            cells.push(...textToCells(`${GLYPH_SELECT_POINTER} `, S_PRIMARY))
           } else {
             cells.push(...textToCells('  ', S_NONE))
           }
           cells.push(...textToCells(idx, S_DIM))
 
-          const labelStyle = active ? S_BLUE_PURPLE : S_NONE
+          const labelStyle = active ? S_PRIMARY : S_NONE
           cells.push(...textToCells(opt.label, labelStyle))
 
           if (opt.freeform && active) {
@@ -1903,7 +1908,7 @@ export function ChatInput({
             const curLabelW = visualWidth(opt.label)
             const pad = Math.max(1, labelCol - curLabelW)
             cells.push(...textToCells(' '.repeat(pad), S_NONE))
-            cells.push(...textToCells(opt.description, S_ACCENT_DIM))
+            cells.push(...textToCells(opt.description, S_DIM))
           }
 
           frame.push(truncateCellRow(cells, maxRowWidth))
@@ -1975,11 +1980,9 @@ export function ChatInput({
     //     icon progression (\u2713 vs \u25fc vs \u25fb) IS the status.
     //   - Completed: dim check + strikethrough dim content. Pending:
     //     hollow square in default color (NOT dim \u2014 pending is
-    //     "waiting", not "forgotten"). In-progress: filled square +
-    //     bold content, both in default fg. CC uses its accent orange
-    //     (#d77757) here, but that hue clashes with the rest of our
-    //     palette, so we lean on shape (filled vs hollow) + weight
-    //     (bold vs regular) instead of color to signal active state.
+    //     "waiting", not "forgotten"). In-progress: filled square in
+    //     primary + bold content — shape (filled vs hollow), weight
+    //     (bold vs regular) AND the single brand hue mark active state.
     //   - No `activeForm` activity line. CC doesn't render one, and
     //     when the model echoed the same phrase for both fields the
     //     extra row was visual noise.
@@ -2008,7 +2011,7 @@ export function ChatInput({
           // ANSI 2 = dim, 9 = strikethrough.
           cells.push(...textToCells(t.content, '\x1b[0m\x1b[2;9m'))
         } else if (t.status === 'in_progress') {
-          cells.push(...textToCells(GLYPH_TODO_IN_PROGRESS, S_BOLD))
+          cells.push(...textToCells(GLYPH_TODO_IN_PROGRESS, S_PRIMARY_BOLD))
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           cells.push(...textToCells(t.content, S_BOLD))
         } else {
@@ -2030,7 +2033,7 @@ export function ChatInput({
     }
 
     // Top separator
-    frame.push(textToCells(sepText, S_GRAY))
+    frame.push(textToCells(sepText, frameStyle))
 
     // Input lines. The terminal's hardware cursor is hidden for the
     // entire TUI lifetime; the visible "cursor" the user sees is just an
@@ -2042,7 +2045,7 @@ export function ChatInput({
       const showCursor = !disabled && i === cursorLine && cursorLine >= 0
       const cells: Cell[] = []
 
-      cells.push({ char: prompt[0], style: S_GRAY, width: 1 })
+      cells.push({ char: prompt[0], style: S_BORDER, width: 1 })
       cells.push({ char: prompt[1], style: S_NONE, width: 1 })
 
       if (!showCursor) {
@@ -2079,7 +2082,7 @@ export function ChatInput({
     }
 
     // Bottom separator
-    frame.push(textToCells(sepText, S_GRAY))
+    frame.push(textToCells(sepText, frameStyle))
 
     // Footer row — same layout pattern Claude Code / Codex / Gemini CLI
     // use: left text and right text on a SINGLE row, with the right
@@ -2109,14 +2112,18 @@ export function ChatInput({
       cells.push(...ansiTextToCells(notice))
       leftCells = cells
     } else if (permissionMode === 'plan') {
+      // Kimi-style mode badge: the mode name takes the primary/warning
+      // hue at bold weight (matching the input frame's border state),
+      // the affordance hint stays on the dim rung.
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`${GLYPH_PLAN_MODE} plan mode  ·  /plan to toggle`, S_DIM))
+      cells.push(...textToCells(`${GLYPH_PLAN_MODE} plan mode`, S_PRIMARY_BOLD))
+      cells.push(...textToCells('  ·  /plan to toggle', S_DIM))
       leftCells = cells
     } else if (permissionMode === 'acceptEdits') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`${GLYPH_ACCEPT_EDITS} accept edits`, S_DIM))
+      cells.push(...textToCells(`${GLYPH_ACCEPT_EDITS} accept edits`, S_WARNING_BOLD))
       leftCells = cells
     }
 
@@ -2215,7 +2222,7 @@ export function ChatInput({
         const labelCells: Cell[] = []
         labelCells.push({ char: ' ', style: S_NONE, width: 1 })
         labelCells.push({ char: ' ', style: S_NONE, width: 1 })
-        labelCells.push(...textToCells(cmd.name, sel ? S_BLUE_PURPLE_BOLD : S_DIM))
+        labelCells.push(...textToCells(cmd.name, sel ? S_PRIMARY_BOLD : S_DIM))
         if (cmd.argumentHint) {
           labelCells.push(...textToCells(' ', padStyle))
           labelCells.push(...textToCells(cmd.argumentHint, S_DIM))
@@ -2269,7 +2276,7 @@ export function ChatInput({
           cells.push({ char: ' ', style: S_NONE, width: 1 })
           const display = '@' + entry.relPath + (entry.isDirectory ? '/' : '')
           const truncated = truncatePathFromStart(display, maxColWidth)
-          cells.push(...textToCells(truncated, sel ? S_BLUE_PURPLE_BOLD : S_DIM))
+          cells.push(...textToCells(truncated, sel ? S_PRIMARY_BOLD : S_DIM))
           frame.push(cells)
         }
         if (atWinEnd < atTotal) {

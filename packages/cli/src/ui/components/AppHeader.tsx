@@ -3,16 +3,9 @@
 // printHeader() writes the banner directly to stdout BEFORE Ink starts.
 // This avoids the Ink <Static> re-render bug where the header would
 // appear multiple times as the dynamic area changes height.
-import { Chalk } from 'chalk'
-
 import { VERSION } from '../../version.js'
 import { GLYPH_HEADER_PIPE } from '../terminal-glyphs.js'
-
-const c = new Chalk({ level: 3 })
-
-/** Logo color — kept as the original soft sky-blue (`#89b4fa`) on purpose,
- *  independent of Claude Code's brand orange used elsewhere. */
-const LOGO_COLOR = '#89b4fa'
+import { chalk as c, paint } from '../tokens.js'
 
 // ── ASCII logos for different terminal widths ──
 
@@ -65,11 +58,18 @@ export function renderHeader(modelId: string): string {
   const abortKey = isMac ? '⌃C' : 'Ctrl+C'
   const newlineKey = isMac ? '⌥⏎ or \\⏎' : 'Alt+Enter or \\+Enter'
 
+  const primary = paint('primary')
+  // chalk's dim ATTRIBUTE (not a flat hex gray): it renders as a darkened
+  // step of the terminal's OWN default foreground, which stays readable
+  // on any user color scheme. A fixed mid-gray like #999999 reads
+  // noticeably darker on terminals whose default fg is a bright white.
+  const dim = (s: string) => c.dim(s)
+
   const lines = [
-    c.hex(LOGO_COLOR).bold(logo),
+    primary(c.bold(logo)),
     '', // breathing room between logo and status info
-    `  ${c.dim(`v${VERSION}`)} ${c.dim(GLYPH_HEADER_PIPE)} ${c.dim('model:')} ${c.hex(LOGO_COLOR)(`${provider}/${modelName}`)}`,
-    `  ${c.dim(`/help commands · ${abortKey} abort · ${newlineKey} newline`)}`,
+    `  ${dim(`v${VERSION}`)} ${dim(GLYPH_HEADER_PIPE)} ${dim('model:')} ${primary(`${provider}/${modelName}`)}`,
+    `  ${dim(`/help commands · ${abortKey} abort · ${newlineKey} newline`)}`,
     '', // blank line after header
   ]
 

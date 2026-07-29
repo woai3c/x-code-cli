@@ -5,28 +5,24 @@
 // Markdown into an AST, then recursively renders each token to ANSI-styled
 // text using chalk.
 //
-// Style choices mirror Claude Code verbatim: heading h1 is bold+italic+underline
-// (no accent color), h2/h3+ are bold, blockquote uses U+258E ▎ as a dim prefix
-// bar with italic text, code blocks emit raw text without indent, inline code
-// is tinted in the brand blue-purple, list bullets use `-` (nested ordered
-// levels switch to letter/roman), and links become OSC 8 hyperlinks.
+// Style choices: h1 is bold+underline, h2/h3+ bold (Codex's scale — CC's
+// bold+italic+underline triple-stack reads heavy). Blockquote uses
+// U+258E ▎ as a muted prefix bar with italic text, code blocks emit raw
+// text without indent, inline code and links use the brand `primary`
+// token, list bullets sit on the `textDim` gray rung (color is reserved
+// for semantics), and links become OSC 8 hyperlinks. All colors resolve
+// through tokens.ts so `/theme` switches apply to committed markdown too.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Chalk } from 'chalk'
 import { type Token, type Tokens, marked } from 'marked'
 
 import { detectFenceLanguage, highlightLine } from './syntax-highlight.js'
 import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
 import { visualWidth } from './text-width.js'
-import { BLUE_PURPLE, SPINNER_BLUE as LINK } from './theme.js'
-
-const c = new Chalk({ level: 3 })
+import { chalk as c, paint } from './tokens.js'
 
 const EOL = '\n'
 
 const BLOCKQUOTE_BAR = GLYPH_BLOCKQUOTE_BAR
-
-// Inline code tint — matches Claude Code's `permission` color (rgb(177,185,249))
-const CODE_INLINE = BLUE_PURPLE
 
 let markedConfigured = false
 function configureMarked(): void {
@@ -140,7 +136,7 @@ function formatToken(
   switch (token.type) {
     case 'blockquote': {
       const inner = (token.tokens ?? []).map((t) => formatToken(t, 0, null, null)).join('')
-      const bar = c.dim(BLOCKQUOTE_BAR)
+      const bar = paint('textMuted')(BLOCKQUOTE_BAR)
       return inner
         .split(EOL)
         .map((line) => (stripAnsi(line).trim() ? `${bar} ${c.italic(line)}` : line))
@@ -167,7 +163,7 @@ function formatToken(
     }
 
     case 'codespan':
-      return c.hex(CODE_INLINE)((token as Tokens.Codespan).text ?? '')
+      return paint('primary')((token as Tokens.Codespan).text ?? '')
 
     case 'em':
       return c.italic((token.tokens ?? []).map((t) => formatToken(t, 0, null, parent)).join(''))
@@ -184,16 +180,19 @@ function formatToken(
       // own `raw`. Without this second EOL, `# H\nbody` rendered as two
       // adjacent rows with no separation. Matches Claude Code.
       if (h.depth === 1) {
-        return c.bold.italic.underline(content) + EOL + EOL
+        return c.bold.underline(content) + EOL + EOL
       }
       return c.bold(content) + EOL + EOL
     }
 
-    case 'hr':
-      // `---` needs its own terminator — missing it made `hr` emit no
-      // newline, and the next block's content landed on the same row
-      // as the rule.
-      return c.hex('#999999')('\u2500'.repeat(20)) + EOL
+    case 'hr': {
+      // Full-width muted rule (Codex's turn separator proportions), not
+      // an arbitrary fixed-length dash run. `---` needs its own
+      // terminator — missing it made `hr` emit no newline, and the next
+      // block's content landed on the same row as the rule.
+      const cols = Math.max(20, (process.stdout.columns ?? 80) - 1)
+      return paint('textMuted')('─'.repeat(cols)) + EOL
+    }
 
     case 'image':
       return (token as Tokens.Image).href ?? ''
@@ -206,7 +205,7 @@ function formatToken(
       const linkText = (l.tokens ?? []).map((t) => formatToken(t, 0, null, l as Token)).join('')
       const href = l.href ?? ''
       const plain = stripAnsi(linkText)
-      const styled = c.hex(LINK).underline(plain && plain !== href ? linkText : href)
+      const styled = c.underline(paint('primary')(plain && plain !== href ? linkText : href))
       // OSC 8 hyperlink: modern terminals render the display text as a
       // clickable link that reveals `href` on hover / Ctrl+click. Older
       // terminals that don't support OSC 8 strip the escape bytes and
@@ -249,15 +248,16 @@ function formatToken(
       if (parent?.type === 'list_item') {
         // Visually distinct bullet so the rendered output can't be
         // confused with the raw markdown source. Unordered items get a
-        // coloured U+2022 •; ordered items keep "N." but with the
-        // digits accented. Claude Code's own render does the same (any
-        // unicode marker makes it obvious marked.lexer actually parsed
-        // the list — otherwise users see `-` both before and after
+        // U+2022 • on the textDim gray rung; ordered items keep "N."
+        // dimmed the same way. Markers deliberately DON'T take a hue —
+        // color is reserved for semantics (Codex/Kimi convention), and a
+        // unicode marker already makes it obvious marked.lexer parsed
+        // the list (otherwise users see `-` both before and after
         // rendering and assume nothing happened).
         const marker =
           orderedListNumber === null
-            ? c.hex(BLUE_PURPLE)(GLYPH_LIST_BULLET)
-            : c.hex(BLUE_PURPLE)(`${getListNumber(listDepth, orderedListNumber)}.`)
+            ? paint('textDim')(GLYPH_LIST_BULLET)
+            : paint('textDim')(`${getListNumber(listDepth, orderedListNumber)}.`)
         const content = tx.tokens
           ? tx.tokens.map((t) => formatToken(t, listDepth, orderedListNumber, token)).join('')
           : tx.text
@@ -307,7 +307,7 @@ function formatToken(
         return padAligned(content, displayWidth, width, align)
       }
 
-      const dim = (s: string) => c.hex('#999999')(s)
+      const dim = paint('textMuted')
       let out = dim(makeDivider(TL, TM, TR))
 
       out += dim(V) + ' '
@@ -363,7 +363,7 @@ export function renderInlineMarkdown(text: string): string {
       // italic: *text* or _text_ (but not inside a word for _)
       .replace(/(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1(?!\w)/g, (_m, _d, inner) => c.italic(inner as string))
       // inline code: `code`
-      .replace(/`([^`]+)`/g, (_m, inner) => c.hex(CODE_INLINE)(inner as string))
+      .replace(/`([^`]+)`/g, (_m, inner) => paint('primary')(inner as string))
   )
 }
 

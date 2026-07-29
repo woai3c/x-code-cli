@@ -6,7 +6,7 @@ import { getPermissionLevel } from '@x-code-cli/core'
 
 import { GLYPH_ELLIPSIS } from '../../terminal-glyphs.js'
 import { type Cell, textToCells } from './cells.js'
-import { S_ACCENT, S_ACCENT_DIM, S_DIM, S_ERROR_BOLD, S_NONE, S_SUCCESS, S_WARNING } from './palette.js'
+import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS, S_WARNING } from './palette.js'
 
 export function permissionTitle(toolName: string, mcp?: { serverName: string; rawName: string }): string {
   if (mcp) return `X-Code wants to use MCP tool: ${mcp.serverName}/${mcp.rawName}`
@@ -24,10 +24,18 @@ export function permissionTitle(toolName: string, mcp?: { serverName: string; ra
   }
 }
 
-const PERMISSION_LEVEL_STYLE: Record<string, { label: string; style: string }> = {
-  'always-allow': { label: 'read-only', style: S_SUCCESS },
-  ask: { label: 'write', style: S_WARNING },
-  deny: { label: 'dangerous', style: S_ERROR_BOLD },
+// Resolved per call (not a module-level table) because palette styles are
+// `let` bindings re-derived on `/theme` switches — a captured table would
+// freeze the strings from module load.
+function permissionLevelStyle(level: string): { label: string; style: string } {
+  switch (level) {
+    case 'always-allow':
+      return { label: 'read-only', style: S_SUCCESS }
+    case 'deny':
+      return { label: 'dangerous', style: S_ERROR_BOLD }
+    default:
+      return { label: 'write', style: S_WARNING }
+  }
 }
 
 /** One-line `key: value, key: value` summary of an MCP tool's input.
@@ -83,19 +91,19 @@ export function permissionContentCells(
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells(truncateToWidth(preview, 2 + 2), S_ACCENT))
+    cells.push(...textToCells(truncateToWidth(preview, 2 + 2), S_PRIMARY))
     return cells
   }
   if (toolName === 'shell') {
     const level = getPermissionLevel('shell', input)
-    const info = PERMISSION_LEVEL_STYLE[level] ?? PERMISSION_LEVEL_STYLE.ask
+    const info = permissionLevelStyle(level)
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     const rawCommand = String(input.command ?? '')
     const decoration = 2 + 2 + 1 + (info.label.length + 2) + 2
     const command = truncateToWidth('$ ' + rawCommand, decoration)
-    cells.push(...textToCells(command, S_ACCENT))
+    cells.push(...textToCells(command, S_PRIMARY))
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push(...textToCells(`[${info.label}]`, info.style))
     return cells
@@ -107,8 +115,8 @@ export function permissionContentCells(
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     const suffix = ' (new file)'
     const truncated = truncateToWidth(fp, 2 + suffix.length + 2)
-    cells.push(...textToCells(truncated, S_ACCENT))
-    cells.push(...textToCells(suffix, S_ACCENT_DIM))
+    cells.push(...textToCells(truncated, S_PRIMARY))
+    cells.push(...textToCells(suffix, S_DIM))
     return cells
   }
   if (toolName === 'edit') {
@@ -116,7 +124,7 @@ export function permissionContentCells(
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells(truncateToWidth(fp, 2 + 2), S_ACCENT))
+    cells.push(...textToCells(truncateToWidth(fp, 2 + 2), S_PRIMARY))
     return cells
   }
   if (toolName === 'enterPlanMode') {

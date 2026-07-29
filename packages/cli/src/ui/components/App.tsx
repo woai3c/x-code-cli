@@ -54,6 +54,7 @@ import { DEFAULT_THEME, THEMES, type ThemeName, getTheme, getThemeColors, parseT
 import { parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
+import { rebuildPalette } from './chat-input/palette.js'
 
 interface AppProps {
   model: LanguageModel
@@ -807,6 +808,7 @@ export function App({
   function applyTheme(name: ThemeName) {
     setTheme(name)
     setSyntaxTheme(getThemeColors(name).syntaxPalette)
+    rebuildPalette()
   }
 
   /**
@@ -842,16 +844,16 @@ export function App({
     const answer = await askQuestion(
       'Pick a theme:',
       choices.map((c) => ({ label: c.label, description: c.description, preview: c.preview })),
+      { noOther: true },
     )
 
     const picked = choices.find((c) => c.label === answer)
-    const parsedFree = parseThemeName(answer ?? '')
-    const resolved = picked ? picked.name : (parsedFree ?? DEFAULT_THEME)
+    const resolved = picked?.name ?? DEFAULT_THEME
 
     applyTheme(resolved)
     saveUserConfig({ theme: resolved })
 
-    if (picked || parsedFree !== null) {
+    if (picked) {
       addInfoMessage(`Theme set to **${themeLabel(resolved)}**. Type a message to get started.`)
     } else {
       addInfoMessage(`Using default theme **${themeLabel(resolved)}**. Run \`/theme\` any time to switch.`)
@@ -1398,19 +1400,13 @@ export function App({
     const answer = await askQuestion(
       `Current: **${themeLabel(current)}**. Choose the text style that looks best with your terminal (${GLYPH_BULLET} = current):`,
       choices.map((c) => ({ label: c.label, description: c.description, preview: c.preview })),
+      { noOther: true },
     )
     const picked = choices.find((c) => c.label === answer)
     if (!picked) {
-      const free = parseThemeName(answer ?? '')
-      if (free === null) {
-        addCommandMessage(commandText, `Cancelled — theme stays **${themeLabel(current)}**.`)
-        return
-      }
-      if (free === current) {
-        addCommandMessage(commandText, `Theme is already **${themeLabel(free)}** — no change.`)
-        return
-      }
-      commitThemeChange(commandText, free)
+      // Empty answer = Esc-dismissed dialog (noOther removes the
+      // free-form path, so a non-choice answer can only be Esc).
+      addCommandMessage(commandText, `Cancelled — theme stays **${themeLabel(current)}**.`)
       return
     }
     if (picked.name === current) {

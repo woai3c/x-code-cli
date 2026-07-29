@@ -1,20 +1,37 @@
 // Cell-style palette for ChatInput's direct-stdout cell-diff renderer.
 //
-// Hardcoded RGB ANSI escapes because cells store raw style strings (the
-// cell-diff emitter can't run chalk). Values mirror `ui/theme.ts` which
-// itself mirrors Claude Code's dark theme (src/utils/theme.ts darkTheme)
-// — keep these two tables in sync.
+// Color styles are DERIVED from `ui/tokens.ts` (the single source of
+// truth) as `let` bindings — `rebuildPalette()` re-derives them whenever
+// `/theme` switches at runtime. The cell-diff emitter can't run chalk,
+// so these stay raw escape strings; tokens.ts guarantees they start with
+// `\x1b[0m` so no cell inherits SGR state from its predecessor.
+//
+// Structural (non-color) constants further down keep their hand-tuned
+// byte sequences and the comments explaining why.
+import { cellFg } from '../../tokens.js'
 
-export const S_GRAY = '\x1b[38;2;136;136;136m' // promptBorder rgb(136,136,136) #888888
-export const S_ACCENT = '\x1b[38;2;215;119;87m' // claude rgb(215,119,87) #d77757
-export const S_ACCENT_DIM = '\x1b[38;2;153;153;153m' // inactive rgb(153,153,153) #999999
-export const S_SPINNER = '\x1b[38;2;147;165;255m' // claudeBlue rgb(147,165,255) #93a5ff
-export const S_SUCCESS = '\x1b[38;2;78;186;101;1m' // success rgb(78,186,101) #4eba65
+// ── Derived color styles (rebuilt on theme switch) ─────────────────────
+
+/** Prompt-box rules and card frames (`─`, `╭╮╰╯`). */
+export let S_BORDER = cellFg('border')
+/** Mode-activated frame color (plan mode) — the primary rung. */
+export let S_BORDER_FOCUS = cellFg('borderFocus')
+/** Brand primary — live tool `(preview)`, completion/selection labels. */
+export let S_PRIMARY = cellFg('primary')
+export let S_PRIMARY_BOLD = cellFg('primary', { bold: true })
+/** Unfocused option rows (permission dialog) — the gray "inactive" rung. */
+export let S_TEXT_DIM = cellFg('textDim')
+/** Weakest gray rung — prompt glyph, placeholders. */
+export let S_TEXT_MUTED = cellFg('textMuted')
+/** Spinner glyph. Same hue as S_PRIMARY but a distinct semantic slot so
+ *  the spinner can diverge later without touching emphasis styles. */
+export let S_SPINNER = cellFg('primary')
+export let S_SUCCESS = cellFg('success', { bold: true })
 // Non-bold variant of SUCCESS — used for the live tool `●` bullet so it
 // matches the committed `stdout-writer.formatToolCall` output exactly
-// (`c.hex(SUCCESS)('●')` is non-bold there). If live used the bold variant,
-// the dot would visibly "de-bold" at the moment the tool finishes.
-export const S_SUCCESS_DOT = '\x1b[0m\x1b[38;2;78;186;101m'
+// (`paint('success')('●')` is non-bold there). If live used the bold
+// variant, the dot would visibly "de-bold" at the moment the tool finishes.
+export let S_SUCCESS_DOT = cellFg('success')
 // Dim half of the running-tool bullet pulse animation. Same green hue as
 // S_SUCCESS_DOT, but with the ANSI dim attribute (2) layered on top so
 // terminals render it as a subdued shade of the same color rather than
@@ -22,21 +39,38 @@ export const S_SUCCESS_DOT = '\x1b[0m\x1b[38;2;78;186;101m'
 // every few spinner frames produces the bright↔dim "heartbeat" CC uses
 // to signal a tool is actively running, so the user can tell at a glance
 // which committed line in scrollback turned into the live row.
-export const S_SUCCESS_DOT_DIM = '\x1b[0m\x1b[38;2;78;186;101;2m'
+export let S_SUCCESS_DOT_DIM = cellFg('success', { dim: true })
+export let S_WARNING = cellFg('warning')
+export let S_WARNING_BOLD = cellFg('warning', { bold: true })
+/** Non-bold error text — matches committed `paint('error')` output. */
+export let S_ERROR = cellFg('error')
+export let S_ERROR_BOLD = cellFg('error', { bold: true })
+
+/** Re-derive every color style from tokens after a `/theme` switch.
+ *  ESM live bindings propagate the new strings to all importers. */
+export function rebuildPalette(): void {
+  S_BORDER = cellFg('border')
+  S_BORDER_FOCUS = cellFg('borderFocus')
+  S_PRIMARY = cellFg('primary')
+  S_PRIMARY_BOLD = cellFg('primary', { bold: true })
+  S_TEXT_DIM = cellFg('textDim')
+  S_TEXT_MUTED = cellFg('textMuted')
+  S_SPINNER = cellFg('primary')
+  S_SUCCESS = cellFg('success', { bold: true })
+  S_SUCCESS_DOT = cellFg('success')
+  S_SUCCESS_DOT_DIM = cellFg('success', { dim: true })
+  S_WARNING = cellFg('warning')
+  S_WARNING_BOLD = cellFg('warning', { bold: true })
+  S_ERROR = cellFg('error')
+  S_ERROR_BOLD = cellFg('error', { bold: true })
+}
+
+// ── Structural styles (not colors — fixed byte sequences) ──────────────
+
 // Bold with NO foreground color — matches committed `c.bold(label)`.
 // Must start with `\x1b[0m` to reset any prior foreground so bold doesn't
 // inherit a color from the preceding cell (same reasoning as S_DIM).
 export const S_BOLD = '\x1b[0m\x1b[1m'
-// BLUE_PURPLE (permission #99ccff) — used for the
-// `(preview)` inside the live tool bubble to match committed
-// `c.hex(BLUE_PURPLE)('(...)')`. Previously used S_SPINNER blue here
-// (147,165,255) which is a DIFFERENT shade, producing a visible
-// color shift at the live→committed handoff.
-export const S_BLUE_PURPLE = '\x1b[0m\x1b[38;2;153;204;255m'
-export const S_BLUE_PURPLE_BOLD = '\x1b[0m\x1b[38;2;153;204;255;1m'
-export const S_WARNING = '\x1b[38;2;255;193;7m' // warning rgb(255,193,7) #ffc107
-export const S_WARNING_BOLD = '\x1b[38;2;255;193;7;1m'
-export const S_ERROR_BOLD = '\x1b[38;2;255;107;128;1m'
 // NB: leading `\x1b[0m` matters. Plain `\x1b[2m` just adds the "dim"
 // attribute ON TOP of whatever foreground color is active — so meta
 // text rendered after a colored span (e.g. the spinner row, where

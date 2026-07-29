@@ -38,6 +38,7 @@ import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
 import { runPluginCli } from './plugin-cli.js'
 import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
+import { rebuildPalette } from './ui/components/chat-input/palette.js'
 import { setSyntaxTheme } from './ui/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
 
@@ -64,7 +65,7 @@ restoreInvocationCwd()
   }
 }
 
-const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
+const chalk = new Chalk({ level: process.stderr.isTTY && !process.env.NO_COLOR ? 3 : 0 })
 
 const MIN_NODE_VERSION = [20, 19, 0]
 
@@ -270,6 +271,7 @@ async function main() {
     if (t !== null) {
       setTheme(t)
       setSyntaxTheme(getThemeColors(t).syntaxPalette)
+      rebuildPalette()
     }
   }
 

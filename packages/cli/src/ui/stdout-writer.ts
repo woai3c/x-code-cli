@@ -19,15 +19,13 @@
 // Ink still owns the bottom-of-screen dynamic region (spinner, in-progress
 // tool call, permission dialog, chat input). That region is short and
 // mostly ASCII, so Ink's own measurement is good enough.
-import { Chalk } from 'chalk'
-
 import { debugLog } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
 import { renderEditDiff } from './render-diff.js'
 import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
 import { GLYPH_BULLET, GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET } from './terminal-glyphs.js'
-import { BLUE_PURPLE, ERROR, PROMPT_BORDER, SUCCESS } from './theme.js'
+import { chalk as c, paint } from './tokens.js'
 import {
   RESULT_INDENT,
   formatDuration,
@@ -38,8 +36,6 @@ import {
   isCollapsibleReadOnlyTool,
   normalizeLineEndings,
 } from './utils.js'
-
-const c = new Chalk({ level: 3 })
 
 /** Function that writes to stdout through Ink's log-update coordination. */
 export type InkWrite = (data: string) => void
@@ -74,9 +70,9 @@ function formatToolCall(tc: DisplayToolCall): string {
   const isFailure = isDenied || isError
   const durationStr = tc.durationMs != null ? formatDuration(tc.durationMs) : null
 
-  const dotColor = isFailure ? ERROR : SUCCESS
-  const previewSuffix = inputPreview ? c.hex(BLUE_PURPLE)(`(${inputPreview})`) : ''
-  const line1 = ` ${c.hex(dotColor)(GLYPH_BULLET)} ${c.bold(label)}${previewSuffix}`
+  const dotStyle = paint(isFailure ? 'error' : 'success')
+  const previewSuffix = inputPreview ? paint('primary')(`(${inputPreview})`) : ''
+  const line1 = ` ${dotStyle(GLYPH_BULLET)} ${c.bold(label)}${previewSuffix}`
 
   // Edit / writeFile success path: render the structured diff under the
   // bullet INSTEAD of the plain "Wrote N lines" / "Applied changes" summary.
@@ -115,9 +111,9 @@ function formatToolCall(tc: DisplayToolCall): string {
   // Errored lines get the ERROR hex color applied AFTER line splitting —
   // applying it before splitting would split on ANSI-reset sequences
   // embedded mid-style and leave half the body uncolored. Apply per line.
-  const paint = isFailure ? (s: string) => c.hex(ERROR)(s) : (s: string) => s
-  const head = `   ${c.gray(GLYPH_RESULT_BRACKET)}  ${paint(lines[0] ?? '')}`
-  const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${paint(l)}`)
+  const paintLine = isFailure ? paint('error') : (s: string) => s
+  const head = `   ${c.gray(GLYPH_RESULT_BRACKET)}  ${paintLine(lines[0] ?? '')}`
+  const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${paintLine(l)}`)
   // Duration goes on the last visible line of the body so it reads like
   // "... +13 lines (1.2s)" on truncated summaries.
   const combined = tail.length > 0 ? [head, ...tail] : [head]
@@ -244,13 +240,13 @@ function writeToolRow(write: InkWrite, tc: DisplayToolCall): void {
 /** Render the collapsed-group summary line, e.g.
  *    ` ● Read 3 files (foo.ts, bar.ts, baz.ts)`
  *  Format mirrors a regular tool row so the visual rhythm is preserved:
- *  green bullet (all members are completed), bold label, BLUE_PURPLE
+ *  green bullet (all members are completed), bold label, primary
  *  paren'd detail. No `⎿` result body — the whole point of collapsing
  *  is to drop the per-call result rows. */
 function writeCollapsedGroup(write: InkWrite, tools: readonly DisplayToolCall[]): void {
   const { label, detail } = formatReadGroupSummary(tools)
-  const detailSuffix = detail ? c.hex(BLUE_PURPLE)(`(${detail})`) : ''
-  const line = ` ${c.hex(SUCCESS)(GLYPH_BULLET)} ${c.bold(label)}${detailSuffix}`
+  const detailSuffix = detail ? paint('primary')(`(${detail})`) : ''
+  const line = ` ${paint('success')(GLYPH_BULLET)} ${c.bold(label)}${detailSuffix}`
   const lead = prevWriteEndedWithBlankRow ? '' : '\n'
   write(toCRLF(lead + line + '\n'))
   prevWriteEndedWithBlankRow = false
@@ -432,7 +428,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
  * matching Claude Code's 2-line command block.
  */
 function writeUserMessage(write: InkWrite, content: string, compact = false): void {
-  const arrow = c.hex(PROMPT_BORDER)(GLYPH_PROMPT_ARROW)
+  const arrow = paint('border')(GLYPH_PROMPT_ARROW)
   const lines = content.split('\n')
   const [first = '', ...rest] = lines
   const indentedRest = rest.map((line) => `  ${line}`)

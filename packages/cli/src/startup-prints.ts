@@ -13,7 +13,7 @@ import { detectShell, formatPersistCommand } from './shell.js'
 import type { ShellType } from './shell.js'
 import { VERSION } from './version.js'
 
-const chalk = new Chalk({ level: process.stderr.isTTY ? 3 : 0 })
+const chalk = new Chalk({ level: process.stderr.isTTY && !process.env.NO_COLOR ? 3 : 0 })
 
 export function printNoApiKeyMessage(): void {
   const code = (s: string) => chalk.cyan(s)
