@@ -1,72 +1,79 @@
 // @x-code-cli/core — Per-provider extended-thinking / reasoning toggle
 //
-// Each provider exposes a different switch for "spend extra tokens reasoning
-// before producing output". The defaults across the eight providers we
-// support are inconsistent: Gemini defaults ON; Claude Sonnet, DeepSeek V4,
-// Qwen, and most others default OFF.
-// The user-facing `/thinking on|off` toggle is meant to give one uniform
-// knob across all of them.
+// AI SDK v7 provides a top-level `reasoning` parameter that works portably
+// across most providers (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot).
+// We use it as the primary mechanism for reasoning control.
 //
-// We map the toggle to the closest equivalent in each provider's AI SDK:
+// Exceptions that still need providerOptions / fetch shim injection:
+//   - zhipu: goes through @ai-sdk/openai-compatible, SDK doesn't auto-translate
+//     `reasoning` for it. We inject `reasoning_effort` via fetch shim.
+//   - alibaba: uses `enableThinking` in providerOptions (no top-level support).
 //
-//   anthropic   thinking: { type: 'enabled' | 'disabled', budgetTokens }  (binary)
-//              effort: 'low' | 'medium' | 'high'                          (tier)
-//   deepseek    thinking: { type: 'enabled' | 'disabled' }
-//   moonshotai  thinking: { type: 'enabled' | 'disabled' }               (K2.x, binary)
-//              reasoningEffort: 'low' | 'high' | 'max'                   (K3, tier)
-//   alibaba     enableThinking: boolean
-//   google      thinkingConfig: { thinkingBudget: -1 | 0 }               (Gemini 2.5, binary)
-//              thinkingConfig: { thinkingLevel: 'LOW' | 'HIGH' }          (Gemini 3, tier)
-//   xai         reasoningEffort: 'high' | 'low'                           (binary)
-//              reasoningEffort: 'low' | 'high'                            (tier)
-//   openai      reasoningEffort: 'high' | 'minimal'                      (binary)
-//              reasoningEffort: 'minimal' | 'low' | 'medium' | 'high'    (tier)
-//   zhipu       thinking: { type: 'enabled' | 'disabled' } (GLM-5/5.2;
-//                 GLM-4-Plus ignores it silently)
+// The user-facing controls:
+//   /thinking on|off — binary toggle (maps to 'high' / 'none')
+//   /model tier picker — explicit effort level (low/high/max etc.)
 //
-// The numeric budget for Anthropic is set generous-but-not-unbounded:
-// 8000 reasoning tokens covers everything short of the longest agent loops
-// and stays well under the 1M context window budget. Users on Opus who want
-// a wider budget can edit this and rebuild — exposing a `budget` slash arg
-// is over-engineering for a feature most users will leave at "on" or "off".
+// When `effort` is set (user picked a tier via /model), it takes priority
+// over the `enabled` flag. The /thinking toggle is only used as a fallback
+// for models without an explicit tier.
 import { PROVIDER_REASONING_TIERS } from '../types/index.js'
 import { providerOf } from './capabilities.js'
 
-const ANTHROPIC_BUDGET_TOKENS = 8000
-
 /** Whether the model exposes a granular reasoning-effort tier (vs. the
  *  binary /thinking toggle). A provider has tiers but only some of its
- *  model families honor them (thinkingLevel is Gemini 3-only, Kimi's
- *  reasoningEffort is K3-only) — modelPattern in PROVIDER_REASONING_TIERS
+ *  model families honor them — modelPattern in PROVIDER_REASONING_TIERS
  *  gates that. Drives both the /model tier picker and the effort branch
- *  in getThinkingProviderOptions. */
+ *  in getReasoningLevel. */
 export function supportsReasoningTier(modelId: string): boolean {
   const config = PROVIDER_REASONING_TIERS[providerOf(modelId)]
   if (!config) return false
   return !config.modelPattern || config.modelPattern.test(modelId)
 }
 
+export type ReasoningLevel = 'provider-default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/** Map our internal tier values (from PROVIDER_REASONING_TIERS) to the SDK's
+ *  canonical reasoning levels. Most map 1:1 but 'max' maps to 'xhigh'. */
+const TIER_TO_REASONING: Record<string, ReasoningLevel> = {
+  none: 'none',
+  minimal: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  max: 'xhigh',
+}
+
 /**
- * Build the `providerOptions` entry needed to put the given model into the
- * desired thinking state. Returns an empty object when the model has no
- * thinking knob (so callers can spread/merge unconditionally).
+ * Compute the top-level `reasoning` value for streamText/generateText.
+ * Returns undefined when the model doesn't support reasoning control
+ * (custom provider, or Alibaba/Zhipu which use different mechanisms).
  *
- * When `effort` is set (user picked a tier via /model), it takes priority
- * over the `enabled` flag — tier is the user's explicit choice. The /thinking
- * toggle is only used as a fallback for models without an explicit tier.
+ * For providers that support the SDK's top-level `reasoning` parameter
+ * (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot), this is all
+ * that's needed — the SDK handles the provider-specific translation.
+ */
+export function getReasoningLevel(modelId: string, enabled: boolean, effort?: string): ReasoningLevel | undefined {
+  const provider = providerOf(modelId)
+
+  // These providers use separate mechanisms (providerOptions / fetch shim)
+  if (provider === 'alibaba' || provider === 'zhipu' || provider === 'custom') {
+    return undefined
+  }
+
+  // Tiered reasoning — user picked an explicit effort level AND the model
+  // honors it.
+  if (effort && supportsReasoningTier(modelId)) {
+    return TIER_TO_REASONING[effort] ?? (effort as ReasoningLevel)
+  }
+
+  return enabled ? 'high' : 'none'
+}
+
+/**
+ * Build providerOptions for providers that can't use the top-level
+ * `reasoning` parameter: Alibaba (enableThinking) and Zhipu (thinking toggle).
  *
- * `enabled` semantics (tier-less fallback):
- *   true  — opt INTO maximum reasoning the provider supports
- *   false — opt OUT (or pin to a low/disabled mode where the provider
- *           defaults to thinking-on and forces some always-on minimum,
- *           e.g. Gemini 2.5 Pro can't go below 128 tokens — we still
- *           ask for the lowest the SDK accepts)
- *
- * `effort` semantics (tiered model):
- *   For providers with granular reasoning control (OpenAI, Anthropic, Google,
- *   xAI, Moonshot), the effort string is mapped to the corresponding AI SDK key.
- *   Providers without tier support (deepseek, alibaba, zhipu)
- *   ignore `effort` and always use the binary `enabled` toggle.
+ * Returns an empty object for providers that use top-level `reasoning`.
  */
 export function getThinkingProviderOptions(
   modelId: string,
@@ -75,65 +82,18 @@ export function getThinkingProviderOptions(
 ): Record<string, Record<string, unknown>> {
   const provider = providerOf(modelId)
 
-  // Tiered reasoning — user picked an explicit effort level AND the model
-  // honors it. A stored tier for a model outside the tier's modelPattern
-  // (e.g. kimi-k2.6, gemini-2.5-pro) falls through to the binary toggle so
-  // /thinking keeps working there.
-  if (effort && supportsReasoningTier(modelId)) {
-    switch (provider) {
-      case 'openai':
-        return { openai: { reasoningEffort: effort } }
-      case 'anthropic':
-        return { anthropic: { effort } }
-      case 'google':
-        return { google: { thinkingConfig: { thinkingLevel: effort.toUpperCase() } } }
-      case 'xai':
-        return { xai: { reasoningEffort: effort } }
-      case 'moonshotai':
-        // Kimi K3 uses the top-level `reasoning_effort` field (low/high/max).
-        return { moonshotai: { reasoningEffort: effort } }
-      default:
-        break
-    }
-  }
-
-  // Binary /thinking toggle (no explicit tier, or provider without tiers).
   switch (provider) {
-    case 'anthropic':
-      return enabled
-        ? { anthropic: { thinking: { type: 'enabled', budgetTokens: ANTHROPIC_BUDGET_TOKENS } } }
-        : { anthropic: { thinking: { type: 'disabled' } } }
-
-    case 'deepseek':
-      // V4 family supports the toggle; the legacy `deepseek-chat` /
-      // `deepseek-reasoner` ids ignore unknown providerOptions silently.
-      return enabled
-        ? { deepseek: { thinking: { type: 'enabled' } } }
-        : { deepseek: { thinking: { type: 'disabled' } } }
-
-    case 'moonshotai':
-      return enabled
-        ? { moonshotai: { thinking: { type: 'enabled' } } }
-        : { moonshotai: { thinking: { type: 'disabled' } } }
-
     case 'alibaba':
       return { alibaba: { enableThinking: enabled } }
 
-    case 'google':
-      return enabled
-        ? { google: { thinkingConfig: { thinkingBudget: -1 } } }
-        : { google: { thinkingConfig: { thinkingBudget: 0 } } }
-
-    case 'xai':
-      return enabled ? { xai: { reasoningEffort: 'high' } } : { xai: { reasoningEffort: 'low' } }
-
-    case 'openai':
-      return enabled ? { openai: { reasoningEffort: 'high' } } : { openai: { reasoningEffort: 'minimal' } }
-
     case 'zhipu':
+      // Binary toggle via providerOptions for models that don't use tiers.
+      // Tiered models get reasoning_effort injected by the fetch shim.
+      if (effort && supportsReasoningTier(modelId)) {
+        return { zhipu: { thinking: { type: 'enabled' } } }
+      }
       return enabled ? { zhipu: { thinking: { type: 'enabled' } } } : { zhipu: { thinking: { type: 'disabled' } } }
 
-    case 'custom':
     default:
       return {}
   }

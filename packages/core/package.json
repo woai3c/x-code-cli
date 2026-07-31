@@ -17,25 +17,27 @@
     "dist"
   ],
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc -b --watch"
   },
   "dependencies": {
-    "@ai-sdk/alibaba": "^1.0.0",
-    "@ai-sdk/anthropic": "^3.0.0",
-    "@ai-sdk/deepseek": "^2.0.0",
-    "@ai-sdk/google": "^3.0.0",
-    "@ai-sdk/moonshotai": "^2.0.25",
-    "@ai-sdk/openai": "^3.0.0",
-    "@ai-sdk/openai-compatible": "^2.0.50",
-    "@ai-sdk/xai": "^3.0.0",
+    "@ai-sdk/alibaba": "^2.0.0",
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@ai-sdk/deepseek": "^3.0.0",
+    "@ai-sdk/google": "^4.0.0",
+    "@ai-sdk/moonshotai": "^3.0.0",
+    "@ai-sdk/openai": "^4.0.0",
+    "@ai-sdk/openai-compatible": "^3.0.0",
+    "@ai-sdk/provider": "^4.0.0",
+    "@ai-sdk/provider-utils": "^5.0.0",
+    "@ai-sdk/xai": "^4.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tavily/core": "^0.7.0",
     "@vscode/ripgrep": "^1.17.0",
-    "ai": "^6.0.0",
+    "ai": "^7.0.0",
     "cheerio": "^1.0.0",
     "diff": "^8.0.0",
     "execa": "^9.0.0",
@@ -46,7 +48,6 @@
     "tesseract.js": "^7.0.0",
     "turndown": "^7.2.0",
     "xlsx": "^0.18.5",
-    "zhipu-ai-provider": "^0.2.0",
     "zod": "^3.25.76"
   }
 }

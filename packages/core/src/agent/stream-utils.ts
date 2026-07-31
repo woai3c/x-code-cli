@@ -3,7 +3,7 @@ import type { ModelMessage } from 'ai'
 
 /** Minimal shape of what we use from streamText() result — avoids complex generic propagation. */
 export interface StreamResult {
-  fullStream: AsyncIterable<{
+  stream: AsyncIterable<{
     type: string
     text?: string
     toolName?: string
@@ -11,8 +11,8 @@ export interface StreamResult {
     output?: unknown
     toolCallId?: string
     /** When `type === 'error'`, the SDK's wrapped provider error. The SDK
-     *  does NOT throw from fullStream iteration on request failure — it
-     *  enqueues this chunk and closes the stream (stream-text.ts:1910).
+     *  does NOT throw from stream iteration on request failure — it
+     *  enqueues this chunk and closes the stream.
      *  Our streamChunksToUI re-throws so the outer try/catch can classify. */
     error?: unknown
   }>
@@ -21,9 +21,6 @@ export interface StreamResult {
     | {
         inputTokens?: number
         outputTokens?: number
-        /** AI SDK v6 normalizes provider cache fields here. cacheReadTokens
-         *  is a subset of inputTokens (don't double-count); cacheWriteTokens
-         *  is what Anthropic charges as cache_creation_input_tokens. */
         inputTokenDetails?: {
           cacheReadTokens?: number
           cacheWriteTokens?: number

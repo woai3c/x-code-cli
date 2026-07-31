@@ -226,13 +226,14 @@ async function doExtract(args: RunMemoryExtractorArgs): Promise<void> {
   const startTime = Date.now()
 
   try {
-    const { output: object } = await generateText({
+    const result = await generateText({
       model: parentModel,
-      system: SYSTEM_PROMPT,
+      instructions: SYSTEM_PROMPT,
       prompt: USER_TEMPLATE(transcript, existing),
       output: Output.object({ schema: MemorySchema }),
       abortSignal,
     })
+    const object = result.output as z.infer<typeof MemorySchema>
 
     const today = new Date().toISOString().slice(0, 10)
     let written = 0

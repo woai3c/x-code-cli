@@ -10,7 +10,7 @@ import path from 'node:path'
 import { grep } from '../src/tools/grep.js'
 
 const exec = (input: Record<string, unknown>) =>
-  grep.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined as any })
+  grep.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined } as any)
 
 let dir: string
 beforeAll(async () => {

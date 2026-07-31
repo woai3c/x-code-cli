@@ -1,10 +1,8 @@
 // @x-code-cli/core — AI SDK Provider Registry (multi-model support)
-import { zhipu } from 'zhipu-ai-provider'
-
 import { createAlibaba } from '@ai-sdk/alibaba'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createDeepSeek } from '@ai-sdk/deepseek'
-import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createGoogle } from '@ai-sdk/google'
 import { createMoonshotAI } from '@ai-sdk/moonshotai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
@@ -34,16 +32,24 @@ export function createModelRegistry() {
 
   if (opts.anthropic) providers.anthropic = createAnthropic({ fetch: permanentErrorFetch })
   if (opts.openai) providers.openai = createOpenAI({ fetch: permanentErrorFetch })
-  if (opts.google) providers.google = createGoogleGenerativeAI({ fetch: permanentErrorFetch })
+  if (opts.google) providers.google = createGoogle({ fetch: permanentErrorFetch })
   if (opts.xai) providers.xai = createXai({ fetch: permanentErrorFetch })
-  if (opts.deepseek) providers.deepseek = createDeepSeek({ fetch: deepseekReasoningFetch })
+  if (opts.deepseek) providers.deepseek = createDeepSeek({ fetch: permanentErrorFetch })
   if (opts.alibaba) {
     providers.alibaba = createAlibaba({
       baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       fetch: permanentErrorFetch,
     })
   }
-  if (opts.zhipu) providers.zhipu = zhipu
+  if (opts.zhipu) {
+    providers.zhipu = createOpenAICompatible({
+      name: 'zhipu',
+      apiKey: opts.zhipu,
+      baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+      fetch: zhipuReasoningFetch,
+      includeUsage: true,
+    })
+  }
   if (opts.moonshotai) {
     // Base URL comes from the /model picker, persisted in config.baseUrls.
     // No env-var escape hatch — the picker is the single source of truth,
@@ -140,33 +146,34 @@ const moonshotConvertUsage = (usage: any) => {
 }
 
 /**
- * Back-fill `reasoning_content: ""` on every assistant message in the request
- * body before it reaches DeepSeek V4. The upstream `@ai-sdk/deepseek` converter
- * (convert-to-deepseek-chat-messages.ts) strips `reasoning_content` from any
- * assistant message at or before the last user message — correct for
- * deepseek-reasoner (R1), which forbids passing reasoning back, but wrong for
- * deepseek-v4-*, which *requires* it. Without this, the second turn 400s with
- * "reasoning_content in the thinking mode must be passed back to the API."
- * Scoped to v4 so R1 keeps its documented behavior. Remove once upstream
- * differentiates by model.
+ * Side-channel for Zhipu reasoning effort. Zhipu goes through
+ * @ai-sdk/openai-compatible which doesn't auto-translate the top-level
+ * `reasoning` parameter. We inject `reasoning_effort` via the fetch shim.
  */
-const deepseekReasoningFetch: typeof fetch = async (input, init) => {
-  // Forward through permanentErrorFetch so DeepSeek requests get BOTH
-  // the v4 reasoning_content backfill AND the billing-error short-circuit.
+let _zhipuReasoningEffort: string | undefined
+
+export function setZhipuReasoningEffort(effort: string | undefined): void {
+  _zhipuReasoningEffort = effort
+}
+
+/**
+ * Inject `reasoning_effort` into Zhipu requests. Zhipu goes through
+ * @ai-sdk/openai-compatible which doesn't auto-translate the SDK's
+ * top-level `reasoning` parameter. We intercept the HTTP body and add it.
+ */
+const zhipuReasoningFetch: typeof fetch = async (input, init) => {
   if (!init?.body || typeof init.body !== 'string') return permanentErrorFetch(input, init)
 
-  try {
-    const body = JSON.parse(init.body) as { model?: string; messages?: Array<Record<string, unknown>> }
-    if (typeof body.model === 'string' && body.model.includes('deepseek-v4') && Array.isArray(body.messages)) {
-      for (const msg of body.messages) {
-        if (msg.role === 'assistant' && msg.reasoning_content == null) {
-          msg.reasoning_content = ''
-        }
+  if (_zhipuReasoningEffort) {
+    try {
+      const body = JSON.parse(init.body) as { model?: string; reasoning_effort?: string }
+      if (typeof body.model === 'string' && !body.reasoning_effort) {
+        body.reasoning_effort = _zhipuReasoningEffort
+        return permanentErrorFetch(input, { ...init, body: JSON.stringify(body) })
       }
-      return permanentErrorFetch(input, { ...init, body: JSON.stringify(body) })
+    } catch {
+      // pass through
     }
-  } catch {
-    // Body wasn't JSON we recognize — pass through unchanged.
   }
 
   return permanentErrorFetch(input, init)

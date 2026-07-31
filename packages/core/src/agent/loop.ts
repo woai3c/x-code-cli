@@ -15,7 +15,8 @@ import { buildKnowledgeContext } from '../knowledge/loader.js'
 import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { applyCacheControl } from '../providers/cache-control.js'
-import { getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
+import { setZhipuReasoningEffort } from '../providers/registry.js'
+import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { createGetGoalTool } from '../tools/get-goal.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
@@ -137,10 +138,10 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
   // Track those calls so we can keep them out of the UI entirely.
   const deferredNames = new Set((state.deferredCatalog ?? []).map((e) => e.name))
   const suppressedDeferredCallIds = new Set<string>()
-  for await (const chunk of result.fullStream) {
+  for await (const chunk of result.stream) {
     if (chunk.type === 'error') {
-      // AI SDK doesn't throw from fullStream iteration on request failure —
-      // it enqueues this chunk and closes the stream (stream-text.ts:1910).
+      // AI SDK doesn't throw from stream iteration on request failure —
+      // it enqueues this chunk and closes the stream.
       // Without this re-throw the loop completes normally, then
       // `await result.response` rejects with NoOutputGeneratedError —
       // user sees that generic message instead of the real provider error
@@ -447,40 +448,37 @@ async function runTurn(
   // the remaining OpenAI-compatible providers rely on the system-prompt
   // cache in LoopState keeping the prefix byte-stable.
   const cached = applyCacheControl({
-    system: systemPrompt,
+    instructions: systemPrompt,
     messages: requestMessages,
     tools: effectiveTools,
     modelId: options.modelId,
     sessionId: state.sessionId,
   })
 
-  // Extended-thinking / reasoning toggle. The user-facing `/thinking on|off`
-  // command (App.tsx) flips `options.thinking`; we translate that flag into
-  // the provider-specific switch (Anthropic `thinking`, Google
-  // `thinkingConfig`, Alibaba `enableThinking`, etc.) and merge it into the
-  // existing per-call providerOptions. Models with no thinking concept
-  // Models with no thinking concept get an empty entry — the SDK silently
-  // ignores the unrelated keys. Defaults to off when undefined so a stale
-  // config without the new field doesn't surprise users with a quality /
-  // latency change on launch.
+  // Extended-thinking / reasoning toggle. AI SDK v7 provides a top-level
+  // `reasoning` parameter that works portably across most providers. For
+  // Alibaba and Zhipu we still use providerOptions (Alibaba) or fetch shim
+  // (Zhipu) since the SDK doesn't translate `reasoning` for them.
   //
   // Tiered reasoning (via /model tier picker) takes priority over the binary
   // /thinking toggle. If the user explicitly chose a reasoning effort level
-  // for this model (stored in config.modelReasoningEffort), we use it
-  // regardless of the /thinking state. /thinking only applies as a fallback
-  // for models without an explicit tier (including providers whose SDK
-  // doesn't expose a granular effort knob — deepseek, moonshot, alibaba,
-  // zhipu).
+  // for this model (stored in config.modelReasoningEffort), we use it.
   const config = loadUserConfig()
   const effort = config.modelReasoningEffort?.[options.modelId]
+  const reasoningLevel = getReasoningLevel(options.modelId, options.thinking ?? false, effort)
   const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false, effort)
   const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
+
+  // Side-channel: pass reasoning effort to the Zhipu fetch shim which
+  // injects `reasoning_effort` into the HTTP body. Zhipu goes through
+  // @ai-sdk/openai-compatible which doesn't auto-translate top-level reasoning.
+  setZhipuReasoningEffort(effort)
 
   let result: StreamResult
   try {
     result = streamText({
       model,
-      system: cached.system,
+      instructions: cached.instructions,
       messages: cached.messages,
       tools: cached.tools ?? effectiveTools,
       maxRetries: 3,
@@ -491,6 +489,11 @@ async function runTurn(
       // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;
       // unknown models fall through to the module-level default.
       maxOutputTokens: getMaxOutputTokens(options.modelId),
+      // Top-level reasoning control (AI SDK v7). Providers that support it
+      // (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot) translate
+      // internally. Returns undefined for Alibaba/Zhipu/custom (handled
+      // via providerOptions / fetch shim instead).
+      ...(reasoningLevel ? { reasoning: reasoningLevel } : {}),
       // AI SDK types `providerOptions` as `SharedV3ProviderOptions` (nested
       // JSONObject). Our cache-control helper returns a looser
       // `Record<string, unknown>` shape because provider-specific field sets
@@ -516,7 +519,7 @@ async function runTurn(
   // Pre-attach .catch(noop) handlers to every sibling promise the SDK exposes
   // (response/usage/finishReason/toolCalls) BEFORE we await the stream. On
   // request failure the SDK rejects all of them in the same tick — if we wait
-  // for fullStream to throw and only then drain, Node's unhandled-rejection
+  // for the stream to throw and only then drain, Node's unhandled-rejection
   // sweep can run first and terminate the process. Attaching catch handlers
   // early is idempotent: a later `await result.response` still rejects and
   // propagates normally through our error path.

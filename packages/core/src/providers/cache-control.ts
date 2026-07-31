@@ -59,9 +59,9 @@ import { providerOf } from './capabilities.js'
 const MESSAGE_CACHE_BREAKPOINTS = 2
 
 export interface CacheControlArgs {
-  /** System prompt string. May be wrapped into a system-role message if the
-   *  provider needs cache_control attached to it. */
-  system: string
+  /** Instructions (system prompt) string. May be wrapped into a system-role
+   *  message if the provider needs cache_control attached to it. */
+  instructions: string
   /** Conversation messages to send. */
   messages: ModelMessage[]
   /** Tool registry passed to streamText. For Anthropic we tag the last entry
@@ -78,10 +78,10 @@ export interface CacheControlArgs {
 }
 
 export interface CacheControlResult {
-  /** Possibly-undefined: for Anthropic/Alibaba we fold the system prompt into
+  /** Possibly-undefined: for Anthropic/Alibaba we fold the instructions into
    *  the messages array to attach cache_control; in that case streamText must
-   *  be called without a separate `system` param. */
-  system?: string
+   *  be called without a separate `instructions` param. */
+  instructions?: string
   messages: ModelMessage[]
   /** For Anthropic/Alibaba, a shallow-cloned tools record with cache_control
    *  attached to the last entry. Other providers get the input record returned
@@ -137,16 +137,16 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
   const provider = providerOf(args.modelId)
 
   if (provider === 'anthropic') {
-    // Fold system into messages so we can attach cache_control to it, then
-    // mark the last N non-system messages as additional breakpoints.
+    // Fold instructions into messages so we can attach cache_control to it,
+    // then mark the last N non-system messages as additional breakpoints.
     const nonSystemTail = args.messages.slice(-MESSAGE_CACHE_BREAKPOINTS)
     const tailSet = new Set(nonSystemTail)
     const tagged = args.messages.map((m) =>
       tailSet.has(m) ? tagMessage(m, 'anthropic', { cacheControl: { type: 'ephemeral' } }) : m,
     )
     return {
-      system: undefined,
-      messages: [anthropicSystemMessage(args.system), ...tagged],
+      instructions: undefined,
+      messages: [anthropicSystemMessage(args.instructions), ...tagged],
       tools: tagLastTool(args.tools),
     }
   }
@@ -156,7 +156,7 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     // API), but the promptCacheKey still routes identical prefixes to the
     // same cache shard which is the actual cost win.
     return {
-      system: args.system,
+      instructions: args.instructions,
       messages: args.messages,
       tools: args.tools,
       providerOptions: {
@@ -173,7 +173,7 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     // SDK spreads non-standard providerOptions keys into the request body
     // verbatim, and @ai-sdk/moonshotai inherits that behavior.
     return {
-      system: args.system,
+      instructions: args.instructions,
       messages: args.messages,
       tools: args.tools,
       providerOptions: {
@@ -189,7 +189,7 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     // cache-cold servers. We use sessionId as the conv-id so every turn
     // in a conversation routes to the same cache shard.
     return {
-      system: args.system,
+      instructions: args.instructions,
       messages: args.messages,
       tools: args.tools,
       headers: { 'x-grok-conv-id': args.sessionId },
@@ -200,7 +200,7 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
     // Alibaba supports explicit caching via `cache_control: { type: 'ephemeral' }`
     // markers, same protocol as Anthropic — up to 4 breakpoints per request.
     // Explicit cache hits cost 10% of input price (vs 80% implicit discount),
-    // with a 125% write cost. We tag system prompt + last tool + last 2
+    // with a 125% write cost. We tag instructions + last tool + last 2
     // messages — identical layout to Anthropic.
     const nonSystemTail = args.messages.slice(-MESSAGE_CACHE_BREAKPOINTS)
     const tailSet = new Set(nonSystemTail)
@@ -208,16 +208,16 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
       tailSet.has(m) ? tagMessage(m, 'alibaba', { cacheControl: { type: 'ephemeral' } }) : m,
     )
     return {
-      system: undefined,
-      messages: [alibabaSystemMessage(args.system), ...tagged],
+      instructions: undefined,
+      messages: [alibabaSystemMessage(args.instructions), ...tagged],
       tools: tagLastToolAlibaba(args.tools),
     }
   }
 
   // OpenAI-compatible & Gemini: no explicit flags, just rely on stable prefix.
   // Callers must ensure buildSystemPrompt is cached in LoopState so the same
-  // system string is re-sent every turn.
-  return { system: args.system, messages: args.messages, tools: args.tools }
+  // instructions string is re-sent every turn.
+  return { instructions: args.instructions, messages: args.messages, tools: args.tools }
 }
 
 /** Shallow-clone `tools` and attach a cache_control breakpoint to the last

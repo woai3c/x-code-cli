@@ -151,7 +151,12 @@ function toolOutputBytes(output: unknown): number {
     for (const entry of typed.value as Array<{ type?: string; text?: string }>) {
       if (typeof entry?.text === 'string') {
         bytes += textBytes(entry.text)
-      } else if (entry?.type !== 'media' && entry?.type !== 'image' && entry?.type !== 'file') {
+      } else if (
+        entry?.type !== 'media' &&
+        entry?.type !== 'image' &&
+        entry?.type !== 'image-data' &&
+        entry?.type !== 'file'
+      ) {
         bytes += jsonBytes(entry)
       }
     }

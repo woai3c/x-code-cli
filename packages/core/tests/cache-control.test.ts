@@ -15,12 +15,12 @@ describe('applyCacheControl', () => {
   describe('anthropic', () => {
     it('folds system prompt into messages with cache_control', () => {
       const out = applyCacheControl({
-        system: 'you are helpful',
+        instructions: 'you are helpful',
         messages: baseMessages,
         modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
-      expect(out.system).toBeUndefined()
+      expect(out.instructions).toBeUndefined()
       expect(out.messages[0].role).toBe('system')
       expect(out.messages[0].content).toBe('you are helpful')
       const sysOpts = (out.messages[0] as { providerOptions?: { anthropic?: { cacheControl?: { type: string } } } })
@@ -30,7 +30,7 @@ describe('applyCacheControl', () => {
 
     it('tags the last two non-system messages with cache_control', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'anthropic:claude-sonnet-5',
         sessionId: 'abc',
@@ -50,7 +50,7 @@ describe('applyCacheControl', () => {
 
     it('does not set top-level providerOptions for anthropic', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'anthropic:claude-haiku-4-5',
         sessionId: 'abc',
@@ -62,7 +62,7 @@ describe('applyCacheControl', () => {
       const frozenSource: ModelMessage[] = [msg('user', 'a'), msg('assistant', 'b')]
       const snapshot = frozenSource.map((m) => ({ ...m }))
       applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: frozenSource,
         modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
@@ -84,7 +84,7 @@ describe('applyCacheControl', () => {
         edit: { description: 'edit a file' },
       }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'anthropic:claude-opus-4-8',
@@ -102,7 +102,7 @@ describe('applyCacheControl', () => {
     it('preserves tool key order so the cached prefix stays byte-stable', () => {
       const tools = { read: {}, write: {}, edit: {}, shell: {} }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'anthropic:claude-opus-4-8',
@@ -114,7 +114,7 @@ describe('applyCacheControl', () => {
     it('does not mutate the input tools record', () => {
       const tools = { read: { description: 'r' }, write: { description: 'w' } }
       applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'anthropic:claude-opus-4-8',
@@ -131,7 +131,7 @@ describe('applyCacheControl', () => {
         },
       }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'anthropic:claude-opus-4-8',
@@ -152,7 +152,7 @@ describe('applyCacheControl', () => {
   describe('openai', () => {
     it('sets top-level promptCacheKey to sessionId', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'openai:gpt-5.6-sol',
         sessionId: 'session-xyz',
@@ -165,19 +165,19 @@ describe('applyCacheControl', () => {
 
     it('keeps system prompt separate (not folded into messages)', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'openai:gpt-5.6-sol',
         sessionId: 'abc',
       })
-      expect(out.system).toBe('sys')
+      expect(out.instructions).toBe('sys')
       expect(out.messages).toHaveLength(baseMessages.length)
     })
 
     it('passes tools through untouched', () => {
       const tools = { read: { description: 'r' }, write: { description: 'w' } }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'openai:gpt-5.6-sol',
@@ -190,7 +190,7 @@ describe('applyCacheControl', () => {
   describe('moonshotai', () => {
     it('sets prompt_cache_key to sessionId for cache-shard affinity', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'moonshotai:kimi-k3',
         sessionId: 'session-xyz',
@@ -202,13 +202,13 @@ describe('applyCacheControl', () => {
     it('keeps system prompt and messages untouched', () => {
       const tools = { read: { description: 'r' } }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'moonshotai:kimi-k3',
         sessionId: 'abc',
       })
-      expect(out.system).toBe('sys')
+      expect(out.instructions).toBe('sys')
       expect(out.messages).toEqual(baseMessages)
       expect(out.tools).toBe(tools)
     })
@@ -217,7 +217,7 @@ describe('applyCacheControl', () => {
   describe('xai', () => {
     it('sends x-grok-conv-id header with sessionId', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'xai:grok-4.5',
         sessionId: 'session-xyz',
@@ -228,13 +228,13 @@ describe('applyCacheControl', () => {
     it('keeps system prompt, messages and tools untouched', () => {
       const tools = { read: { description: 'r' } }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'xai:grok-4.5',
         sessionId: 'abc',
       })
-      expect(out.system).toBe('sys')
+      expect(out.instructions).toBe('sys')
       expect(out.messages).toEqual(baseMessages)
       expect(out.tools).toBe(tools)
       expect(out.providerOptions).toBeUndefined()
@@ -244,12 +244,12 @@ describe('applyCacheControl', () => {
   describe('alibaba', () => {
     it('folds system prompt into messages with cache_control', () => {
       const out = applyCacheControl({
-        system: 'you are helpful',
+        instructions: 'you are helpful',
         messages: baseMessages,
         modelId: 'alibaba:qwen3-coder-plus',
         sessionId: 'abc',
       })
-      expect(out.system).toBeUndefined()
+      expect(out.instructions).toBeUndefined()
       expect(out.messages[0].role).toBe('system')
       expect(out.messages[0].content).toBe('you are helpful')
       const sysOpts = (out.messages[0] as { providerOptions?: { alibaba?: { cacheControl?: { type: string } } } })
@@ -259,7 +259,7 @@ describe('applyCacheControl', () => {
 
     it('tags the last two non-system messages with cache_control', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'alibaba:qwen3-coder-plus',
         sessionId: 'abc',
@@ -282,7 +282,7 @@ describe('applyCacheControl', () => {
         edit: { description: 'edit a file' },
       }
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         tools,
         modelId: 'alibaba:qwen3-coder-plus',
@@ -298,7 +298,7 @@ describe('applyCacheControl', () => {
 
     it('does not set top-level providerOptions', () => {
       const out = applyCacheControl({
-        system: 'sys',
+        instructions: 'sys',
         messages: baseMessages,
         modelId: 'alibaba:qwen3-coder-plus',
         sessionId: 'abc',
@@ -313,13 +313,13 @@ describe('applyCacheControl', () => {
       (modelId) => {
         const tools = { read: { description: 'r' } }
         const out = applyCacheControl({
-          system: 'sys',
+          instructions: 'sys',
           messages: baseMessages,
           tools,
           modelId,
           sessionId: 'abc',
         })
-        expect(out.system).toBe('sys')
+        expect(out.instructions).toBe('sys')
         expect(out.messages).toEqual(baseMessages)
         expect(out.providerOptions).toBeUndefined()
         expect(out.tools).toBe(tools)

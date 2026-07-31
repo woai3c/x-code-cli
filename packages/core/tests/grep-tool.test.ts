@@ -36,10 +36,11 @@ describe('grep tool', () => {
     await fs.writeFile(path.join(tmpDir, 'hello.ts'), 'const greeting = "hello world"\nconst farewell = "goodbye"')
     await fs.writeFile(path.join(tmpDir, 'other.ts'), 'const x = 42')
 
-    const result = await grep.execute!(
-      { pattern: 'hello', path: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
+    const result = await grep.execute!({ pattern: 'hello', path: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)
     expect(result).toContain('hello')
     expect(result).toContain('hello.ts')
 
@@ -50,10 +51,11 @@ describe('grep tool', () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-grep-test-'))
     await fs.writeFile(path.join(tmpDir, 'empty.ts'), 'const x = 1')
 
-    const result = await grep.execute!(
-      { pattern: 'nonexistent_pattern_xyz', path: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
+    const result = await grep.execute!({ pattern: 'nonexistent_pattern_xyz', path: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)
     expect(result).toContain('No matches found')
 
     await fs.rm(tmpDir, { recursive: true })
@@ -64,10 +66,11 @@ describe('grep tool', () => {
     await fs.writeFile(path.join(tmpDir, 'code.ts'), 'hello world')
     await fs.writeFile(path.join(tmpDir, 'code.js'), 'hello world')
 
-    const result = await grep.execute!(
-      { pattern: 'hello', path: tmpDir, glob: '*.ts' },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
+    const result = await grep.execute!({ pattern: 'hello', path: tmpDir, glob: '*.ts' }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)
     expect(result).toContain('code.ts')
     expect(result).not.toContain('code.js')
 
@@ -82,10 +85,11 @@ describe('grep tool', () => {
     }
     await fs.writeFile(path.join(tmpDir, 'big.txt'), lines.join('\n'))
 
-    const result = (await grep.execute!(
-      { pattern: 'match_target', path: tmpDir, headLimit: 5 },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )) as string
+    const result = (await grep.execute!({ pattern: 'match_target', path: tmpDir, headLimit: 5 }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)) as string
     expect(result).toContain('more lines not shown')
     expect(result).toContain('capped at 5')
     const matchLines = result.split('\n').filter((l) => l.includes('match_target') && !l.includes('...'))

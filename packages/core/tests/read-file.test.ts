@@ -7,7 +7,7 @@ import path from 'node:path'
 import { type ReadFileCache, createReadFileTool, readFile } from '../src/tools/read-file.js'
 
 const exec = (input: Record<string, unknown>) =>
-  readFile.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined as any })
+  readFile.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined } as any)
 
 describe('readFile tool', () => {
   it('reads a text file with line numbers', async () => {
@@ -141,7 +141,7 @@ describe('readFile — Jupyter notebooks', () => {
 
 describe('readFile — read de-dup cache', () => {
   const execWith = (tool: ReturnType<typeof createReadFileTool>, input: Record<string, unknown>) =>
-    tool.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined as any })
+    tool.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined } as any)
 
   it('returns a stub when re-reading an unchanged file', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-'))

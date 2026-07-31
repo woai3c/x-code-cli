@@ -145,7 +145,7 @@ export async function compressMessages(
   const { text: summary } = await generateText({
     model,
     abortSignal,
-    system: systemPrompt,
+    instructions: systemPrompt,
     messages: messagesToSummarize,
   })
 

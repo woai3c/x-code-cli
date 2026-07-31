@@ -33,7 +33,7 @@ export { resolveModelId, getAvailableProviders, getEnvVarName, loadUserConfig, s
 export type { UserConfig } from './config/index.js'
 
 // Provider Registry
-export { createModelRegistry } from './providers/registry.js'
+export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'
 
 // Agent
 export { agentLoop, saveSession, compressMessages } from './agent/loop.js'

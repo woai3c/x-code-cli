@@ -37,7 +37,7 @@ describe('toolResultMessage', () => {
       type: 'content',
       value: [
         { type: 'text', text: '[image returned, image/png]' },
-        { type: 'media', data: 'AAAA', mediaType: 'image/png' },
+        { type: 'image-data', data: 'AAAA', mediaType: 'image/png' },
       ],
     })
   })

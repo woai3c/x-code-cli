@@ -96,7 +96,7 @@ describe('agent loop', () => {
     }
 
     vi.mocked(streamText).mockReturnValue({
-      fullStream: mockAsyncIterable,
+      stream: mockAsyncIterable,
       response: Promise.resolve({ messages: [{ role: 'assistant', content: 'Hello world' }] }),
       usage: Promise.resolve({ inputTokens: 100, outputTokens: 20 }),
       finishReason: Promise.resolve('stop'),
@@ -126,7 +126,7 @@ describe('agent loop', () => {
 
   it('stops at finishReason stop (single turn)', async () => {
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: 'done' }
         },
@@ -150,7 +150,7 @@ describe('agent loop', () => {
   it('reports error when max turns exceeded', async () => {
     // Force tool-calls finish reason to keep looping
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: '' }
         },
@@ -179,7 +179,7 @@ describe('agent loop', () => {
     // turns every subsequent submit hit the cap immediately. Now it's a
     // per-invocation local, so two clean turns in a row each report 1.
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: 'ok' }
         },
@@ -203,7 +203,7 @@ describe('agent loop', () => {
     // The fix also makes maxTurns optional. When unset, the loop runs to
     // a natural finish — no "Reached maximum turns" error.
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: 'done' }
         },
@@ -228,7 +228,7 @@ describe('agent loop', () => {
     const state = createLoopState()
     createGoal(state, { objective: 'wait for an external value', maxTurns: 20 })
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           requestGoalBlocked(state, { blocker: 'missing environment variable' })
           yield { type: 'tool-call', toolCallId: 'goal-blocked', toolName: 'updateGoal', input: {} }
@@ -265,7 +265,7 @@ describe('agent loop', () => {
     // in state.messages BEFORE the next streamText call, merged into one
     // user message — never interleaved with pending tool_results.
     const stopResult = {
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: 'done' }
         },
@@ -277,7 +277,7 @@ describe('agent loop', () => {
     } as any
     vi.mocked(streamText)
       .mockReturnValueOnce({
-        fullStream: {
+        stream: {
           async *[Symbol.asyncIterator]() {
             yield { type: 'text-delta', text: 'working' }
           },
@@ -324,7 +324,7 @@ describe('agent loop', () => {
     // needs_follow_up: a message queued while the final reply streams must
     // keep the loop alive instead of returning to the UI idle.
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: 'reply' }
         },
@@ -358,7 +358,7 @@ describe('agent loop', () => {
 
   it('runs without a queue when consumeQueuedInputs is absent', async () => {
     vi.mocked(streamText).mockReturnValue({
-      fullStream: {
+      stream: {
         async *[Symbol.asyncIterator]() {
           yield { type: 'text-delta', text: 'done' }
         },

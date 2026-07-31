@@ -647,8 +647,8 @@ export const PROVIDER_BASE_URLS: Record<string, { options: readonly { label: str
 // second picker so the user can choose the effort level. The chosen level
 // is persisted per-model in UserConfig.modelReasoningEffort.
 //
-// Providers with no entry here (deepseek, alibaba, zhipu)
-// only support the binary /thinking toggle — skip the tier picker.
+// Providers with no entry here (alibaba) only support the binary
+// /thinking toggle — skip the tier picker.
 //
 // `modelPattern` gates the tier to the models that actually honor it:
 // within a provider, only some model families expose the granular knob
@@ -695,6 +695,23 @@ export const PROVIDER_REASONING_TIERS: Record<
       { label: 'Low', value: 'low', description: 'Faster, concise reasoning' },
       { label: 'High', value: 'high', description: 'Deeper reasoning' },
       { label: 'Max', value: 'max', description: 'Maximum reasoning (default)' },
+    ],
+  },
+  deepseek: {
+    // V4 Flash supports low/high/max; V4 Pro currently only high/max (low→high server-side).
+    modelPattern: /deepseek-v4/,
+    options: [
+      { label: 'Low', value: 'low', description: 'Faster, less reasoning' },
+      { label: 'High', value: 'high', description: 'Standard reasoning (default)' },
+      { label: 'Max', value: 'max', description: 'Maximum reasoning depth' },
+    ],
+  },
+  zhipu: {
+    // reasoning_effort is GLM-5.2+; earlier models use the binary thinking switch.
+    modelPattern: /glm-5\.2/,
+    options: [
+      { label: 'High', value: 'high', description: 'Enhanced reasoning' },
+      { label: 'Max', value: 'max', description: 'Deep reasoning (default)' },
     ],
   },
 }

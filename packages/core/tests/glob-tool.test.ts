@@ -15,10 +15,11 @@ describe('glob tool', () => {
     await fs.writeFile(path.join(tmpDir, 'b.ts'), 'const b = 2')
     await fs.writeFile(path.join(tmpDir, 'c.js'), 'const c = 3')
 
-    const result = await glob.execute!(
-      { pattern: '*.ts', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
+    const result = await glob.execute!({ pattern: '*.ts', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)
     expect(result).toContain('a.ts')
     expect(result).toContain('b.ts')
     expect(result).not.toContain('c.js')
@@ -30,10 +31,11 @@ describe('glob tool', () => {
   it('returns message when no files match', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-glob-test-'))
 
-    const result = await glob.execute!(
-      { pattern: '*.xyz', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
+    const result = await glob.execute!({ pattern: '*.xyz', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)
     expect(result).toContain('No files found')
 
     await fs.rm(tmpDir, { recursive: true })
@@ -44,10 +46,11 @@ describe('glob tool', () => {
     await fs.mkdir(path.join(tmpDir, 'sub'), { recursive: true })
     await fs.writeFile(path.join(tmpDir, 'sub', 'deep.ts'), 'export {}')
 
-    const result = await glob.execute!(
-      { pattern: '**/*.ts', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )
+    const result = await glob.execute!({ pattern: '**/*.ts', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)
     expect(result).toContain('deep.ts')
 
     await fs.rm(tmpDir, { recursive: true })
@@ -60,10 +63,11 @@ describe('glob tool', () => {
       await fs.writeFile(path.join(tmpDir, `file-${String(i).padStart(4, '0')}.ts`), '')
     }
 
-    const result = (await glob.execute!(
-      { pattern: '*.ts', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )) as string
+    const result = (await glob.execute!({ pattern: '*.ts', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)) as string
     expect(result).toContain('more files not shown')
     expect(result).toContain('capped at 200')
     const lines = result.split('\n').filter((l) => l.includes('.ts') && !l.includes('...'))
@@ -91,10 +95,11 @@ describe('glob tool', () => {
     await fs.utimes(path.join(tmpDir, 'b.ts'), new Date(baseTime - 2000), new Date(baseTime - 2000))
     await fs.utimes(path.join(tmpDir, 'c.ts'), new Date(baseTime - 1000), new Date(baseTime - 1000))
 
-    const result = (await glob.execute!(
-      { pattern: '*.ts', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )) as string
+    const result = (await glob.execute!({ pattern: '*.ts', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)) as string
 
     const lines = result.split('\n').filter((l) => l.endsWith('.ts'))
     // Newest (c.ts) must precede older files in the result.
@@ -124,10 +129,11 @@ describe('glob tool', () => {
     // and pick up the local .gitignore.
     await fs.mkdir(path.join(tmpDir, '.git'), { recursive: true })
 
-    const result = (await glob.execute!(
-      { pattern: '**/*', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )) as string
+    const result = (await glob.execute!({ pattern: '**/*', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)) as string
 
     expect(result).toContain('keep.ts')
     // The junk/ directory must be excluded by .gitignore — if --glob
@@ -150,10 +156,11 @@ describe('glob tool', () => {
     await fs.writeFile(path.join(tmpDir, '.git', 'config'), '[core]\n')
     await fs.writeFile(path.join(tmpDir, '.git', 'objects', 'abc123'), 'binary')
 
-    const result = (await glob.execute!(
-      { pattern: '**/*', cwd: tmpDir },
-      { toolCallId: 'test', messages: [], abortSignal: undefined as any },
-    )) as string
+    const result = (await glob.execute!({ pattern: '**/*', cwd: tmpDir }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: undefined,
+    } as any)) as string
 
     expect(result).toContain('real.ts')
     // None of the .git internal files should leak through.

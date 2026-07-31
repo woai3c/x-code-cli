@@ -7,7 +7,7 @@ import path from 'node:path'
 import { listDir } from '../src/tools/list-dir.js'
 
 const exec = (input: Record<string, unknown>) =>
-  listDir.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined as any })
+  listDir.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined } as any)
 
 describe('listDir tool', () => {
   it('lists files and directories', async () => {

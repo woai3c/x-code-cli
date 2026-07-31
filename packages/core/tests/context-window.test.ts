@@ -138,7 +138,7 @@ describe('estimateTokenCount', () => {
               type: 'content' as const,
               value: [
                 { type: 'text' as const, text: 'visible text' },
-                { type: 'media' as const, data: 'x'.repeat(10_000), mediaType: 'image/png' },
+                { type: 'image-data' as const, data: 'x'.repeat(10_000), mediaType: 'image/png' },
               ],
             },
           },
@@ -146,7 +146,7 @@ describe('estimateTokenCount', () => {
       },
     ]
     const countedText = JSON.stringify({ path: 'src/index.ts' }) + 'visible text'
-    const tokens = estimateTokenCount(messages)
+    const tokens = estimateTokenCount(messages as any)
     expect(tokens).toBe(Math.ceil(Buffer.byteLength(countedText, 'utf8') / 3.0))
   })
 })
