@@ -93,9 +93,14 @@ function resolveSubModel(
 function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: string) {
   const deny = [...(agentDef.disallowedTools ?? []), 'task']
 
-  // In plan mode, deny write tools for general-purpose agent
-  if (parentPermissionMode === 'plan' && agentDef.name === 'general-purpose') {
-    deny.push('writeFile', 'edit')
+  // In plan mode, deny write tools for ALL sub-agents — not just
+  // general-purpose. Plan mode's read-only invariant must hold regardless
+  // of which agent is running; shell is included because it can write
+  // files or execute destructive commands.
+  if (parentPermissionMode === 'plan') {
+    for (const t of ['writeFile', 'edit', 'shell']) {
+      if (!deny.includes(t)) deny.push(t)
+    }
   }
 
   // `'*'` is a wildcard meaning "every tool" — matches Claude Code's

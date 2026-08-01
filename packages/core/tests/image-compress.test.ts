@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   ATTACH_BYTE_BUDGET,
   MAX_EDGE_PX,
-  READ_BYTE_BUDGET,
   buildCompressionCaption,
   compressImage,
   formatBytes,
@@ -165,9 +164,6 @@ describe('buildCompressionCaption', () => {
 describe('constants', () => {
   it('ATTACH_BYTE_BUDGET is 3.75 MB', () => {
     expect(ATTACH_BYTE_BUDGET).toBe(3.75 * 1024 * 1024)
-  })
-  it('READ_BYTE_BUDGET is 256 KB', () => {
-    expect(READ_BYTE_BUDGET).toBe(256 * 1024)
   })
   it('MAX_EDGE_PX is 2000', () => {
     expect(MAX_EDGE_PX).toBe(2000)

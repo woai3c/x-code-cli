@@ -646,6 +646,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               kind: 'command-result',
             })
           },
+          abortControllerRef.current.signal,
         )
 
         // agentLoop returns { state, turnCount } — we only keep the state

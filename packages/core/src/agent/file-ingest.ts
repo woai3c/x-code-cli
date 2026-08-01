@@ -24,7 +24,7 @@ import {
   sniffImageMime,
 } from '../providers/capabilities.js'
 import { userXcodeDir } from '../utils.js'
-import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage } from '../utils/image-compress.js'
+import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage, formatBytes } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
 
@@ -138,12 +138,6 @@ const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.
  *  sees a short hint instead and can call readFile with offset/limit or
  *  grep to narrow down. */
 export const MAX_INGEST_BYTES = 256 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-}
 
 /** The human/model-facing message we substitute when an attachment is too
  *  large to inline. Mirrors Claude Code's `MaxFileReadTokenExceededError`
@@ -260,7 +254,7 @@ async function extractPdfText(filePath: string): Promise<string> {
 /** Extract text from an Office document. Routes .docx through mammoth
  *  (best-in-class semantic extraction), .xlsx through SheetJS (CSV per
  *  sheet), everything else through officeparser. */
-async function extractOfficeText(filePath: string): Promise<string> {
+export async function extractOfficeText(filePath: string): Promise<string> {
   const ext = path.extname(filePath).toLowerCase()
   try {
     if (ext === '.docx') {
@@ -366,6 +360,7 @@ export async function ingestFile(
   ref: FileReference,
   caps: ProviderCapabilities,
   onNotice?: (msg: string) => void,
+  abortSignal?: AbortSignal,
 ): Promise<IngestedPart[]> {
   let kind: FileKind
   let stats: Awaited<ReturnType<typeof fs.stat>>
@@ -492,7 +487,7 @@ export async function ingestFile(
   const sub = pickVisionProvider()
   if (sub) {
     try {
-      const caption = await captionImage(ref.absolutePath, sub)
+      const caption = await captionImage(ref.absolutePath, sub, { abortSignal })
       onNotice?.(`Captioned image via ${sub.modelId}`)
       return [
         {
@@ -529,13 +524,14 @@ export async function buildUserContent(
   text: string,
   caps: ProviderCapabilities,
   onNotice?: (msg: string) => void,
+  abortSignal?: AbortSignal,
 ): Promise<string | Array<TextPart | ImagePart | FilePart>> {
   const refs = extractFileReferences(text)
   if (refs.length === 0) return text
 
   const parts: IngestedPart[] = [{ type: 'text', text }]
   for (const ref of refs) {
-    const ingested = await ingestFile(ref, caps, onNotice)
+    const ingested = await ingestFile(ref, caps, onNotice, abortSignal)
     parts.push(...ingested)
   }
   return parts

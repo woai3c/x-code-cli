@@ -30,14 +30,6 @@ export const MAX_EDGE_PX = 2000
  *  stays under the 5 MB base64 ceiling every major provider enforces. */
 export const ATTACH_BYTE_BUDGET = 3.75 * 1024 * 1024
 
-/** Smaller byte budget for tool-read images (readFile). Each tool-read image
- *  persists in the conversation and accumulates on every subsequent turn, so
- *  per-image size — not the per-image API ceiling — is what keeps the total
- *  under the provider's request-size limit. 256 KB keeps clean 2000px UI
- *  screenshots on the lossless fast path while capping dense content at a
- *  readable q80/1000px JPEG. */
-export const READ_BYTE_BUDGET = 256 * 1024
-
 /** Progressively lower JPEG quality for the lossy ladder. */
 const JPEG_QUALITY_STEPS = [80, 60, 40, 20] as const
 

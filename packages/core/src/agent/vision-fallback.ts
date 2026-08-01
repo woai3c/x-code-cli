@@ -147,7 +147,13 @@ export async function captionImageBuffer(
  * media type from its extension; keeps the existing file-ingest call site
  * (and its cache key by file content) working unchanged.
  */
-export async function captionImage(filePath: string, sub: VisionProvider): Promise<string> {
+export async function captionImage(
+  filePath: string,
+  sub: VisionProvider,
+  opts?: { abortSignal?: AbortSignal },
+): Promise<string> {
   const buffer = await fs.readFile(filePath)
-  return captionImageBuffer(buffer, mediaTypeFor(filePath), sub.modelId)
+  return captionImageBuffer(buffer, mediaTypeFor(filePath), sub.modelId, {
+    abortSignal: opts?.abortSignal,
+  })
 }

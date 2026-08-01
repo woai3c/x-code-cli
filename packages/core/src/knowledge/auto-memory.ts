@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { KnowledgeCategory, KnowledgeFact } from '../types/index.js'
-import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { XCODE_DIR, debugLog, userXcodeDir } from '../utils.js'
 
 const MAX_LOAD_LINES = 200
 
@@ -140,8 +140,8 @@ class AutoMemory {
     try {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true })
       await fs.writeFile(this.filePath, this.serialize(), 'utf-8')
-    } catch {
-      // Silently fail — don't crash agent if memory write fails
+    } catch (err) {
+      debugLog('auto-memory.save-error', `${this.filePath}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }

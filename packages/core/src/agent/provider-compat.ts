@@ -5,8 +5,7 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
-import { capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
-import { buildUnsupportedImageNotice } from '../providers/capabilities.js'
+import { buildUnsupportedImageNotice, capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
 import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
 import { ocrImage } from './file-ingest.js'
 import { toolMediaUserMessage } from './messages.js'

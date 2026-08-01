@@ -18,7 +18,7 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
-import { classifyFile } from '../agent/file-ingest.js'
+import { classifyFile, extractOfficeText } from '../agent/file-ingest.js'
 import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { formatToolError } from '../utils/tool-errors.js'
@@ -41,6 +41,13 @@ const LARGE_FILE_LINE_THRESHOLD = 2000
  *  context_length_exceeded. CC enforces the same invariant via
  *  `validateContentTokens`. */
 const MAX_READ_BYTES = 256 * 1024
+
+/** Max raw bytes for a PDF sent as a FilePart in a tool result. Claude Code
+ *  uses 3 MB (`PDF_EXTRACT_SIZE_THRESHOLD`); we pick a tighter default
+ *  because our readFile result persists in `state.messages` and accumulates
+ *  on every subsequent turn. 5 MB raw ≈ 6.67 MB base64 — within the
+ *  per-request ceiling of all major providers. */
+const MAX_PDF_BYTES = 5 * 1024 * 1024
 
 /** Per-file fingerprint used by the read de-dup cache. */
 export interface ReadFileCacheEntry {
@@ -304,9 +311,7 @@ Usage:
         if (kind === 'image') {
           const buffer = await fs.readFile(filePath)
           const mime = mediaTypeFor(filePath)
-          // Compress with a smaller byte budget than user-attached images:
-          // each tool-read image persists in the conversation and accumulates
-          // on every subsequent turn, so per-image size matters more here.
+          // Same byte budget as user-attached images (ATTACH_BYTE_BUDGET).
           const compressed = await compressImage(buffer, mime, { byteBudget: ATTACH_BYTE_BUDGET })
           const finalMime = compressed.changed ? compressed.mimeType : mime
           const header = compressed.changed
@@ -326,6 +331,15 @@ Usage:
         }
 
         if (kind === 'pdf') {
+          const stats = await fs.stat(filePath)
+          if (stats.size > MAX_PDF_BYTES) {
+            return (
+              `[PDF ${filePath} is too large to read (${(stats.size / (1024 * 1024)).toFixed(1)} MB, ` +
+              `cap ${MAX_PDF_BYTES / (1024 * 1024)} MB). ` +
+              `The user can attach it via @path instead, or use shell to extract specific pages ` +
+              `(e.g. pdftotext with page ranges).]`
+            )
+          }
           const buffer = await fs.readFile(filePath)
           return {
             type: 'content',
@@ -341,12 +355,20 @@ Usage:
           }
         }
 
-        // Text / Office / unknown → read as text.
-        // (Office files are handled up-front by buildUserContent when the user
-        // attaches them via @path; if a model calls readFile on a .docx anyway,
-        // we fall through to a UTF-8 read which returns gibberish — a follow-up
-        // could route Office here too, but it's a rare path worth keeping
-        // simple for now.)
+        if (kind === 'office') {
+          const text = await extractOfficeText(filePath)
+          const textBytes = Buffer.byteLength(text, 'utf-8')
+          if (textBytes > MAX_READ_BYTES) {
+            return (
+              `[Office file ${filePath} extracted text is too large (${(textBytes / 1024).toFixed(1)} KB, ` +
+              `cap ${MAX_READ_BYTES / 1024} KB). ` +
+              `Use grep to search for specific content, or delegate to a sub-agent via the task tool.]`
+            )
+          }
+          return `Extracted text from ${path.basename(filePath)}:\n\n${text}`
+        }
+
+        // Text / unknown → read as text.
         const verdict = await checkReadCache(cache, filePath, isRangeRead)
         if (verdict && verdict.hit) return verdict.stub
         const { text, complete } = await readTextResult(filePath, offset, limit)
