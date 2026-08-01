@@ -86,7 +86,7 @@ class AutoMemory {
     const cutoff = Date.now() - maxAgeDays * 86400_000
     const before = this.facts.length
     this.facts = this.facts.filter((f) => new Date(f.date).getTime() > cutoff)
-    if (this.facts.length < before) this.save()
+    if (this.facts.length < before) this.enqueueSave()
   }
 
   /** Get all facts */

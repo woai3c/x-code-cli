@@ -1,8 +1,4 @@
 // @x-code-cli/core — Provider-specific compatibility shims
-import fs from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
-
 import type { ModelMessage } from 'ai'
 
 import { buildUnsupportedImageNotice, capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
@@ -159,17 +155,9 @@ async function ocrBuffer(buffer: Buffer): Promise<string> {
   const cached = ocrCache.get(key)
   if (cached != null) return cached
 
-  // tesseract.js takes a path, URL, or Buffer. Buffers work but some
-  // versions have edge cases — writing to a tmp file is universally safe.
-  const tmp = path.join(os.tmpdir(), `xcc-ocr-${Date.now()}-${Math.random().toString(36).slice(2)}.png`)
-  try {
-    await fs.writeFile(tmp, buffer)
-    const text = await ocrImage(tmp)
-    ocrCache.set(key, text)
-    return text
-  } finally {
-    await fs.unlink(tmp).catch(() => {})
-  }
+  const text = await ocrImage(buffer)
+  ocrCache.set(key, text)
+  return text
 }
 
 function imagePartToBuffer(part: { image: unknown; mediaType?: string }): Buffer | null {

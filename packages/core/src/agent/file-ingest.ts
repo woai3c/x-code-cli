@@ -283,22 +283,51 @@ export async function extractOfficeText(filePath: string): Promise<string> {
   }
 }
 
-/** OCR an image via tesseract.js. Loads Chinese + English language packs on
- *  first call (cached in-memory afterwards). Accuracy is limited, especially
- *  for handwriting or stylized text — intended as a text-extraction fallback
- *  for providers that can't natively see images. */
-export async function ocrImage(filePath: string): Promise<string> {
+// ── Shared tesseract.js worker pool ──
+// A single worker is reused across ocrImage / ocrPdf calls within a session.
+// Auto-terminates after WORKER_IDLE_MS of inactivity to avoid holding WASM
+// memory indefinitely. The worker accepts both file paths and Buffers, so
+// callers never need to write temp files.
+
+const WORKER_IDLE_MS = 30_000
+let sharedWorker: Awaited<ReturnType<(typeof import('tesseract.js'))['createWorker']>> | null = null
+let workerIdleTimer: ReturnType<typeof setTimeout> | null = null
+
+async function getOcrWorker() {
+  if (sharedWorker) {
+    if (workerIdleTimer) clearTimeout(workerIdleTimer)
+    workerIdleTimer = setTimeout(terminateWorker, WORKER_IDLE_MS)
+    return sharedWorker
+  }
+  const { createWorker } = await import('tesseract.js')
+  sharedWorker = await createWorker(['eng', 'chi_sim'], 1, {
+    cachePath: await tesseractCacheDir(),
+  })
+  workerIdleTimer = setTimeout(terminateWorker, WORKER_IDLE_MS)
+  return sharedWorker
+}
+
+function terminateWorker() {
+  if (sharedWorker) {
+    void sharedWorker.terminate().catch(() => {})
+    sharedWorker = null
+  }
+  if (workerIdleTimer) {
+    clearTimeout(workerIdleTimer)
+    workerIdleTimer = null
+  }
+}
+
+/** OCR an image via tesseract.js. Accepts a file path OR an in-memory Buffer.
+ *  Uses a shared worker that auto-terminates after 30 s idle. Loads Chinese +
+ *  English language packs on first call. Accuracy is limited, especially for
+ *  handwriting or stylized text — intended as a text-extraction fallback for
+ *  providers that can't natively see images. */
+export async function ocrImage(input: string | Buffer): Promise<string> {
   try {
-    const { createWorker } = await import('tesseract.js')
-    const worker = await createWorker(['eng', 'chi_sim'], 1, {
-      cachePath: await tesseractCacheDir(),
-    })
-    try {
-      const { data } = await worker.recognize(filePath)
-      return data.text ?? ''
-    } finally {
-      await worker.terminate()
-    }
+    const worker = await getOcrWorker()
+    const { data } = await worker.recognize(input)
+    return data.text ?? ''
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return `[OCR failed: ${msg}]`
@@ -321,21 +350,13 @@ async function ocrPdf(filePath: string): Promise<string> {
       await parser.destroy().catch(() => {})
     }
 
-    const { createWorker } = await import('tesseract.js')
-    const worker = await createWorker(['eng', 'chi_sim'], 1, {
-      cachePath: await tesseractCacheDir(),
-    })
-    try {
-      const out: string[] = []
-      for (const page of screenshots.pages) {
-        if (!page.data) continue
-        const { data } = await worker.recognize(Buffer.from(page.data))
-        out.push(`--- Page ${page.pageNumber} ---\n${data.text ?? ''}`)
-      }
-      return out.join('\n\n')
-    } finally {
-      await worker.terminate()
+    const out: string[] = []
+    for (const page of screenshots.pages) {
+      if (!page.data) continue
+      const text = await ocrImage(Buffer.from(page.data))
+      out.push(`--- Page ${page.pageNumber} ---\n${text}`)
     }
+    return out.join('\n\n')
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return `[PDF OCR failed: ${msg}]`
@@ -362,6 +383,10 @@ export async function ingestFile(
   onNotice?: (msg: string) => void,
   abortSignal?: AbortSignal,
 ): Promise<IngestedPart[]> {
+  if (abortSignal?.aborted) {
+    return [{ type: 'text', text: `[File ingest cancelled: ${ref.raw}]` }]
+  }
+
   let kind: FileKind
   let stats: Awaited<ReturnType<typeof fs.stat>>
   try {
@@ -531,6 +556,7 @@ export async function buildUserContent(
 
   const parts: IngestedPart[] = [{ type: 'text', text }]
   for (const ref of refs) {
+    if (abortSignal?.aborted) break
     const ingested = await ingestFile(ref, caps, onNotice, abortSignal)
     parts.push(...ingested)
   }

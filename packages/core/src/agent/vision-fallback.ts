@@ -16,6 +16,7 @@
 import fs from 'node:fs/promises'
 
 import { generateText } from 'ai'
+import type { LanguageModel } from 'ai'
 
 import { getAvailableProviders } from '../config/index.js'
 import { createModelRegistry } from '../providers/registry.js'
@@ -76,6 +77,22 @@ export function pickVisionProvider(): VisionProvider | null {
  *  cheap collision-resistant key strategy provider-compat.ts uses for OCR. */
 const captionCache = new LruCache<string>({ maxEntries: 50 })
 
+/** Cached registry + resolved model instances. The registry is expensive to
+ *  create (initializes all configured provider SDK instances); caching it
+ *  avoids re-allocation on every caption call in a browser-agent session
+ *  where screenshots arrive every few seconds. */
+let cachedRegistry: ReturnType<typeof createModelRegistry> | null = null
+const resolvedModels = new Map<string, LanguageModel>()
+
+function getVisionModel(modelId: string): LanguageModel {
+  const existing = resolvedModels.get(modelId)
+  if (existing) return existing
+  if (!cachedRegistry) cachedRegistry = createModelRegistry()
+  const model = cachedRegistry.languageModel(modelId as `${string}:${string}`)
+  resolvedModels.set(modelId, model)
+  return model
+}
+
 /** Default caption prompt: asks for both verbatim text AND visual elements
  *  (layout, colors, components) — OCR alone misses the latter, so the caption
  *  subsumes what OCR would have produced. Used for pasted-image ingest. */
@@ -118,8 +135,7 @@ export async function captionImageBuffer(
     debugLog('vision-fallback.compressed', `${buffer.length}B → ${finalBuf.length}B (${finalMime})`)
   }
 
-  const registry = createModelRegistry()
-  const model = registry.languageModel(modelId as `${string}:${string}`)
+  const model = getVisionModel(modelId)
 
   debugLog('vision-fallback.caption', `${modelId} ${finalBuf.length}B`)
   const { text } = await generateText({
