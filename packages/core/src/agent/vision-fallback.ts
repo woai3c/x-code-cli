@@ -20,6 +20,7 @@ import { generateText } from 'ai'
 import { getAvailableProviders } from '../config/index.js'
 import { createModelRegistry } from '../providers/registry.js'
 import { debugLog } from '../utils.js'
+import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
 import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 
@@ -107,12 +108,20 @@ export async function captionImageBuffer(
     return cached
   }
 
+  // Compress before sending to the vision sub-agent — same budget as
+  // user-attached images. The sub-agent is a cheap caption model; there's
+  // no point pushing multi-MB originals through it.
+  const compressed = await compressImage(buffer, mediaType, { byteBudget: ATTACH_BYTE_BUDGET })
+  const finalBuf = compressed.data
+  const finalMime = compressed.changed ? compressed.mimeType : mediaType
+  if (compressed.changed) {
+    debugLog('vision-fallback.compressed', `${buffer.length}B → ${finalBuf.length}B (${finalMime})`)
+  }
+
   const registry = createModelRegistry()
-  // The registry's languageModel() type is `${string}:${string}`; our model
-  // ids are all of the form "provider:model". Cast at the boundary.
   const model = registry.languageModel(modelId as `${string}:${string}`)
 
-  debugLog('vision-fallback.caption', `${modelId} ${buffer.length}B`)
+  debugLog('vision-fallback.caption', `${modelId} ${finalBuf.length}B`)
   const { text } = await generateText({
     model,
     abortSignal: opts.abortSignal,
@@ -121,7 +130,7 @@ export async function captionImageBuffer(
         role: 'user',
         content: [
           { type: 'text', text: opts.prompt ?? DEFAULT_CAPTION_PROMPT },
-          { type: 'image', image: buffer, mediaType },
+          { type: 'image', image: finalBuf, mediaType: finalMime },
         ],
       },
     ],
