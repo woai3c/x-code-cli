@@ -19,6 +19,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { classifyFile } from '../agent/file-ingest.js'
+import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
@@ -302,20 +303,23 @@ Usage:
 
         if (kind === 'image') {
           const buffer = await fs.readFile(filePath)
-          // Content tool result: the provider-compat sanitizer decides whether
-          // this image stays in the tool result, moves to a following user
-          // message, or gets replaced with OCR (DeepSeek etc.). We attach both an
-          // `image-data` part (for providers that can see it) and a trailing
-          // text part with the file path (so the model always has a textual
-          // anchor to reference).
+          const mime = mediaTypeFor(filePath)
+          // Compress with a smaller byte budget than user-attached images:
+          // each tool-read image persists in the conversation and accumulates
+          // on every subsequent turn, so per-image size matters more here.
+          const compressed = await compressImage(buffer, mime, { byteBudget: ATTACH_BYTE_BUDGET })
+          const finalMime = compressed.changed ? compressed.mimeType : mime
+          const header = compressed.changed
+            ? `Loaded image: ${filePath} (compressed from ${buffer.length} to ${compressed.data.length} bytes)`
+            : `Loaded image: ${filePath}`
           return {
             type: 'content',
             value: [
-              { type: 'text', text: `Loaded image: ${filePath}` },
+              { type: 'text', text: header },
               {
                 type: 'image-data',
-                data: buffer.toString('base64'),
-                mediaType: mediaTypeFor(filePath),
+                data: compressed.data.toString('base64'),
+                mediaType: finalMime,
               },
             ],
           }

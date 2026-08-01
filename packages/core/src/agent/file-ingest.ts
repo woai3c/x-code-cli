@@ -24,6 +24,7 @@ import {
   sniffImageMime,
 } from '../providers/capabilities.js'
 import { userXcodeDir } from '../utils.js'
+import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
 
@@ -464,11 +465,20 @@ export async function ingestFile(
       if (!isModelAcceptedImageMime(effectiveMime)) {
         return [{ type: 'text', text: buildUnsupportedImageNotice(effectiveMime, ref.absolutePath) }]
       }
-      return [
+
+      // Compress oversized images to fit pixel + byte budget.
+      const compressed = await compressImage(buffer, effectiveMime, { byteBudget: ATTACH_BYTE_BUDGET })
+      const finalMime = normalizeImageMime(compressed.changed ? compressed.mimeType : effectiveMime)
+
+      const parts: IngestedPart[] = [
         { type: 'text', text: `<<file path="${ref.absolutePath}" kind="image">>` },
-        // base64 string, not the Buffer — see the PDF branch above for why.
-        { type: 'image', image: buffer.toString('base64'), mediaType: normalizeImageMime(effectiveMime) },
+        { type: 'image', image: compressed.data.toString('base64'), mediaType: finalMime },
       ]
+      if (compressed.changed) {
+        parts.push({ type: 'text', text: buildCompressionCaption(compressed) })
+        onNotice?.(`Compressed image: ${formatBytes(buffer.length)} → ${formatBytes(compressed.data.length)}`)
+      }
+      return parts
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return [{ type: 'text', text: `[Failed to attach image ${ref.raw}: ${msg}]` }]
