@@ -1,3 +1,14 @@
+## v0.3.26 (2026-08-01)
+
+### Features
+
+- add image compression for user-attached and tool-read images (fe61b38)
+- upgrade AI SDK to v7 + simplify reasoning architecture (555164b)
+
+### Bug Fixes
+
+- compress images in vision-fallback caption path (88f4e17)
+
 ## v0.3.25 (2026-07-29)
 
 ### Features
