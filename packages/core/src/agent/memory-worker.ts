@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import type { LanguageModel } from 'ai'
 
+import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from '../knowledge/memory-index.js'
 import type { MemoryJob, MemoryOperation, MemoryOperationResult, MemoryWriteNotice } from '../knowledge/memory-types.js'
 import { debugLog } from '../utils.js'
 import { extractMemoryOperations } from './memory-extractor.js'
@@ -191,20 +192,34 @@ export function isDeleteOperationAuthorized(
 ): boolean {
   const request = operation.userRequest.normalize('NFKC').trim()
   if (!request) return false
-  return userMessages.some((message) => message.normalize('NFKC').includes(request))
+  return userMessages.some((message) => message.normalize('NFKC').trim() === request)
 }
 
 export function bindOperationEvidence(operations: readonly MemoryOperation[], job: MemoryJob): MemoryOperation[] {
-  const supported = new Set<MemoryOperation['evidence'][number]['kind']>(['explicit'])
-  if (job.projection.verification.length > 0) supported.add('validated')
-  if (
-    job.projection.changedFiles.length > 0 ||
-    job.projection.events.some((event) => event.type === 'tool-result' && event.status === 'ok')
-  ) {
-    supported.add('observed')
+  const observedPaths = new Set(job.projection.changedFiles.map(normalizeMemoryText))
+  const observedIdentifiers = new Set<string>()
+  for (const event of job.projection.events) {
+    if (event.type !== 'tool-result' || event.status !== 'ok') continue
+    const start = event.evidence.indexOf('; signals=')
+    const end = event.evidence.lastIndexOf('; status=')
+    if (start < 0 || end <= start) continue
+    const signals = event.evidence.slice(start + '; signals='.length, end)
+    for (const value of extractMemoryPaths(signals)) observedPaths.add(normalizeMemoryText(value))
+    for (const value of extractMemoryIdentifiers(signals)) observedIdentifiers.add(normalizeMemoryText(value))
   }
   const contentHash = createHash('sha256').update(JSON.stringify(job.projection)).digest('hex')
   const bind = (operation: MemoryOperation): MemoryOperation | null => {
+    const supported = new Set<MemoryOperation['evidence'][number]['kind']>(['explicit'])
+    if (job.projection.verification.length > 0) supported.add('validated')
+    if (operation.action !== 'delete') {
+      const hasObservedPath = extractMemoryPaths(operation.content).some((value) =>
+        observedPaths.has(normalizeMemoryText(value)),
+      )
+      const hasObservedIdentifier = extractMemoryIdentifiers(operation.content).some((value) =>
+        observedIdentifiers.has(normalizeMemoryText(value)),
+      )
+      if (hasObservedPath || hasObservedIdentifier) supported.add('observed')
+    }
     const evidence = operation.evidence
       .filter((item) => supported.has(item.kind))
       .map((item) => ({

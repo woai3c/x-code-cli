@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
+import { extractMemoryIdentifiers, extractMemoryPaths } from '../knowledge/memory-index.js'
 import { redactMemoryValue } from '../knowledge/memory-redaction.js'
 import type { MemoryJob, TurnMemoryProjection } from '../knowledge/memory-types.js'
 import { extractText } from '../utils/message-helpers.js'
@@ -18,9 +19,8 @@ interface ToolPart {
   isError?: boolean
 }
 
-const FILE_CONTENT_TOOL_RE = /(?:readFile|read_file|readMcpResource)$/i
-const VERIFICATION_TOOL_RE = /(?:test|check|lint|build|compile|verify)/i
-const COMMAND_TOOL_RE = /(?:shell|command|terminal|powershell|bash)/i
+// Executable and tool protocol identifiers are stable machine syntax. This
+// never inspects user prose or tool-result prose to infer intent or meaning.
 const VERIFICATION_COMMAND_RE =
   /(?:^|[\s"'=:/\\])(?:test|tests|build|typecheck|lint|check|ci|pytest|vitest|jest|eslint|tsc)(?=$|[\s"'&,;:/\\])/i
 
@@ -58,22 +58,33 @@ function summarizeInput(value: unknown): string {
 
 function outputText(output: unknown): string {
   if (typeof output === 'string') return output
-  if (output && typeof output === 'object') {
-    const record = output as Record<string, unknown>
-    if (typeof record.value === 'string') return record.value
-    if (Array.isArray(record.value)) {
-      return record.value
-        .filter((item): item is { type: string; text: string } =>
-          Boolean(item && typeof item === 'object' && (item as { type?: string }).type === 'text'),
-        )
-        .map((item) => item.text)
-        .join('\n')
-    }
+  if (!output || typeof output !== 'object') return String(output ?? '')
+  const record = output as Record<string, unknown>
+  if (typeof record.value === 'string') return record.value
+  if (Array.isArray(record.value)) {
+    return record.value
+      .filter((item): item is { type: string; text: string } =>
+        Boolean(
+          item &&
+          typeof item === 'object' &&
+          (item as { type?: string }).type === 'text' &&
+          typeof (item as { text?: unknown }).text === 'string',
+        ),
+      )
+      .map((item) => item.text)
+      .join('\n')
   }
-  return JSON.stringify(output ?? '')
+  return stableStringify(output)
 }
 
-function isFailedToolResult(part: ToolPart, evidence: string): boolean {
+function summarizeOutputSignals(output: unknown): string {
+  const text = outputText(output)
+  const paths = extractMemoryPaths(text).slice(0, 20)
+  const identifiers = extractMemoryIdentifiers(text).slice(0, 40)
+  return stableStringify({ paths, identifiers })
+}
+
+function isFailedToolResult(part: ToolPart): boolean {
   if (part.isError) return true
   if (part.output && typeof part.output === 'object') {
     const output = part.output as Record<string, unknown>
@@ -83,13 +94,11 @@ function isFailedToolResult(part: ToolPart, evidence: string): boolean {
     if (typeof output.exitCode === 'number' && output.exitCode !== 0) return true
     if (output.type === 'error-text' || output.type === 'error-json') return true
   }
-  if (/^(?:Error:|\[Tool execution (?:failed|interrupted))/i.test(evidence.trim())) return true
-  const exitCodes = [...evidence.matchAll(/\bexit code\s*[:=]?\s*(-?\d+)/gi)].map((match) => Number(match[1]))
-  return exitCodes.some((code) => code !== 0)
+  return false
 }
 
 function isVerificationToolResult(toolName: string, input: string): boolean {
-  return VERIFICATION_TOOL_RE.test(toolName) || (COMMAND_TOOL_RE.test(toolName) && VERIFICATION_COMMAND_RE.test(input))
+  return toolName === 'shell' && VERIFICATION_COMMAND_RE.test(input)
 }
 
 function changedFilesSince(current: ReadonlySet<string>, before: ReadonlySet<string>): string[] {
@@ -145,14 +154,12 @@ export function buildTurnMemoryProjection(input: {
     if (message.role === 'tool' && Array.isArray(message.content)) {
       for (const part of message.content as ToolPart[]) {
         if (part.type !== 'tool-result' || !part.toolName) continue
-        const rawEvidence = outputText(part.output).replace(/\b[A-Za-z0-9+/]{160,}={0,2}\b/g, '[binary removed]')
-        const status = isFailedToolResult(part, rawEvidence) ? 'error' : 'ok'
-        const evidence = FILE_CONTENT_TOOL_RE.test(part.toolName)
-          ? `${toolInputs.get(part.toolCallId ?? part.toolName) ?? '{}'}; file content omitted; status=${status}`.slice(
-              0,
-              1000,
-            )
-          : rawEvidence.slice(0, 1000)
+        const status = isFailedToolResult(part) ? 'error' : 'ok'
+        const evidence =
+          `${toolInputs.get(part.toolCallId ?? part.toolName) ?? '{}'}; signals=${summarizeOutputSignals(part.output)}; status=${status}`.slice(
+            0,
+            1000,
+          )
         events.push({ type: 'tool-result', name: part.toolName, status, evidence })
         if (
           status === 'ok' &&
@@ -186,10 +193,20 @@ function trimProjection(projection: TurnMemoryProjection, maxTokens: number): Tu
   clone.events = clone.events.slice(-128)
   clone.changedFiles = clone.changedFiles.slice(0, 512).map((value) => value.slice(0, 8192))
   clone.verification = clone.verification.slice(-128).map((value) => value.slice(0, 1000))
-  while (size() > maxBytes && clone.events.length > 0) {
+  while (size() > maxBytes) {
     const ordinary = clone.events.findIndex((event) => event.type === 'tool-call')
-    clone.events.splice(ordinary >= 0 ? ordinary : clone.events.length - 1, 1)
+    if (ordinary < 0) break
+    clone.events.splice(ordinary, 1)
   }
+  while (size() > maxBytes) {
+    const successful = clone.events.findIndex((event) => event.type === 'tool-result' && event.status === 'ok')
+    if (successful < 0) break
+    clone.events.splice(successful, 1)
+  }
+  while (size() > maxBytes && clone.changedFiles.length > 0) {
+    clone.changedFiles.pop()
+  }
+  while (size() > maxBytes && clone.events.length > 0) clone.events.pop()
   while (size() > maxBytes && clone.verification.length > 1) {
     clone.verification.pop()
   }
@@ -204,6 +221,16 @@ function trimProjection(projection: TurnMemoryProjection, maxTokens: number): Tu
     const value = clone.userMessages[index]
     if (!value || value.length <= 1000) break
     clone.userMessages[index] = value.slice(0, Math.max(1000, Math.floor(value.length * 0.8)))
+  }
+  while (size() > maxBytes && clone.verification.length > 0) clone.verification.pop()
+  while (size() > maxBytes && clone.assistantFinal.length > 0) {
+    clone.assistantFinal = clone.assistantFinal.slice(0, Math.floor(clone.assistantFinal.length * 0.8))
+  }
+  while (size() > maxBytes && clone.userMessages.length > 0) {
+    const value = clone.userMessages.at(-1)!
+    if (value.length > 1)
+      clone.userMessages[clone.userMessages.length - 1] = value.slice(0, Math.floor(value.length * 0.8))
+    else clone.userMessages.pop()
   }
   return clone
 }

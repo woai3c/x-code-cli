@@ -17,7 +17,7 @@ describe('memory selector', () => {
     const selected = await selectMemoryTopics({
       model: {} as LanguageModel,
       query: {
-        currentUserText: '以前のデプロイ手順を確認して',
+        currentUserText: 'opaque-current-request',
         recentConversationText: '',
         repositoryId: 'D:/repo',
         mentionedPaths: [],
@@ -42,7 +42,7 @@ describe('memory selector', () => {
     const payload = JSON.parse(String(call?.prompt)) as Record<string, unknown>
     expect(call?.instructions).toContain('untrustedSignals')
     expect(payload).toMatchObject({
-      query: '以前のデプロイ手順を確認して',
+      query: 'opaque-current-request',
       untrustedSignals: 'deployWorkflow src/release.ts',
     })
     expect(selected).toEqual(['workflow'])

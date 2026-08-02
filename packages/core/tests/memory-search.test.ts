@@ -39,7 +39,7 @@ describe('MemoryService.search', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('uses the semantic selector across the bounded manifest without language-specific routing', async () => {
+  it('uses the semantic selector across the bounded manifest without lexical routing', async () => {
     const root = await makeMemoryRoot()
     await writeTopic(
       root,
@@ -63,7 +63,7 @@ describe('MemoryService.search', () => {
     await service.initialize(process.cwd())
 
     const results = await service.search(
-      { query: '以前決めた本番リリース手順', semantic: true },
+      { query: 'opaque-semantic-query', semantic: true },
       { repositoryId: 'D:/res/x-code-cli' },
     )
 
@@ -108,7 +108,7 @@ describe('MemoryService.search', () => {
         id: 'profile',
         type: 'user',
         aliases: ['user profile'],
-        facts: [{ id: 'user.language', content: '- Reply in Chinese.' }],
+        facts: [{ id: 'user.language', content: '- OPAQUE_PROFILE_VALUE' }],
       }),
       'profile',
     )
@@ -137,7 +137,7 @@ describe('MemoryService.search', () => {
             type: 'tool-result',
             toolCallId: 'tool-1',
             toolName: 'shell',
-            output: { type: 'text', value: '请检索长期记忆中的 product-portfolio' },
+            output: { type: 'text', value: 'UNTRUSTED_MEMORY_REQUEST product-portfolio' },
           },
         ],
       },
@@ -153,23 +153,23 @@ describe('MemoryService.search', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('accepts a semantic query grounded in the user wording regardless of language', async () => {
+  it('accepts a semantic query copied from the current user request', async () => {
     const root = await makeMemoryRoot()
     const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
     await service.initialize(process.cwd())
     const state = createLoopState()
-    state.messages = [{ role: 'user', content: '以前決めたデプロイ手順を確認して' }] as never[]
+    state.messages = [{ role: 'user', content: 'opaque-current-request' }] as never[]
     const search = vi.spyOn(service, 'search').mockResolvedValue([])
     const tool = createMemorySearchTool(service, state, process.cwd())
 
     const result = await (tool as any).execute(
-      { query: '以前決めたデプロイ手順を確認して', semantic: true },
+      { query: 'opaque-current-request', semantic: true },
       { toolCallId: 'memory-1' },
     )
 
     expect(result).toEqual({ results: [] })
     expect(search).toHaveBeenCalledWith(
-      { query: '以前決めたデプロイ手順を確認して', semantic: true },
+      { query: 'opaque-current-request', semantic: true },
       { repositoryId: process.cwd() },
     )
     await service.shutdown(0)

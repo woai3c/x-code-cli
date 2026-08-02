@@ -18,7 +18,7 @@ function job(id = 'job-1'): MemoryJob {
     sourceOccurredAt: '2026-08-02T00:00:01.000Z',
     attempt: 0,
     projection: {
-      userMessages: ['remember this'],
+      userMessages: ['opaque payload'],
       assistantFinal: 'done',
       events: [],
       changedFiles: [],

@@ -201,7 +201,7 @@ function pushToolResult(
   isError = false,
   images?: readonly ToolImage[],
 ): void {
-  state.messages.push(toolResultMessage(toolCallId, toolName, output, images))
+  state.messages.push(toolResultMessage(toolCallId, toolName, output, images, isError))
   // Clear the progress reporter for manually-dispatched tools (shell,
   // writeFile, edit, askUser). Auto-executed tools go through the SDK
   // stream's `tool-result` event and are cleared there — this call is

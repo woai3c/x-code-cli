@@ -19,6 +19,7 @@ export function toolResultMessage(
   toolName: string,
   result: string,
   images?: readonly ToolImage[],
+  isError = false,
 ): ModelMessage {
   const output =
     images && images.length > 0
@@ -29,7 +30,9 @@ export function toolResultMessage(
             ...images.map((img) => ({ type: 'image-data' as const, data: img.data, mediaType: img.mediaType })),
           ],
         }
-      : { type: 'text' as const, value: result }
+      : isError
+        ? { type: 'error-text' as const, value: result }
+        : { type: 'text' as const, value: result }
   return {
     role: 'tool',
     content: [

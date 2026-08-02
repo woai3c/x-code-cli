@@ -482,7 +482,7 @@ describe('session-store: hydrateLoopState', () => {
           factIds: ['user.language'],
           factHashes: { 'user.language': 'fact-hash' },
           path: 'topics/profile.md',
-          renderedContent: 'Reply in Chinese.',
+          renderedContent: 'OPAQUE_RECALLED_VALUE',
         },
       ],
     })

@@ -43,6 +43,17 @@ function tombstonedTopicIds(state: LoopState): Set<string> {
   return new Set(state.memoryRecallTombstones.flatMap((item) => item.topicIds ?? []))
 }
 
+export function activeMemoryRecallAttachments(state: LoopState): MemoryRecallAttachment[] {
+  const tombstoned = tombstonedFactIds(state)
+  const tombstonedTopics = tombstonedTopicIds(state)
+  return state.memoryRecallAttachments.filter(
+    (attachment) =>
+      !attachment.topics.some(
+        (topic) => tombstonedTopics.has(topic.topicId) || topic.factIds.some((id) => tombstoned.has(id)),
+      ),
+  )
+}
+
 function renderAttachment(attachment: MemoryRecallAttachment): string {
   const body = attachment.topics
     .map((topic) => topic.renderedContent.replace(/<\/?x-code-memory-context\b/gi, (tag) => tag.replace('<', '&lt;')))
@@ -68,16 +79,7 @@ function prependToMessage(message: ModelMessage, block: string): ModelMessage {
 
 export function applyMemoryRecallAttachments(messages: readonly ModelMessage[], state: LoopState): ModelMessage[] {
   const result = [...messages]
-  const tombstoned = tombstonedFactIds(state)
-  const tombstonedTopics = tombstonedTopicIds(state)
-  const attachments = state.memoryRecallAttachments
-    .filter(
-      (attachment) =>
-        !attachment.topics.some(
-          (topic) => tombstonedTopics.has(topic.topicId) || topic.factIds.some((id) => tombstoned.has(id)),
-        ),
-    )
-    .sort((a, b) => a.anchorMessageIndex - b.anchorMessageIndex)
+  const attachments = activeMemoryRecallAttachments(state).sort((a, b) => a.anchorMessageIndex - b.anchorMessageIndex)
   let offset = 0
   for (const attachment of attachments) {
     const block = renderAttachment(attachment)

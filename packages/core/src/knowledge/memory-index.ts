@@ -38,8 +38,10 @@ export function tokenizeMemoryText(value: string): string[] {
   for (const identifier of identifiers) result.add(identifier.toLowerCase())
   for (const token of tokens) {
     result.add(token)
-    if (token.length <= 64 && !/[A-Za-z0-9]/.test(token)) {
-      const chars = [...token]
+    for (const run of token.match(/[^\x00-\x7F]+/g) ?? []) {
+      result.add(run)
+      const chars = [...run]
+      if (chars.length > 64) continue
       for (let size = 2; size <= 3; size++) {
         for (let index = 0; index + size <= chars.length; index++) result.add(chars.slice(index, index + size).join(''))
       }

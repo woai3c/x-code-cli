@@ -10,14 +10,13 @@ import { parseMemoryTopic } from '../src/knowledge/memory-store.js'
 import { topicMarkdown } from './memory-test-helpers.js'
 
 describe('MemoryIndex', () => {
-  it('normalizes Unicode, identifiers, Windows paths, and multilingual n-grams', () => {
+  it('normalizes Unicode, identifiers, Windows paths, and script-independent n-grams', () => {
     expect(normalizeMemoryText('D:\\Res\\x-code-cli')).toBe('d:/res/x code cli')
-    expect(tokenizeMemoryText('MemoryService 用户画像')).toEqual(
-      expect.arrayContaining(['memoryservice', 'memory', 'service', '用户', '画像', '用户画像']),
+    expect(tokenizeMemoryText('MemoryService αβγδ')).toEqual(
+      expect.arrayContaining(['memoryservice', 'memory', 'service', 'αβ', 'βγ', 'αβγ']),
     )
-    expect(tokenizeMemoryText('ユーザー設定')).toEqual(expect.arrayContaining(['ユー', '設定']))
-    expect(tokenizeMemoryText('настройки')).toEqual(expect.arrayContaining(['на', 'нас']))
     expect(tokenizeMemoryText('x-code-cli')).toEqual(expect.arrayContaining(['x-code-cli', 'x', 'code', 'cli']))
+    expect(tokenizeMemoryText('αβTypeScriptγδ')).toEqual(expect.arrayContaining(['αβ', 'γδ']))
     expect(extractMemoryIdentifiers('react-dom failed in @scope/tool with TS2322')).toEqual(
       expect.arrayContaining(['react-dom', '@scope/tool', 'TS2322']),
     )
@@ -38,7 +37,7 @@ describe('MemoryIndex', () => {
     const index = new MemoryIndex()
     index.rebuild([topic], 7)
 
-    expect([...index.exactHits('x-code-cli 的技术栈', [], [])].map(([id]) => id)).toEqual(['product-portfolio'])
+    expect([...index.exactHits('x-code-cli details', [], [])].map(([id]) => id)).toEqual(['product-portfolio'])
     expect(index.exactHits('repo', ['D:/res/x-code-cli'], []).has('product-portfolio')).toBe(true)
     expect(index.bm25('TypeScript pnpm')[0]?.topicId).toBe('product-portfolio')
     expect(index.facts.get('portfolio.x-code.stack')?.topicId).toBe('product-portfolio')

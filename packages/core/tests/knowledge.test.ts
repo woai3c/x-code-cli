@@ -33,7 +33,7 @@ describe('Memory v2 knowledge source', () => {
         type: 'user',
         aliases: ['user-profile'],
         keywords: ['language'],
-        facts: [{ id: 'user.language', content: '- Reply in Chinese.' }],
+        facts: [{ id: 'user.language', content: '- OPAQUE_PROFILE_VALUE' }],
       }),
       'profile',
     )
@@ -86,7 +86,7 @@ describe('Memory v2 knowledge source', () => {
           factIds: ['user.language'],
           factHashes: { 'user.language': 'old-fact-hash' },
           path: 'topics/profile.md',
-          renderedContent: 'Reply in Chinese.',
+          renderedContent: 'OPAQUE_RECALLED_VALUE',
         },
       ],
     })

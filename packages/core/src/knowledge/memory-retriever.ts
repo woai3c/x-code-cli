@@ -89,9 +89,7 @@ function repositoryMatches(topic: MemoryTopic, repositoryId: string): boolean {
 
 function includesAlias(message: string, alias: string): boolean {
   const normalized = normalizeMemoryText(alias)
-  if (!normalized) return false
-  if (/[^\x00-\x7F]/u.test(normalized)) return message.includes(normalized)
-  return ` ${message} `.includes(` ${normalized} `)
+  return normalized.length >= 2 && message.includes(normalized)
 }
 
 export class MemoryRetriever {
@@ -175,8 +173,7 @@ export class MemoryRetriever {
         const topic = this.index.topics.get(topicId)!
         let score = entry.score
         if (repositoryMatches(topic, query.repositoryId)) score += 0.15
-        const aliasHit = topic.metadata.aliases.some((alias) => includesAlias(normalizedMessage, alias))
-        if (aliasHit) {
+        if (topic.metadata.aliases.some((alias) => includesAlias(normalizedMessage, alias))) {
           score += 0.2
           protectedSet.add(topicId)
         }

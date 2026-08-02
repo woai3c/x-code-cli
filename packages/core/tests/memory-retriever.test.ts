@@ -46,14 +46,14 @@ describe('MemoryRetriever', () => {
   })
 
   it('directly selects one protected exact alias and applies repository boost', () => {
-    const result = retriever.retrieve(query('x-code-cli 的技术栈是什么'))
+    const result = retriever.retrieve(query('x-code-cli'))
     expect(result.selectedTopicIds).toEqual(['product-portfolio'])
     expect(result.needsSelector).toBe(false)
-    expect(result.candidates[0]?.score).toBeGreaterThan(0.2)
+    expect(result.candidates[0]?.score).toBeGreaterThan(0.4)
   })
 
-  it('asks for semantic selection on an ambiguous history query', () => {
-    const result = retriever.retrieve(query('build 工作流程怎么做'))
+  it('asks for semantic selection when one lexical route is not locally conclusive', () => {
+    const result = retriever.retrieve(query('core'))
     expect(result.needsSelector).toBe(true)
   })
 

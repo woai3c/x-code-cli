@@ -1,5 +1,6 @@
 import { createLoopState } from '../src/agent/loop-state.js'
 import {
+  activeMemoryRecallAttachments,
   addMemoryRecallAttachment,
   addMemoryRecallTombstone,
   applyMemoryRecallAttachments,
@@ -19,7 +20,7 @@ function attachment(): MemoryRecallAttachment {
         factIds: ['user.language'],
         factHashes: { 'user.language': 'fact-hash' },
         path: 'topics/profile.md',
-        renderedContent: 'Reply in Chinese.',
+        renderedContent: 'OPAQUE_RECALLED_VALUE',
       },
     ],
   }
@@ -42,6 +43,7 @@ describe('memory recall attachment state', () => {
     state.messages.push({ role: 'user', content: 'Question' })
     addMemoryRecallAttachment(state, attachment())
     addMemoryRecallTombstone(state, { generation: 2, factIds: ['user.language'] })
+    expect(activeMemoryRecallAttachments(state)).toEqual([])
     expect(applyMemoryRecallAttachments(state.messages, state)[0]?.content).toBe('Question')
   })
 

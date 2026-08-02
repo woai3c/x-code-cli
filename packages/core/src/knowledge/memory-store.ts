@@ -197,12 +197,32 @@ function sectionAt(body: string, offset: number): { id: string; headingPath: str
   return { id: headingPath.join(' / ') || 'root', headingPath }
 }
 
-function nextFactBoundary(body: string, markerEnd: number, nextMarker: number | undefined): number {
+function headingLevelAt(body: string, offset: number): number {
+  const heading = /^(#{1,3})\s+.+$/gm
+  let level = 0
+  let match: RegExpExecArray | null
+  while ((match = heading.exec(body)) && match.index < offset) level = match[1]!.length
+  return level
+}
+
+function nextFactBoundary(
+  body: string,
+  markerStart: number,
+  markerEnd: number,
+  nextMarker: number | undefined,
+): number {
   let end = nextMarker ?? body.length
+  const currentLevel = headingLevelAt(body, markerStart)
   const heading = /^(#{1,3})\s+.+$/gm
   heading.lastIndex = markerEnd
-  const nextHeading = heading.exec(body)
-  if (nextHeading && nextHeading.index < end) end = nextHeading.index
+  let nextHeading: RegExpExecArray | null
+  while ((nextHeading = heading.exec(body))) {
+    if (nextHeading.index >= end) break
+    if (currentLevel === 0 || nextHeading[1]!.length <= currentLevel) {
+      end = nextHeading.index
+      break
+    }
+  }
   return end
 }
 
@@ -232,7 +252,7 @@ function parseFacts(body: string): MemoryFact[] {
     if (metadata.expiresAt && !Number.isFinite(Date.parse(metadata.expiresAt))) {
       throw new Error(`Invalid expiresAt for ${metadata.id}`)
     }
-    const end = nextFactBoundary(body, current.end, matches[index + 1]?.index)
+    const end = nextFactBoundary(body, current.index, current.end, matches[index + 1]?.index)
     const content = canonicalText(body.slice(current.end, end))
     if (!content) throw new Error(`Empty fact content: ${metadata.id}`)
     const section = sectionAt(body, current.index)
@@ -513,23 +533,9 @@ function evidenceRank(kind: EvidenceKind): number {
   return 1
 }
 
-function canonicalPredicate(value: string): string {
-  const normalized = value.toLowerCase().replace(/[^a-z0-9\p{L}]+/gu, '')
-  const groups: Record<string, string> = {
-    techstack: 'stack',
-    technologystack: 'stack',
-    technologies: 'stack',
-    lang: 'language',
-    preferences: 'preference',
-    repo: 'repository',
-    filepath: 'path',
-  }
-  return groups[normalized] ?? normalized
-}
-
 function slotParts(factId: string): { subject: Set<string>; predicate: string } {
   const segments = factId.split('.')
-  const predicate = canonicalPredicate(segments.pop() ?? '')
+  const predicate = (segments.pop() ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
   const subject = new Set(
     segments
       .join('.')

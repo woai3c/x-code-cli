@@ -9,6 +9,7 @@ import { loadUserConfig, resolveModelId } from '../../config/index.js'
 import type { HookBus } from '../../hooks/bus.js'
 import type { HookEvent } from '../../hooks/types.js'
 import { tokenizeMemoryText } from '../../knowledge/memory-index.js'
+import { activeMemoryRecallAttachments } from '../../knowledge/memory-recall-state.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog, isAbortError } from '../../utils.js'
@@ -233,7 +234,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
           ? BROWSER_VISION_ADDENDUM
           : BROWSER_VISION_CAPTION_ADDENDUM
   const taskTokens = new Set(tokenizeMemoryText(prompt))
-  const recalledMemory = parentState.memoryRecallAttachments
+  const recalledMemory = activeMemoryRecallAttachments(parentState)
     .flatMap((attachment) => attachment.topics)
     .filter((topic) => tokenizeMemoryText(topic.renderedContent).some((token) => taskTokens.has(token)))
     .map((topic) => topic.renderedContent)

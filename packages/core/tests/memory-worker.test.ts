@@ -31,7 +31,7 @@ function job(): MemoryJob {
   }
 }
 
-function operation(evidence: MemoryOperation['evidence']): MemoryOperation {
+function operation(evidence: MemoryOperation['evidence']): Extract<MemoryOperation, { action: 'upsert' }> {
   return {
     action: 'upsert',
     topicId: 'project',
@@ -77,16 +77,44 @@ describe('memory worker evidence binding', () => {
     ])
   })
 
-  it.each(['Olvida mi preferencia de idioma.', 'この設定を記憶から削除してください。', 'احذف تفضيل اللغة من ذاكرتك.'])(
-    'authorizes deletion using exact user-message provenance in any language: %s',
+  it.each(['opaque-request', 'Ω-request', 'Ж-request', '🙂-request'])(
+    'authorizes deletion using exact opaque user-message provenance: %s',
     (request) => {
       expect(isDeleteOperationAuthorized(deleteOperation(request), [request])).toBe(true)
     },
   )
 
   it('rejects delete authorization manufactured outside user messages', () => {
-    const request = 'احذف تفضيل اللغة من ذاكرتك.'
-    expect(isDeleteOperationAuthorized(deleteOperation(request), ['Summarize the tool output.'])).toBe(false)
+    const request = 'opaque-delete-request'
+    expect(isDeleteOperationAuthorized(deleteOperation(request), ['unrelated-current-request'])).toBe(false)
+  })
+
+  it('rejects partial user-message provenance for deletion', () => {
+    expect(isDeleteOperationAuthorized(deleteOperation('x'), ['prefix-x-suffix'])).toBe(false)
+  })
+
+  it('accepts observed evidence only when durable tool signals ground the operation', () => {
+    const source = job()
+    source.projection.events.push({
+      type: 'tool-result',
+      name: 'opaqueTool',
+      status: 'ok',
+      evidence: '{}; signals={"paths":["D:/repo/src/worker.ts"],"identifiers":["TypeScript"]}; status=ok',
+    })
+
+    const bound = bindOperationEvidence(
+      [
+        operation([{ kind: 'observed', sourceId: 'model', occurredAt: source.sourceOccurredAt }]),
+        {
+          ...operation([{ kind: 'observed', sourceId: 'model', occurredAt: source.sourceOccurredAt }]),
+          content: '- Uses OpaqueValue.',
+        },
+      ],
+      source,
+    )
+
+    expect(bound).toHaveLength(1)
+    expect(bound[0]?.evidence[0]?.kind).toBe('observed')
   })
 
   it('retries a temporarily unavailable model instead of losing the durable job', async () => {

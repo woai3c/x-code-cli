@@ -59,6 +59,45 @@ describe('MemoryStore', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
+  it('treats nested headings as part of a fact until a same-level boundary', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryStore(root)
+    await store.initialize()
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'product',
+        type: 'portfolio',
+        facts: [
+          {
+            id: 'portfolio.x-code.stack',
+            content: '- VALUE_OLD\n\n### Nested details\n\n- NESTED_VALUE_OLD',
+          },
+        ],
+      }),
+      'product',
+    )
+    const topic = (await store.load()).topics[0]!
+    expect(topic.facts[0]?.content).toContain('NESTED_VALUE_OLD')
+
+    await store.applyOperations([
+      {
+        action: 'upsert',
+        topicId: 'product',
+        factId: 'portfolio.x-code.stack',
+        expectedTopicHash: topic.hash,
+        content: '- VALUE_NEW',
+        evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-04T00:00:00.000Z' }],
+      },
+    ])
+
+    const written = await fs.readFile(path.join(root, 'topics', 'product.md'), 'utf-8')
+    expect(written).toContain('VALUE_NEW')
+    expect(written).not.toContain('VALUE_OLD')
+    expect(written).not.toContain('NESTED_VALUE_OLD')
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
   it('rejects a delayed job instead of overwriting newer evidence', async () => {
     const root = await makeMemoryRoot()
     const store = new MemoryStore(root)
@@ -71,7 +110,7 @@ describe('MemoryStore', () => {
         facts: [
           {
             id: 'user.language',
-            content: '- Reply in Chinese.',
+            content: '- VALUE_NEWER',
             observedAt: '2026-08-03T00:00:00.000Z',
           },
         ],
@@ -85,16 +124,16 @@ describe('MemoryStore', () => {
         topicId: 'profile',
         factId: 'user.language',
         expectedTopicHash: topic.hash,
-        content: '- Reply in English.',
+        content: '- VALUE_OLDER',
         evidence: [{ kind: 'explicit', sourceId: 'old-session', occurredAt: '2026-08-02T00:00:00.000Z' }],
       },
     ])
     expect(result.status).toBe('warning')
-    expect(await fs.readFile(topic.path, 'utf-8')).toContain('Reply in Chinese')
+    expect(await fs.readFile(topic.path, 'utf-8')).toContain('VALUE_NEWER')
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('protects explicit facts without relying on English fact-ID keywords', async () => {
+  it('protects explicit facts without relying on predicate vocabulary', async () => {
     const root = await makeMemoryRoot()
     const store = new MemoryStore(root)
     await store.initialize()
@@ -103,7 +142,7 @@ describe('MemoryStore', () => {
       topicMarkdown({
         id: 'profile',
         type: 'reference',
-        facts: [{ id: 'custom.slot', content: '- Répondre en français.', observedAt: '2026-08-02T00:00:00.000Z' }],
+        facts: [{ id: 'custom.slot', content: '- VALUE_EXPLICIT', observedAt: '2026-08-02T00:00:00.000Z' }],
       }),
       'profile',
     )
@@ -115,17 +154,17 @@ describe('MemoryStore', () => {
         topicId: 'profile',
         factId: 'custom.slot',
         expectedTopicHash: topic.hash,
-        content: '- Reply in English.',
+        content: '- VALUE_VALIDATED',
         evidence: [{ kind: 'validated', sourceId: 'test-run', occurredAt: '2026-08-04T00:00:00.000Z' }],
       },
     ])
 
     expect(result.status).toBe('warning')
-    expect(await fs.readFile(topic.path, 'utf-8')).toContain('Répondre en français')
+    expect(await fs.readFile(topic.path, 'utf-8')).toContain('VALUE_EXPLICIT')
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('normalizes a unique subject/predicate slot to the existing fact ID', async () => {
+  it('reuses an existing fact ID when the structural subject and predicate match', async () => {
     const root = await makeMemoryRoot()
     const store = new MemoryStore(root)
     await store.initialize()
@@ -143,7 +182,7 @@ describe('MemoryStore', () => {
       {
         action: 'upsert',
         topicId: 'product',
-        factId: 'portfolio.x-code.tech-stack',
+        factId: 'x-code.stack',
         expectedTopicHash: topic.hash,
         content: '- Stack is Rust.',
         evidence: [{ kind: 'explicit', sourceId: 'new-session', occurredAt: '2026-08-04T00:00:00.000Z' }],
@@ -240,7 +279,7 @@ describe('MemoryStore', () => {
     const invalid = topicMarkdown({
       id: 'profile',
       type: 'user',
-      facts: [{ id: 'user.language', content: '- Reply in Chinese.' }],
+      facts: [{ id: 'user.language', content: '- VALUE_A' }],
     }).replace('status: active', 'status: invalid')
     await writeTopic(root, invalid, 'Profile')
 
@@ -249,7 +288,7 @@ describe('MemoryStore', () => {
         action: 'upsert',
         topicId: 'profile',
         factId: 'user.language',
-        content: '- Reply in English.',
+        content: '- VALUE_B',
         evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-04T00:00:00.000Z' }],
         topicPatch: {
           type: 'user',
@@ -278,7 +317,7 @@ describe('MemoryStore', () => {
         facts: [
           {
             id: 'user.language',
-            content: '- Reply in Chinese.',
+            content: '- VALUE_BOUND',
             observedAt: '2026-08-03T00:00:00.000Z',
           },
         ],
@@ -294,7 +333,7 @@ describe('MemoryStore', () => {
           topicId: 'profile',
           factId: 'user.language',
           expectedTopicHash: topic.hash,
-          content: '- Reply in English.',
+          content: '- VALUE_FORGED',
           evidence: [{ kind: 'explicit', sourceId: 'forged', occurredAt: '2099-01-01T00:00:00.000Z' }],
         },
       ],
@@ -302,7 +341,7 @@ describe('MemoryStore', () => {
     )
 
     expect(result.status).toBe('warning')
-    expect(await fs.readFile(topic.path, 'utf-8')).toContain('Reply in Chinese')
+    expect(await fs.readFile(topic.path, 'utf-8')).toContain('VALUE_BOUND')
     await fs.rm(root, { recursive: true, force: true })
   })
 

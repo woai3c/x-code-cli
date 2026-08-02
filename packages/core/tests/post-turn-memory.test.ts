@@ -7,8 +7,8 @@ describe('post-turn memory projection', () => {
     const messages: ModelMessage[] = [
       { role: 'user', content: 'old question' },
       { role: 'assistant', content: 'old answer' },
-      { role: 'user', content: '记住 x-code 是我的产品' },
-      { role: 'assistant', content: '好的，已经完成。' },
+      { role: 'user', content: 'current turn payload' },
+      { role: 'assistant', content: 'current turn result' },
     ]
     const projection = buildTurnMemoryProjection({
       messages,
@@ -20,15 +20,15 @@ describe('post-turn memory projection', () => {
       turnCompletedAt: '2026-08-02T00:01:00.000Z',
     })
 
-    expect(projection.userMessages).toEqual(['记住 x-code 是我的产品'])
-    expect(projection.assistantFinal).toBe('好的，已经完成。')
+    expect(projection.userMessages).toEqual(['current turn payload'])
+    expect(projection.assistantFinal).toBe('current turn result')
     expect(JSON.stringify(projection)).not.toContain('old question')
     expect(shouldCreateMemoryJob(projection)).toBe(true)
   })
 
-  it('lets the model evaluate non-empty turns in any language and skips only control commands', () => {
+  it('lets the model evaluate every non-empty turn and skips only control commands', () => {
     const base = {
-      assistantFinal: '你好',
+      assistantFinal: 'result',
       events: [],
       changedFiles: [],
       verification: [],
@@ -36,7 +36,7 @@ describe('post-turn memory projection', () => {
       turnStartedAt: '2026-08-02T00:00:00.000Z',
       turnCompletedAt: '2026-08-02T00:00:01.000Z',
     }
-    for (const text of ['你好', 'Hello', 'Hola', 'こんにちは', 'مرحبًا', '记住以后用中文']) {
+    for (const text of ['opaque-a', 'Ω-opaque', 'Ж-opaque', '🙂']) {
       expect(shouldCreateMemoryJob({ ...base, userMessages: [text] })).toBe(true)
     }
     expect(shouldCreateMemoryJob({ ...base, userMessages: ['/memory status'] })).toBe(false)
@@ -74,7 +74,7 @@ describe('post-turn memory projection', () => {
     expect(JSON.stringify(one)).not.toContain('github_pat_abcdefghijklmnopqrstuv')
   })
 
-  it('marks structural tool errors and never projects file bodies', () => {
+  it('marks structural tool errors and never projects raw result bodies', () => {
     const messages = [
       { role: 'user', content: 'Inspect the config' },
       {
@@ -82,9 +82,9 @@ describe('post-turn memory projection', () => {
         content: [
           {
             type: 'tool-call',
-            toolCallId: 'read-1',
-            toolName: 'mcp__filesystem__read_file',
-            input: { path: 'secret.env' },
+            toolCallId: 'op-1',
+            toolName: 'opaqueTool',
+            input: { reference: 'opaque-ref' },
           },
         ],
       },
@@ -93,13 +93,13 @@ describe('post-turn memory projection', () => {
         content: [
           {
             type: 'tool-result',
-            toolCallId: 'read-1',
-            toolName: 'mcp__filesystem__read_file',
-            output: { error: { message: 'permission denied' }, value: 'FILE_BODY_MUST_NOT_ENTER_MEMORY' },
+            toolCallId: 'op-1',
+            toolName: 'opaqueTool',
+            output: { error: { code: 'DENIED' }, value: 'do not copy this raw result prose' },
           },
         ],
       },
-      { role: 'assistant', content: 'I could not read it.' },
+      { role: 'assistant', content: 'the operation failed' },
     ] as ModelMessage[]
 
     const projection = buildTurnMemoryProjection({
@@ -114,17 +114,17 @@ describe('post-turn memory projection', () => {
 
     expect(projection.events).toContainEqual({
       type: 'tool-result',
-      name: 'mcp__filesystem__read_file',
+      name: 'opaqueTool',
       status: 'error',
-      evidence: '{"path":"secret.env"}; file content omitted; status=error',
+      evidence: '{"reference":"opaque-ref"}; signals={"identifiers":[],"paths":[]}; status=error',
     })
-    expect(JSON.stringify(projection)).not.toContain('FILE_BODY_MUST_NOT_ENTER_MEMORY')
+    expect(JSON.stringify(projection)).not.toContain('do not copy this raw result prose')
     expect(projection.verification).toEqual([])
   })
 
-  it('recognizes verification from the tool invocation instead of localized output text', () => {
+  it('recognizes verification from the command protocol without parsing result prose', () => {
     const messages = [
-      { role: 'user', content: 'Vérifie le projet' },
+      { role: 'user', content: 'run the requested checks' },
       {
         role: 'assistant',
         content: [
@@ -143,11 +143,11 @@ describe('post-turn memory projection', () => {
             type: 'tool-result',
             toolCallId: 'shell-1',
             toolName: 'shell',
-            output: { exitCode: 0, value: 'Toutes les vérifications ont réussi.' },
+            output: { type: 'text', value: 'ordinary result prose must stay out' },
           },
         ],
       },
-      { role: 'assistant', content: 'Terminé.' },
+      { role: 'assistant', content: 'done' },
     ] as ModelMessage[]
 
     const projection = buildTurnMemoryProjection({
@@ -160,6 +160,67 @@ describe('post-turn memory projection', () => {
       turnCompletedAt: '2026-08-02T00:00:01.000Z',
     })
 
-    expect(projection.verification).toEqual(['shell: Toutes les vérifications ont réussi.'])
+    expect(projection.verification).toEqual([
+      'shell: {"command":"pnpm test"}; signals={"identifiers":[],"paths":[]}; status=ok',
+    ])
+    expect(JSON.stringify(projection)).not.toContain('ordinary result prose must stay out')
+  })
+
+  it('retains only structured paths and identifiers from successful tool results', () => {
+    const messages = [
+      { role: 'user', content: 'inspect the operation' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'op-1', toolName: 'opaqueTool', input: {} }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'op-1',
+            toolName: 'opaqueTool',
+            output: { value: 'D:\\repo\\src\\worker.ts MemoryService TS2322 ordinary prose' },
+          },
+        ],
+      },
+      { role: 'assistant', content: 'done' },
+    ] as ModelMessage[]
+
+    const projection = buildTurnMemoryProjection({
+      messages,
+      turnStartMessageIndex: 0,
+      filesModifiedBefore: new Set(),
+      filesModifiedAfter: new Set(),
+      repositoryId: 'repo',
+      turnStartedAt: '2026-08-02T00:00:00.000Z',
+      turnCompletedAt: '2026-08-02T00:00:01.000Z',
+    })
+    const evidence = projection.events.find((event) => event.type === 'tool-result')?.evidence
+
+    expect(evidence).toContain('D:/repo/src/worker.ts')
+    expect(evidence).toContain('MemoryService')
+    expect(evidence).toContain('TS2322')
+    expect(evidence).not.toContain('ordinary prose')
+  })
+
+  it('enforces the projection byte budget even with many changed paths', () => {
+    const projection = buildTurnMemoryProjection({
+      messages: [
+        { role: 'user', content: 'payload' },
+        { role: 'assistant', content: 'result' },
+      ],
+      turnStartMessageIndex: 0,
+      filesModifiedBefore: new Set(),
+      filesModifiedAfter: new Set(
+        Array.from({ length: 512 }, (_, index) => `D:/repo/${String(index).padStart(4, '0')}/${'x'.repeat(200)}.ts`),
+      ),
+      repositoryId: 'repo',
+      turnStartedAt: '2026-08-02T00:00:00.000Z',
+      turnCompletedAt: '2026-08-02T00:00:01.000Z',
+      maxInputTokens: 256,
+    })
+
+    expect(Buffer.byteLength(JSON.stringify(projection), 'utf-8')).toBeLessThanOrEqual(256 * 3)
   })
 })
