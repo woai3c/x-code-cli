@@ -54,6 +54,7 @@ export type MemoryOperation =
       remove: MemoryFactTarget[]
       evidence: MemoryEvidence[]
       reason: 'explicit-forget'
+      userRequest: string
       topicPatches?: Array<{ topicId: string; patch: TopicMetadataPatch }>
     }
 
@@ -82,7 +83,6 @@ export interface MemoryJob {
   createdAt: string
   sourceOccurredAt: string
   attempt: number
-  explicitMemoryIntent: boolean
   nextAttemptAt?: string
   projection: TurnMemoryProjection
 }
@@ -163,8 +163,6 @@ export interface RecallQuery {
   repositoryId: string
   mentionedPaths: string[]
   identifiers: string[]
-  explicitHistoryIntent: boolean
-  explicitForgetIntent: boolean
 }
 
 export interface RecallCandidate {
@@ -205,11 +203,13 @@ export interface MemoryRecallAttachment {
 export interface MemoryRecallTombstone {
   generation: number
   factIds: string[]
+  topicIds?: string[]
 }
 
 export interface LateRecallSignals {
   anchorMessageIndex: number
   repositoryId: string
+  currentUserText: string
   paths: string[]
   identifiers: string[]
   text: string
@@ -225,8 +225,6 @@ export interface MemorySearchArgs {
 
 export interface MemorySearchContext {
   repositoryId: string
-  currentUserText: string
-  explicitHistoryIntent?: boolean
   allowedTopicIds?: string[]
 }
 

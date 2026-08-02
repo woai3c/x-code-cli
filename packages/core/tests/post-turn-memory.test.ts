@@ -26,7 +26,7 @@ describe('post-turn memory projection', () => {
     expect(shouldCreateMemoryJob(projection)).toBe(true)
   })
 
-  it('skips greetings but never skips explicit remember intent', () => {
+  it('lets the model evaluate non-empty turns in any language and skips only control commands', () => {
     const base = {
       assistantFinal: '你好',
       events: [],
@@ -36,13 +36,15 @@ describe('post-turn memory projection', () => {
       turnStartedAt: '2026-08-02T00:00:00.000Z',
       turnCompletedAt: '2026-08-02T00:00:01.000Z',
     }
-    expect(shouldCreateMemoryJob({ ...base, userMessages: ['你好'] })).toBe(false)
-    expect(shouldCreateMemoryJob({ ...base, userMessages: ['记住以后用中文'] })).toBe(true)
+    for (const text of ['你好', 'Hello', 'Hola', 'こんにちは', 'مرحبًا', '记住以后用中文']) {
+      expect(shouldCreateMemoryJob({ ...base, userMessages: [text] })).toBe(true)
+    }
+    expect(shouldCreateMemoryJob({ ...base, userMessages: ['/memory status'] })).toBe(false)
   })
 
   it('redacts secrets before creating a deterministic durable job', () => {
     const projection = {
-      userMessages: ['key=sk-proj-abcdefghijklmnop'],
+      userMessages: ['key=sk-proj-abcdefghijklmnop github_pat_abcdefghijklmnopqrstuv'],
       assistantFinal: 'saved',
       events: [],
       changedFiles: [],
@@ -69,5 +71,95 @@ describe('post-turn memory projection', () => {
     })
     expect(one.jobId).toBe(two.jobId)
     expect(JSON.stringify(one)).not.toContain('sk-proj-abcdefghijklmnop')
+    expect(JSON.stringify(one)).not.toContain('github_pat_abcdefghijklmnopqrstuv')
+  })
+
+  it('marks structural tool errors and never projects file bodies', () => {
+    const messages = [
+      { role: 'user', content: 'Inspect the config' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'read-1',
+            toolName: 'mcp__filesystem__read_file',
+            input: { path: 'secret.env' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'read-1',
+            toolName: 'mcp__filesystem__read_file',
+            output: { error: { message: 'permission denied' }, value: 'FILE_BODY_MUST_NOT_ENTER_MEMORY' },
+          },
+        ],
+      },
+      { role: 'assistant', content: 'I could not read it.' },
+    ] as ModelMessage[]
+
+    const projection = buildTurnMemoryProjection({
+      messages,
+      turnStartMessageIndex: 0,
+      filesModifiedBefore: new Set(),
+      filesModifiedAfter: new Set(),
+      repositoryId: 'repo',
+      turnStartedAt: '2026-08-02T00:00:00.000Z',
+      turnCompletedAt: '2026-08-02T00:00:01.000Z',
+    })
+
+    expect(projection.events).toContainEqual({
+      type: 'tool-result',
+      name: 'mcp__filesystem__read_file',
+      status: 'error',
+      evidence: '{"path":"secret.env"}; file content omitted; status=error',
+    })
+    expect(JSON.stringify(projection)).not.toContain('FILE_BODY_MUST_NOT_ENTER_MEMORY')
+    expect(projection.verification).toEqual([])
+  })
+
+  it('recognizes verification from the tool invocation instead of localized output text', () => {
+    const messages = [
+      { role: 'user', content: 'Vérifie le projet' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'shell-1',
+            toolName: 'shell',
+            input: { command: 'pnpm test' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'shell-1',
+            toolName: 'shell',
+            output: { exitCode: 0, value: 'Toutes les vérifications ont réussi.' },
+          },
+        ],
+      },
+      { role: 'assistant', content: 'Terminé.' },
+    ] as ModelMessage[]
+
+    const projection = buildTurnMemoryProjection({
+      messages,
+      turnStartMessageIndex: 0,
+      filesModifiedBefore: new Set(),
+      filesModifiedAfter: new Set(),
+      repositoryId: 'repo',
+      turnStartedAt: '2026-08-02T00:00:00.000Z',
+      turnCompletedAt: '2026-08-02T00:00:01.000Z',
+    })
+
+    expect(projection.verification).toEqual(['shell: Toutes les vérifications ont réussi.'])
   })
 })

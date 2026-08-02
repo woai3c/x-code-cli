@@ -21,7 +21,6 @@ function job(): MemoryJob {
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:01:00.000Z',
     attempt: 0,
-    explicitMemoryIntent: true,
     projection: {
       userMessages: ['Remember my API key sk-proj-abcdefghijklmnop and product x-code.'],
       assistantFinal: 'Done.',

@@ -912,7 +912,6 @@ export async function agentLoop(
           .slice(toolResultStartIndex)
           .filter((message) => message.role === 'tool')
           .map((message) => JSON.stringify(message.content))
-          .filter((content) => !content.includes('Error:'))
           .join('\n')
           .slice(0, 12_000)
         const paths = extractMemoryPaths(resultText)
@@ -924,6 +923,7 @@ export async function agentLoop(
               {
                 anchorMessageIndex: state.messages.length - 1,
                 repositoryId: process.cwd(),
+                currentUserText: initialRecallQuery?.currentUserText ?? taskTextForMeta ?? taskText,
                 paths,
                 identifiers,
                 text: `${paths.join(' ')} ${identifiers.join(' ')}`,

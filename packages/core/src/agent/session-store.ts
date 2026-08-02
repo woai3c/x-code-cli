@@ -86,6 +86,7 @@ interface CompactBoundaryEntry {
    *  `listSessions` to show "compacted" hints in the picker without
    *  re-reading the post-boundary messages. */
   summary?: string
+  memoryGeneration?: number
   ts: string
 }
 
@@ -141,6 +142,7 @@ interface MemoryRecallEntry {
   t: 'meta'
   kind: 'memory-recall'
   attachment: MemoryRecallAttachment
+  memoryGeneration?: number
   ts: string
 }
 
@@ -392,7 +394,12 @@ export async function appendStepStats(state: LoopState, step: StepStats): Promis
 export async function markBoundaryAndReflush(state: LoopState, summary?: string): Promise<void> {
   const filePath = getSessionFilePath(state)
   const ts = new Date().toISOString()
-  const boundary: CompactBoundaryEntry = { t: 'meta', kind: 'compact-boundary', ts }
+  const boundary: CompactBoundaryEntry = {
+    t: 'meta',
+    kind: 'compact-boundary',
+    memoryGeneration: state.memoryGeneration,
+    ts,
+  }
   if (summary !== undefined) boundary.summary = summary
   const lines = [JSON.stringify(boundary)]
   for (const message of state.messages) {
@@ -488,6 +495,7 @@ export async function appendMemoryRecall(state: LoopState, attachment: MemoryRec
     t: 'meta',
     kind: 'memory-recall',
     attachment: structuredClone(attachment),
+    memoryGeneration: state.memoryGeneration,
     ts: new Date().toISOString(),
   }
   await appendLine(getSessionFilePath(state), entry)
@@ -525,6 +533,7 @@ export interface LoadedSession {
   stepStats: StepStats[]
   memoryRecallAttachments: MemoryRecallAttachment[]
   memoryRecallTombstones: MemoryRecallTombstone[]
+  memoryGeneration: number
   /** Path of the jsonl file so the agent loop can keep appending to the
    *  same file when the user resumes. */
   filePath: string
@@ -566,6 +575,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   const stepStats: StepStats[] = []
   let memoryRecallAttachments: MemoryRecallAttachment[] = []
   let memoryRecallTombstones: MemoryRecallTombstone[] = []
+  let memoryGeneration = 0
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -587,6 +597,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         checkpoints = []
         memoryRecallAttachments = []
         memoryRecallTombstones = []
+        memoryGeneration = entry.memoryGeneration ?? 0
       } else if (entry.kind === 'checkpoint') {
         checkpoints.push({
           ckptId: entry.ckptId,
@@ -608,8 +619,10 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         stepStats.push(entry.step)
       } else if (entry.kind === 'memory-recall') {
         memoryRecallAttachments.push(entry.attachment)
+        memoryGeneration = Math.max(memoryGeneration, entry.memoryGeneration ?? 0)
       } else if (entry.kind === 'memory-recall-delete') {
         memoryRecallTombstones.push(entry.tombstone)
+        memoryGeneration = Math.max(memoryGeneration, entry.tombstone.generation)
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg') {
@@ -639,6 +652,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     stepStats,
     memoryRecallAttachments,
     memoryRecallTombstones,
+    memoryGeneration,
     filePath,
   }
 }
@@ -870,7 +884,7 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.stepStats = loaded.stepStats.slice()
   state.memoryRecallAttachments = loaded.memoryRecallAttachments.map((attachment) => structuredClone(attachment))
   state.memoryRecallTombstones = loaded.memoryRecallTombstones.map((tombstone) => structuredClone(tombstone))
-  state.memoryGeneration = Math.max(0, ...state.memoryRecallTombstones.map((item) => item.generation))
+  state.memoryGeneration = loaded.memoryGeneration
   state.surfacedMemoryHashes = new Set(
     state.memoryRecallAttachments.flatMap((attachment) =>
       attachment.topics.map((topic) => `${topic.topicId}@${topic.topicHash}`),

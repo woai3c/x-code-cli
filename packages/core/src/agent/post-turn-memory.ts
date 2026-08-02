@@ -7,19 +7,22 @@ import { redactMemoryValue } from '../knowledge/memory-redaction.js'
 import type { MemoryJob, TurnMemoryProjection } from '../knowledge/memory-types.js'
 import { extractText } from '../utils/message-helpers.js'
 
-const EXPLICIT_MEMORY_RE =
-  /(?:记住|以后|始终|不要再|我的产品|忘记|remember|from now on|always|never again|my product|forget)/i
-const GREETING_RE = /^(?:你好|您好|嗨|hello|hi|hey|谢谢|thanks)[!！,.，。\s]*$/i
 const PURE_SLASH_RE = /^\/[a-z][\w-]*(?:\s+[^\n]*)?$/i
-const VERIFY_RE =
-  /(?:tests? passed|build succeeded|typecheck passed|exit code\s*[:=]?\s*0|测试通过|构建通过|类型检查通过)/i
 
 interface ToolPart {
   type?: string
+  toolCallId?: string
   toolName?: string
   input?: unknown
   output?: unknown
+  isError?: boolean
 }
+
+const FILE_CONTENT_TOOL_RE = /(?:readFile|read_file|readMcpResource)$/i
+const VERIFICATION_TOOL_RE = /(?:test|check|lint|build|compile|verify)/i
+const COMMAND_TOOL_RE = /(?:shell|command|terminal|powershell|bash)/i
+const VERIFICATION_COMMAND_RE =
+  /(?:^|[\s"'=:/\\])(?:test|tests|build|typecheck|lint|check|ci|pytest|vitest|jest|eslint|tsc)(?=$|[\s"'&,;:/\\])/i
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
@@ -70,6 +73,25 @@ function outputText(output: unknown): string {
   return JSON.stringify(output ?? '')
 }
 
+function isFailedToolResult(part: ToolPart, evidence: string): boolean {
+  if (part.isError) return true
+  if (part.output && typeof part.output === 'object') {
+    const output = part.output as Record<string, unknown>
+    if (output.isError === true || output.success === false || output.ok === false) return true
+    if ('error' in output && output.error !== undefined && output.error !== null && output.error !== false) return true
+    if (output.status === 'error' || output.status === 'failed') return true
+    if (typeof output.exitCode === 'number' && output.exitCode !== 0) return true
+    if (output.type === 'error-text' || output.type === 'error-json') return true
+  }
+  if (/^(?:Error:|\[Tool execution (?:failed|interrupted))/i.test(evidence.trim())) return true
+  const exitCodes = [...evidence.matchAll(/\bexit code\s*[:=]?\s*(-?\d+)/gi)].map((match) => Number(match[1]))
+  return exitCodes.some((code) => code !== 0)
+}
+
+function isVerificationToolResult(toolName: string, input: string): boolean {
+  return VERIFICATION_TOOL_RE.test(toolName) || (COMMAND_TOOL_RE.test(toolName) && VERIFICATION_COMMAND_RE.test(input))
+}
+
 function changedFilesSince(current: ReadonlySet<string>, before: ReadonlySet<string>): string[] {
   return [...current]
     .filter((file) => !before.has(file))
@@ -80,9 +102,7 @@ function changedFilesSince(current: ReadonlySet<string>, before: ReadonlySet<str
 export function shouldCreateMemoryJob(projection: TurnMemoryProjection): boolean {
   const userText = projection.userMessages.join('\n').trim()
   if (!userText || !projection.assistantFinal.trim()) return false
-  if (EXPLICIT_MEMORY_RE.test(userText)) return true
-  if (GREETING_RE.test(userText) || PURE_SLASH_RE.test(userText)) return false
-  return true
+  return !PURE_SLASH_RE.test(userText)
 }
 
 export function buildTurnMemoryProjection(input: {
@@ -100,6 +120,7 @@ export function buildTurnMemoryProjection(input: {
   let assistantFinal = ''
   const events: TurnMemoryProjection['events'] = []
   const verification: string[] = []
+  const toolInputs = new Map<string, string>()
 
   for (const message of messages) {
     if (message.role === 'user') {
@@ -113,7 +134,9 @@ export function buildTurnMemoryProjection(input: {
       if (Array.isArray(message.content)) {
         for (const part of message.content as ToolPart[]) {
           if (part.type === 'tool-call' && part.toolName) {
-            events.push({ type: 'tool-call', name: part.toolName, summary: summarizeInput(part.input) })
+            const summary = summarizeInput(part.input)
+            events.push({ type: 'tool-call', name: part.toolName, summary })
+            toolInputs.set(part.toolCallId ?? part.toolName, summary)
           }
         }
       }
@@ -122,12 +145,21 @@ export function buildTurnMemoryProjection(input: {
     if (message.role === 'tool' && Array.isArray(message.content)) {
       for (const part of message.content as ToolPart[]) {
         if (part.type !== 'tool-result' || !part.toolName) continue
-        const evidence = outputText(part.output)
-          .replace(/\b[A-Za-z0-9+/]{160,}={0,2}\b/g, '[binary removed]')
-          .slice(0, 1000)
-        const status = /^Error:/i.test(evidence) ? 'error' : 'ok'
+        const rawEvidence = outputText(part.output).replace(/\b[A-Za-z0-9+/]{160,}={0,2}\b/g, '[binary removed]')
+        const status = isFailedToolResult(part, rawEvidence) ? 'error' : 'ok'
+        const evidence = FILE_CONTENT_TOOL_RE.test(part.toolName)
+          ? `${toolInputs.get(part.toolCallId ?? part.toolName) ?? '{}'}; file content omitted; status=${status}`.slice(
+              0,
+              1000,
+            )
+          : rawEvidence.slice(0, 1000)
         events.push({ type: 'tool-result', name: part.toolName, status, evidence })
-        if (VERIFY_RE.test(evidence)) verification.push(`${part.toolName}: ${evidence.slice(0, 500)}`)
+        if (
+          status === 'ok' &&
+          isVerificationToolResult(part.toolName, toolInputs.get(part.toolCallId ?? part.toolName) ?? '')
+        ) {
+          verification.push(`${part.toolName}: ${evidence.slice(0, 500)}`)
+        }
       }
     }
   }
@@ -149,8 +181,11 @@ function trimProjection(projection: TurnMemoryProjection, maxTokens: number): Tu
   const maxBytes = maxTokens * 3
   const clone = structuredClone(projection)
   const size = () => Buffer.byteLength(JSON.stringify(clone), 'utf-8')
-  clone.userMessages = clone.userMessages.map((value) => value.slice(0, 12_000))
+  clone.userMessages = clone.userMessages.slice(-32).map((value) => value.slice(0, 12_000))
   clone.assistantFinal = clone.assistantFinal.slice(0, 18_000)
+  clone.events = clone.events.slice(-128)
+  clone.changedFiles = clone.changedFiles.slice(0, 512).map((value) => value.slice(0, 8192))
+  clone.verification = clone.verification.slice(-128).map((value) => value.slice(0, 1000))
   while (size() > maxBytes && clone.events.length > 0) {
     const ordinary = clone.events.findIndex((event) => event.type === 'tool-call')
     clone.events.splice(ordinary >= 0 ? ordinary : clone.events.length - 1, 1)
@@ -195,7 +230,6 @@ export function createMemoryJob(input: {
     createdAt: new Date().toISOString(),
     sourceOccurredAt: projection.turnCompletedAt,
     attempt: 0,
-    explicitMemoryIntent: EXPLICIT_MEMORY_RE.test(projection.userMessages.join('\n')),
     projection,
   }
 }

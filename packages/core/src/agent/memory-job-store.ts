@@ -4,12 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { redactMemoryValue } from '../knowledge/memory-redaction.js'
-import { atomicWriteFile } from '../knowledge/memory-transaction-store.js'
+import { atomicWriteFile, syncDirectory } from '../knowledge/memory-transaction-store.js'
 import type { MemoryJob } from '../knowledge/memory-types.js'
 
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000, 300_000, 900_000, 1_800_000]
 const LOCK_STALE_MS = 30_000
-const SAFE_JOB_ID_RE = /^[A-Za-z0-9._-]+$/
+const SAFE_JOB_ID_RE = /^[A-Za-z0-9._-]{1,200}$/
+const MAX_JOB_BYTES = 2 * 1024 * 1024
 const RECENT_RUNS_MAX_BYTES = 256 * 1024
 const RECENT_RUNS_MAX_RECORDS = 256
 
@@ -60,16 +61,78 @@ function validateJob(value: unknown): MemoryJob {
     typeof job.jobId !== 'string' ||
     !SAFE_JOB_ID_RE.test(job.jobId) ||
     typeof job.sessionId !== 'string' ||
+    !SAFE_JOB_ID_RE.test(job.sessionId) ||
+    typeof job.turnStartMessageIndex !== 'number' ||
+    !Number.isSafeInteger(job.turnStartMessageIndex) ||
+    job.turnStartMessageIndex < 0 ||
     typeof job.modelId !== 'string' ||
+    !job.modelId.trim() ||
+    job.modelId.length > 500 ||
     typeof job.repositoryId !== 'string' ||
+    !job.repositoryId.trim() ||
+    job.repositoryId.length > 8192 ||
     typeof job.cwd !== 'string' ||
+    !job.cwd.trim() ||
+    job.cwd.length > 8192 ||
     typeof job.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(job.createdAt)) ||
+    typeof job.sourceOccurredAt !== 'string' ||
+    !Number.isFinite(Date.parse(job.sourceOccurredAt)) ||
     typeof job.attempt !== 'number' ||
-    !job.projection
+    !Number.isSafeInteger(job.attempt) ||
+    job.attempt < 0 ||
+    (job.nextAttemptAt !== undefined &&
+      (typeof job.nextAttemptAt !== 'string' || !Number.isFinite(Date.parse(job.nextAttemptAt)))) ||
+    !validateProjection(job.projection, job.repositoryId)
   ) {
     throw new Error('Invalid memory job schema')
   }
   return job as MemoryJob
+}
+
+function validateProjection(value: unknown, repositoryId: string): boolean {
+  if (!value || typeof value !== 'object') return false
+  const projection = value as Record<string, unknown>
+  const stringArray = (item: unknown, maxItems: number, maxChars: number) =>
+    Array.isArray(item) &&
+    item.length <= maxItems &&
+    item.every((entry) => typeof entry === 'string' && entry.length <= maxChars)
+  if (
+    !stringArray(projection.userMessages, 32, 12_000) ||
+    typeof projection.assistantFinal !== 'string' ||
+    projection.assistantFinal.length > 18_000 ||
+    !Array.isArray(projection.events) ||
+    projection.events.length > 128 ||
+    !stringArray(projection.changedFiles, 512, 8192) ||
+    !stringArray(projection.verification, 128, 1000) ||
+    projection.repositoryId !== repositoryId ||
+    typeof projection.turnStartedAt !== 'string' ||
+    !Number.isFinite(Date.parse(projection.turnStartedAt)) ||
+    typeof projection.turnCompletedAt !== 'string' ||
+    !Number.isFinite(Date.parse(projection.turnCompletedAt))
+  ) {
+    return false
+  }
+  return projection.events.every((event) => {
+    if (!event || typeof event !== 'object') return false
+    const item = event as Record<string, unknown>
+    if (item.type === 'tool-call') {
+      return (
+        typeof item.name === 'string' &&
+        item.name.length <= 500 &&
+        typeof item.summary === 'string' &&
+        item.summary.length <= 1000
+      )
+    }
+    return (
+      item.type === 'tool-result' &&
+      typeof item.name === 'string' &&
+      item.name.length <= 500 &&
+      (item.status === 'ok' || item.status === 'error') &&
+      typeof item.evidence === 'string' &&
+      item.evidence.length <= 1000
+    )
+  })
 }
 
 export class MemoryJobStore {
@@ -77,6 +140,7 @@ export class MemoryJobStore {
   readonly pendingDir: string
   readonly runningDir: string
   readonly failedDir: string
+  readonly appliedDir: string
   readonly locksDir: string
   readonly recentRunsPath: string
 
@@ -85,6 +149,7 @@ export class MemoryJobStore {
     this.pendingDir = path.join(this.stateRoot, 'jobs', 'pending')
     this.runningDir = path.join(this.stateRoot, 'jobs', 'running')
     this.failedDir = path.join(this.stateRoot, 'jobs', 'failed')
+    this.appliedDir = path.join(this.stateRoot, 'jobs', 'applied')
     this.locksDir = path.join(this.stateRoot, 'locks')
     this.recentRunsPath = path.join(this.stateRoot, 'recent-runs.jsonl')
   }
@@ -94,6 +159,7 @@ export class MemoryJobStore {
       fs.mkdir(this.pendingDir, { recursive: true }),
       fs.mkdir(this.runningDir, { recursive: true }),
       fs.mkdir(this.failedDir, { recursive: true }),
+      fs.mkdir(this.appliedDir, { recursive: true }),
       fs.mkdir(this.locksDir, { recursive: true }),
     ])
   }
@@ -101,6 +167,7 @@ export class MemoryJobStore {
   async enqueue(job: MemoryJob): Promise<'created' | 'duplicate'> {
     validateJob(job)
     const fileName = `${job.jobId}.json`
+    if (await exists(path.join(this.appliedDir, fileName))) return 'duplicate'
     for (const dir of [this.pendingDir, this.runningDir, this.failedDir]) {
       if (await exists(path.join(dir, fileName))) return 'duplicate'
     }
@@ -115,13 +182,58 @@ export class MemoryJobStore {
       await handle.close()
     }
     try {
-      await fs.link(temp, target)
+      try {
+        await fs.link(temp, target)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'EEXIST') return 'duplicate'
+        if (code !== 'EPERM' && code !== 'ENOSYS' && code !== 'ENOTSUP' && code !== 'EXDEV') throw error
+        const lockPath = path.join(this.locksDir, `enqueue-${job.jobId}.lock`)
+        const deadline = Date.now() + 10_000
+        while (true) {
+          try {
+            await fs.mkdir(lockPath)
+            break
+          } catch (lockError) {
+            if ((lockError as NodeJS.ErrnoException).code !== 'EEXIST') throw lockError
+            for (const dir of [this.pendingDir, this.runningDir, this.failedDir, this.appliedDir]) {
+              if (await exists(path.join(dir, fileName))) return 'duplicate'
+            }
+            const stat = await fs.stat(lockPath).catch(() => null)
+            if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+              await fs.rmdir(lockPath).catch(() => {})
+              continue
+            }
+            if (Date.now() >= deadline) throw new Error(`Timed out publishing memory job: ${job.jobId}`)
+            await new Promise((resolve) => setTimeout(resolve, 25))
+          }
+        }
+        try {
+          for (const dir of [this.pendingDir, this.runningDir, this.failedDir, this.appliedDir]) {
+            if (await exists(path.join(dir, fileName))) return 'duplicate'
+          }
+          await fs.rename(temp, target)
+          await syncDirectory(this.pendingDir)
+          return 'created'
+        } finally {
+          await fs.rmdir(lockPath).catch(() => {})
+          await syncDirectory(this.locksDir)
+        }
+      }
       await fs.unlink(temp)
+      await syncDirectory(this.pendingDir)
+      for (const dir of [this.runningDir, this.failedDir, this.appliedDir]) {
+        if (!(await exists(path.join(dir, fileName)))) continue
+        await fs.unlink(target).catch(() => {})
+        await syncDirectory(this.pendingDir)
+        return 'duplicate'
+      }
       return 'created'
     } catch (error) {
-      await fs.unlink(temp).catch(() => {})
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') return 'duplicate'
       throw error
+    } finally {
+      await fs.unlink(temp).catch(() => {})
     }
   }
 
@@ -132,12 +244,27 @@ export class MemoryJobStore {
     for (const name of entries) {
       const source = path.join(this.pendingDir, name)
       try {
+        const stat = await fs.stat(source)
+        if (stat.size > MAX_JOB_BYTES) throw new Error('Memory job exceeds the durable queue size limit')
         const job = validateJob(JSON.parse(await fs.readFile(source, 'utf-8')))
         if (`${job.jobId}.json` !== name) throw new Error('Memory job ID does not match its filename')
         if (job.nextAttemptAt && Date.parse(job.nextAttemptAt) > now) continue
         parsed.push({ name, job })
       } catch {
         await fs.rename(source, path.join(this.failedDir, name)).catch(() => {})
+        await Promise.all([syncDirectory(this.pendingDir), syncDirectory(this.failedDir)])
+        const jobId = name.slice(0, -'.json'.length)
+        if (SAFE_JOB_ID_RE.test(jobId)) {
+          await this.appendRun({
+            jobId,
+            status: 'failed',
+            durationMs: 0,
+            tokens: 0,
+            operations: 0,
+            errorCategory: 'corrupt-job',
+            completedAt: new Date().toISOString(),
+          })
+        }
       }
     }
     parsed.sort((a, b) => a.job.createdAt.localeCompare(b.job.createdAt) || a.job.jobId.localeCompare(b.job.jobId))
@@ -146,6 +273,7 @@ export class MemoryJobStore {
       const target = path.join(this.runningDir, item.name)
       try {
         await fs.rename(source, target)
+        await Promise.all([syncDirectory(this.pendingDir), syncDirectory(this.runningDir)])
         return item.job
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
@@ -157,6 +285,12 @@ export class MemoryJobStore {
 
   async complete(job: MemoryJob): Promise<void> {
     await fs.unlink(path.join(this.runningDir, `${job.jobId}.json`)).catch(() => {})
+    await syncDirectory(this.runningDir)
+  }
+
+  async isApplied(jobId: string): Promise<boolean> {
+    if (!SAFE_JOB_ID_RE.test(jobId)) return false
+    return exists(path.join(this.appliedDir, `${jobId}.json`))
   }
 
   async retry(job: MemoryJob, maxAttempts = RETRY_DELAYS_MS.length): Promise<'pending' | 'failed'> {
@@ -175,6 +309,7 @@ export class MemoryJobStore {
     const running = path.join(this.runningDir, `${job.jobId}.json`)
     await atomicWriteFile(running, JSON.stringify(updated, null, 2) + '\n')
     await fs.rename(running, path.join(this.pendingDir, `${job.jobId}.json`))
+    await Promise.all([syncDirectory(this.runningDir), syncDirectory(this.pendingDir)])
     return 'pending'
   }
 
@@ -185,6 +320,7 @@ export class MemoryJobStore {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       await fs.unlink(running).catch(() => {})
     })
+    await Promise.all([syncDirectory(this.runningDir), syncDirectory(this.failedDir)])
   }
 
   async recoverRunning(): Promise<void> {
@@ -195,6 +331,7 @@ export class MemoryJobStore {
       if (await exists(target)) await fs.unlink(source).catch(() => {})
       else await fs.rename(source, target).catch(() => {})
     }
+    await Promise.all([syncDirectory(this.runningDir), syncDirectory(this.pendingDir)])
   }
 
   async tryAcquireExtractorLock(): Promise<ExtractorLease | null> {
@@ -242,13 +379,19 @@ export class MemoryJobStore {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
         const current = await fs
           .readFile(lockPath, 'utf-8')
-          .then((raw) => JSON.parse(raw) as ExtractorLockFile)
+          .then((raw) => {
+            const value = JSON.parse(raw) as Partial<ExtractorLockFile>
+            return typeof value.pid === 'number' && Number.isFinite(Date.parse(value.heartbeatAt ?? ''))
+              ? (value as ExtractorLockFile)
+              : null
+          })
           .catch(() => null)
         const stat = current ? null : await fs.stat(lockPath).catch(() => null)
         const heartbeatAge = current
           ? Date.now() - Date.parse(current.heartbeatAt)
           : Date.now() - (stat?.mtimeMs ?? Date.now())
-        if (heartbeatAge > LOCK_STALE_MS && (!current || !processExists(current.pid))) {
+        const ownerDead = !current || current.hostname !== os.hostname() || !processExists(current.pid)
+        if (heartbeatAge > LOCK_STALE_MS && ownerDead) {
           await fs.unlink(lockPath).catch(() => {})
           continue
         }

@@ -2,10 +2,20 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { DEFAULT_MEMORY_CONFIG } from '../src/config/index.js'
+import type { MemoryConfig } from '../src/config/index.js'
 import type { EvidenceKind, MemoryStatus, MemoryType } from '../src/knowledge/memory-types.js'
 
 export async function makeMemoryRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'x-code-memory-v2-'))
+}
+
+export function enabledMemoryConfig(): MemoryConfig {
+  return {
+    ...DEFAULT_MEMORY_CONFIG,
+    enabled: true,
+    recall: { ...DEFAULT_MEMORY_CONFIG.recall },
+  }
 }
 
 export function topicMarkdown(input: {
@@ -24,6 +34,7 @@ export function topicMarkdown(input: {
     observedAt?: string
     evidence?: EvidenceKind
     status?: MemoryStatus
+    expiresAt?: string
   }>
   manual?: string
 }): string {
@@ -58,6 +69,7 @@ ${facts
       observedAt: fact.observedAt ?? '2026-08-02T00:00:00.000Z',
       evidence: fact.evidence ?? 'explicit',
       status: fact.status ?? 'active',
+      ...(fact.expiresAt ? { expiresAt: fact.expiresAt } : {}),
     })} -->
 
 ${fact.content}`,

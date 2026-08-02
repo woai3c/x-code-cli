@@ -1,11 +1,11 @@
+import { createHash } from 'node:crypto'
+
 import type { LanguageModel } from 'ai'
 
-import type { MemoryJob, MemoryOperationResult, MemoryWriteNotice } from '../knowledge/memory-types.js'
+import type { MemoryJob, MemoryOperation, MemoryOperationResult, MemoryWriteNotice } from '../knowledge/memory-types.js'
 import { debugLog } from '../utils.js'
 import { extractMemoryOperations } from './memory-extractor.js'
 import type { MemoryJobStore } from './memory-job-store.js'
-
-const EXPLICIT_FORGET_RE = /(?:忘记|别记|从记忆中删除|forget|remove\s+(?:this\s+)?memory)/i
 
 export interface MemoryWorkerOptions {
   jobStore: MemoryJobStore
@@ -18,12 +18,13 @@ export interface MemoryWorkerOptions {
   }>
   commitOperations(
     operations: Awaited<ReturnType<typeof extractMemoryOperations>>['operations'],
+    job: MemoryJob,
   ): Promise<MemoryOperationResult>
   onCommitted(result: MemoryOperationResult): Promise<void>
   onNotice(notice: MemoryWriteNotice): void
-  maxOperations: number
-  maxOutputTokens: number
-  maxAttempts: number
+  maxOperations(): number
+  maxOutputTokens(): number
+  maxAttempts(): number
 }
 
 export class MemoryWorker {
@@ -92,22 +93,28 @@ export class MemoryWorker {
     const controller = new AbortController()
     this.activeController = controller
     try {
+      if (await this.options.jobStore.isApplied(job.jobId)) {
+        await this.options.jobStore.complete(job)
+        return
+      }
       const preferred = this.options.preferredModelId()
       const modelId = preferred && preferred !== 'inherit' ? preferred : job.modelId
       const model =
         this.options.resolveModel(modelId) ?? (modelId === job.modelId ? null : this.options.resolveModel(job.modelId))
       if (!model) {
-        await this.options.jobStore.fail(job)
-        await this.options.jobStore.appendRun({
-          jobId: job.jobId,
-          status: 'failed',
-          durationMs: Date.now() - started,
-          tokens: 0,
-          operations: 0,
-          errorCategory: 'model-unavailable',
-          completedAt: new Date().toISOString(),
-        })
-        this.options.onNotice({ action: 'failed', error: `Memory model unavailable: ${modelId}` })
+        const retry = await this.options.jobStore.retry(job, this.options.maxAttempts())
+        if (retry === 'failed') {
+          await this.options.jobStore.appendRun({
+            jobId: job.jobId,
+            status: 'failed',
+            durationMs: Date.now() - started,
+            tokens: 0,
+            operations: 0,
+            errorCategory: 'model-unavailable',
+            completedAt: new Date().toISOString(),
+          })
+          this.options.onNotice({ action: 'failed', error: `Memory model unavailable: ${modelId}` })
+        }
         return
       }
       const context = await this.options.contextFor(job)
@@ -115,17 +122,21 @@ export class MemoryWorker {
         job,
         model,
         ...context,
-        maxOperations: this.options.maxOperations,
-        maxOutputTokens: this.options.maxOutputTokens,
+        maxOperations: this.options.maxOperations(),
+        maxOutputTokens: this.options.maxOutputTokens(),
         abortSignal: controller.signal,
       })
       tokens = extracted.tokens
-      const explicitForget = EXPLICIT_FORGET_RE.test(job.projection.userMessages.join('\n'))
-      const safeOperations = extracted.operations.filter((operation) => operation.action !== 'delete' || explicitForget)
+      const safeOperations = bindOperationEvidence(
+        extracted.operations.filter(
+          (operation) =>
+            operation.action !== 'delete' || isDeleteOperationAuthorized(operation, job.projection.userMessages),
+        ),
+        job,
+      )
       operations = safeOperations.length
-      const committed = await this.options.commitOperations(safeOperations)
+      const committed = await this.options.commitOperations(safeOperations, job)
       await this.options.onCommitted(committed)
-      await this.options.jobStore.complete(job)
       const status = committed.status === 'success' ? 'success' : committed.status
       await this.options.jobStore.appendRun({
         jobId: job.jobId,
@@ -135,9 +146,10 @@ export class MemoryWorker {
         operations,
         completedAt: new Date().toISOString(),
       })
+      await this.options.jobStore.complete(job)
       for (const notice of committed.notices) this.options.onNotice(notice)
     } catch (error) {
-      const retry = await this.options.jobStore.retry(job, this.options.maxAttempts)
+      const retry = await this.options.jobStore.retry(job, this.options.maxAttempts())
       const message = error instanceof Error ? error.message : String(error)
       debugLog('memory-worker.error', `${job.jobId}: ${message}`)
       if (retry === 'failed') {
@@ -171,4 +183,38 @@ export class MemoryWorker {
     )
     this.retryTimer.unref?.()
   }
+}
+
+export function isDeleteOperationAuthorized(
+  operation: Extract<MemoryOperation, { action: 'delete' }>,
+  userMessages: readonly string[],
+): boolean {
+  const request = operation.userRequest.normalize('NFKC').trim()
+  if (!request) return false
+  return userMessages.some((message) => message.normalize('NFKC').includes(request))
+}
+
+export function bindOperationEvidence(operations: readonly MemoryOperation[], job: MemoryJob): MemoryOperation[] {
+  const supported = new Set<MemoryOperation['evidence'][number]['kind']>(['explicit'])
+  if (job.projection.verification.length > 0) supported.add('validated')
+  if (
+    job.projection.changedFiles.length > 0 ||
+    job.projection.events.some((event) => event.type === 'tool-result' && event.status === 'ok')
+  ) {
+    supported.add('observed')
+  }
+  const contentHash = createHash('sha256').update(JSON.stringify(job.projection)).digest('hex')
+  const bind = (operation: MemoryOperation): MemoryOperation | null => {
+    const evidence = operation.evidence
+      .filter((item) => supported.has(item.kind))
+      .map((item) => ({
+        kind: item.kind,
+        sourceId: `memory-job:${job.jobId}:${item.kind}`,
+        occurredAt: job.sourceOccurredAt,
+        contentHash,
+      }))
+    if (evidence.length === 0) return null
+    return { ...operation, evidence } as MemoryOperation
+  }
+  return operations.map(bind).filter((operation): operation is MemoryOperation => Boolean(operation))
 }

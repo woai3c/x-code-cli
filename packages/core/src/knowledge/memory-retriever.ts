@@ -9,6 +9,7 @@ import {
   MemoryIndex,
   extractMemoryIdentifiers,
   extractMemoryPaths,
+  isMemoryFactActive,
   normalizeMemoryText,
   tokenizeMemoryText,
 } from './memory-index.js'
@@ -21,10 +22,6 @@ import type {
   RecallCandidate,
   RecallQuery,
 } from './memory-types.js'
-
-const HISTORY_RE = /(?:记得|记忆|之前|以前|上次|曾经|历史|过去|remember|before|previous|last time|history)/i
-const FORGET_RE = /(?:忘记|别记|删除.*记忆|forget|remove.*memory)/i
-const SELF_CONTAINED_RE = /^(?:你好|谢谢|翻译|格式化|hello\b|hi\b|thanks\b|format\b|translate\b)/i
 
 export interface RetrieverOptions {
   maxTopicsPerTurn: number
@@ -76,8 +73,6 @@ export function buildRecallQuery(
     repositoryId: repositoryId.replace(/\\/g, '/'),
     mentionedPaths: extractMemoryPaths(clean),
     identifiers: extractMemoryIdentifiers(clean),
-    explicitHistoryIntent: HISTORY_RE.test(clean),
-    explicitForgetIntent: FORGET_RE.test(clean),
   }
 }
 
@@ -85,21 +80,6 @@ function addRoute(routeRanks: Map<string, Map<string, number>>, route: string, t
   const ranks = new Map<string, number>()
   topicIds.slice(0, 20).forEach((topicId, index) => ranks.set(topicId, index + 1))
   routeRanks.set(route, ranks)
-}
-
-function intentTypes(query: string): Set<MemoryTopic['metadata']['type']> {
-  const result = new Set<MemoryTopic['metadata']['type']>()
-  if (/(?:产品|仓库|技术栈|架构|product|repo|stack|architecture)/i.test(query)) result.add('portfolio')
-  if (/(?:偏好|纠正|不要再|协作|preference|feedback|correction)/i.test(query)) {
-    result.add('feedback')
-    result.add('user')
-  }
-  if (/(?:为什么|决策|流程|怎么做|decision|workflow|why)/i.test(query)) {
-    result.add('project')
-    result.add('workflow')
-  }
-  if (/(?:入口|链接|文档|reference|dashboard|url)/i.test(query)) result.add('reference')
-  return result
 }
 
 function repositoryMatches(topic: MemoryTopic, repositoryId: string): boolean {
@@ -110,7 +90,7 @@ function repositoryMatches(topic: MemoryTopic, repositoryId: string): boolean {
 function includesAlias(message: string, alias: string): boolean {
   const normalized = normalizeMemoryText(alias)
   if (!normalized) return false
-  if (/\p{Script=Han}/u.test(normalized)) return message.includes(normalized)
+  if (/[^\x00-\x7F]/u.test(normalized)) return message.includes(normalized)
   return ` ${message} `.includes(` ${normalized} `)
 }
 
@@ -146,15 +126,6 @@ export class MemoryRetriever {
       'conversation',
       conversation.map((hit) => hit.topicId),
     )
-    const types = intentTypes(query.currentUserText)
-    addRoute(
-      routeRanks,
-      'type',
-      [...this.index.topics.values()]
-        .filter((topic) => types.has(topic.metadata.type))
-        .sort((a, b) => Date.parse(b.metadata.updatedAt) - Date.parse(a.metadata.updatedAt))
-        .map((topic) => topic.metadata.id),
-    )
     addRoute(
       routeRanks,
       'pinned',
@@ -165,7 +136,6 @@ export class MemoryRetriever {
       exact: 4,
       bm25: 2.5,
       conversation: 1.5,
-      type: 1.5,
       relationship: 0.8,
       pinned: 0.5,
     }
@@ -210,8 +180,7 @@ export class MemoryRetriever {
           score += 0.2
           protectedSet.add(topicId)
         }
-        if (query.explicitHistoryIntent && types.has(topic.metadata.type)) score += 0.1
-        if (topic.metadata.status === 'stale') score *= 0.5
+        if (topic.facts.length > 0 && !topic.facts.some((fact) => isMemoryFactActive(fact))) score *= 0.5
         const topicTokens = this.index.topicTokens(topicId)
         const localCoverage = queryTokens.size
           ? [...queryTokens].filter((token) => topicTokens.has(token)).length / queryTokens.size
@@ -238,9 +207,8 @@ export class MemoryRetriever {
       const locallyCertain =
         independentRoutes >= 2 && top.coverage >= 0.6 && (!second || top.score - second.score >= 0.02)
       if (locallyCertain) selectedTopicIds = [top.topicId]
-      else if (query.explicitHistoryIntent || independentRoutes >= 2) needsSelector = true
+      else if (independentRoutes >= 1) needsSelector = true
     }
-    if (SELF_CONTAINED_RE.test(query.currentUserText)) needsSelector = false
 
     const trace: MemoryRecallTrace = {
       query: query.currentUserText,
@@ -288,26 +256,24 @@ export class MemoryRetriever {
         const content = renderSection(section)
         if (!content) continue
         const tokens = estimateTokens(content)
+        const candidateContent = [...rendered, content].join('\n\n')
         if (
           topicTokens + tokens > this.options.maxTokensPerTopic ||
-          totalTokens + topicTokens + tokens > this.options.maxTokensPerTurn
+          totalTokens + topicTokens + tokens > this.options.maxTokensPerTurn ||
+          candidateContent.split('\n').length > 200 ||
+          Buffer.byteLength(candidateContent, 'utf-8') > 8 * 1024
         ) {
           continue
         }
         rendered.push(content)
         topicTokens += tokens
-        for (const fact of section.facts.filter((item) => item.metadata.status === 'active')) {
+        for (const fact of section.facts.filter((item) => isMemoryFactActive(item))) {
           factIds.push(fact.metadata.id)
           factHashes[fact.metadata.id] = fact.hash
         }
       }
       if (rendered.length <= 2) continue
-      const renderedContent = rendered
-        .join('\n\n')
-        .split('\n')
-        .slice(0, 200)
-        .join('\n')
-        .slice(0, 8 * 1024)
+      const renderedContent = rendered.join('\n\n')
       const actualTokens = estimateTokens(renderedContent)
       if (totalTokens + actualTokens > this.options.maxTokensPerTurn) continue
       packed.push({
@@ -374,12 +340,14 @@ function overlap(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
 
 function sectionScore(section: MemorySection, queryTokens: Set<string>): number {
   const tokens = new Set(tokenizeMemoryText(`${section.headingPath.join(' ')} ${section.content}`))
-  return overlap(queryTokens, tokens) + (section.facts.some((fact) => fact.metadata.status === 'active') ? 0.01 : 0)
+  return overlap(queryTokens, tokens) + (section.facts.some((fact) => isMemoryFactActive(fact)) ? 0.01 : 0)
 }
 
 function renderSection(section: MemorySection): string {
-  if (section.facts.length === 0) return section.content
-  const active = section.facts.filter((fact) => fact.metadata.status === 'active')
+  if (section.facts.length === 0) {
+    return section.content.replace(/^#{1,3}\s+.*$/gm, '').trim() ? section.content : ''
+  }
+  const active = section.facts.filter((fact) => isMemoryFactActive(fact))
   let manual = section.content
   for (const fact of section.facts) {
     const id = fact.metadata.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -390,6 +358,7 @@ function renderSection(section: MemorySection): string {
     )
   }
   manual = manual.replace(/\n{3,}/g, '\n\n').trim()
+  if (active.length === 0 && !manual.replace(/^#{1,3}\s+.*$/gm, '').trim()) return ''
   return [manual, ...active.map((fact) => fact.content)].filter(Boolean).join('\n\n')
 }
 

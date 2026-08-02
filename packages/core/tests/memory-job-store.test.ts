@@ -17,7 +17,6 @@ function job(id = 'job-1'): MemoryJob {
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:00:01.000Z',
     attempt: 0,
-    explicitMemoryIntent: true,
     projection: {
       userMessages: ['remember this'],
       assistantFinal: 'done',
@@ -87,6 +86,47 @@ describe('MemoryJobStore', () => {
 
     expect(await store.claimNext()).toBeNull()
     expect(await fs.readdir(store.failedDir)).toEqual(['tampered.json'])
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('quarantines malformed projections and records a diagnostic run', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryJobStore(root)
+    await store.initialize()
+    await fs.writeFile(
+      path.join(store.pendingDir, 'corrupt.json'),
+      JSON.stringify({ ...job('corrupt'), projection: {} }),
+      'utf-8',
+    )
+
+    expect(await store.claimNext()).toBeNull()
+    expect(await fs.readdir(store.failedDir)).toEqual(['corrupt.json'])
+    expect(await store.lastRun()).toMatchObject({ jobId: 'corrupt', status: 'failed', errorCategory: 'corrupt-job' })
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('does not enqueue jobs that already have a durable applied marker', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryJobStore(root)
+    await store.initialize()
+    await fs.writeFile(path.join(store.appliedDir, 'job-1.json'), '{"jobId":"job-1"}\n', 'utf-8')
+
+    expect(await store.enqueue(job())).toBe('duplicate')
+    expect(await store.counts()).toEqual({ pending: 0, running: 0, failed: 0 })
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('publishes atomically when the filesystem does not support hard links', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryJobStore(root)
+    await store.initialize()
+    const link = vi
+      .spyOn(fs, 'link')
+      .mockRejectedValueOnce(Object.assign(new Error('unsupported'), { code: 'ENOTSUP' }))
+
+    expect(await store.enqueue(job('portable'))).toBe('created')
+    expect((await store.claimNext())?.jobId).toBe('portable')
+    link.mockRestore()
     await fs.rm(root, { recursive: true, force: true })
   })
 })

@@ -10,7 +10,7 @@ import { appendMemoryRecall, appendMemoryRecallDelete } from '../agent/session-s
 import { resolveMemoryConfig } from '../config/index.js'
 import type { MemoryConfig } from '../config/index.js'
 import { debugLog, userXcodeDir } from '../utils.js'
-import { MemoryIndex } from './memory-index.js'
+import { MemoryIndex, isMemoryFactActive } from './memory-index.js'
 import { addMemoryRecallAttachment, addMemoryRecallTombstone } from './memory-recall-state.js'
 import { MemoryRetriever } from './memory-retriever.js'
 import { selectMemoryTopics } from './memory-selector.js'
@@ -37,12 +37,36 @@ export interface MemoryServiceOptions {
   onNotice?: (notice: MemoryWriteNotice) => void
 }
 
+function pinnedCoreSignature(topics: readonly MemoryTopic[]): string {
+  return JSON.stringify(
+    topics
+      .filter((topic) => topic.metadata.pinned && topic.metadata.status === 'active')
+      .sort(
+        (a, b) =>
+          Date.parse(b.metadata.updatedAt) - Date.parse(a.metadata.updatedAt) ||
+          a.metadata.id.localeCompare(b.metadata.id),
+      )
+      .map((topic) => ({
+        id: topic.metadata.id,
+        summary: topic.metadata.summary,
+        description: topic.metadata.description,
+        aliases: topic.metadata.aliases,
+      })),
+  )
+}
+
+function isWildcardMemoryQuery(value: string): boolean {
+  return /^(?:\*|\.\*)$/.test(value.trim())
+}
+
 export class MemoryService {
   readonly memoryRoot: string
   private readonly store: MemoryStore
   private readonly jobStore: MemoryJobStore
   private readonly index = new MemoryIndex()
+  private currentConfig: MemoryConfig
   private retriever: MemoryRetriever
+  private retrieverConfigKey = ''
   private worker: MemoryWorker
   private topics: MemoryTopic[] = []
   private invalidTopics: Array<{ path: string; error: string }> = []
@@ -56,6 +80,7 @@ export class MemoryService {
   private pinnedInvalidationGeneration = 0
 
   constructor(private readonly options: MemoryServiceOptions = {}) {
+    this.currentConfig = this.readConfig()
     this.memoryRoot = options.memoryRoot ?? path.join(userXcodeDir(), 'memory')
     this.store = new MemoryStore(this.memoryRoot)
     this.jobStore = new MemoryJobStore(this.memoryRoot)
@@ -64,14 +89,18 @@ export class MemoryService {
     this.worker = new MemoryWorker({
       jobStore: this.jobStore,
       resolveModel: (modelId) => this.resolveModel(modelId),
-      preferredModelId: () => this.config().model,
+      preferredModelId: () => this.refreshConfig().model,
       contextFor: (job) => this.extractionContext(job),
-      commitOperations: (operations) => this.store.applyOperations(operations),
+      commitOperations: (operations, job) =>
+        this.store.applyOperations(operations, {
+          jobId: job.jobId,
+          sourceOccurredAt: job.sourceOccurredAt,
+        }),
       onCommitted: (result) => this.afterCommit(result),
       onNotice: (notice) => this.noticeHandler?.(notice),
-      maxOperations: this.config().maxOperationsPerTurn,
-      maxOutputTokens: this.config().maxOutputTokens,
-      maxAttempts: this.config().retryMaxAttempts,
+      maxOperations: () => this.config().maxOperationsPerTurn,
+      maxOutputTokens: () => this.config().maxOutputTokens,
+      maxAttempts: () => this.config().retryMaxAttempts,
     })
   }
 
@@ -91,7 +120,7 @@ export class MemoryService {
       const loaded = await this.store.initialize()
       this.installSnapshot(loaded.topics, loaded.invalidTopics, loaded.generation)
       this.initialized = true
-      if (this.config().enabled) this.worker.wake()
+      if (this.refreshConfig().enabled) this.worker.wake()
     } catch (error) {
       this.initialized = true
       this.initializationError = error instanceof Error ? error.message : String(error)
@@ -104,7 +133,7 @@ export class MemoryService {
   }
 
   getConfig(): MemoryConfig {
-    return this.config()
+    return this.refreshConfig()
   }
 
   listTopics(): Array<{
@@ -132,9 +161,10 @@ export class MemoryService {
   }
 
   async recall(query: RecallQuery, state: LoopState): Promise<MemoryRecallAttachment | null> {
+    const config = this.refreshConfig()
     if (!this.available()) return null
     await this.synchronizeGeneration(state)
-    const config = this.config()
+    this.ensureRetrieverConfig(config)
     if (state.memoryTokensInWindow >= config.recall.maxTokensPerCompactionWindow) return null
     const retrieved = this.retriever.retrieve(query)
     let selected = retrieved.selectedTopicIds
@@ -187,7 +217,8 @@ export class MemoryService {
   }
 
   async lateRecall(signals: LateRecallSignals, state: LoopState): Promise<MemoryRecallAttachment | null> {
-    const config = this.config()
+    const config = this.refreshConfig()
+    this.ensureRetrieverConfig(config)
     if (!this.available() || !config.recall.lateBoundRecall) return null
     await this.synchronizeGeneration(state)
     const remainingBudget = config.recall.maxTokensPerCompactionWindow - state.memoryTokensInWindow
@@ -198,20 +229,46 @@ export class MemoryService {
       repositoryId: signals.repositoryId,
       mentionedPaths: signals.paths,
       identifiers: signals.identifiers,
-      explicitHistoryIntent: false,
-      explicitForgetIntent: false,
     }
     const surfaced = new Set(
       state.memoryRecallAttachments.flatMap((attachment) => attachment.topics.map((topic) => topic.topicId)),
     )
     const retrieved = this.retriever.retrieve(query)
-    const selected = retrieved.candidates
+    const candidateIds = retrieved.candidates
       .filter(
         (candidate) =>
           !surfaced.has(candidate.topicId) && candidate.routes.some((route) => route === 'exact' || route === 'bm25'),
       )
-      .slice(0, 2)
+      .slice(0, 50)
       .map((candidate) => candidate.topicId)
+    if (candidateIds.length === 0) return null
+    const selectorModelId =
+      config.recall.selectorModel === 'inherit' ? this.currentModelId() : config.recall.selectorModel
+    const model = selectorModelId ? this.resolveModel(selectorModelId) : null
+    if (!model) return null
+    let selected: string[]
+    try {
+      selected = (
+        await selectMemoryTopics({
+          model,
+          query: {
+            currentUserText: signals.currentUserText,
+            recentConversationText: '',
+            repositoryId: signals.repositoryId,
+            mentionedPaths: [],
+            identifiers: [],
+          },
+          manifest: this.index.manifest(candidateIds),
+          preferredTopicIds: candidateIds,
+          untrustedSignals: signals.text,
+        })
+      )
+        .filter((topicId) => !surfaced.has(topicId))
+        .slice(0, 2)
+    } catch (error) {
+      debugLog('memory.late-recall-selector-failed', error instanceof Error ? error.message : String(error))
+      return null
+    }
     const attachment = this.retriever.pack(query, selected, signals.anchorMessageIndex, 'after-tool-results')
     if (!attachment || attachment.estimatedTokens > remainingBudget || !addMemoryRecallAttachment(state, attachment)) {
       return null
@@ -222,22 +279,26 @@ export class MemoryService {
       packedTokens: attachment.estimatedTokens,
     }
     this.lastTrace = state.lastMemoryRecallTrace
+    state.memoryGeneration = this.index.generation
     void appendMemoryRecall(state, attachment)
     return attachment
   }
 
   async enqueuePostTurnJob(job: MemoryJob): Promise<'created' | 'duplicate' | 'skipped'> {
-    if (!this.available() || !this.config().enabled) return 'skipped'
+    this.refreshConfig()
+    if (!this.available()) return 'skipped'
     const result = await this.jobStore.enqueue(job)
     if (result === 'created') this.worker.wake()
     return result
   }
 
   async search(args: MemorySearchArgs, context: MemorySearchContext): Promise<MemorySearchResult[]> {
+    const config = this.refreshConfig()
     if (!this.available()) return []
+    this.ensureRetrieverConfig(config)
     const query = args.query.trim()
-    if (!query || /^(?:\*|\.\*|all|全部|所有记忆|列出.*记忆)$/i.test(query)) {
-      throw new Error('memorySearch requires a specific, non-enumerating query')
+    if (!query || isWildcardMemoryQuery(query)) {
+      throw new Error('memorySearch requires a specific, non-wildcard query')
     }
     const recallQuery: RecallQuery = {
       currentUserText: query,
@@ -245,13 +306,30 @@ export class MemoryService {
       repositoryId: context.repositoryId,
       mentionedPaths: [],
       identifiers: [],
-      explicitHistoryIntent: context.explicitHistoryIntent ?? true,
-      explicitForgetIntent: false,
     }
     const retrieved = this.retriever.retrieve(recallQuery)
-    let candidateIds = retrieved.candidates
+    const lexicalCandidateIds = retrieved.candidates
       .filter((candidate) => candidate.protected || candidate.routes.some((route) => route !== 'pinned'))
       .map((candidate) => candidate.topicId)
+    let candidateIds = lexicalCandidateIds
+    if (args.semantic) {
+      const modelId = this.config().recall.selectorModel
+      const resolvedId = modelId === 'inherit' ? this.currentModelId() : modelId
+      const model = resolvedId ? this.resolveModel(resolvedId) : null
+      if (model) {
+        try {
+          candidateIds = await selectMemoryTopics({
+            model,
+            query: recallQuery,
+            manifest: this.index.manifest(context.allowedTopicIds),
+            preferredTopicIds: lexicalCandidateIds,
+          })
+        } catch (error) {
+          debugLog('memory.search-selector-fallback', error instanceof Error ? error.message : String(error))
+          candidateIds = lexicalCandidateIds
+        }
+      }
+    }
     if (context.allowedTopicIds) candidateIds = candidateIds.filter((id) => context.allowedTopicIds!.includes(id))
     if (args.topicIds) {
       const candidates = new Set(candidateIds)
@@ -259,31 +337,22 @@ export class MemoryService {
         throw new Error('topicIds cannot expand memory search candidates')
       candidateIds = candidateIds.filter((id) => args.topicIds!.includes(id))
     }
-    if (args.semantic) {
-      const modelId = this.config().recall.selectorModel
-      const resolvedId = modelId === 'inherit' ? this.currentModelId() : modelId
-      const model = resolvedId ? this.resolveModel(resolvedId) : null
-      if (model) {
-        candidateIds = await selectMemoryTopics({
-          model,
-          query: recallQuery,
-          manifest: this.index.manifest(candidateIds.slice(0, 50)),
-          preferredTopicIds: candidateIds,
-        })
-      }
-    }
     const score = new Map(retrieved.candidates.map((candidate) => [candidate.topicId, candidate.score]))
     const results: MemorySearchResult[] = []
     for (const topicId of candidateIds) {
       const topic = this.index.topics.get(topicId)
       if (!topic) continue
       for (const section of topic.sections) {
-        const activeFacts = section.facts.filter((fact) => args.includeStale || fact.metadata.status === 'active')
+        const activeFacts = section.facts.filter((fact) => args.includeStale || isMemoryFactActive(fact))
         if (section.facts.length && activeFacts.length === 0) continue
         results.push({
           topicId,
           section: section.headingPath.join(' / ') || 'root',
-          status: activeFacts.some((fact) => fact.metadata.status === 'active') ? 'active' : topic.metadata.status,
+          status: section.facts.length
+            ? activeFacts.some((fact) => isMemoryFactActive(fact))
+              ? 'active'
+              : 'stale'
+            : topic.metadata.status,
           updatedAt: topic.metadata.updatedAt,
           path: topic.path,
           snippet: (activeFacts.length ? activeFacts.map((fact) => fact.content).join('\n') : section.content).slice(
@@ -315,6 +384,7 @@ export class MemoryService {
   }
 
   async status(): Promise<MemoryStatusReport> {
+    this.refreshConfig()
     const queue = await this.jobStore.counts().catch(() => ({ pending: 0, running: 0, failed: 0 }))
     const lastRun = await this.jobStore.lastRun().catch(() => undefined)
     return {
@@ -347,15 +417,29 @@ export class MemoryService {
   }
 
   private config(): MemoryConfig {
+    return this.currentConfig
+  }
+
+  private readConfig(): MemoryConfig {
     return this.options.config?.() ?? resolveMemoryConfig()
+  }
+
+  private refreshConfig(): MemoryConfig {
+    this.currentConfig = this.readConfig()
+    return this.currentConfig
   }
 
   private available(): boolean {
     return this.initialized && !this.initializationError && this.config().enabled
   }
 
-  private createRetriever(): MemoryRetriever {
-    const recall = this.config().recall
+  private createRetriever(config: MemoryConfig = this.config()): MemoryRetriever {
+    const recall = config.recall
+    this.retrieverConfigKey = JSON.stringify([
+      recall.maxTopicsPerTurn,
+      recall.maxTokensPerTopic,
+      recall.maxTokensPerTurn,
+    ])
     return new MemoryRetriever(this.index, {
       maxTopicsPerTurn: recall.maxTopicsPerTurn,
       maxTokensPerTopic: recall.maxTokensPerTopic,
@@ -363,21 +447,25 @@ export class MemoryService {
     })
   }
 
+  private ensureRetrieverConfig(config: MemoryConfig): void {
+    const key = JSON.stringify([
+      config.recall.maxTopicsPerTurn,
+      config.recall.maxTokensPerTopic,
+      config.recall.maxTokensPerTurn,
+    ])
+    if (key !== this.retrieverConfigKey) this.retriever = this.createRetriever(config)
+  }
+
   private installSnapshot(
     topics: MemoryTopic[],
     invalidTopics: Array<{ path: string; error: string }>,
     generation: number,
   ): void {
-    if (this.initialized || this.topics.length > 0) {
-      const nextFacts = new Map(
-        topics
-          .filter((topic) => topic.metadata.pinned)
-          .flatMap((topic) => topic.facts.map((fact) => [fact.metadata.id, fact.hash] as const)),
-      )
-      const pinnedFactChanged = this.topics
-        .filter((topic) => topic.metadata.pinned)
-        .some((topic) => topic.facts.some((fact) => nextFacts.get(fact.metadata.id) !== fact.hash))
-      if (pinnedFactChanged) this.pinnedInvalidationGeneration = generation
+    if (
+      (this.initialized || this.topics.length > 0) &&
+      pinnedCoreSignature(this.topics) !== pinnedCoreSignature(topics)
+    ) {
+      this.pinnedInvalidationGeneration = generation
     }
     this.topics = topics
     this.invalidTopics = invalidTopics
@@ -400,14 +488,13 @@ export class MemoryService {
   }
 
   private async extractionContext(job: MemoryJob) {
+    this.ensureRetrieverConfig(this.config())
     const query: RecallQuery = {
       currentUserText: `${job.projection.userMessages.join('\n')}\n${job.projection.assistantFinal}`,
       recentConversationText: '',
       repositoryId: job.repositoryId,
       mentionedPaths: job.projection.changedFiles,
       identifiers: [],
-      explicitHistoryIntent: job.explicitMemoryIntent,
-      explicitForgetIntent: /(?:忘记|forget)/i.test(job.projection.userMessages.join('\n')),
     }
     const retrieved = this.retriever.retrieve(query)
     const ids = [
@@ -449,20 +536,46 @@ export class MemoryService {
   }
 
   private async applyChangesToState(state: LoopState, fromGeneration: number, toGeneration: number): Promise<void> {
-    if (fromGeneration >= toGeneration) {
+    if (fromGeneration > toGeneration) {
+      const factIds = [
+        ...new Set(
+          state.memoryRecallAttachments.flatMap((attachment) => attachment.topics.flatMap((topic) => topic.factIds)),
+        ),
+      ]
+      const topicIds = [
+        ...new Set(
+          state.memoryRecallAttachments.flatMap((attachment) => attachment.topics.map((topic) => topic.topicId)),
+        ),
+      ]
+      if (factIds.length > 0 || topicIds.length > 0) {
+        const tombstone = { generation: toGeneration, factIds, topicIds }
+        addMemoryRecallTombstone(state, tombstone)
+        void appendMemoryRecallDelete(state, tombstone)
+      }
+      state.systemPromptCache = null
+      state.expectCacheMiss = true
+      state.memoryGeneration = toGeneration
+      return
+    }
+    if (fromGeneration === toGeneration) {
       state.memoryGeneration = toGeneration
       return
     }
     const factIds = new Set<string>()
+    const topicIds = new Set<string>()
     const attachedFactIds = new Set(
       state.memoryRecallAttachments.flatMap((attachment) => attachment.topics.flatMap((topic) => topic.factIds)),
     )
     let pinnedChanged = false
     let manualEdit = false
+    let missingChange = false
     if (toGeneration - fromGeneration <= 256) {
       for (let generation = fromGeneration + 1; generation <= toGeneration; generation++) {
         const change = await this.readChange(generation)
-        if (!change) continue
+        if (!change) {
+          missingChange = true
+          continue
+        }
         if (change.reason === 'manual-edit') manualEdit = true
         for (const item of [...change.changed, ...change.deleted]) {
           if (attachedFactIds.has(item.factId)) factIds.add(item.factId)
@@ -471,8 +584,12 @@ export class MemoryService {
         }
       }
     } else {
+      missingChange = true
+    }
+    if (missingChange) {
       for (const attachment of state.memoryRecallAttachments) {
         for (const topic of attachment.topics) {
+          if (this.index.topics.get(topic.topicId)?.hash !== topic.topicHash) topicIds.add(topic.topicId)
           for (const [factId, factHash] of Object.entries(topic.factHashes)) {
             if (this.index.facts.get(factId)?.factHash !== factHash) factIds.add(factId)
           }
@@ -481,18 +598,23 @@ export class MemoryService {
       pinnedChanged = state.memoryRecallAttachments.some((attachment) =>
         attachment.topics.some((topic) => this.index.topics.get(topic.topicId)?.metadata.pinned),
       )
+      // A missing manifest means we cannot prove the cached Core profile is
+      // unchanged. Prefer one expected cache miss over retaining stale pinned
+      // data across a damaged/pruned generation chain.
+      if (state.systemPromptCache !== null) pinnedChanged = true
     }
     if (manualEdit) {
       for (const attachment of state.memoryRecallAttachments) {
         for (const topic of attachment.topics) {
+          if (this.index.topics.get(topic.topicId)?.hash !== topic.topicHash) topicIds.add(topic.topicId)
           for (const [factId, factHash] of Object.entries(topic.factHashes)) {
             if (this.index.facts.get(factId)?.factHash !== factHash) factIds.add(factId)
           }
         }
       }
     }
-    if (factIds.size) {
-      const tombstone = { generation: toGeneration, factIds: [...factIds] }
+    if (factIds.size || topicIds.size) {
+      const tombstone = { generation: toGeneration, factIds: [...factIds], topicIds: [...topicIds] }
       addMemoryRecallTombstone(state, tombstone)
       void appendMemoryRecallDelete(state, tombstone)
     }

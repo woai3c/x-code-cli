@@ -2,7 +2,20 @@ import path from 'node:path'
 
 import type { MemoryFact, MemoryTopic } from './memory-types.js'
 
-const WORD_RE = /[\p{L}\p{N}]+/gu
+const WORD_RE = /[\p{L}\p{M}\p{N}]+/gu
+
+export function isMemoryFactActive(fact: MemoryFact, now = Date.now()): boolean {
+  return fact.metadata.status === 'active' && (!fact.metadata.expiresAt || Date.parse(fact.metadata.expiresAt) > now)
+}
+
+function searchableTopicBody(topic: MemoryTopic): string {
+  let manual = topic.body
+  for (const fact of [...topic.facts].sort((a, b) => b.start - a.start)) {
+    manual = manual.slice(0, fact.start) + manual.slice(fact.end)
+  }
+  const activeFacts = topic.facts.filter((fact) => isMemoryFactActive(fact)).map((fact) => fact.content)
+  return `${manual}\n${activeFacts.join('\n')}`
+}
 
 export function normalizeMemoryText(value: string): string {
   return value
@@ -10,7 +23,7 @@ export function normalizeMemoryText(value: string): string {
     .replace(/\\/g, '/')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_.-]+/g, ' ')
-    .toLocaleLowerCase('en-US')
+    .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -22,10 +35,10 @@ export function tokenizeMemoryText(value: string): string[] {
   const source = value.normalize('NFKC')
   const identifiers =
     source.match(/\b(?:[A-Za-z_$][\w$]*(?:[.:-][A-Za-z_$][\w$]*)+|[A-Za-z_$][\w$]*[A-Z][\w$]*)\b/g) ?? []
-  for (const identifier of identifiers) result.add(identifier.toLocaleLowerCase('en-US'))
+  for (const identifier of identifiers) result.add(identifier.toLowerCase())
   for (const token of tokens) {
     result.add(token)
-    if (/\p{Script=Han}/u.test(token)) {
+    if (token.length <= 64 && !/[A-Za-z0-9]/.test(token)) {
       const chars = [...token]
       for (let size = 2; size <= 3; size++) {
         for (let index = 0; index + size <= chars.length; index++) result.add(chars.slice(index, index + size).join(''))
@@ -45,10 +58,7 @@ export function extractMemoryIdentifiers(value: string): string[] {
     value.match(/\b(?:[A-Za-z_$][\w$]*(?:[.:-][A-Za-z_$][\w$]*)+|[A-Z][A-Z0-9_]{2,}|[A-Za-z_$][\w$]*[A-Z][\w$]*)\b/g) ??
     []
   const scopedPackages = value.match(/@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*/gi) ?? []
-  const labeledPackages = [...value.matchAll(/\b(?:package|module|dependency)\s+['"`]?([a-z0-9][a-z0-9._-]*)/gi)].map(
-    (match) => match[1]!,
-  )
-  return [...new Set([...codeIdentifiers, ...scopedPackages, ...labeledPackages].map((item) => item.normalize('NFKC')))]
+  return [...new Set([...codeIdentifiers, ...scopedPackages].map((item) => item.normalize('NFKC')))]
 }
 
 interface IndexedTopic {
@@ -118,7 +128,7 @@ export class MemoryIndex {
           factHash: fact.hash,
           observedAt: fact.metadata.observedAt,
           evidence: fact.metadata.evidence,
-          status: fact.metadata.status,
+          status: isMemoryFactActive(fact) ? 'active' : 'stale',
         })
       }
       const fields = {
@@ -127,7 +137,7 @@ export class MemoryIndex {
         keywords: tokenizeMemoryText(topic.metadata.keywords.join(' ')),
         description: tokenizeMemoryText(topic.metadata.description),
         heading: tokenizeMemoryText(topic.sections.flatMap((section) => section.headingPath).join(' ')),
-        body: tokenizeMemoryText(topic.sections.map((section) => section.content).join(' ')),
+        body: tokenizeMemoryText(searchableTopicBody(topic)),
       }
       const all = Object.values(fields).flat()
       const tokenCounts = counts(all)
@@ -226,7 +236,7 @@ export class MemoryIndex {
         a.metadata.id.localeCompare(b.metadata.id),
     )
     for (const topic of topics) {
-      for (const fact of topic.facts.filter((item) => item.metadata.status === 'active')) {
+      for (const fact of topic.facts.filter((item) => isMemoryFactActive(item))) {
         const summary = fact.content.replace(/\s+/g, ' ').slice(0, 180)
         const line = `${fact.metadata.id}\t${topic.metadata.id}\t${topic.metadata.type}\t${summary}`
         const lineTokens = Math.ceil(Buffer.byteLength(line, 'utf-8') / 3)

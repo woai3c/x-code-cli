@@ -142,7 +142,10 @@ export interface MemoryConfig {
 }
 
 export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
-  enabled: true,
+  // Memory v2 remains opt-in until its crash/recovery and retrieval-quality
+  // release gates are complete. Flipping this default is a release decision,
+  // not an implementation convenience.
+  enabled: false,
   model: 'inherit',
   maxInputTokens: 12_000,
   maxOutputTokens: 1500,
@@ -161,11 +164,60 @@ export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
 }
 
 export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): MemoryConfig {
-  const memory = config.memory
+  const memory =
+    config.memory && typeof config.memory === 'object' && !Array.isArray(config.memory)
+      ? (config.memory as Record<string, unknown>)
+      : {}
+  const recallValue = memory.recall
+  const recall =
+    recallValue && typeof recallValue === 'object' && !Array.isArray(recallValue)
+      ? (recallValue as Record<string, unknown>)
+      : {}
+  const integer = (value: unknown, fallback: number, min: number, max: number) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback
+  const text = (value: unknown, fallback: string) =>
+    typeof value === 'string' && value.trim() ? value.trim() : fallback
+  const maxTokensPerTopic = integer(
+    recall.maxTokensPerTopic,
+    DEFAULT_MEMORY_CONFIG.recall.maxTokensPerTopic,
+    100,
+    10_000,
+  )
+  const maxTokensPerTurn = Math.max(
+    maxTokensPerTopic,
+    integer(recall.maxTokensPerTurn, DEFAULT_MEMORY_CONFIG.recall.maxTokensPerTurn, 100, 20_000),
+  )
   return {
-    ...DEFAULT_MEMORY_CONFIG,
-    ...memory,
-    recall: { ...DEFAULT_MEMORY_CONFIG.recall, ...memory?.recall },
+    enabled: typeof memory.enabled === 'boolean' ? memory.enabled : DEFAULT_MEMORY_CONFIG.enabled,
+    model: text(memory.model, DEFAULT_MEMORY_CONFIG.model),
+    maxInputTokens: integer(memory.maxInputTokens, DEFAULT_MEMORY_CONFIG.maxInputTokens, 1000, 100_000),
+    maxOutputTokens: integer(memory.maxOutputTokens, DEFAULT_MEMORY_CONFIG.maxOutputTokens, 128, 8192),
+    maxOperationsPerTurn: integer(memory.maxOperationsPerTurn, DEFAULT_MEMORY_CONFIG.maxOperationsPerTurn, 1, 8),
+    drainTimeoutMs: integer(memory.drainTimeoutMs, DEFAULT_MEMORY_CONFIG.drainTimeoutMs, 0, 30_000),
+    retryMaxAttempts: integer(memory.retryMaxAttempts, DEFAULT_MEMORY_CONFIG.retryMaxAttempts, 1, 8),
+    recall: {
+      maxTopicsPerTurn: integer(recall.maxTopicsPerTurn, DEFAULT_MEMORY_CONFIG.recall.maxTopicsPerTurn, 1, 5),
+      maxTokensPerTopic,
+      maxTokensPerTurn,
+      maxTokensPerCompactionWindow: Math.max(
+        maxTokensPerTurn,
+        integer(
+          recall.maxTokensPerCompactionWindow,
+          DEFAULT_MEMORY_CONFIG.recall.maxTokensPerCompactionWindow,
+          100,
+          100_000,
+        ),
+      ),
+      semanticSelector:
+        recall.semanticSelector === 'auto' || recall.semanticSelector === 'off'
+          ? recall.semanticSelector
+          : DEFAULT_MEMORY_CONFIG.recall.semanticSelector,
+      selectorModel: text(recall.selectorModel, DEFAULT_MEMORY_CONFIG.recall.selectorModel),
+      lateBoundRecall:
+        typeof recall.lateBoundRecall === 'boolean'
+          ? recall.lateBoundRecall
+          : DEFAULT_MEMORY_CONFIG.recall.lateBoundRecall,
+    },
   }
 }
 

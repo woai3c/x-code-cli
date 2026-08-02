@@ -30,6 +30,7 @@ import {
   appendGoalInput,
   appendGoalState,
   appendHeader,
+  appendMemoryRecall,
   appendUsage,
   flushPendingMessages,
   getSessionFilePath,
@@ -461,5 +462,33 @@ describe('session-store: hydrateLoopState', () => {
     expect(hydrated.goalInputs).toHaveLength(1)
     expect(hydrated.goalInputs[0]?.id).toBe(input.id)
     expect(hydrated.goalInputs[0]?.promotedAt).toBe(promoted.promotedAt)
+  })
+
+  it('restores the persisted memory generation even without tombstones', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-002'
+    state.taskSlug = 'memory-generation'
+    state.memoryGeneration = 7
+    await appendHeader(state, 'test:model', 'resume memory')
+    await appendMemoryRecall(state, {
+      attachmentId: 'memory-1',
+      anchorMessageIndex: 0,
+      placement: 'before-user',
+      estimatedTokens: 5,
+      topics: [
+        {
+          topicId: 'profile',
+          topicHash: 'topic-hash',
+          factIds: ['user.language'],
+          factHashes: { 'user.language': 'fact-hash' },
+          path: 'topics/profile.md',
+          renderedContent: 'Reply in Chinese.',
+        },
+      ],
+    })
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    expect(loaded?.memoryGeneration).toBe(7)
+    expect(hydrateLoopState(loaded!).memoryGeneration).toBe(7)
   })
 })

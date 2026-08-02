@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { redactMemoryText } from './memory-redaction.js'
-import { MemoryTransactionStore, memoryContentHash } from './memory-transaction-store.js'
+import { MemoryTransactionStore, atomicWriteFile, memoryContentHash } from './memory-transaction-store.js'
 import type {
   EvidenceKind,
   MemoryChange,
@@ -10,6 +10,7 @@ import type {
   MemoryFactMetadata,
   MemoryOperation,
   MemoryOperationResult,
+  MemorySection,
   MemoryStatus,
   MemoryTopic,
   MemoryTopicMetadata,
@@ -22,6 +23,12 @@ const FACT_MARKER_RE = /<!--\s*x-memory:\s*(\{[^\n]*\})\s*-->/g
 const VALID_TYPES = new Set<MemoryType>(['user', 'portfolio', 'feedback', 'workflow', 'project', 'reference'])
 const VALID_EVIDENCE = new Set<EvidenceKind>(['explicit', 'validated', 'observed'])
 const VALID_STATUS = new Set<MemoryStatus>(['active', 'stale'])
+const SAFE_JOB_ID_RE = /^[A-Za-z0-9._-]{1,200}$/
+
+export interface MemoryCommitContext {
+  jobId: string
+  sourceOccurredAt: string
+}
 
 export interface MemoryLoadResult {
   topics: MemoryTopic[]
@@ -264,7 +271,20 @@ function parseSections(body: string, facts: MemoryFact[]) {
       },
     ]
   }
-  return headings.map((heading, index) => {
+  const sections: MemorySection[] = []
+  const preambleEnd = headings[0]!.index
+  const preamble = canonicalText(body.slice(0, preambleEnd))
+  const preambleFacts = facts.filter((fact) => fact.start < preambleEnd)
+  if (preambleFacts.length > 0 || preamble.replace(/^#{1,3}\s+.*$/gm, '').trim()) {
+    sections.push({
+      id: 'root',
+      headingPath: [],
+      content: preamble,
+      facts: preambleFacts,
+      estimatedTokens: estimateTokens(preamble),
+    })
+  }
+  for (const [index, heading] of headings.entries()) {
     const end = headings[index + 1]?.index ?? body.length
     const before = headings.slice(0, index + 1)
     const pathParts: string[] = []
@@ -274,14 +294,15 @@ function parseSections(body: string, facts: MemoryFact[]) {
     }
     const headingPath = pathParts.filter(Boolean)
     const content = canonicalText(body.slice(heading.index, end))
-    return {
+    sections.push({
       id: headingPath.join(' / '),
       headingPath,
       content,
       facts: facts.filter((fact) => fact.start >= heading.index && fact.start < end),
       estimatedTokens: estimateTokens(content),
-    }
-  })
+    })
+  }
+  return sections
 }
 
 export function parseMemoryTopic(raw: string, filePath: string): MemoryTopic {
@@ -404,7 +425,9 @@ function removeFactBlocks(topic: MemoryTopic, ids: ReadonlySet<string>): void {
 }
 
 function factMetadata(evidence: MemoryOperation['evidence']): MemoryFactMetadata {
-  const latest = [...evidence].sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))[0]
+  const latest = [...evidence].sort(
+    (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt) || evidenceRank(b.kind) - evidenceRank(a.kind),
+  )[0]
   if (!latest) throw new Error('Memory operation requires evidence')
   return { id: '', observedAt: latest.occurredAt, evidence: latest.kind, status: 'active' }
 }
@@ -540,18 +563,14 @@ function findSlotCandidates(factId: string, topicId: string, topics: Iterable<Me
 }
 
 function incomingWins(existing: MemoryFact, topic: MemoryTopic, evidence: MemoryOperation['evidence']): boolean {
-  const incoming = [...evidence].sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))[0]
+  const incoming = [...evidence].sort(
+    (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt) || evidenceRank(b.kind) - evidenceRank(a.kind),
+  )[0]
   if (!incoming) return false
   const incomingTime = Date.parse(incoming.occurredAt)
   const existingTime = Date.parse(existing.metadata.observedAt)
   if (incomingTime < existingTime) return false
-  if (
-    existing.metadata.evidence === 'explicit' &&
-    incoming.kind === 'observed' &&
-    (topic.metadata.type === 'user' ||
-      topic.metadata.type === 'feedback' ||
-      /(?:identity|preference|ownership|owner|goal|plan|intent|deadline)/i.test(existing.metadata.id))
-  ) {
+  if (existing.metadata.evidence === 'explicit' && incoming.kind !== 'explicit') {
     return false
   }
   if (incomingTime > existingTime) return true
@@ -662,15 +681,39 @@ export class MemoryStore {
     return { ...value, generation }
   }
 
-  async applyOperations(operations: readonly MemoryOperation[]): Promise<MemoryOperationResult> {
-    if (operations.length === 0) {
+  async applyOperations(
+    operations: readonly MemoryOperation[],
+    context?: MemoryCommitContext,
+  ): Promise<MemoryOperationResult> {
+    if (!context && operations.length === 0) {
       const generation = (await this.transactionStore.readSchema()).generation
       return { status: 'no-op', notices: [], generation }
     }
     return this.transactionStore.withWriterLock(async () => {
+      const appliedJobPath = context
+        ? path.join(this.memoryRoot, '.state', 'jobs', 'applied', `${context.jobId}.json`)
+        : null
+      if (context && (!SAFE_JOB_ID_RE.test(context.jobId) || !Number.isFinite(Date.parse(context.sourceOccurredAt)))) {
+        throw new Error('Invalid memory commit context')
+      }
+      if (
+        appliedJobPath &&
+        (await fs.access(appliedJobPath).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        const generation = (await this.transactionStore.readSchema()).generation
+        return { status: 'no-op', notices: [], generation }
+      }
       const loaded = await this.loadWithoutReaderProtocol()
       const topics = new Map(loaded.topics.map((topic) => [topic.metadata.id, cloneTopic(topic)]))
       const originalTopics = new Map(loaded.topics.map((topic) => [topic.metadata.id, topic]))
+      const quarantinedTopicIds = new Set(
+        loaded.invalidTopics
+          .map((item) => path.basename(item.path, '.md').toLowerCase())
+          .filter((id) => TOPIC_ID_RE.test(id)),
+      )
       const writes = new Map<string, string>()
       const deletes = new Set<string>()
       const touched = new Set<string>()
@@ -695,8 +738,30 @@ export class MemoryStore {
 
       for (const operation of operations.slice(0, 8)) {
         const factsById = rebuildFacts()
+        if (
+          operation.evidence.length === 0 ||
+          operation.evidence.some(
+            (evidence) =>
+              !VALID_EVIDENCE.has(evidence.kind) ||
+              !evidence.sourceId.trim() ||
+              !Number.isFinite(Date.parse(evidence.occurredAt)) ||
+              (context !== undefined &&
+                (evidence.occurredAt !== context.sourceOccurredAt ||
+                  evidence.sourceId !== `memory-job:${context.jobId}:${evidence.kind}`)),
+          )
+        ) {
+          notices.push({ action: 'failed', error: 'Invalid or unbound memory evidence' })
+          continue
+        }
         if (operation.action === 'delete') {
           reason = 'forget'
+          if (
+            operation.remove.some((target) => quarantinedTopicIds.has(target.topicId)) ||
+            operation.topicPatches?.some((item) => quarantinedTopicIds.has(item.topicId))
+          ) {
+            notices.push({ action: 'failed', error: 'Cannot automatically modify a quarantined topic' })
+            continue
+          }
           if (
             operation.remove.some((target) => {
               const topic = topics.get(target.topicId)
@@ -759,6 +824,15 @@ export class MemoryStore {
           continue
         }
 
+        if (quarantinedTopicIds.has(operation.topicId)) {
+          notices.push({
+            action: 'failed',
+            topicId: operation.topicId,
+            factId: operation.factId,
+            error: 'Cannot automatically overwrite a quarantined topic',
+          })
+          continue
+        }
         if (!TOPIC_ID_RE.test(operation.factId)) {
           notices.push({
             action: 'failed',
@@ -790,14 +864,7 @@ export class MemoryStore {
               !operation.topicPatch.description ||
               !operation.topicPatch.addAliases?.length ||
               !operation.topicPatch.addKeywords?.length)) ||
-          operation.evidence.length === 0 ||
           hasOversizeIndexValue(operation.topicPatch) ||
-          operation.evidence.some(
-            (evidence) =>
-              !VALID_EVIDENCE.has(evidence.kind) ||
-              !evidence.sourceId.trim() ||
-              !Number.isFinite(Date.parse(evidence.occurredAt)),
-          ) ||
           !canonicalText(operation.content) ||
           operation.content.includes('<!-- x-memory:') ||
           Buffer.byteLength(operation.content, 'utf-8') > 8 * 1024
@@ -839,6 +906,7 @@ export class MemoryStore {
         if (
           operation.action === 'replace-conflict' &&
           operation.remove.some((target) => {
+            if (quarantinedTopicIds.has(target.topicId)) return true
             const topic = topics.get(target.topicId)
             return !topic || target.expectedTopicHash !== topic.hash
           })
@@ -864,6 +932,13 @@ export class MemoryStore {
         const nextHash = memoryContentHash(canonicalText(safeContent))
         if (existing && existing.fact.hash === nextHash) {
           const metadata = factMetadata(operation.evidence)
+          if (
+            existing.fact.metadata.observedAt === metadata.observedAt &&
+            existing.fact.metadata.evidence === metadata.evidence &&
+            !operation.topicPatch
+          ) {
+            continue
+          }
           const markerPattern = new RegExp(
             `<!--\\s*x-memory:\\s*\\{[^\\n]*"id"\\s*:\\s*"${factId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^\\n]*\\}\\s*-->`,
           )
@@ -941,6 +1016,12 @@ export class MemoryStore {
 
       if (changed.length === 0 && deleted.length === 0 && !metadataOnlyChange) {
         const generation = (await this.transactionStore.readSchema()).generation
+        if (appliedJobPath) {
+          await atomicWriteFile(
+            appliedJobPath,
+            JSON.stringify({ jobId: context!.jobId, appliedAt: new Date().toISOString() }) + '\n',
+          )
+        }
         return {
           status: notices.some((notice) => notice.action === 'failed') ? 'warning' : 'no-op',
           notices,
@@ -960,6 +1041,12 @@ export class MemoryStore {
         if (raw !== originalTopics.get(topic.metadata.id)?.raw) writes.set(topic.path, raw)
       }
       const memoryContent = renderCoreProfile([...topics.values()])
+      if (appliedJobPath) {
+        writes.set(
+          appliedJobPath,
+          JSON.stringify({ jobId: context!.jobId, appliedAt: new Date().toISOString() }) + '\n',
+        )
+      }
       const generation = await this.transactionStore.commitLocked({
         writes,
         deletes: [...deletes].filter((target) => !writes.has(target)),
@@ -1000,10 +1087,15 @@ export class MemoryStore {
         if (!after.has(id))
           deleted.push({ topicId: entry.topic.metadata.id, factId: id, previousHash: entry.fact.hash })
       }
+      const previousTopicHashes = new Map(previousTopics.map((topic) => [topic.metadata.id, topic.hash]))
+      const currentTopicIds = new Set(loaded.topics.map((topic) => topic.metadata.id))
+      const manualTopicChanged =
+        loaded.topics.some((topic) => previousTopicHashes.get(topic.metadata.id) !== topic.hash) ||
+        previousTopics.some((topic) => !currentTopicIds.has(topic.metadata.id))
       const memoryContent = renderCoreProfile(loaded.topics)
       const currentMemory = await fs.readFile(this.transactionStore.memoryPath, 'utf-8').catch(() => '')
       let generation = loaded.generation
-      if (changed.length || deleted.length || currentMemory !== memoryContent) {
+      if (changed.length || deleted.length || manualTopicChanged || currentMemory !== memoryContent) {
         generation = await this.transactionStore.commitLocked({
           writes: new Map(),
           deletes: [],

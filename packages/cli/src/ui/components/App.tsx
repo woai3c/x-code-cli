@@ -1752,10 +1752,7 @@ export function App({
         return
       }
       try {
-        const results = await service.search(
-          { query, semantic, maxResults: 5 },
-          { repositoryId: process.cwd(), currentUserText: query, explicitHistoryIntent: true },
-        )
+        const results = await service.search({ query, semantic, maxResults: 5 }, { repositoryId: process.cwd() })
         if (results.length === 0) {
           addInfoMessage(`No memory matched \`${query}\`.`)
           return

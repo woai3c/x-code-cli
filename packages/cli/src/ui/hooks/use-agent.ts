@@ -1245,10 +1245,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   /** Save session and cleanup */
   const cleanup = useCallback(async () => {
-    if (loopStateRef.current) {
-      await saveSession(loopStateRef.current, modelRef.current)
-    }
-    if (options.memoryService) await options.memoryService.shutdown(options.memoryService.getConfig().drainTimeoutMs)
+    const sessionSave = loopStateRef.current ? saveSession(loopStateRef.current, modelRef.current) : Promise.resolve()
+    const memoryDrain = options.memoryService
+      ? options.memoryService.shutdown(options.memoryService.getConfig().drainTimeoutMs)
+      : Promise.resolve()
+    await Promise.all([sessionSave, memoryDrain])
   }, [options.memoryService])
 
   const reloadMemory = useCallback(async () => {

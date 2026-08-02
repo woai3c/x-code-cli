@@ -29,7 +29,7 @@ function processExists(pid: number): boolean {
   }
 }
 
-async function syncDirectory(dir: string): Promise<void> {
+export async function syncDirectory(dir: string): Promise<void> {
   const handle = await fs.open(dir, 'r').catch(() => null)
   if (!handle) return
   await handle.sync().catch(() => {})
@@ -85,6 +85,7 @@ export class MemoryTransactionStore {
       fs.mkdir(path.join(this.stateRoot, 'jobs', 'pending'), { recursive: true }),
       fs.mkdir(path.join(this.stateRoot, 'jobs', 'running'), { recursive: true }),
       fs.mkdir(path.join(this.stateRoot, 'jobs', 'failed'), { recursive: true }),
+      fs.mkdir(path.join(this.stateRoot, 'jobs', 'applied'), { recursive: true }),
     ])
 
     if (!(await pathExists(this.schemaPath))) {
@@ -109,12 +110,16 @@ export class MemoryTransactionStore {
 
   async withWriterLock<T>(fn: () => Promise<T>): Promise<T> {
     const lockPath = path.join(this.locksDir, 'writer.lock')
+    const ownerId = `${process.pid}-${randomUUID()}`
     const started = Date.now()
     while (true) {
       try {
         const handle = await fs.open(lockPath, 'wx', 0o600)
         try {
-          await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf-8')
+          await handle.writeFile(
+            JSON.stringify({ ownerId, pid: process.pid, startedAt: new Date().toISOString() }),
+            'utf-8',
+          )
           await handle.sync().catch(() => {})
         } finally {
           await handle.close()
@@ -143,7 +148,11 @@ export class MemoryTransactionStore {
       await this.recoverCommittedTransactionsLocked()
       return await fn()
     } finally {
-      await fs.unlink(lockPath).catch(() => {})
+      const currentOwner = await fs
+        .readFile(lockPath, 'utf-8')
+        .then((raw) => (JSON.parse(raw) as { ownerId?: string }).ownerId)
+        .catch(() => undefined)
+      if (currentOwner === ownerId) await fs.unlink(lockPath).catch(() => {})
     }
   }
 
@@ -304,13 +313,28 @@ export class MemoryTransactionStore {
       throw new Error(`Invalid memory transaction generation: ${manifest.transactionId}`)
     }
     const topicsRoot = path.resolve(this.memoryRoot, 'topics')
+    const appliedJobsRoot = path.resolve(this.stateRoot, 'jobs', 'applied')
     const isTopicPath = (target: string) => {
       const resolved = path.resolve(target)
       const relative = path.relative(topicsRoot, resolved)
       return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative) && resolved.endsWith('.md')
     }
+    const isAppliedJobPath = (target: string) => {
+      const resolved = path.resolve(target)
+      const relative = path.relative(appliedJobsRoot, resolved)
+      return (
+        Boolean(relative) &&
+        !relative.startsWith('..') &&
+        !path.isAbsolute(relative) &&
+        /^[A-Za-z0-9._-]{1,200}\.json$/.test(relative)
+      )
+    }
     for (const write of manifest.writes) {
-      if (path.resolve(write.target) !== path.resolve(this.memoryPath) && !isTopicPath(write.target)) {
+      if (
+        path.resolve(write.target) !== path.resolve(this.memoryPath) &&
+        !isTopicPath(write.target) &&
+        !isAppliedJobPath(write.target)
+      ) {
         throw new Error(`Memory transaction target is outside the store: ${write.target}`)
       }
       const staged = path.resolve(transactionDir, write.staged)
