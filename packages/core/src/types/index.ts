@@ -6,6 +6,8 @@ import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
 import type { SubAgentEvent } from '../agent/sub-agents/types.js'
 import type { CommandRegistry } from '../commands/registry.js'
 import type { HookBus } from '../hooks/bus.js'
+import type { MemoryService } from '../knowledge/memory-service.js'
+import type { MemoryWriteNotice } from '../knowledge/memory-types.js'
 import type { McpPermissionStore } from '../mcp/permissions.js'
 import type { McpRegistry } from '../mcp/registry.js'
 import type { PluginRegistry } from '../plugins/registry.js'
@@ -174,12 +176,7 @@ export interface AgentCallbacks {
   /** Fired by the sub-agent runner to stream progress from child agent loops.
    *  The CLI UI uses these events to build the collapsed/expanded task block. */
   onSubAgentEvent?: (event: SubAgentEvent) => void
-  /** Optional. Fired by the post-turn memory extractor for each fact it
-   *  commits to AutoMemory. Surfaces "Remembered: …" in scrollback so the
-   *  user can see what the silent extractor saved. The extractor is
-   *  fire-and-forget (runs after agentLoop returns), so this callback may
-   *  fire AFTER `submit()` resolved and even into the next turn — keep
-   *  the closure free of per-turn state. */
+  /** Fired by the durable memory worker after a fact commit or failure. */
   onMemoryWrite?: (notice: MemoryWriteNotice) => void
 }
 
@@ -302,38 +299,9 @@ export interface AgentOptions {
    *  disabled (sub-agents, --print). Mirrors Codex's steer_input and
    *  Claude Code's priority-'next' queue consumption. */
   consumeQueuedInputs?: () => string[] | undefined
-}
 
-// ─── Knowledge ───
-
-/**
- * Category taxonomy for auto memory entries. Categories describe the TYPE of
- * knowledge (who it's about, how it was learned) rather than the topic —
- * this mirrors the taxonomy Claude Code uses and produces sharper memories
- * because each category has distinct trigger conditions for the agent.
- *
- * - user:      Facts about the human user — role, expertise, goals, constraints
- * - feedback:  Corrections or validated approaches ("don't mock the db", "yes, that was right")
- * - project:   Ongoing work, initiatives, decisions, non-obvious project state
- * - reference: Pointers to external systems (Linear project, Grafana dashboard, etc.)
- */
-export type KnowledgeCategory = 'user' | 'feedback' | 'project' | 'reference'
-
-export interface KnowledgeFact {
-  key: string
-  fact: string
-  category: KnowledgeCategory
-  date: string
-}
-
-/** Surface event emitted by the post-turn memory extractor when it commits
- *  a fact to AutoMemory. Lets the UI render a "Remembered: …" line in
- *  scrollback so the user has visibility into otherwise-silent writes. */
-export interface MemoryWriteNotice {
-  scope: 'project' | 'user'
-  category: KnowledgeCategory
-  key: string
-  fact: string
+  /** Global Memory v2 service. Present only on the root agent. */
+  memoryService?: MemoryService
 }
 
 export interface SessionSummary {

@@ -83,6 +83,57 @@ describe('agent loop', () => {
     }
   })
 
+  it('enqueues exactly one durable memory job after a clean root stop and never for a sub-agent', async () => {
+    const response = () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    })
+    vi.mocked(streamText).mockImplementation(() => response() as any)
+    const memoryService = {
+      setActiveModelId: vi.fn(),
+      setNoticeHandler: vi.fn(),
+      initialize: vi.fn().mockResolvedValue(undefined),
+      recall: vi.fn().mockResolvedValue(null),
+      getConfig: vi.fn().mockReturnValue({ maxInputTokens: 12_000 }),
+      enqueuePostTurnJob: vi.fn().mockResolvedValue('created'),
+      search: vi.fn().mockResolvedValue([]),
+    }
+
+    await agentLoop(
+      'Remember that x-code is my product',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 3, printMode: false, memoryService: memoryService as any },
+      mockCallbacks,
+    )
+    expect(memoryService.enqueuePostTurnJob).toHaveBeenCalledTimes(1)
+    expect(memoryService.enqueuePostTurnJob.mock.calls[0]?.[0].projection.userMessages).toEqual([
+      'Remember that x-code is my product',
+    ])
+
+    memoryService.enqueuePostTurnJob.mockClear()
+    await agentLoop(
+      'Remember this child result',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 3,
+        printMode: false,
+        memoryService: memoryService as any,
+        toolFilter: { allow: [] },
+      },
+      mockCallbacks,
+    )
+    expect(memoryService.enqueuePostTurnJob).not.toHaveBeenCalled()
+  })
+
   it('streams text from LLM and collects usage', async () => {
     const mockChunks = [
       { type: 'text-delta', text: 'Hello' },

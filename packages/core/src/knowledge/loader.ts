@@ -4,10 +4,9 @@
 // section; sections concatenated in the order below):
 //
 //   1. User AGENTS.md (~/.x-code/) — fallback to CLAUDE.md when absent
-//   2. User auto memory (~/.x-code/memory/auto.md)     — AI-written via post-turn extractor
+//   2. User memory Core profile (~/.x-code/memory/MEMORY.md)
 //   3. Project AGENTS.md chain — fallback to CLAUDE.md per directory
-//   4. Project auto memory (.x-code/memory/auto.md)    — AI-written via post-turn extractor
-//   5. AGENTS.local.md at project root                 — personal preferences, gitignored
+//   4. AGENTS.local.md at project root                 — personal preferences, gitignored
 //
 // Later sections carry more weight for the model: monorepo sub-packages
 // (deepest in the chain) override shared context, and local personal
@@ -22,7 +21,7 @@
 import path from 'node:path'
 
 import { fileExists, readFileSafe, userXcodeDir } from '../utils.js'
-import { getAutoMemory } from './auto-memory.js'
+import type { MemoryService } from './memory-service.js'
 
 /** Filenames recognised at each directory, tried in order. The first one
  *  found wins for that directory; the rest are skipped. AGENTS.md is our
@@ -75,7 +74,11 @@ async function collectProjectKnowledgeChain(
 }
 
 /** Build the full knowledge context for system prompt injection */
-export async function buildKnowledgeContext(options?: { sessionContext?: string }): Promise<string> {
+export async function buildKnowledgeContext(options?: {
+  sessionContext?: string
+  memoryService?: MemoryService
+  cwd?: string
+}): Promise<string> {
   const sections: string[] = []
 
   // User-scope human-written prefs: AGENTS.md preferred; fall back to
@@ -87,23 +90,16 @@ export async function buildKnowledgeContext(options?: { sessionContext?: string 
     sections.push(`### User Preferences (~/.x-code/${userKnowledge.fileName})\n${userKnowledge.content}`)
   }
 
-  const userMemory = getAutoMemory('user')
-  const userMemoryContent = userMemory.getPromptContent()
+  const userMemoryContent = options?.memoryService?.getCoreProfile().trim()
   if (userMemoryContent) {
     sections.push('### User Auto Memory\n' + userMemoryContent)
   }
 
-  const cwd = process.cwd()
+  const cwd = options?.cwd ?? process.cwd()
   const projectKnowledge = await collectProjectKnowledgeChain(cwd)
   for (const entry of projectKnowledge) {
     const relPath = path.relative(cwd, entry.dir) || '.'
     sections.push(`### Project ${entry.fileName} (${relPath})\n${entry.content}`)
-  }
-
-  const projectMemory = getAutoMemory('project')
-  const projectMemoryContent = projectMemory.getPromptContent()
-  if (projectMemoryContent) {
-    sections.push('### Project Auto Memory\n' + projectMemoryContent)
   }
 
   const localPrefs = await readFileSafe(path.join(cwd, 'AGENTS.local.md'))

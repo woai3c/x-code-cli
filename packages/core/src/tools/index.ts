@@ -1,13 +1,9 @@
 // @x-code-cli/core — Tool registry (unified export)
 //
-// Memory writes are NOT exposed as a tool — they happen silently via the
-// post-turn extractor (`agent/memory-extractor.ts` → `generateText` +
-// `Output.object` → `getAutoMemory().add()`). This matches Codex's "main
-// agent is read-only for memory" philosophy: any visible memory-write tool
-// row in the frame would feel like AI-doing-things-behind-the-user's-back.
-// Claude Code takes a different route (memories are markdown files written
-// via the generic Write tool, with UI collapse), but that requires a
-// separate collapse path we'd rather not maintain.
+// Memory writes are never exposed as a tool. A durable post-turn worker
+// extracts operations after the root loop finishes. The root-only
+// memorySearch tool is created dynamically in loop.ts because it needs the
+// current MemoryService and LoopState; sub-agents never receive it.
 import { askUser } from './ask-user.js'
 import { killShell, shellOutput } from './background-shell.js'
 import { edit } from './edit.js'

@@ -13,7 +13,6 @@ import {
   createModelRegistry,
   estimateTokenCount,
   expandCommandBody,
-  getAutoMemory,
   getAvailableProviders,
   getContextWindow,
   listSessions,
@@ -30,7 +29,6 @@ import type {
   AgentOptions,
   DiffStats,
   GoalState,
-  KnowledgeFact,
   LanguageModel,
   LoadedSession,
   SkillDefinition,
@@ -128,7 +126,16 @@ export const SLASH_COMMANDS = [
   { name: '/review', description: 'Review a pull request (no-arg = list open PRs)', argumentHint: '[PR]' },
   { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
   { name: '/usage-history', description: 'List past sessions in this project' },
-  { name: '/memory', description: 'Show auto-memory entries (project + user)' },
+  {
+    name: '/memory',
+    description: 'Inspect and manage global long-term memory',
+    subcommands: [
+      { name: 'status', description: 'Show schema, generation, queue, worker, and invalid topics' },
+      { name: 'search', description: 'Search memory locally; add --semantic for AI topic selection' },
+      { name: 'explain', description: 'Explain the most recent recall decision' },
+      { name: 'reload', description: 'Reload manually edited topics and rebuild MEMORY.md' },
+    ],
+  },
   {
     name: '/mcp',
     description: 'Manage MCP servers',
@@ -459,6 +466,7 @@ export function App({
     switchModel,
     setThinking,
     getThinking,
+    reloadMemory,
     invalidateSystemPromptCache,
     addInfoMessage,
     echoCommand,
@@ -1018,7 +1026,7 @@ export function App({
 
         case 'memory':
           echoCommand(text)
-          handleMemory()
+          await handleMemory(arg)
           return
 
         case 'skill':
@@ -1659,37 +1667,115 @@ export function App({
     }
   }
 
-  /** Format a memory fact list for display in scrollback. */
-  function formatMemoryList(scope: 'project' | 'user', facts: KnowledgeFact[]): string {
-    if (facts.length === 0) {
-      return `**Auto memory (${scope})** — empty.`
+  async function handleMemory(rawArg: string) {
+    const service = options.memoryService
+    if (!service) {
+      addInfoMessage('Memory v2 is unavailable in this session.')
+      return
     }
-    const byCategory = new Map<string, KnowledgeFact[]>()
-    for (const f of facts) {
-      const list = byCategory.get(f.category) ?? []
-      list.push(f)
-      byCategory.set(f.category, list)
-    }
-    const lines: string[] = [`**Auto memory (${scope})** — ${facts.length} fact${facts.length === 1 ? '' : 's'}.`, '']
-    for (const [category, items] of byCategory) {
-      lines.push(`### ${category}`)
-      for (const f of items) {
-        lines.push(`- \`${f.key}\` — ${f.fact} _(${f.date})_`)
+    const arg = rawArg.trim()
+    if (!arg) {
+      const topics = service.listTopics()
+      if (topics.length === 0) {
+        addInfoMessage('**Global memory** — empty.')
+        return
       }
-      lines.push('')
+      const lines = [`**Global memory** — ${topics.length} topic${topics.length === 1 ? '' : 's'}.`, '']
+      for (const topic of topics) {
+        const detail = topic.summary || topic.description
+        lines.push(`- ${topic.pinned ? '📌 ' : ''}\`${topic.id}\` · ${topic.type} · ${topic.facts} facts — ${detail}`)
+      }
+      addInfoMessage(lines.join('\n'))
+      return
     }
-    return lines.join('\n').trimEnd()
-  }
-
-  /** /memory — show all auto-memory entries (project + user). The
-   *  extractor writes the underlying files in the background; users who
-   *  want to delete or edit entries open `auto.md` directly. */
-  function handleMemory() {
-    const sections: string[] = []
-    sections.push(formatMemoryList('project', getAutoMemory('project').getAll()))
-    sections.push('')
-    sections.push(formatMemoryList('user', getAutoMemory('user').getAll()))
-    addInfoMessage(sections.join('\n'))
+    if (arg === 'status') {
+      const status = await service.status()
+      const lines = [
+        `**Memory status** — ${status.enabled ? 'enabled' : 'disabled'}`,
+        '',
+        `- Schema: ${status.schemaVersion ?? 'unsupported'} · generation ${status.generation}`,
+        `- Topics: ${status.topics} · facts: ${status.facts}`,
+        `- Queue: ${status.queue.pending} pending · ${status.queue.running} running · ${status.queue.failed} failed`,
+        `- Worker: ${status.worker}`,
+      ]
+      if (status.lastRun) {
+        lines.push(
+          `- Last run: ${status.lastRun.status} · ${status.lastRun.operations} operations · ${status.lastRun.durationMs} ms`,
+        )
+      }
+      if (status.error) lines.push(`- Error: ${status.error}`)
+      for (const invalid of status.invalidTopics) lines.push(`- Invalid: \`${invalid.path}\` — ${invalid.error}`)
+      addInfoMessage(lines.join('\n'))
+      return
+    }
+    if (arg === 'reload') {
+      try {
+        await reloadMemory()
+        const status = await service.status()
+        addInfoMessage(
+          `Memory reloaded — generation ${status.generation}, ${status.topics} topics, ${status.invalidTopics.length} invalid.`,
+        )
+      } catch (error) {
+        addInfoMessage(`Memory reload failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return
+    }
+    if (arg === 'explain') {
+      const trace = service.getLastTrace()
+      if (!trace) {
+        addInfoMessage('No memory recall has run in this session yet.')
+        return
+      }
+      const lines = [
+        `**Memory recall** — generation ${trace.generation}${trace.selectorUsed ? ' · semantic selector used' : ''}`,
+        '',
+        `- Query: ${trace.query}`,
+        `- Selected: ${trace.selectedTopicIds.join(', ') || '(none)'}`,
+        `- Packed: ${trace.packedTokens} estimated tokens`,
+        '',
+        ...trace.candidates
+          .slice(0, 10)
+          .map(
+            (candidate) =>
+              `- \`${candidate.topicId}\` · ${candidate.score.toFixed(3)} · ${candidate.routes.join('+')} · coverage ${Math.round(candidate.coverage * 100)}%`,
+          ),
+      ]
+      addInfoMessage(lines.join('\n'))
+      return
+    }
+    if (arg.startsWith('search ')) {
+      let query = arg.slice('search '.length).trim()
+      const semantic = query.startsWith('--semantic ')
+      if (semantic) query = query.slice('--semantic '.length).trim()
+      if (!query) {
+        addInfoMessage('Usage: /memory search [--semantic] <query>')
+        return
+      }
+      try {
+        const results = await service.search(
+          { query, semantic, maxResults: 5 },
+          { repositoryId: process.cwd(), currentUserText: query, explicitHistoryIntent: true },
+        )
+        if (results.length === 0) {
+          addInfoMessage(`No memory matched \`${query}\`.`)
+          return
+        }
+        addInfoMessage(
+          [`**Memory search** — ${results.length} results.`, '']
+            .concat(
+              results.map(
+                (result) =>
+                  `- \`${result.topicId}\` / ${result.section} — ${result.snippet.replace(/\s+/g, ' ').slice(0, 240)}`,
+              ),
+            )
+            .join('\n'),
+        )
+      } catch (error) {
+        addInfoMessage(`Memory search failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return
+    }
+    addInfoMessage('Usage: /memory [status|search [--semantic] <query>|explain|reload]')
   }
 
   // Slash-command handlers live in ../commands/{skill,plugin,mcp}.ts. Each

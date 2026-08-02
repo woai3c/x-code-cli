@@ -7,6 +7,7 @@ import path from 'node:path'
 
 import {
   McpPermissionStore,
+  MemoryService,
   PROVIDER_DETECTION_ORDER,
   buildPluginIntegration,
   createCommandRegistry,
@@ -278,6 +279,11 @@ async function main() {
   // Create registries and get model
   const providerRegistry = createModelRegistry()
   const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
+  const memoryService = new MemoryService({
+    resolveModel: (id) => providerRegistry.languageModel(id as `${string}:${string}`),
+  })
+  memoryService.setActiveModelId(modelId)
+  await memoryService.initialize(process.cwd())
 
   // --plugin-debug / XC_PLUGIN_DEBUG=1: mirror plugin/hook/marketplace
   // debugLog breadcrumbs to stderr so they're visible live without
@@ -371,6 +377,7 @@ async function main() {
     // unless explicitly requested.
     permissionMode: argv.plan ? 'plan' : 'default',
     modelRegistry: providerRegistry,
+    memoryService,
     subAgentRegistry,
     skillRegistry,
     mcpRegistry: mcpLoadResult.registry,

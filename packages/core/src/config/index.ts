@@ -120,6 +120,55 @@ export interface BrowserConfig {
   args?: string[]
 }
 
+export interface MemoryRecallConfig {
+  maxTopicsPerTurn: number
+  maxTokensPerTopic: number
+  maxTokensPerTurn: number
+  maxTokensPerCompactionWindow: number
+  semanticSelector: 'auto' | 'off'
+  selectorModel: string
+  lateBoundRecall: boolean
+}
+
+export interface MemoryConfig {
+  enabled: boolean
+  model: string
+  maxInputTokens: number
+  maxOutputTokens: number
+  maxOperationsPerTurn: number
+  drainTimeoutMs: number
+  retryMaxAttempts: number
+  recall: MemoryRecallConfig
+}
+
+export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
+  enabled: true,
+  model: 'inherit',
+  maxInputTokens: 12_000,
+  maxOutputTokens: 1500,
+  maxOperationsPerTurn: 8,
+  drainTimeoutMs: 5000,
+  retryMaxAttempts: 8,
+  recall: {
+    maxTopicsPerTurn: 5,
+    maxTokensPerTopic: 1500,
+    maxTokensPerTurn: 4000,
+    maxTokensPerCompactionWindow: 15_000,
+    semanticSelector: 'auto',
+    selectorModel: 'inherit',
+    lateBoundRecall: true,
+  },
+}
+
+export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): MemoryConfig {
+  const memory = config.memory
+  return {
+    ...DEFAULT_MEMORY_CONFIG,
+    ...memory,
+    recall: { ...DEFAULT_MEMORY_CONFIG.recall, ...memory?.recall },
+  }
+}
+
 export interface UserConfig {
   model?: string
   thinking?: boolean
@@ -147,6 +196,7 @@ export interface UserConfig {
    *  picker. Key = provider key (e.g. "moonshotai"), value = full base URL
    *  (e.g. "https://api.moonshot.cn/v1"). */
   baseUrls?: Record<string, string>
+  memory?: Partial<Omit<MemoryConfig, 'recall'>> & { recall?: Partial<MemoryRecallConfig> }
 }
 
 /** Path to the user config file. Exposed so other modules that want to

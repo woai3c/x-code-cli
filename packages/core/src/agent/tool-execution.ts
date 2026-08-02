@@ -629,7 +629,10 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.
       const isError = isToolErrorString(output)
-      if (!isError) state.filesModified.add(input.filePath as string)
+      if (!isError) {
+        state.filesModified.add(input.filePath as string)
+        state.turnFilesModified.add(input.filePath as string)
+      }
       return { output, isError }
     }
     if (toolName === 'shell') {
@@ -662,6 +665,7 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
             await fs.writeFile(absPath, newContent, 'utf-8')
           }
           state.filesModified.add(absPath)
+          state.turnFilesModified.add(absPath)
           return { output: '', isError: false }
         } catch {
           // File unreadable or unwritable — fall through to real sed

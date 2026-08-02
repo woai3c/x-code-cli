@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getAvailableProviders, resolveModelId } from '../src/config/index.js'
+import {
+  DEFAULT_MEMORY_CONFIG,
+  getAvailableProviders,
+  resolveMemoryConfig,
+  resolveModelId,
+} from '../src/config/index.js'
 
 /** Every provider env var the config module reads. Mirrors `ENV_MAP` in
  *  `src/config/index.ts` plus the `OPENAI_COMPATIBLE_*` pair from
@@ -113,5 +118,15 @@ describe('getAvailableProviders', () => {
     const providers = getAvailableProviders()
     expect(providers).toContain('anthropic')
     expect(providers).toContain('openai')
+  })
+})
+
+describe('memory config', () => {
+  it('enables the complete v2 pipeline by default and merges nested recall overrides', () => {
+    expect(resolveMemoryConfig({})).toEqual(DEFAULT_MEMORY_CONFIG)
+    expect(resolveMemoryConfig({ memory: { recall: { semanticSelector: 'off' } } }).recall).toEqual({
+      ...DEFAULT_MEMORY_CONFIG.recall,
+      semanticSelector: 'off',
+    })
   })
 })

@@ -12,6 +12,9 @@ import { loadUserConfig } from '../config/index.js'
 import { aggregateUserPromptSubmit } from '../hooks/bus.js'
 import type { HookEvent } from '../hooks/types.js'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
+import { extractMemoryIdentifiers, extractMemoryPaths } from '../knowledge/memory-index.js'
+import { applyMemoryRecallAttachments } from '../knowledge/memory-recall-state.js'
+import { buildRecallQuery } from '../knowledge/memory-retriever.js'
 import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { applyCacheControl } from '../providers/cache-control.js'
@@ -20,6 +23,7 @@ import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } f
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { createGetGoalTool } from '../tools/get-goal.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
+import { createMemorySearchTool } from '../tools/memory-search.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
@@ -32,9 +36,9 @@ import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
-import { runMemoryExtractor } from './memory-extractor.js'
 import { toolErrorString } from './messages.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
+import { buildTurnMemoryProjection, createMemoryJob, shouldCreateMemoryJob } from './post-turn-memory.js'
 import {
   downgradeBinaryPartsForProvider,
   ensureReasoningContentParts,
@@ -344,6 +348,10 @@ function buildTools(options: AgentOptions, state: LoopState) {
     tools.updateGoal = createUpdateGoalTool(state)
   }
 
+  if (!options.toolFilter && options.memoryService) {
+    tools.memorySearch = createMemorySearchTool(options.memoryService, state, process.cwd())
+  }
+
   // Deferred loading is a top-level-agent feature only. The presence of a
   // toolFilter is the authoritative "this is a sub-agent" signal (runner.ts
   // always passes one; the main loop never does).
@@ -434,7 +442,10 @@ async function runTurn(
   // Chat Completions providers keep the tool role text-only and receive raw
   // tool images in one following user message. This also handles images from
   // auto-executed tools such as readFile, which bypass manual tool dispatch.
-  const requestMessages = reattachToolResultImagesForProvider(state.messages, options.modelId)
+  const requestMessages = reattachToolResultImagesForProvider(
+    applyMemoryRecallAttachments(state.messages, state),
+    options.modelId,
+  )
 
   // Text-only providers (DeepSeek, custom) would 400 on any surviving
   // image/file parts. Rewrite those parts to OCR'd text in-place before
@@ -584,6 +595,16 @@ export async function agentLoop(
   existingState?: LoopState,
 ): Promise<AgentLoopResult> {
   const state = existingState ?? createLoopState(options.permissionMode ?? 'default')
+  const turnStartMessageIndex = state.messages.length
+  const turnStartedAt = new Date().toISOString()
+  const filesModifiedBefore = new Set(state.filesModified)
+  state.turnFilesModified.clear()
+
+  if (!options.toolFilter && options.memoryService) {
+    options.memoryService.setActiveModelId(options.modelId)
+    options.memoryService.setNoticeHandler(callbacks.onMemoryWrite)
+    await options.memoryService.initialize(process.cwd())
+  }
 
   // ── Plugin hook: SessionStart ──
   // First-invocation-of-the-session marker. Fire-and-forget, but awaited
@@ -665,7 +686,11 @@ export async function agentLoop(
   // the resume prompt, the pending work is embedded directly in their first
   // user message. Auto-injecting it into every system prompt made the model
   // treat trivial greetings as "continue exploring", so we no longer do that.
-  const fullKnowledgeContext = await buildKnowledgeContext()
+  let fullKnowledgeContext: string | null = null
+  const initialRecallQuery =
+    !options.toolFilter && options.memoryService
+      ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, process.cwd())
+      : null
 
   // Detect git repo once — cheap stat, avoids per-turn disk hit
   const isGitRepo = await fs
@@ -673,8 +698,8 @@ export async function agentLoop(
     .then(() => true)
     .catch(() => false)
 
-  // Cache knowledge context and git status on state for sub-agent use
-  state.knowledgeContext = fullKnowledgeContext
+  // Cache git status on state for sub-agent use. Knowledge is loaded after the
+  // first compaction and memory generation sync below.
   state.isGitRepo = isGitRepo
 
   // Lazy plan-file path derivation. We derive ONCE per plan-mode
@@ -716,6 +741,9 @@ export async function agentLoop(
   // Tracks whether we exited the loop on a clean `stop` finish reason —
   // the only case where the post-turn memory extractor should run.
   let completedNormally = false
+  let cleanStop = false
+  let lateRecallAttempted = false
+  let initialRecallAttempted = false
 
   // No `maxTurns` → run until the model says stop or the user aborts.
   // This is the default for interactive mode (and Codex's main loop has
@@ -738,6 +766,18 @@ export async function agentLoop(
       cwd: process.cwd(),
       abortSignal: options.abortSignal,
     })
+
+    if (!initialRecallAttempted && initialRecallQuery && options.memoryService && !options.abortSignal?.aborted) {
+      initialRecallAttempted = true
+      await options.memoryService.recall(initialRecallQuery, state).catch((error) => {
+        debugLog('memory.recall-error', error instanceof Error ? error.message : String(error))
+        return null
+      })
+    }
+    if (fullKnowledgeContext === null) {
+      fullKnowledgeContext = await buildKnowledgeContext({ memoryService: options.memoryService, cwd: process.cwd() })
+      state.knowledgeContext = fullKnowledgeContext
+    }
 
     // ── Rewind checkpoint (first turn only) ──
     // Snapshot the working tree AFTER compaction so that
@@ -775,7 +815,7 @@ export async function agentLoop(
         debugLog('agent.skills.system-prompt', `enabled=[${enabled.join(',')}] disabled=[${disabled.join(',')}]`)
       }
       state.systemPromptCache = buildSystemPrompt({
-        knowledgeContext: fullKnowledgeContext,
+        knowledgeContext: fullKnowledgeContext ?? '',
         modelId: options.modelId,
         isGitRepo,
         planMode: state.permissionMode === 'plan',
@@ -862,10 +902,40 @@ export async function agentLoop(
         break
       }
       stepToolCallCount += toolCalls.length
+      const toolResultStartIndex = state.messages.length
       await processToolCalls(toolCalls, state, options, callbacks, model)
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
       if (options.abortSignal?.aborted) break
+      if (!lateRecallAttempted && !options.toolFilter && options.memoryService) {
+        const resultText = state.messages
+          .slice(toolResultStartIndex)
+          .filter((message) => message.role === 'tool')
+          .map((message) => JSON.stringify(message.content))
+          .filter((content) => !content.includes('Error:'))
+          .join('\n')
+          .slice(0, 12_000)
+        const paths = extractMemoryPaths(resultText)
+        const identifiers = extractMemoryIdentifiers(resultText)
+        if (paths.length || identifiers.length) {
+          lateRecallAttempted = true
+          await options.memoryService
+            .lateRecall(
+              {
+                anchorMessageIndex: state.messages.length - 1,
+                repositoryId: process.cwd(),
+                paths,
+                identifiers,
+                text: `${paths.join(' ')} ${identifiers.join(' ')}`,
+              },
+              state,
+            )
+            .catch((error) => {
+              debugLog('memory.late-recall-error', error instanceof Error ? error.message : String(error))
+              return null
+            })
+        }
+      }
       // Mid-turn steering: inject user messages queued while this tool
       // batch ran. Safe only here — the batch's tool_results are all
       // recorded, so the merged user message never interleaves with
@@ -909,6 +979,7 @@ export async function agentLoop(
         continue
       }
       completedNormally = true
+      cleanStop = true
     }
 
     break
@@ -930,22 +1001,41 @@ export async function agentLoop(
   // runs in those cases). Abort path: useAgent.abort() pushes the
   // `[Request interrupted by user]` notice AFTER agentLoop returns, so
   // it's responsible for its own flush — see use-agent.ts.
-  void flushPendingMessages(state)
-
-  // Post-turn memory extractor: runs ONLY on a clean `stop` finish (no
-  // error, no abort, no content-filter, no length-cap give-up). Fire-and-
-  // forget — the user can type the next prompt immediately while a single
-  // generateText + Output.object call scans the transcript for durable
-  // knowledge to persist. Writes go directly to AutoMemory (silent path)
-  // so the ChatInput frame doesn't render a tool row after the user's
-  // reply is already complete.
-  if (completedNormally && !options.abortSignal?.aborted) {
-    void runMemoryExtractor({
-      parentState: state,
-      parentModel: model,
-      abortSignal: options.abortSignal,
-      onWrite: callbacks.onMemoryWrite,
+  if (cleanStop && !options.toolFilter && options.memoryService && !options.abortSignal?.aborted) {
+    await flushPendingMessages(state)
+    const memoryConfig = options.memoryService.getConfig()
+    const filesThisTurn = new Set([
+      ...state.turnFilesModified,
+      ...[...state.filesModified].filter((file) => !filesModifiedBefore.has(file)),
+    ])
+    const projection = buildTurnMemoryProjection({
+      messages: state.messages,
+      turnStartMessageIndex,
+      filesModifiedBefore: new Set(),
+      filesModifiedAfter: filesThisTurn,
+      repositoryId: process.cwd(),
+      turnStartedAt,
+      turnCompletedAt: new Date().toISOString(),
+      maxInputTokens: memoryConfig.maxInputTokens,
     })
+    if (shouldCreateMemoryJob(projection)) {
+      const job = createMemoryJob({
+        projection,
+        sessionId: state.sessionId,
+        turnStartMessageIndex,
+        modelId: options.modelId,
+        repositoryId: process.cwd(),
+        cwd: process.cwd(),
+      })
+      await options.memoryService.enqueuePostTurnJob(job).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        debugLog('memory.enqueue-error', message)
+        callbacks.onMemoryWrite?.({ action: 'failed', error: message })
+        return 'skipped' as const
+      })
+    }
+  } else {
+    void flushPendingMessages(state)
   }
 
   // ── Record per-step stats ──

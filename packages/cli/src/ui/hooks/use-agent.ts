@@ -26,7 +26,6 @@ import {
   generateTaskSlug,
   getDiffStatsForCheckpoint,
   hydrateLoopState,
-  initMemories,
   loadPersistedRules,
   markBoundaryAndReflush,
   modelSupportsVision,
@@ -422,15 +421,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     }
   }, [options])
 
-  /** Initialize memories (once). Project context comes from AGENTS.md at the repo
-   *  root (walked up from cwd, Codex-style), not from language-specific manifest
-   *  scanning, which would bias the tool toward Node/TS projects. */
+  /** Initialize process-scoped services once. */
   const initialize = useCallback(async () => {
     if (initializedRef.current) return
     initializedRef.current = true
-    await initMemories()
+    await options.memoryService?.initialize(process.cwd())
     loadPersistedRules(process.cwd())
-  }, [])
+  }, [options.memoryService])
 
   /** Submit a user message.
    *
@@ -606,16 +603,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         onError: (error) => {
           setState((prev) => ({ ...prev, error: error.message }))
         },
-        onMemoryWrite: ({ scope, category, key, fact }) => {
-          // Fire-and-forget extractor → may arrive after submit() resolved
-          // and even into the next turn. We append directly to scrollback;
-          // the cell-buffer renderer treats this like any other assistant
-          // message and inserts it above the (now possibly active) input
-          // box without disturbing whatever the user is typing.
+        onMemoryWrite: (notice) => {
+          const labels = {
+            remembered: 'Remembered',
+            updated: 'Updated memory',
+            forgotten: 'Forgotten',
+            failed: 'Memory failed',
+          } as const
+          const subject = [notice.topicId, notice.factId].filter(Boolean).join(' · ')
+          const detail = notice.error ?? notice.content ?? ''
           appendMessage({
-            id: `mem-${Date.now()}-${key}`,
+            id: `mem-${Date.now()}-${notice.factId ?? notice.action}`,
             role: 'assistant',
-            content: `Remembered (${scope} · ${category}) \`${key}\`: ${fact}`,
+            content: `${labels[notice.action]}${subject ? ` (${subject})` : ''}${detail ? `: ${detail}` : ''}`,
             timestamp: Date.now(),
             kind: 'command-result',
           })
@@ -1248,7 +1248,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (loopStateRef.current) {
       await saveSession(loopStateRef.current, modelRef.current)
     }
-  }, [])
+    if (options.memoryService) await options.memoryService.shutdown(options.memoryService.getConfig().drainTimeoutMs)
+  }, [options.memoryService])
+
+  const reloadMemory = useCallback(async () => {
+    await options.memoryService?.reload(loopStateRef.current ?? undefined)
+  }, [options.memoryService])
 
   /** Synchronous snapshot of the live session for the post-exit hint
    *  printed by index.ts. Returns null when no LoopState exists yet
@@ -1518,11 +1523,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   }, [restoreQueueToDraft])
 
   /** Switch model at runtime */
-  const switchModel = useCallback((newModelId: string, newModel: LanguageModel) => {
-    modelRef.current = newModel
-    modelIdRef.current = newModelId
-    setState((prev) => ({ ...prev, modelId: newModelId }))
-  }, [])
+  const switchModel = useCallback(
+    (newModelId: string, newModel: LanguageModel) => {
+      modelRef.current = newModel
+      modelIdRef.current = newModelId
+      options.memoryService?.setActiveModelId(newModelId)
+      setState((prev) => ({ ...prev, modelId: newModelId }))
+    },
+    [options.memoryService],
+  )
 
   /** Flip extended-thinking on/off at runtime. Picked up by the next
    *  agent turn via thinkingRef.current. Persistence (saveUserConfig)
@@ -1612,6 +1621,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     switchModel,
     setThinking,
     getThinking,
+    reloadMemory,
     invalidateSystemPromptCache,
     setPermissionMode,
     addInfoMessage,

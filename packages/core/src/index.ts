@@ -11,8 +11,6 @@ export type {
   DisplayToolCall,
   AgentCallbacks,
   AgentOptions,
-  KnowledgeCategory,
-  KnowledgeFact,
   SessionSummary,
   ModelMessage,
   LanguageModel,
@@ -29,8 +27,16 @@ export {
 export type { ProviderModel } from './types/index.js'
 
 // Config
-export { resolveModelId, getAvailableProviders, getEnvVarName, loadUserConfig, saveUserConfig } from './config/index.js'
-export type { UserConfig } from './config/index.js'
+export {
+  DEFAULT_MEMORY_CONFIG,
+  resolveMemoryConfig,
+  resolveModelId,
+  getAvailableProviders,
+  getEnvVarName,
+  loadUserConfig,
+  saveUserConfig,
+} from './config/index.js'
+export type { MemoryConfig, MemoryRecallConfig, UserConfig } from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'
@@ -120,7 +126,32 @@ export { ensureProjectStorageDir } from './project-storage.js'
 
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'
-export { getAutoMemory, initMemories } from './knowledge/auto-memory.js'
+export { MemoryService } from './knowledge/memory-service.js'
+export { MemoryIndex, normalizeMemoryText, tokenizeMemoryText } from './knowledge/memory-index.js'
+export { MemoryStore, formatMemoryTopic, parseMemoryTopic, renderCoreProfile } from './knowledge/memory-store.js'
+export { buildRecallQuery, MemoryRetriever } from './knowledge/memory-retriever.js'
+export type {
+  EvidenceKind,
+  LateRecallSignals,
+  MemoryChange,
+  MemoryEvidence,
+  MemoryJob,
+  MemoryOperation,
+  MemoryRecallAttachment,
+  MemoryRecallTombstone,
+  MemoryRecallTrace,
+  MemorySearchArgs,
+  MemorySearchContext,
+  MemorySearchResult,
+  MemoryStatus,
+  MemoryStatusReport,
+  MemoryTopic,
+  MemoryType,
+  MemoryWriteNotice,
+  RecallQuery,
+  TopicMetadataPatch,
+  TurnMemoryProjection,
+} from './knowledge/memory-types.js'
 export { generateSessionSummary } from './knowledge/session.js'
 
 // Sub-agents
@@ -252,6 +283,8 @@ export {
   appendGoalVerification,
   appendHeader,
   appendInterrupted,
+  appendMemoryRecall,
+  appendMemoryRecallDelete,
   flushPendingMessages,
   getSessionFilePath,
   hydrateLoopState,

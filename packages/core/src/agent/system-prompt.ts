@@ -206,7 +206,7 @@ If you find yourself wanting to ask "is the plan good?" in any form: stop, call 
 **askUser is for**: clarifying requirements, choosing between technical approaches DURING planning (e.g. "Redis vs in-memory cache?"), prioritizing what to include. Never for plan approval.`
 
 /** Build a focused system prompt for a sub-agent invocation.
- *  Shorter than the parent prompt — no plan-mode overlay, no auto-memory
+ *  Shorter than the parent prompt — no plan-mode overlay, no independent memory
  *  guidelines, no response-format rules. Just role + environment + contract. */
 export function buildSubAgentSystemPrompt(options: {
   agentPrompt: string
