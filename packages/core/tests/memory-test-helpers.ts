@@ -10,10 +10,9 @@ export async function makeMemoryRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'x-code-memory-v2-'))
 }
 
-export function enabledMemoryConfig(): MemoryConfig {
+export function memoryConfig(): MemoryConfig {
   return {
     ...DEFAULT_MEMORY_CONFIG,
-    enabled: true,
     recall: { ...DEFAULT_MEMORY_CONFIG.recall },
   }
 }

@@ -131,7 +131,6 @@ export interface MemoryRecallConfig {
 }
 
 export interface MemoryConfig {
-  enabled: boolean
   model: string
   maxInputTokens: number
   maxOutputTokens: number
@@ -142,10 +141,6 @@ export interface MemoryConfig {
 }
 
 export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
-  // Memory v2 remains opt-in until its crash/recovery and retrieval-quality
-  // release gates are complete. Flipping this default is a release decision,
-  // not an implementation convenience.
-  enabled: false,
   model: 'inherit',
   maxInputTokens: 12_000,
   maxOutputTokens: 1500,
@@ -188,7 +183,6 @@ export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): Memo
     integer(recall.maxTokensPerTurn, DEFAULT_MEMORY_CONFIG.recall.maxTokensPerTurn, 100, 20_000),
   )
   return {
-    enabled: typeof memory.enabled === 'boolean' ? memory.enabled : DEFAULT_MEMORY_CONFIG.enabled,
     model: text(memory.model, DEFAULT_MEMORY_CONFIG.model),
     maxInputTokens: integer(memory.maxInputTokens, DEFAULT_MEMORY_CONFIG.maxInputTokens, 1000, 100_000),
     maxOutputTokens: integer(memory.maxOutputTokens, DEFAULT_MEMORY_CONFIG.maxOutputTokens, 128, 8192),

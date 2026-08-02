@@ -239,14 +239,13 @@ export interface MemorySearchResult {
 }
 
 export interface MemoryStatusReport {
-  enabled: boolean
   initialized: boolean
   schemaVersion?: number
   generation: number
   topics: number
   facts: number
   queue: { pending: number; running: number; failed: number }
-  worker: 'idle' | 'running' | 'stopped' | 'disabled'
+  worker: 'idle' | 'running' | 'stopped'
   invalidTopics: Array<{ path: string; error: string }>
   lastRun?: {
     jobId: string

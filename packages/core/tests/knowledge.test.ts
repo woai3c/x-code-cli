@@ -3,13 +3,13 @@ import path from 'node:path'
 
 import { createLoopState } from '../src/agent/loop-state.js'
 import { MemoryService } from '../src/knowledge/memory-service.js'
-import { enabledMemoryConfig, makeMemoryRoot, topicMarkdown, writeTopic } from './memory-test-helpers.js'
+import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 
 describe('Memory v2 knowledge source', () => {
   it('initializes an empty v2 store without reading legacy auto.md', async () => {
     const root = await makeMemoryRoot()
     await fs.writeFile(path.join(root, 'auto.md'), 'legacy content that must be ignored', 'utf-8')
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
 
     expect(service.getCoreProfile()).not.toContain('legacy content')
@@ -17,6 +17,10 @@ describe('Memory v2 knowledge source', () => {
       version: 2,
       generation: 0,
     })
+    const status = await service.status()
+    expect(status).not.toHaveProperty('enabled')
+    expect(status).toMatchObject({ initialized: true, schemaVersion: 2 })
+    expect(['idle', 'running']).toContain(status.worker)
     expect(await fs.readFile(path.join(root, 'auto.md'), 'utf-8')).toContain('legacy content')
     await service.shutdown(0)
     await fs.rm(root, { recursive: true, force: true })
@@ -24,7 +28,7 @@ describe('Memory v2 knowledge source', () => {
 
   it('reloads manual topic edits and isolates a topic as soon as it becomes invalid', async () => {
     const root = await makeMemoryRoot()
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     await writeTopic(
       root,
@@ -69,7 +73,7 @@ describe('Memory v2 knowledge source', () => {
 
   it('invalidates resumed attachments when the memory store generation moved backwards', async () => {
     const root = await makeMemoryRoot()
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const state = createLoopState()
     state.memoryGeneration = 7
@@ -126,7 +130,7 @@ describe('Memory v2 knowledge source', () => {
       }),
       'manual-notes',
     )
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const state = createLoopState()
     state.messages.push({ role: 'user', content: 'What is the manual-note codename?' })

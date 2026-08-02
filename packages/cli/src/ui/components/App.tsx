@@ -1691,7 +1691,7 @@ export function App({
     if (arg === 'status') {
       const status = await service.status()
       const lines = [
-        `**Memory status** — ${status.enabled ? 'enabled' : 'disabled'}`,
+        `**Memory status** — ${status.error ? 'error' : status.initialized ? 'ready' : 'initializing'}`,
         '',
         `- Schema: ${status.schemaVersion ?? 'unsupported'} · generation ${status.generation}`,
         `- Topics: ${status.topics} · facts: ${status.facts}`,

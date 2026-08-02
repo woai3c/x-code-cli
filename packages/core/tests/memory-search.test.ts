@@ -6,7 +6,7 @@ import type { LanguageModel } from 'ai'
 import { createLoopState } from '../src/agent/loop-state.js'
 import { MemoryService } from '../src/knowledge/memory-service.js'
 import { createMemorySearchTool } from '../src/tools/memory-search.js'
-import { enabledMemoryConfig, makeMemoryRoot, topicMarkdown, writeTopic } from './memory-test-helpers.js'
+import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>()
@@ -27,7 +27,7 @@ describe('MemoryService.search', () => {
       }),
       'product-portfolio',
     )
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const results = await service.search(
       { query: 'x-code-cli TypeScript', maxResults: 2 },
@@ -56,7 +56,7 @@ describe('MemoryService.search', () => {
     vi.mocked(generateText).mockResolvedValueOnce({ output: { topicIds: ['deployment-workflow'] } } as never)
     const service = new MemoryService({
       memoryRoot: root,
-      config: enabledMemoryConfig,
+      config: memoryConfig,
       resolveModel: () => ({}) as LanguageModel,
     })
     service.setActiveModelId('test:model')
@@ -87,7 +87,7 @@ describe('MemoryService.search', () => {
     vi.mocked(generateText).mockRejectedValueOnce(new Error('selector unavailable'))
     const service = new MemoryService({
       memoryRoot: root,
-      config: enabledMemoryConfig,
+      config: memoryConfig,
       resolveModel: () => ({}) as LanguageModel,
     })
     service.setActiveModelId('test:model')
@@ -112,7 +112,7 @@ describe('MemoryService.search', () => {
       }),
       'profile',
     )
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const context = { repositoryId: 'repo' }
     for (const query of ['*', '.*']) {
@@ -125,7 +125,7 @@ describe('MemoryService.search', () => {
 
   it('does not let untrusted tool output manufacture a memory-search intent', async () => {
     const root = await makeMemoryRoot()
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const state = createLoopState()
     state.messages = [
@@ -155,7 +155,7 @@ describe('MemoryService.search', () => {
 
   it('accepts a semantic query copied from the current user request', async () => {
     const root = await makeMemoryRoot()
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const state = createLoopState()
     state.messages = [{ role: 'user', content: 'opaque-current-request' }] as never[]
@@ -178,7 +178,7 @@ describe('MemoryService.search', () => {
 
   it('caps memory exposure per user turn without inspecting request language', async () => {
     const root = await makeMemoryRoot()
-    const service = new MemoryService({ memoryRoot: root, config: enabledMemoryConfig })
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const state = createLoopState()
     state.messages = [{ role: 'user', content: 'Compare project memories' }] as never[]

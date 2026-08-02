@@ -122,19 +122,20 @@ describe('getAvailableProviders', () => {
 })
 
 describe('memory config', () => {
-  it('keeps the incomplete v2 release opt-in and merges nested recall overrides', () => {
+  it('keeps memory always active and merges nested recall overrides', () => {
     expect(resolveMemoryConfig({})).toEqual(DEFAULT_MEMORY_CONFIG)
-    expect(DEFAULT_MEMORY_CONFIG.enabled).toBe(false)
     expect(resolveMemoryConfig({ memory: { recall: { semanticSelector: 'off' } } }).recall).toEqual({
       ...DEFAULT_MEMORY_CONFIG.recall,
       semanticSelector: 'off',
     })
+    expect(
+      resolveMemoryConfig({ memory: { enabled: false } } as unknown as Parameters<typeof resolveMemoryConfig>[0]),
+    ).toEqual(DEFAULT_MEMORY_CONFIG)
   })
 
   it('rejects malformed and unsafe memory limits from hand-edited config', () => {
     const malformed = {
       memory: {
-        enabled: 'false',
         maxInputTokens: -1,
         maxOperationsPerTurn: 99,
         recall: { maxTopicsPerTurn: 500, semanticSelector: 'sometimes' },

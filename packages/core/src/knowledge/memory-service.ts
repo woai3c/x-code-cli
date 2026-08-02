@@ -120,7 +120,8 @@ export class MemoryService {
       const loaded = await this.store.initialize()
       this.installSnapshot(loaded.topics, loaded.invalidTopics, loaded.generation)
       this.initialized = true
-      if (this.refreshConfig().enabled) this.worker.wake()
+      this.refreshConfig()
+      this.worker.wake()
     } catch (error) {
       this.initialized = true
       this.initializationError = error instanceof Error ? error.message : String(error)
@@ -129,7 +130,7 @@ export class MemoryService {
   }
 
   getCoreProfile(): string {
-    return this.config().enabled && !this.initializationError ? this.coreProfile : ''
+    return this.initializationError ? '' : this.coreProfile
   }
 
   getConfig(): MemoryConfig {
@@ -388,14 +389,13 @@ export class MemoryService {
     const queue = await this.jobStore.counts().catch(() => ({ pending: 0, running: 0, failed: 0 }))
     const lastRun = await this.jobStore.lastRun().catch(() => undefined)
     return {
-      enabled: this.config().enabled && !this.initializationError,
       initialized: this.initialized,
       schemaVersion: this.initializationError ? undefined : 2,
       generation: this.index.generation,
       topics: this.topics.length,
       facts: this.topics.reduce((sum, topic) => sum + topic.facts.length, 0),
       queue,
-      worker: !this.config().enabled || this.initializationError ? 'disabled' : this.worker.status,
+      worker: this.worker.status,
       invalidTopics: this.invalidTopics,
       ...(lastRun
         ? {
@@ -430,7 +430,7 @@ export class MemoryService {
   }
 
   private available(): boolean {
-    return this.initialized && !this.initializationError && this.config().enabled
+    return this.initialized && !this.initializationError
   }
 
   private createRetriever(config: MemoryConfig = this.config()): MemoryRetriever {
