@@ -101,6 +101,7 @@ export async function extractMemoryOperations(input: ExtractMemoryInput): Promis
   const payload = redactMemoryValue({
     sourceOccurredAt: input.job.sourceOccurredAt,
     repositoryId: input.job.repositoryId,
+    explicitMemoryIntent: input.job.explicitMemoryIntent,
     projection: input.job.projection,
     coreProfile: input.coreProfile,
     factRegistry: input.factRegistry,

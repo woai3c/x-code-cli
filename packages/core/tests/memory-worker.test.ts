@@ -18,6 +18,7 @@ function job(): MemoryJob {
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:00:01.000Z',
     attempt: 0,
+    explicitMemoryIntent: false,
     projection: {
       userMessages: ['The project uses TypeScript.'],
       assistantFinal: 'Understood.',
@@ -147,5 +148,60 @@ describe('memory worker evidence binding', () => {
     expect(retried.nextAttemptAt).toBeDefined()
     await worker.shutdown(0)
     await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('finishes a transaction-applied job without retaining its marker', async () => {
+    const root = await makeMemoryRoot()
+    const jobStore = new MemoryJobStore(root)
+    await jobStore.initialize()
+    await jobStore.enqueue(job())
+    await fs.writeFile(path.join(jobStore.appliedDir, 'job-evidence.json'), '{"jobId":"job-evidence"}\n', 'utf-8')
+    const worker = new MemoryWorker({
+      jobStore,
+      resolveModel: () => null,
+      preferredModelId: () => null,
+      contextFor: async () => ({ coreProfile: '', factRegistry: '', relatedTopics: [] }),
+      commitOperations: async () => ({ status: 'no-op', notices: [], generation: 0 }),
+      onCommitted: async () => {},
+      onNotice: () => {},
+      maxOperations: () => 8,
+      maxOutputTokens: () => 1500,
+      maxAttempts: () => 2,
+    })
+
+    worker.wake()
+    await vi.waitFor(async () => expect(await jobStore.counts()).toEqual({ pending: 0, running: 0, failed: 0 }))
+
+    expect(await jobStore.lastRun()).toMatchObject({ jobId: 'job-evidence', status: 'no-op' })
+    await expect(fs.access(path.join(jobStore.appliedDir, 'job-evidence.json'))).rejects.toThrow()
+    await worker.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('contains root worker failures instead of leaking a rejected wake promise', async () => {
+    const onNotice = vi.fn()
+    const worker = new MemoryWorker({
+      jobStore: {
+        tryAcquireExtractorLock: async () => {
+          throw new Error('lock read failed')
+        },
+        nextPendingDelay: async () => null,
+      } as unknown as MemoryJobStore,
+      resolveModel: () => null,
+      preferredModelId: () => null,
+      contextFor: async () => ({ coreProfile: '', factRegistry: '', relatedTopics: [] }),
+      commitOperations: async () => ({ status: 'no-op', notices: [], generation: 0 }),
+      onCommitted: async () => {},
+      onNotice,
+      maxOperations: () => 8,
+      maxOutputTokens: () => 1500,
+      maxAttempts: () => 2,
+    })
+
+    worker.wake()
+    await vi.waitFor(() => expect(worker.status).toBe('idle'))
+
+    expect(onNotice).toHaveBeenCalledWith({ action: 'failed', error: 'lock read failed' })
+    await worker.shutdown(0)
   })
 })

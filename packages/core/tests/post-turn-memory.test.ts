@@ -40,6 +40,8 @@ describe('post-turn memory projection', () => {
       expect(shouldCreateMemoryJob({ ...base, userMessages: [text] })).toBe(true)
     }
     expect(shouldCreateMemoryJob({ ...base, userMessages: ['/memory status'] })).toBe(false)
+    expect(shouldCreateMemoryJob({ ...base, userMessages: ['你好！'] })).toBe(false)
+    expect(shouldCreateMemoryJob({ ...base, userMessages: ['你好，记住我偏好中文'] })).toBe(true)
   })
 
   it('redacts secrets before creating a deterministic durable job', () => {
@@ -72,6 +74,7 @@ describe('post-turn memory projection', () => {
     expect(one.jobId).toBe(two.jobId)
     expect(JSON.stringify(one)).not.toContain('sk-proj-abcdefghijklmnop')
     expect(JSON.stringify(one)).not.toContain('github_pat_abcdefghijklmnopqrstuv')
+    expect(one.explicitMemoryIntent).toBe(false)
   })
 
   it('marks structural tool errors and never projects raw result bodies', () => {

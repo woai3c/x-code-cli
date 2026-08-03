@@ -21,6 +21,7 @@ function job(): MemoryJob {
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:01:00.000Z',
     attempt: 0,
+    explicitMemoryIntent: true,
     projection: {
       userMessages: ['Remember my API key sk-proj-abcdefghijklmnop and product x-code.'],
       assistantFinal: 'Done.',
@@ -68,5 +69,7 @@ describe('memory extractor', () => {
     expect(result.tokens).toBe(120)
     expect(generateText).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(vi.mocked(generateText).mock.calls[0]?.[0])).not.toContain('sk-proj-abcdefghijklmnop')
+    const payload = JSON.parse(String(vi.mocked(generateText).mock.calls[0]?.[0].prompt))
+    expect(payload.explicitMemoryIntent).toBe(true)
   })
 })

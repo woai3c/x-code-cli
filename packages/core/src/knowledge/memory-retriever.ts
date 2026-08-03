@@ -19,9 +19,14 @@ import type {
   MemoryRecallTrace,
   MemorySection,
   MemoryTopic,
+  MemoryType,
   RecallCandidate,
   RecallQuery,
 } from './memory-types.js'
+
+const HISTORY_RE = /(?:记得|记忆|之前|以前|上次|曾经|历史|过去|remember|before|previous|last time|history)/i
+const FORGET_RE = /(?:忘记|别记|删除.*记忆|forget|remove.*memory)/i
+const SELF_CONTAINED_RE = /^(?:你好|您好|谢谢|翻译|格式化|hello\b|hi\b|thanks\b|format\b|translate\b)/i
 
 export interface RetrieverOptions {
   maxTopicsPerTurn: number
@@ -73,6 +78,8 @@ export function buildRecallQuery(
     repositoryId: repositoryId.replace(/\\/g, '/'),
     mentionedPaths: extractMemoryPaths(clean),
     identifiers: extractMemoryIdentifiers(clean),
+    explicitHistoryIntent: HISTORY_RE.test(clean),
+    explicitForgetIntent: FORGET_RE.test(clean),
   }
 }
 
@@ -89,7 +96,38 @@ function repositoryMatches(topic: MemoryTopic, repositoryId: string): boolean {
 
 function includesAlias(message: string, alias: string): boolean {
   const normalized = normalizeMemoryText(alias)
-  return normalized.length >= 2 && message.includes(normalized)
+  if (!normalized) return false
+  if (/[^\x00-\x7F]/u.test(normalized)) return message.includes(normalized)
+  let index = message.indexOf(normalized)
+  while (index >= 0) {
+    const before = index === 0 ? '' : message[index - 1]!
+    const afterIndex = index + normalized.length
+    const after = afterIndex >= message.length ? '' : message[afterIndex]!
+    if (!/[a-z0-9]/i.test(before) && !/[a-z0-9]/i.test(after)) return true
+    index = message.indexOf(normalized, index + 1)
+  }
+  return false
+}
+
+function intentTypes(query: RecallQuery): MemoryType[] {
+  const text = normalizeMemoryText(query.currentUserText)
+  const types = new Set<MemoryType>()
+  if (/(?:产品|项目定位|路线图|技术栈|架构|product|portfolio|roadmap|tech stack|architecture)/i.test(text)) {
+    types.add('portfolio')
+  }
+  if (/(?:偏好|习惯|纠正|反馈|协作|风格|prefer|preference|correction|feedback|collaboration|style)/i.test(text)) {
+    types.add('feedback')
+    types.add('user')
+  }
+  if (
+    query.explicitHistoryIntent ||
+    /(?:决定|决策|为什么|为何|流程|工作流|约定|decision|why|workflow|process|convention)/i.test(text)
+  ) {
+    types.add('project')
+    types.add('workflow')
+  }
+  if (/(?:文档|参考|入口|链接|地址|docs?|reference|entry|link|url)/i.test(text)) types.add('reference')
+  return [...types]
 }
 
 export class MemoryRetriever {
@@ -102,7 +140,7 @@ export class MemoryRetriever {
 
   retrieve(query: RecallQuery): RetrieveResult {
     const recentHash = createHash('sha1').update(query.recentConversationText).digest('hex').slice(0, 12)
-    const cacheKey = `${this.index.generation}:${normalizeMemoryText(query.currentUserText)}:${normalizeMemoryText(query.repositoryId)}:${recentHash}`
+    const cacheKey = `${this.index.generation}:${normalizeMemoryText(query.currentUserText)}:${normalizeMemoryText(query.repositoryId)}:${recentHash}:${query.explicitHistoryIntent}:${query.explicitForgetIntent}`
     const cached = this.cache.get(cacheKey)
     if (cached) return structuredClone(cached)
     const routeRanks = new Map<string, Map<string, number>>()
@@ -124,6 +162,14 @@ export class MemoryRetriever {
       'conversation',
       conversation.map((hit) => hit.topicId),
     )
+    const typeIntent = new Set(intentTypes(query))
+    addRoute(
+      routeRanks,
+      'type',
+      [...this.index.topics.values()]
+        .filter((topic) => typeIntent.has(topic.metadata.type))
+        .map((topic) => topic.metadata.id),
+    )
     addRoute(
       routeRanks,
       'pinned',
@@ -134,6 +180,7 @@ export class MemoryRetriever {
       exact: 4,
       bm25: 2.5,
       conversation: 1.5,
+      type: 1.5,
       relationship: 0.8,
       pinned: 0.5,
     }
@@ -173,6 +220,7 @@ export class MemoryRetriever {
         const topic = this.index.topics.get(topicId)!
         let score = entry.score
         if (repositoryMatches(topic, query.repositoryId)) score += 0.15
+        if (query.explicitHistoryIntent && typeIntent.has(topic.metadata.type)) score += 0.1
         if (topic.metadata.aliases.some((alias) => includesAlias(normalizedMessage, alias))) {
           score += 0.2
           protectedSet.add(topicId)
@@ -195,8 +243,10 @@ export class MemoryRetriever {
     const exactUnique = candidates.filter((candidate) => candidate.routes.includes('exact') && candidate.protected)
     let selectedTopicIds: string[] = []
     let needsSelector = false
-    if (exactUnique.length > 0) {
-      selectedTopicIds = exactUnique.slice(0, this.options.maxTopicsPerTurn).map((candidate) => candidate.topicId)
+    if (exactUnique.length === 1) {
+      selectedTopicIds = [exactUnique[0]!.topicId]
+    } else if (exactUnique.length > 1) {
+      needsSelector = true
     } else if (candidates.length) {
       const top = candidates[0]!
       const second = candidates[1]
@@ -204,8 +254,10 @@ export class MemoryRetriever {
       const locallyCertain =
         independentRoutes >= 2 && top.coverage >= 0.6 && (!second || top.score - second.score >= 0.02)
       if (locallyCertain) selectedTopicIds = [top.topicId]
-      else if (independentRoutes >= 1) needsSelector = true
+      else if (query.explicitHistoryIntent || query.explicitForgetIntent || independentRoutes >= 2) needsSelector = true
     }
+    if (candidates.length === 0 && (query.explicitHistoryIntent || query.explicitForgetIntent)) needsSelector = true
+    if (SELF_CONTAINED_RE.test(query.currentUserText.trim())) needsSelector = false
 
     const trace: MemoryRecallTrace = {
       query: query.currentUserText,

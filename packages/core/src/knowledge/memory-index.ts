@@ -103,6 +103,19 @@ function basename(value: string): string {
   return path.posix.basename(value.replace(/\\/g, '/'))
 }
 
+function containsExactKey(message: string, key: string): boolean {
+  if (/[^\x00-\x7F]/u.test(key)) return message.includes(key)
+  let index = message.indexOf(key)
+  while (index >= 0) {
+    const before = index === 0 ? '' : message[index - 1]!
+    const afterIndex = index + key.length
+    const after = afterIndex >= message.length ? '' : message[afterIndex]!
+    if (!/[a-z0-9]/i.test(before) && !/[a-z0-9]/i.test(after)) return true
+    index = message.indexOf(key, index + 1)
+  }
+  return false
+}
+
 export class MemoryIndex {
   generation = 0
   readonly topics = new Map<string, MemoryTopic>()
@@ -170,7 +183,7 @@ export class MemoryIndex {
     for (const key of keys) {
       if (!key) continue
       for (const [exactKey, owners] of this.exact) {
-        if (key !== exactKey && !normalizedQuery.includes(exactKey)) continue
+        if (key !== exactKey && !containsExactKey(normalizedQuery, exactKey)) continue
         const specificity =
           key === exactKey ? 1 : Math.min(0.9, exactKey.length / Math.max(normalizedQuery.length, 1) + 0.35)
         for (const owner of owners) scores.set(owner, Math.max(scores.get(owner) ?? 0, specificity))
@@ -262,7 +275,7 @@ function uniqueExactKeys(topic: MemoryTopic): string[] {
     ...topic.metadata.appliesTo,
     ...topic.metadata.appliesTo.map(basename),
     ...topic.sections.flatMap((section) => section.headingPath),
-    ...topic.metadata.keywords.filter((value) => /[A-Z0-9_.:-]/i.test(value)),
+    ...topic.metadata.keywords.filter((value) => /[A-Z0-9_.:-]/.test(value)),
   ]
   return [...new Set(values.map(normalizeMemoryText).filter((value) => value.length >= 2))]
 }

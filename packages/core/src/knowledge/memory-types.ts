@@ -84,6 +84,7 @@ export interface MemoryJob {
   sourceOccurredAt: string
   attempt: number
   nextAttemptAt?: string
+  explicitMemoryIntent: boolean
   projection: TurnMemoryProjection
 }
 
@@ -163,6 +164,8 @@ export interface RecallQuery {
   repositoryId: string
   mentionedPaths: string[]
   identifiers: string[]
+  explicitHistoryIntent: boolean
+  explicitForgetIntent: boolean
 }
 
 export interface RecallCandidate {
@@ -208,6 +211,7 @@ export interface MemoryRecallTombstone {
 
 export interface LateRecallSignals {
   anchorMessageIndex: number
+  placement: MemoryRecallAttachment['placement']
   repositoryId: string
   currentUserText: string
   paths: string[]

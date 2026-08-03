@@ -54,6 +54,8 @@ describe('Memory v2 knowledge source', () => {
         repositoryId: process.cwd(),
         mentionedPaths: [],
         identifiers: [],
+        explicitHistoryIntent: false,
+        explicitForgetIntent: false,
       },
       freshState,
     )
@@ -102,6 +104,8 @@ describe('Memory v2 knowledge source', () => {
         repositoryId: process.cwd(),
         mentionedPaths: [],
         identifiers: [],
+        explicitHistoryIntent: true,
+        explicitForgetIntent: false,
       },
       state,
     )
@@ -141,6 +145,8 @@ describe('Memory v2 knowledge source', () => {
         repositoryId: process.cwd(),
         mentionedPaths: [],
         identifiers: [],
+        explicitHistoryIntent: false,
+        explicitForgetIntent: false,
       },
       state,
     )
@@ -153,6 +159,46 @@ describe('Memory v2 knowledge source', () => {
 
     expect(state.memoryGeneration).toBe(beforeGeneration + 1)
     expect(state.memoryRecallTombstones.at(-1)?.topicIds).toEqual(['manual-notes'])
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('late-recalls a protected exact tool entity without requiring a selector model', async () => {
+    const root = await makeMemoryRoot()
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'worker-reference',
+        type: 'reference',
+        aliases: ['NewWorker'],
+        facts: [{ id: 'reference.worker.location', content: '- NewWorker lives in src/new-worker.ts.' }],
+      }),
+      'worker-reference',
+    )
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
+    const state = createLoopState()
+    state.messages = [
+      { role: 'user', content: 'inspect the operation' },
+      { role: 'assistant', content: 'tool call' },
+      { role: 'tool', content: [] },
+    ]
+
+    const attachment = await service.lateRecall(
+      {
+        anchorMessageIndex: 2,
+        placement: 'after-tool-results',
+        repositoryId: process.cwd(),
+        currentUserText: 'inspect the operation',
+        paths: [],
+        identifiers: ['NewWorker'],
+        text: 'NewWorker',
+      },
+      state,
+    )
+
+    expect(attachment?.topics.map((topic) => topic.topicId)).toEqual(['worker-reference'])
+    expect(state.lastMemoryRecallTrace?.selectorUsed).toBe(false)
     await service.shutdown(0)
     await fs.rm(root, { recursive: true, force: true })
   })

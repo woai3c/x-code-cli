@@ -6,13 +6,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { streamText } from 'ai'
-import type { LanguageModel, UserContent } from 'ai'
+import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import { loadUserConfig } from '../config/index.js'
 import { aggregateUserPromptSubmit } from '../hooks/bus.js'
 import type { HookEvent } from '../hooks/types.js'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
-import { extractMemoryIdentifiers, extractMemoryPaths } from '../knowledge/memory-index.js'
+import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from '../knowledge/memory-index.js'
 import { applyMemoryRecallAttachments } from '../knowledge/memory-recall-state.js'
 import { buildRecallQuery } from '../knowledge/memory-retriever.js'
 import { listMcpResources, readMcpResource } from '../mcp/resources.js'
@@ -73,7 +73,7 @@ function prependContext(userMessage: UserContent, context: string): UserContent 
  *  some providers' tool-call sequencing (see prependContext). Returns
  *  true when a message was injected. Called at tool-batch boundaries
  *  and on `stop`, never mid-stream. */
-function drainQueuedInputs(state: LoopState, options: AgentOptions): boolean {
+function drainQueuedInputs(state: LoopState, options: AgentOptions, turnMessages?: ModelMessage[]): boolean {
   const queued = options.consumeQueuedInputs?.()
   if (!queued?.length) return false
   const text = queued
@@ -89,8 +89,45 @@ function drainQueuedInputs(state: LoopState, options: AgentOptions): boolean {
     'The user sent a new message while you were working:\n' +
     text +
     "\n\nIMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it."
-  state.messages.push({ role: 'user', content: wrapped })
+  const message = { role: 'user' as const, content: wrapped }
+  state.messages.push(message)
+  turnMessages?.push(message)
   return true
+}
+
+interface ToolResultPart {
+  type?: string
+  output?: unknown
+  isError?: boolean
+}
+
+function isFailedToolResult(part: ToolResultPart): boolean {
+  if (part.isError) return true
+  if (!part.output || typeof part.output !== 'object') return false
+  const output = part.output as Record<string, unknown>
+  return (
+    output.isError === true ||
+    output.success === false ||
+    output.ok === false ||
+    ('error' in output && output.error !== undefined && output.error !== null && output.error !== false) ||
+    output.status === 'error' ||
+    output.status === 'failed' ||
+    (typeof output.exitCode === 'number' && output.exitCode !== 0) ||
+    output.type === 'error-text' ||
+    output.type === 'error-json'
+  )
+}
+
+function successfulToolResultText(messages: readonly ModelMessage[]): string {
+  const outputs: string[] = []
+  for (const message of messages) {
+    if (message.role !== 'tool' || !Array.isArray(message.content)) continue
+    for (const part of message.content as ToolResultPart[]) {
+      if (part.type !== 'tool-result' || isFailedToolResult(part)) continue
+      outputs.push(typeof part.output === 'string' ? part.output : JSON.stringify(part.output ?? ''))
+    }
+  }
+  return outputs.join('\n').slice(0, 12_000)
 }
 
 /** Pull plain text out of a UserContent payload for slugification.
@@ -219,6 +256,7 @@ async function collectTurnResponse(
   state: LoopState,
   modelId: string,
   callbacks: AgentCallbacks,
+  turnMessages: ModelMessage[],
 ): Promise<string> {
   const response = await result.response
   // CRITICAL: auto-executed tools (readFile / grep / glob / listDir / webFetch
@@ -232,6 +270,7 @@ async function collectTurnResponse(
   // budget used elsewhere in the loop.
   truncateToolResultsInMessages(response.messages)
   state.messages.push(...response.messages)
+  turnMessages.push(...response.messages)
   ensureReasoningContentParts(state.messages, modelId)
 
   const usage = await result.usage
@@ -417,6 +456,7 @@ async function runTurn(
   callbacks: AgentCallbacks,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   effectiveTools: Record<string, any>,
+  turnMessages: ModelMessage[],
   /** Current turn number — diagnostic only, threaded in so the debug log
    *  can tag each finish with which iteration of the outer loop it was. */
   turn: number,
@@ -572,7 +612,7 @@ async function runTurn(
   }
 
   try {
-    const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks)
+    const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks, turnMessages)
     debugLog(
       'turn.finish',
       `reason=${finishReason} turn=${turn} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
@@ -596,6 +636,7 @@ export async function agentLoop(
 ): Promise<AgentLoopResult> {
   const state = existingState ?? createLoopState(options.permissionMode ?? 'default')
   const turnStartMessageIndex = state.messages.length
+  const turnMessages: ModelMessage[] = []
   const turnStartedAt = new Date().toISOString()
   const filesModifiedBefore = new Set(state.filesModified)
   state.turnFilesModified.clear()
@@ -655,7 +696,9 @@ export async function agentLoop(
     }
   }
 
-  state.messages.push({ role: 'user', content: effectiveUserMessage })
+  const initialUserMessage = { role: 'user' as const, content: effectiveUserMessage }
+  state.messages.push(initialUserMessage)
+  turnMessages.push(initialUserMessage)
 
   // Per-invocation turn counter. Scoped to this single `agentLoop` call
   // — re-entering the function (next user submit) starts at 0 again.
@@ -849,7 +892,7 @@ export async function agentLoop(
     // search keep a byte-stable tools prefix across turns.
     const effectiveTools = composeTurnTools(baseTools, state.deferredCatalog, state.activatedTools)
 
-    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turn)
+    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turnMessages, turn)
 
     // ── Plugin hook: TurnComplete ──
     // Fires regardless of finish reason (including error / abort) so
@@ -904,24 +947,31 @@ export async function agentLoop(
       stepToolCallCount += toolCalls.length
       const toolResultStartIndex = state.messages.length
       await processToolCalls(toolCalls, state, options, callbacks, model)
+      const manualToolMessages = state.messages.slice(toolResultStartIndex)
+      turnMessages.push(...manualToolMessages)
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
       if (options.abortSignal?.aborted) break
+      // A queued user message is the natural anchor for late memory. Drain it
+      // before attaching recall so providers never see two consecutive user
+      // messages (one synthetic memory block plus one queued user message).
+      const queuedInputInjected = drainQueuedInputs(state, options, turnMessages)
       if (!lateRecallAttempted && !options.toolFilter && options.memoryService) {
-        const resultText = state.messages
-          .slice(toolResultStartIndex)
-          .filter((message) => message.role === 'tool')
-          .map((message) => JSON.stringify(message.content))
-          .join('\n')
-          .slice(0, 12_000)
-        const paths = extractMemoryPaths(resultText)
-        const identifiers = extractMemoryIdentifiers(resultText)
+        const responseMessages = (await outcome.result.response).messages
+        const resultText = successfulToolResultText([...responseMessages, ...manualToolMessages])
+        const initialPaths = new Set(initialRecallQuery?.mentionedPaths.map(normalizeMemoryText) ?? [])
+        const initialIdentifiers = new Set(initialRecallQuery?.identifiers.map(normalizeMemoryText) ?? [])
+        const paths = extractMemoryPaths(resultText).filter((value) => !initialPaths.has(normalizeMemoryText(value)))
+        const identifiers = extractMemoryIdentifiers(resultText).filter(
+          (value) => !initialIdentifiers.has(normalizeMemoryText(value)),
+        )
         if (paths.length || identifiers.length) {
           lateRecallAttempted = true
           await options.memoryService
             .lateRecall(
               {
                 anchorMessageIndex: state.messages.length - 1,
+                placement: queuedInputInjected ? 'before-user' : 'after-tool-results',
                 repositoryId: process.cwd(),
                 currentUserText: initialRecallQuery?.currentUserText ?? taskTextForMeta ?? taskText,
                 paths,
@@ -936,11 +986,6 @@ export async function agentLoop(
             })
         }
       }
-      // Mid-turn steering: inject user messages queued while this tool
-      // batch ran. Safe only here — the batch's tool_results are all
-      // recorded, so the merged user message never interleaves with
-      // pending tool_result parts (providers reject that ordering).
-      drainQueuedInputs(state, options)
       continue
     }
 
@@ -951,11 +996,13 @@ export async function agentLoop(
         // Nudge the model to pick up exactly where it stopped. This goes
         // into state.messages but NOT into UI messages, so the user sees
         // one continuous streamed reply with at most a brief pause.
-        state.messages.push({
+        const continuationMessage = {
           role: 'user',
           content:
             'Output token limit hit. Resume directly — no apology, no recap. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.',
-        })
+        } as const
+        state.messages.push(continuationMessage)
+        turnMessages.push(continuationMessage)
         continue
       }
       callbacks.onError(
@@ -974,7 +1021,7 @@ export async function agentLoop(
       // needs_follow_up equivalent. Messages that land after this drain
       // (sub-millisecond race) stay queued; the UI's idle-drain submits
       // them as a fresh agentLoop call.
-      if (drainQueuedInputs(state, options)) {
+      if (drainQueuedInputs(state, options, turnMessages)) {
         continuationAttempts = 0
         continue
       }
@@ -1009,8 +1056,8 @@ export async function agentLoop(
       ...[...state.filesModified].filter((file) => !filesModifiedBefore.has(file)),
     ])
     const projection = buildTurnMemoryProjection({
-      messages: state.messages,
-      turnStartMessageIndex,
+      messages: turnMessages,
+      turnStartMessageIndex: 0,
       filesModifiedBefore: new Set(),
       filesModifiedAfter: filesThisTurn,
       repositoryId: process.cwd(),

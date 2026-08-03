@@ -281,6 +281,7 @@ export class MemoryTransactionStore {
         }
         if (currentHash !== write.nextHash) await atomicWriteFile(write.target, staged)
       }
+      const deletedDirectories = new Set<string>()
       for (const deletion of manifest.deletes) {
         const current = await fs.readFile(deletion.target).catch(() => null)
         if (!current) continue
@@ -289,7 +290,9 @@ export class MemoryTransactionStore {
           throw new Error(`Memory delete target changed during recovery: ${deletion.target}`)
         }
         await fs.unlink(deletion.target)
+        deletedDirectories.add(path.dirname(deletion.target))
       }
+      await Promise.all([...deletedDirectories].map(syncDirectory))
       await atomicWriteFile(
         path.join(this.changesDir, `${manifest.targetGeneration}.json`),
         JSON.stringify(change, null, 2) + '\n',

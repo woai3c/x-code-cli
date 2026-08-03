@@ -56,8 +56,20 @@ function pinnedCoreSignature(topics: readonly MemoryTopic[]): string {
 }
 
 function isWildcardMemoryQuery(value: string): boolean {
-  return /^(?:\*|\.\*)$/.test(value.trim())
+  const normalized = value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()
+  if (/^(?:\*|\.\*|memory|memories|记忆|全部记忆|所有记忆)$/.test(normalized)) return true
+  return (
+    /\b(?:list|show|dump|enumerate|export)\b.*\b(?:all|every|everything)\b.*\b(?:memory|memories|preferences?|facts?)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:all|every|everything)\b.*\b(?:memory|memories|preferences?|facts?)\b/.test(normalized) ||
+    /\b(?:everything|all)\b.*\b(?:know|remember)\b.*\b(?:about me|about the user)\b/.test(normalized) ||
+    /(?:列出|显示|枚举|导出).*(?:全部|所有|一切).*(?:记忆|偏好|事实)|(?:全部|所有).*(?:记忆|偏好)/.test(normalized)
+  )
 }
+
+const HISTORY_QUERY_RE = /(?:记得|记忆|之前|以前|上次|曾经|历史|过去|remember|before|previous|last time|history)/i
+const FORGET_QUERY_RE = /(?:忘记|别记|删除.*记忆|forget|remove.*memory)/i
 
 export class MemoryService {
   readonly memoryRoot: string
@@ -169,11 +181,7 @@ export class MemoryService {
     if (state.memoryTokensInWindow >= config.recall.maxTokensPerCompactionWindow) return null
     const retrieved = this.retriever.retrieve(query)
     let selected = retrieved.selectedTopicIds
-    if (
-      retrieved.needsSelector &&
-      config.recall.semanticSelector === 'auto' &&
-      retrieved.protectedTopicIds.length === 0
-    ) {
+    if (retrieved.needsSelector && config.recall.semanticSelector === 'auto') {
       const selectorModelId =
         config.recall.selectorModel === 'inherit' ? this.currentModelId() : config.recall.selectorModel
       const model = selectorModelId ? this.resolveModel(selectorModelId) : null
@@ -230,6 +238,8 @@ export class MemoryService {
       repositoryId: signals.repositoryId,
       mentionedPaths: signals.paths,
       identifiers: signals.identifiers,
+      explicitHistoryIntent: false,
+      explicitForgetIntent: false,
     }
     const surfaced = new Set(
       state.memoryRecallAttachments.flatMap((attachment) => attachment.topics.map((topic) => topic.topicId)),
@@ -243,34 +253,42 @@ export class MemoryService {
       .slice(0, 50)
       .map((candidate) => candidate.topicId)
     if (candidateIds.length === 0) return null
-    const selectorModelId =
-      config.recall.selectorModel === 'inherit' ? this.currentModelId() : config.recall.selectorModel
-    const model = selectorModelId ? this.resolveModel(selectorModelId) : null
-    if (!model) return null
-    let selected: string[]
-    try {
-      selected = (
-        await selectMemoryTopics({
-          model,
-          query: {
-            currentUserText: signals.currentUserText,
-            recentConversationText: '',
-            repositoryId: signals.repositoryId,
-            mentionedPaths: [],
-            identifiers: [],
-          },
-          manifest: this.index.manifest(candidateIds),
-          preferredTopicIds: candidateIds,
-          untrustedSignals: signals.text,
-        })
-      )
-        .filter((topicId) => !surfaced.has(topicId))
-        .slice(0, 2)
-    } catch (error) {
-      debugLog('memory.late-recall-selector-failed', error instanceof Error ? error.message : String(error))
-      return null
+    const protectedExact = retrieved.candidates.filter(
+      (candidate) => !surfaced.has(candidate.topicId) && candidate.protected && candidate.routes.includes('exact'),
+    )
+    let selected = protectedExact.length === 1 ? [protectedExact[0]!.topicId] : []
+    if (selected.length === 0) {
+      const selectorModelId =
+        config.recall.selectorModel === 'inherit' ? this.currentModelId() : config.recall.selectorModel
+      const model = selectorModelId ? this.resolveModel(selectorModelId) : null
+      if (!model) return null
+      try {
+        selected = (
+          await selectMemoryTopics({
+            model,
+            query: {
+              currentUserText: signals.currentUserText,
+              recentConversationText: '',
+              repositoryId: signals.repositoryId,
+              mentionedPaths: [],
+              identifiers: [],
+              explicitHistoryIntent: false,
+              explicitForgetIntent: false,
+            },
+            manifest: this.index.manifest(candidateIds),
+            preferredTopicIds: candidateIds,
+            untrustedSignals: signals.text,
+          })
+        )
+          .filter((topicId) => !surfaced.has(topicId))
+          .slice(0, 2)
+        retrieved.trace.selectorUsed = true
+      } catch (error) {
+        debugLog('memory.late-recall-selector-failed', error instanceof Error ? error.message : String(error))
+        return null
+      }
     }
-    const attachment = this.retriever.pack(query, selected, signals.anchorMessageIndex, 'after-tool-results')
+    const attachment = this.retriever.pack(query, selected, signals.anchorMessageIndex, signals.placement)
     if (!attachment || attachment.estimatedTokens > remainingBudget || !addMemoryRecallAttachment(state, attachment)) {
       return null
     }
@@ -307,6 +325,8 @@ export class MemoryService {
       repositoryId: context.repositoryId,
       mentionedPaths: [],
       identifiers: [],
+      explicitHistoryIntent: HISTORY_QUERY_RE.test(query),
+      explicitForgetIntent: FORGET_QUERY_RE.test(query),
     }
     const retrieved = this.retriever.retrieve(recallQuery)
     const lexicalCandidateIds = retrieved.candidates
@@ -495,6 +515,8 @@ export class MemoryService {
       repositoryId: job.repositoryId,
       mentionedPaths: job.projection.changedFiles,
       identifiers: [],
+      explicitHistoryIntent: false,
+      explicitForgetIntent: false,
     }
     const retrieved = this.retriever.retrieve(query)
     const ids = [

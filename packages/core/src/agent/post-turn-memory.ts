@@ -9,6 +9,9 @@ import type { MemoryJob, TurnMemoryProjection } from '../knowledge/memory-types.
 import { extractText } from '../utils/message-helpers.js'
 
 const PURE_SLASH_RE = /^\/[a-z][\w-]*(?:\s+[^\n]*)?$/i
+const PURE_GREETING_RE = /^(?:你好|您好|嗨|哈喽|早上好|下午好|晚上好|hello|hi|hey)[!！,.，。?？~～\s]*$/i
+const EXPLICIT_MEMORY_INTENT_RE =
+  /(?:记住|记一下|以后|始终|总是|不要再|别再|我的产品|我的项目|忘记|别记|remember|from now on|always|never again|my product|my project|forget)/i
 
 interface ToolPart {
   type?: string
@@ -111,7 +114,8 @@ function changedFilesSince(current: ReadonlySet<string>, before: ReadonlySet<str
 export function shouldCreateMemoryJob(projection: TurnMemoryProjection): boolean {
   const userText = projection.userMessages.join('\n').trim()
   if (!userText || !projection.assistantFinal.trim()) return false
-  return !PURE_SLASH_RE.test(userText)
+  if (PURE_SLASH_RE.test(userText)) return false
+  return EXPLICIT_MEMORY_INTENT_RE.test(userText) || !PURE_GREETING_RE.test(userText)
 }
 
 export function buildTurnMemoryProjection(input: {
@@ -257,6 +261,7 @@ export function createMemoryJob(input: {
     createdAt: new Date().toISOString(),
     sourceOccurredAt: projection.turnCompletedAt,
     attempt: 0,
+    explicitMemoryIntent: EXPLICIT_MEMORY_INTENT_RE.test(projection.userMessages.join('\n')),
     projection,
   }
 }

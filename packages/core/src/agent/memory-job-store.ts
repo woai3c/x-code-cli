@@ -81,13 +81,14 @@ function validateJob(value: unknown): MemoryJob {
     typeof job.attempt !== 'number' ||
     !Number.isSafeInteger(job.attempt) ||
     job.attempt < 0 ||
+    (job.explicitMemoryIntent !== undefined && typeof job.explicitMemoryIntent !== 'boolean') ||
     (job.nextAttemptAt !== undefined &&
       (typeof job.nextAttemptAt !== 'string' || !Number.isFinite(Date.parse(job.nextAttemptAt)))) ||
     !validateProjection(job.projection, job.repositoryId)
   ) {
     throw new Error('Invalid memory job schema')
   }
-  return job as MemoryJob
+  return { ...job, explicitMemoryIntent: job.explicitMemoryIntent ?? false } as MemoryJob
 }
 
 function validateProjection(value: unknown, repositoryId: string): boolean {
@@ -168,6 +169,7 @@ export class MemoryJobStore {
     validateJob(job)
     const fileName = `${job.jobId}.json`
     if (await exists(path.join(this.appliedDir, fileName))) return 'duplicate'
+    if (await this.hasCompletedRun(job.jobId)) return 'duplicate'
     for (const dir of [this.pendingDir, this.runningDir, this.failedDir]) {
       if (await exists(path.join(dir, fileName))) return 'duplicate'
     }
@@ -285,7 +287,8 @@ export class MemoryJobStore {
 
   async complete(job: MemoryJob): Promise<void> {
     await fs.unlink(path.join(this.runningDir, `${job.jobId}.json`)).catch(() => {})
-    await syncDirectory(this.runningDir)
+    await fs.unlink(path.join(this.appliedDir, `${job.jobId}.json`)).catch(() => {})
+    await Promise.all([syncDirectory(this.runningDir), syncDirectory(this.appliedDir)])
   }
 
   async isApplied(jobId: string): Promise<boolean> {
@@ -401,7 +404,14 @@ export class MemoryJobStore {
   }
 
   async appendRun(record: MemoryRunRecord): Promise<void> {
-    await fs.appendFile(this.recentRunsPath, JSON.stringify(record) + '\n', { encoding: 'utf-8', mode: 0o600 })
+    const handle = await fs.open(this.recentRunsPath, 'a', 0o600)
+    try {
+      await handle.writeFile(JSON.stringify(record) + '\n', 'utf-8')
+      await handle.sync().catch(() => {})
+    } finally {
+      await handle.close()
+    }
+    await syncDirectory(path.dirname(this.recentRunsPath))
     const size = await fs
       .stat(this.recentRunsPath)
       .then((stat) => stat.size)
@@ -431,6 +441,25 @@ export class MemoryJobStore {
     } catch {
       return undefined
     }
+  }
+
+  private async hasCompletedRun(jobId: string): Promise<boolean> {
+    const raw = await fs.readFile(this.recentRunsPath, 'utf-8').catch(() => '')
+    for (const line of raw.trim().split('\n')) {
+      if (!line) continue
+      try {
+        const record = JSON.parse(line) as Partial<MemoryRunRecord>
+        if (
+          record.jobId === jobId &&
+          (record.status === 'success' || record.status === 'no-op' || record.status === 'warning')
+        ) {
+          return true
+        }
+      } catch {
+        continue
+      }
+    }
+    return false
   }
 
   async nextPendingDelay(): Promise<number | null> {

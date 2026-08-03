@@ -22,6 +22,8 @@ describe('memory selector', () => {
         repositoryId: 'D:/repo',
         mentionedPaths: [],
         identifiers: [],
+        explicitHistoryIntent: false,
+        explicitForgetIntent: false,
       },
       manifest: [
         {

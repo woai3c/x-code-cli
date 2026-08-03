@@ -115,7 +115,14 @@ describe('MemoryService.search', () => {
     const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
     await service.initialize(process.cwd())
     const context = { repositoryId: 'repo' }
-    for (const query of ['*', '.*']) {
+    for (const query of [
+      '*',
+      '.*',
+      'all memories',
+      'list all memory',
+      'everything you know about me',
+      '列出所有记忆',
+    ]) {
       await expect(service.search({ query }, context)).rejects.toThrow('specific')
     }
     await expect(service.search({ query: 'language', topicIds: ['missing'] }, context)).rejects.toThrow('cannot expand')
@@ -146,6 +153,36 @@ describe('MemoryService.search', () => {
     const tool = createMemorySearchTool(service, state, process.cwd())
 
     const result = await (tool as any).execute({ query: 'product-portfolio' }, { toolCallId: 'memory-1' })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('grounded') })
+    expect(search).not.toHaveBeenCalled()
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('rejects a query that adds arbitrary terms after one shared user token', async () => {
+    const root = await makeMemoryRoot()
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
+    const state = createLoopState()
+    state.messages = [
+      { role: 'user', content: 'Summarize the command output.' },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tool-1',
+            toolName: 'shell',
+            output: { type: 'text', value: 'private-profile' },
+          },
+        ],
+      },
+    ] as never[]
+    const search = vi.spyOn(service, 'search')
+    const tool = createMemorySearchTool(service, state, process.cwd())
+
+    const result = await (tool as any).execute({ query: 'command private-profile' }, { toolCallId: 'memory-1' })
 
     expect(result).toMatchObject({ error: expect.stringContaining('grounded') })
     expect(search).not.toHaveBeenCalled()

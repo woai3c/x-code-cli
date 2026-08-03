@@ -1,7 +1,7 @@
 import path from 'node:path'
 
 import { MemoryIndex } from '../src/knowledge/memory-index.js'
-import { MemoryRetriever } from '../src/knowledge/memory-retriever.js'
+import { MemoryRetriever, buildRecallQuery } from '../src/knowledge/memory-retriever.js'
 import { parseMemoryTopic } from '../src/knowledge/memory-store.js'
 import type { RecallQuery } from '../src/knowledge/memory-types.js'
 import { topicMarkdown } from './memory-test-helpers.js'
@@ -13,6 +13,8 @@ function query(text: string): RecallQuery {
     repositoryId: 'D:/res/x-code-cli',
     mentionedPaths: [],
     identifiers: [],
+    explicitHistoryIntent: false,
+    explicitForgetIntent: false,
   }
 }
 
@@ -52,8 +54,72 @@ describe('MemoryRetriever', () => {
     expect(result.candidates[0]?.score).toBeGreaterThan(0.4)
   })
 
-  it('asks for semantic selection when one lexical route is not locally conclusive', () => {
+  it('does not ask for semantic selection for one ordinary weak lexical route', () => {
     const result = retriever.retrieve(query('core'))
+    expect(result.needsSelector).toBe(false)
+    expect(result.selectedTopicIds).toEqual([])
+  })
+
+  it('routes explicit history requests by type and asks the semantic selector', () => {
+    const historyQuery = query('What did we decide before about authentication?')
+    historyQuery.explicitHistoryIntent = true
+    const result = retriever.retrieve(historyQuery)
+
+    expect(result.needsSelector).toBe(true)
+    expect(result.candidates.some((candidate) => candidate.routes.includes('type'))).toBe(true)
+  })
+
+  it('detects explicit history and forget intent while building queries', () => {
+    const history = buildRecallQuery('What did we decide last time?', [], 0, 'D:\\repo')
+    const forget = buildRecallQuery('Forget my previous preference', [], 0, 'D:\\repo')
+
+    expect(history).toMatchObject({ explicitHistoryIntent: true, explicitForgetIntent: false })
+    expect(forget).toMatchObject({ explicitHistoryIntent: true, explicitForgetIntent: true })
+    expect(history.repositoryId).toBe('D:/repo')
+  })
+
+  it('does not treat a short alias as a substring of an unrelated word', () => {
+    const go = parseMemoryTopic(
+      topicMarkdown({
+        id: 'go-language',
+        type: 'reference',
+        aliases: ['go'],
+        facts: [{ id: 'reference.go.version', content: '- Go version is 1.25.' }],
+      }),
+      path.join('C:/memory/topics', 'go-language.md'),
+    )
+    const goIndex = new MemoryIndex()
+    goIndex.rebuild([go], 1)
+    const goRetriever = new MemoryRetriever(goIndex, {
+      maxTopicsPerTurn: 5,
+      maxTokensPerTopic: 1500,
+      maxTokensPerTurn: 4000,
+    })
+
+    const result = goRetriever.retrieve(query('debug google authentication'))
+    expect(result.protectedTopicIds).toEqual([])
+    expect(result.selectedTopicIds).toEqual([])
+  })
+
+  it('sends ambiguous protected exact matches to the selector', () => {
+    const first = parseMemoryTopic(
+      topicMarkdown({ id: 'shared-one', type: 'reference', aliases: ['shared-key'], manual: 'First reference.' }),
+      path.join('C:/memory/topics', 'shared-one.md'),
+    )
+    const second = parseMemoryTopic(
+      topicMarkdown({ id: 'shared-two', type: 'reference', aliases: ['shared-key'], manual: 'Second reference.' }),
+      path.join('C:/memory/topics', 'shared-two.md'),
+    )
+    const sharedIndex = new MemoryIndex()
+    sharedIndex.rebuild([first, second], 1)
+    const sharedRetriever = new MemoryRetriever(sharedIndex, {
+      maxTopicsPerTurn: 5,
+      maxTokensPerTopic: 1500,
+      maxTokensPerTurn: 4000,
+    })
+
+    const result = sharedRetriever.retrieve(query('shared-key'))
+    expect(result.selectedTopicIds).toEqual([])
     expect(result.needsSelector).toBe(true)
   })
 

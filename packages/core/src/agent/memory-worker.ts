@@ -44,10 +44,25 @@ export class MemoryWorker {
 
   wake(): void {
     if (this.stopped || this.runningPromise) return
-    this.runningPromise = this.run().finally(() => {
-      this.runningPromise = null
-      void this.schedulePending()
-    })
+    this.runningPromise = this.run()
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        debugLog('memory-worker.run-error', message)
+        try {
+          this.options.onNotice({ action: 'failed', error: message })
+        } catch (noticeError) {
+          debugLog(
+            'memory-worker.notice-error',
+            noticeError instanceof Error ? noticeError.message : String(noticeError),
+          )
+        }
+      })
+      .finally(() => {
+        this.runningPromise = null
+        void this.schedulePending().catch((error) => {
+          debugLog('memory-worker.schedule-error', error instanceof Error ? error.message : String(error))
+        })
+      })
   }
 
   async shutdown(timeoutMs: number): Promise<void> {
@@ -95,6 +110,14 @@ export class MemoryWorker {
     this.activeController = controller
     try {
       if (await this.options.jobStore.isApplied(job.jobId)) {
+        await this.options.jobStore.appendRun({
+          jobId: job.jobId,
+          status: 'no-op',
+          durationMs: Date.now() - started,
+          tokens: 0,
+          operations: 0,
+          completedAt: new Date().toISOString(),
+        })
         await this.options.jobStore.complete(job)
         return
       }

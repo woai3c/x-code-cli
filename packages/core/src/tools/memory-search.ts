@@ -22,9 +22,9 @@ function latestUserText(state: LoopState): string {
 
 function relatedToTurn(query: string, userText: string): boolean {
   const queryTokens = new Set(tokenizeMemoryText(query))
-  const userTokens = new Set(tokenizeMemoryText(userText))
   if (queryTokens.size === 0) return false
-  return [...queryTokens].some((token) => userTokens.has(token))
+  const allowedTokens = new Set(tokenizeMemoryText(userText))
+  return [...queryTokens].every((token) => allowedTokens.has(token))
 }
 
 export function createMemorySearchTool(service: MemoryService, state: LoopState, repositoryId: string) {

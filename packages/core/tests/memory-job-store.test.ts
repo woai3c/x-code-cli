@@ -17,6 +17,7 @@ function job(id = 'job-1'): MemoryJob {
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:00:01.000Z',
     attempt: 0,
+    explicitMemoryIntent: false,
     projection: {
       userMessages: ['opaque payload'],
       assistantFinal: 'done',
@@ -111,6 +112,30 @@ describe('MemoryJobStore', () => {
     await store.initialize()
     await fs.writeFile(path.join(store.appliedDir, 'job-1.json'), '{"jobId":"job-1"}\n', 'utf-8')
 
+    expect(await store.enqueue(job())).toBe('duplicate')
+    expect(await store.counts()).toEqual({ pending: 0, running: 0, failed: 0 })
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('removes applied markers after completion and deduplicates from the bounded run log', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryJobStore(root)
+    await store.initialize()
+    await store.enqueue(job())
+    const claimed = await store.claimNext()
+    await fs.writeFile(path.join(store.appliedDir, 'job-1.json'), '{"jobId":"job-1"}\n', 'utf-8')
+    await store.appendRun({
+      jobId: 'job-1',
+      status: 'success',
+      durationMs: 1,
+      tokens: 1,
+      operations: 1,
+      completedAt: '2026-08-02T00:00:02.000Z',
+    })
+
+    await store.complete(claimed!)
+
+    await expect(fs.access(path.join(store.appliedDir, 'job-1.json'))).rejects.toThrow()
     expect(await store.enqueue(job())).toBe('duplicate')
     expect(await store.counts()).toEqual({ pending: 0, running: 0, failed: 0 })
     await fs.rm(root, { recursive: true, force: true })
