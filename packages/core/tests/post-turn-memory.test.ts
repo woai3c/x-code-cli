@@ -61,7 +61,6 @@ describe('post-turn memory projection', () => {
       turnStartMessageIndex: 4,
       modelId: 'test:model',
       repositoryId: 'repo',
-      cwd: 'D:/repo',
     })
     const two = createMemoryJob({
       projection,
@@ -69,7 +68,6 @@ describe('post-turn memory projection', () => {
       turnStartMessageIndex: 4,
       modelId: 'test:model',
       repositoryId: 'repo',
-      cwd: 'D:/repo',
     })
     expect(one.jobId).toBe(two.jobId)
     expect(JSON.stringify(one)).not.toContain('sk-proj-abcdefghijklmnop')

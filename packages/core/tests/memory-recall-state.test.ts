@@ -9,7 +9,6 @@ import type { MemoryRecallAttachment } from '../src/knowledge/memory-types.js'
 
 function attachment(): MemoryRecallAttachment {
   return {
-    attachmentId: 'memory-1',
     anchorMessageIndex: 0,
     placement: 'before-user',
     estimatedTokens: 20,
@@ -19,7 +18,6 @@ function attachment(): MemoryRecallAttachment {
         topicHash: 'topic-hash',
         factIds: ['user.language'],
         factHashes: { 'user.language': 'fact-hash' },
-        path: 'topics/profile.md',
         renderedContent: 'OPAQUE_RECALLED_VALUE',
       },
     ],

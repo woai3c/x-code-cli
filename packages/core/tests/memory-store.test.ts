@@ -390,7 +390,7 @@ describe('MemoryStore', () => {
     )
 
     expect(first.status).toBe('success')
-    expect(replay).toMatchObject({ status: 'no-op', generation: first.generation })
+    expect(replay).toMatchObject({ status: 'no-op' })
     expect(await fs.readFile(path.join(root, 'topics', 'product.md'), 'utf-8')).toContain('Stack is TypeScript')
     await fs.rm(root, { recursive: true, force: true })
   })

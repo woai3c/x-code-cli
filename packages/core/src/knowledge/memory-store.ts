@@ -1,8 +1,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { parseFrontmatter } from '../frontmatter.js'
+import { estimateTextTokens, fileExists, truncateUtf8 } from '../utils.js'
+import { atomicWriteFile } from '../utils/atomic-file.js'
 import { redactMemoryText } from './memory-redaction.js'
-import { MemoryTransactionStore, atomicWriteFile, memoryContentHash } from './memory-transaction-store.js'
+import { MemoryTransactionStore, memoryContentHash } from './memory-transaction-store.js'
+import { MEMORY_ID_RE, SAFE_JOB_ID_RE } from './memory-types.js'
 import type {
   EvidenceKind,
   MemoryChange,
@@ -18,12 +22,10 @@ import type {
   TopicMetadataPatch,
 } from './memory-types.js'
 
-const TOPIC_ID_RE = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
 const FACT_MARKER_RE = /<!--\s*x-memory:\s*(\{[^\n]*\})\s*-->/g
 const VALID_TYPES = new Set<MemoryType>(['user', 'portfolio', 'feedback', 'workflow', 'project', 'reference'])
 const VALID_EVIDENCE = new Set<EvidenceKind>(['explicit', 'validated', 'observed'])
 const VALID_STATUS = new Set<MemoryStatus>(['active', 'stale'])
-const SAFE_JOB_ID_RE = /^[A-Za-z0-9._-]{1,200}$/
 
 export interface MemoryCommitContext {
   jobId: string
@@ -73,10 +75,6 @@ function isolateInvalidTopics(
   return topics.filter((topic) => !invalidPaths.has(topic.path))
 }
 
-function estimateTokens(text: string): number {
-  return Math.ceil(Buffer.byteLength(text, 'utf-8') / 3)
-}
-
 function canonicalText(value: string): string {
   return value
     .replace(/\r\n/g, '\n')
@@ -91,72 +89,14 @@ function cleanLine(value: string): string {
     .trim()
 }
 
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = ''
-  let bytes = 0
-  for (const char of value) {
-    const size = Buffer.byteLength(char, 'utf-8')
-    if (bytes + size > maxBytes) break
-    result += char
-    bytes += size
-  }
-  return result
-}
-
 function uniqueSorted(values: readonly string[] | undefined): string[] {
   return [...new Set((values ?? []).map(cleanLine).filter(Boolean))].sort((a, b) => a.localeCompare(b))
 }
 
-function parseScalar(value: string): string | boolean {
-  const trimmed = value.trim()
-  if (trimmed === 'true') return true
-  if (trimmed === 'false') return false
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      return JSON.parse(trimmed) as string
-    } catch {
-      return trimmed.slice(1, -1)
-    }
-  }
-  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1).replace(/''/g, "'")
-  return trimmed
-}
-
 function parseTopicFrontmatter(raw: string): { data: Record<string, string | boolean | string[]>; body: string } {
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
-  if (!match) throw new Error('Missing YAML frontmatter')
-  const data: Record<string, string | boolean | string[]> = {}
-  let arrayKey: string | null = null
-  for (const rawLine of match[1]!.split(/\r?\n/)) {
-    const item = rawLine.match(/^\s+-\s+(.*)$/)
-    if (item && arrayKey) {
-      const list = data[arrayKey]
-      if (Array.isArray(list)) list.push(String(parseScalar(item[1]!)))
-      continue
-    }
-    const field = rawLine.match(/^([a-z_]+):\s*(.*)$/)
-    if (!field) {
-      if (rawLine.trim()) throw new Error(`Unsupported frontmatter line: ${rawLine.trim()}`)
-      continue
-    }
-    const [, key, rawValue] = field
-    if (!rawValue) {
-      data[key!] = []
-      arrayKey = key!
-    } else if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
-      data[key!] = uniqueSorted(
-        rawValue
-          .slice(1, -1)
-          .split(',')
-          .map((value) => String(parseScalar(value))),
-      )
-      arrayKey = null
-    } else {
-      data[key!] = parseScalar(rawValue)
-      arrayKey = null
-    }
-  }
-  return { data, body: match[2]!.replace(/\r\n/g, '\n') }
+  const result = parseFrontmatter(raw, { blockLists: true })
+  if (!result) throw new Error('Missing YAML frontmatter')
+  return result as { data: Record<string, string | boolean | string[]>; body: string }
 }
 
 function requiredString(data: Record<string, string | boolean | string[]>, key: string): string {
@@ -179,22 +119,6 @@ function stringArray(data: Record<string, string | boolean | string[]>, key: str
     throw new Error(`Frontmatter field ${key} contains an item over ${maxItemChars} characters`)
   }
   return result
-}
-
-function sectionAt(body: string, offset: number): { id: string; headingPath: string[] } {
-  const headings: Array<{ index: number; level: number; title: string }> = []
-  const pattern = /^(#{1,3})\s+(.+)$/gm
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(body)) && match.index < offset) {
-    headings.push({ index: match.index, level: match[1]!.length, title: match[2]!.trim() })
-  }
-  const pathParts: string[] = []
-  for (const heading of headings) {
-    pathParts.splice(heading.level - 1)
-    pathParts[heading.level - 1] = heading.title
-  }
-  const headingPath = pathParts.filter(Boolean)
-  return { id: headingPath.join(' / ') || 'root', headingPath }
 }
 
 function headingLevelAt(body: string, offset: number): number {
@@ -243,7 +167,7 @@ function parseFacts(body: string): MemoryFact[] {
     } catch {
       throw new Error(`Invalid x-memory JSON near byte ${current.index}`)
     }
-    if (!metadata.id || !TOPIC_ID_RE.test(metadata.id)) throw new Error(`Invalid fact ID: ${String(metadata.id)}`)
+    if (!metadata.id || !MEMORY_ID_RE.test(metadata.id)) throw new Error(`Invalid fact ID: ${String(metadata.id)}`)
     if (ids.has(metadata.id)) throw new Error(`Duplicate fact ID: ${metadata.id}`)
     ids.add(metadata.id)
     if (!VALID_EVIDENCE.has(metadata.evidence)) throw new Error(`Invalid evidence for ${metadata.id}`)
@@ -255,12 +179,10 @@ function parseFacts(body: string): MemoryFact[] {
     const end = nextFactBoundary(body, current.index, current.end, matches[index + 1]?.index)
     const content = canonicalText(body.slice(current.end, end))
     if (!content) throw new Error(`Empty fact content: ${metadata.id}`)
-    const section = sectionAt(body, current.index)
     facts.push({
       metadata,
       content,
       hash: memoryContentHash(content),
-      sectionId: section.id,
       start: current.index,
       end,
     })
@@ -283,11 +205,10 @@ function parseSections(body: string, facts: MemoryFact[]) {
   if (headings.length === 0) {
     return [
       {
-        id: 'root',
         headingPath: [],
         content: canonicalText(body),
         facts: [...facts],
-        estimatedTokens: estimateTokens(body),
+        estimatedTokens: estimateTextTokens(body),
       },
     ]
   }
@@ -297,11 +218,10 @@ function parseSections(body: string, facts: MemoryFact[]) {
   const preambleFacts = facts.filter((fact) => fact.start < preambleEnd)
   if (preambleFacts.length > 0 || preamble.replace(/^#{1,3}\s+.*$/gm, '').trim()) {
     sections.push({
-      id: 'root',
       headingPath: [],
       content: preamble,
       facts: preambleFacts,
-      estimatedTokens: estimateTokens(preamble),
+      estimatedTokens: estimateTextTokens(preamble),
     })
   }
   for (const [index, heading] of headings.entries()) {
@@ -315,11 +235,10 @@ function parseSections(body: string, facts: MemoryFact[]) {
     const headingPath = pathParts.filter(Boolean)
     const content = canonicalText(body.slice(heading.index, end))
     sections.push({
-      id: headingPath.join(' / '),
       headingPath,
       content,
       facts: facts.filter((fact) => fact.start >= heading.index && fact.start < end),
-      estimatedTokens: estimateTokens(content),
+      estimatedTokens: estimateTextTokens(content),
     })
   }
   return sections
@@ -328,7 +247,7 @@ function parseSections(body: string, facts: MemoryFact[]) {
 export function parseMemoryTopic(raw: string, filePath: string): MemoryTopic {
   const { data, body } = parseTopicFrontmatter(raw)
   const id = requiredString(data, 'id')
-  if (!TOPIC_ID_RE.test(id)) throw new Error(`Invalid topic ID: ${id}`)
+  if (!MEMORY_ID_RE.test(id)) throw new Error(`Invalid topic ID: ${id}`)
   if (path.basename(filePath, '.md') !== id) throw new Error(`Topic ID does not match filename: ${id}`)
   const type = requiredString(data, 'type') as MemoryType
   if (!VALID_TYPES.has(type)) throw new Error(`Invalid topic type: ${type}`)
@@ -354,7 +273,7 @@ export function parseMemoryTopic(raw: string, filePath: string): MemoryTopic {
   if (pinned && type !== 'user' && type !== 'portfolio' && type !== 'feedback') {
     throw new Error(`Only stable user, portfolio, or feedback topics may be pinned`)
   }
-  if (estimateTokens(summary) > 120) throw new Error('Topic summary exceeds 120 tokens')
+  if (estimateTextTokens(summary) > 120) throw new Error('Topic summary exceeds 120 tokens')
   const metadata: MemoryTopicMetadata = {
     id,
     type,
@@ -444,10 +363,14 @@ function removeFactBlocks(topic: MemoryTopic, ids: ReadonlySet<string>): void {
   topic.body = body.trimEnd() + '\n'
 }
 
-function factMetadata(evidence: MemoryOperation['evidence']): MemoryFactMetadata {
-  const latest = [...evidence].sort(
+function latestEvidence(evidence: MemoryOperation['evidence']): MemoryOperation['evidence'][number] | undefined {
+  return [...evidence].sort(
     (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt) || evidenceRank(b.kind) - evidenceRank(a.kind),
   )[0]
+}
+
+function factMetadata(evidence: MemoryOperation['evidence']): MemoryFactMetadata {
+  const latest = latestEvidence(evidence)
   if (!latest) throw new Error('Memory operation requires evidence')
   return { id: '', observedAt: latest.occurredAt, evidence: latest.kind, status: 'active' }
 }
@@ -496,7 +419,7 @@ function newTopic(
   patch: TopicMetadataPatch | undefined,
   now: string,
 ): MemoryTopic {
-  if (!TOPIC_ID_RE.test(topicId)) throw new Error(`Invalid topic ID: ${topicId}`)
+  if (!MEMORY_ID_RE.test(topicId)) throw new Error(`Invalid topic ID: ${topicId}`)
   if (!patch?.type || !patch.description || !patch.addAliases?.length || !patch.addKeywords?.length) {
     throw new Error(`New topic ${topicId} requires type, description, aliases, and keywords`)
   }
@@ -569,9 +492,7 @@ function findSlotCandidates(factId: string, topicId: string, topics: Iterable<Me
 }
 
 function incomingWins(existing: MemoryFact, topic: MemoryTopic, evidence: MemoryOperation['evidence']): boolean {
-  const incoming = [...evidence].sort(
-    (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt) || evidenceRank(b.kind) - evidenceRank(a.kind),
-  )[0]
+  const incoming = latestEvidence(evidence)
   if (!incoming) return false
   const incomingTime = Date.parse(incoming.occurredAt)
   const existingTime = Date.parse(existing.metadata.observedAt)
@@ -605,7 +526,7 @@ export function renderCoreProfile(topics: readonly MemoryTopic[]): string {
   let coreTokens = 0
   for (const topic of sorted.filter((item) => item.metadata.pinned)) {
     const line = `- ${topic.metadata.summary}`
-    const tokens = estimateTokens(line)
+    const tokens = estimateTextTokens(line)
     if (coreTokens + tokens > 800) break
     lines.push(line)
     coreTokens += tokens
@@ -616,7 +537,7 @@ export function renderCoreProfile(topics: readonly MemoryTopic[]): string {
     const aliases = topic.metadata.aliases.length ? `; aliases: ${topic.metadata.aliases.join(', ')}` : ''
     const line = `- ${topic.metadata.id} — ${topic.metadata.description}${aliases}`
     const candidate = [...lines, line].join('\n')
-    if (lines.length >= 199 || estimateTokens(candidate) > 1500) break
+    if (lines.length >= 199 || estimateTextTokens(candidate) > 1500) break
     lines.push(line)
   }
   return lines.join('\n').trimEnd() + '\n'
@@ -692,8 +613,7 @@ export class MemoryStore {
     context?: MemoryCommitContext,
   ): Promise<MemoryOperationResult> {
     if (!context && operations.length === 0) {
-      const generation = (await this.transactionStore.readSchema()).generation
-      return { status: 'no-op', notices: [], generation }
+      return { status: 'no-op', notices: [] }
     }
     return this.transactionStore.withWriterLock(async () => {
       const appliedJobPath = context
@@ -702,15 +622,8 @@ export class MemoryStore {
       if (context && (!SAFE_JOB_ID_RE.test(context.jobId) || !Number.isFinite(Date.parse(context.sourceOccurredAt)))) {
         throw new Error('Invalid memory commit context')
       }
-      if (
-        appliedJobPath &&
-        (await fs.access(appliedJobPath).then(
-          () => true,
-          () => false,
-        ))
-      ) {
-        const generation = (await this.transactionStore.readSchema()).generation
-        return { status: 'no-op', notices: [], generation }
+      if (appliedJobPath && (await fileExists(appliedJobPath))) {
+        return { status: 'no-op', notices: [] }
       }
       const loaded = await this.loadWithoutReaderProtocol()
       const topics = new Map(loaded.topics.map((topic) => [topic.metadata.id, cloneTopic(topic)]))
@@ -718,7 +631,7 @@ export class MemoryStore {
       const quarantinedTopicIds = new Set(
         loaded.invalidTopics
           .map((item) => path.basename(item.path, '.md').toLowerCase())
-          .filter((id) => TOPIC_ID_RE.test(id)),
+          .filter((id) => MEMORY_ID_RE.test(id)),
       )
       const writes = new Map<string, string>()
       const deletes = new Set<string>()
@@ -839,7 +752,7 @@ export class MemoryStore {
           })
           continue
         }
-        if (!TOPIC_ID_RE.test(operation.factId)) {
+        if (!MEMORY_ID_RE.test(operation.factId)) {
           notices.push({
             action: 'failed',
             topicId: operation.topicId,
@@ -1021,7 +934,6 @@ export class MemoryStore {
       }
 
       if (changed.length === 0 && deleted.length === 0 && !metadataOnlyChange) {
-        const generation = (await this.transactionStore.readSchema()).generation
         const rejected = notices.some((notice) => notice.action === 'failed')
         if (appliedJobPath && !rejected) {
           await atomicWriteFile(
@@ -1032,7 +944,6 @@ export class MemoryStore {
         return {
           status: rejected ? 'warning' : 'no-op',
           notices,
-          generation,
         }
       }
       const activeTopicIds = new Set(topics.keys())
@@ -1054,7 +965,7 @@ export class MemoryStore {
           JSON.stringify({ jobId: context!.jobId, appliedAt: new Date().toISOString() }) + '\n',
         )
       }
-      const generation = await this.transactionStore.commitLocked({
+      await this.transactionStore.commitLocked({
         writes,
         deletes: [...deletes].filter((target) => !writes.has(target)),
         memoryContent,
@@ -1063,7 +974,6 @@ export class MemoryStore {
       return {
         status: notices.some((notice) => notice.action === 'failed') ? 'warning' : 'success',
         notices,
-        generation,
       }
     })
   }

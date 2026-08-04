@@ -1,14 +1,13 @@
-import { Output, generateText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { z } from 'zod'
 
 import type { MemoryReasoningMode } from '../config/index.js'
 import { redactMemoryValue } from '../knowledge/memory-redaction.js'
+import { MEMORY_ID_RE } from '../knowledge/memory-types.js'
 import type { MemoryJob, MemoryOperation } from '../knowledge/memory-types.js'
-import { runMemoryInference } from './memory-inference.js'
+import { generateStructuredObject, runMemoryInference } from './memory-inference.js'
 
-const MEMORY_ID_RE = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
 const MemoryIdSchema = z
   .string()
   .regex(MEMORY_ID_RE, 'Use lowercase letters and digits separated only by dots or hyphens')
@@ -130,23 +129,16 @@ export async function extractMemoryOperations(input: ExtractMemoryInput): Promis
     reasoningMode: input.reasoningMode,
     maxOutputTokens: input.maxOutputTokens ?? 1500,
     maxTotalOutputTokens: input.maxTotalOutputTokens ?? 8192,
-    generate: ({ providerOptions, ...settings }) =>
-      generateText({
-        model: input.model,
-        instructions: SYSTEM_PROMPT,
-        prompt: JSON.stringify(payload),
-        output: Output.object({
-          schema: OutputSchema,
-          name: 'memory_operations',
-          description: 'Validated durable memory operations; return an empty operations array when no fact qualifies',
-        }),
-        maxRetries: 2,
-        abortSignal: input.abortSignal,
-        ...settings,
-        ...(providerOptions
-          ? { providerOptions: providerOptions as Parameters<typeof generateText>[0]['providerOptions'] }
-          : {}),
-      }),
+    generate: generateStructuredObject({
+      model: input.model,
+      instructions: SYSTEM_PROMPT,
+      payload,
+      outputName: 'memory_operations',
+      outputDescription: 'Validated durable memory operations; return an empty operations array when no fact qualifies',
+      outputSchema: OutputSchema,
+      maxRetries: 2,
+      abortSignal: input.abortSignal,
+    }),
   })
   const output = OutputSchema.parse(result.output)
   validateOperations(output.operations, new Set(existingTopicIds))

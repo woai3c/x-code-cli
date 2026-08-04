@@ -81,7 +81,6 @@ describe('Memory v2 knowledge source', () => {
     state.memoryGeneration = 7
     state.messages.push({ role: 'user', content: 'What was my preference?' })
     state.memoryRecallAttachments.push({
-      attachmentId: 'old-memory',
       anchorMessageIndex: 0,
       placement: 'before-user',
       estimatedTokens: 10,
@@ -91,7 +90,6 @@ describe('Memory v2 knowledge source', () => {
           topicHash: 'old-topic-hash',
           factIds: ['user.language'],
           factHashes: { 'user.language': 'old-fact-hash' },
-          path: 'topics/profile.md',
           renderedContent: 'OPAQUE_RECALLED_VALUE',
         },
       ],

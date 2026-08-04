@@ -1,5 +1,7 @@
-import type { LanguageModelUsage } from 'ai'
-import { NoObjectGeneratedError, NoOutputGeneratedError } from 'ai'
+import type { LanguageModel, LanguageModelUsage } from 'ai'
+import { NoObjectGeneratedError, NoOutputGeneratedError, Output, generateText } from 'ai'
+
+import { z } from 'zod'
 
 import type { MemoryReasoningMode } from '../config/index.js'
 import { providerOf } from '../providers/capabilities.js'
@@ -117,6 +119,40 @@ export function reasoningControls(modelId: string | undefined, mode: MemoryReaso
 export function resetMemoryInferenceState(): void {
   rejectedControls.clear()
   rejectedTemperature.clear()
+}
+
+/** Shared structured-output generateText wrapper used by the extractor and
+ *  the selector. Inference settings from runMemoryInference are spread last
+ *  so budget/reasoning fallbacks always win over call-site defaults. */
+export function generateStructuredObject(input: {
+  model: LanguageModel
+  instructions: string
+  payload: unknown
+  outputName: string
+  outputDescription: string
+  outputSchema: z.ZodType<unknown>
+  maxRetries: number
+  abortSignal?: AbortSignal
+}): (settings: MemoryInferenceSettings) => Promise<{ output: unknown; usage: LanguageModelUsage }> {
+  return async ({ providerOptions, ...settings }) => {
+    const result = await generateText({
+      model: input.model,
+      instructions: input.instructions,
+      prompt: JSON.stringify(input.payload),
+      output: Output.object({
+        schema: input.outputSchema,
+        name: input.outputName,
+        description: input.outputDescription,
+      }),
+      maxRetries: input.maxRetries,
+      ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+      ...settings,
+      ...(providerOptions
+        ? { providerOptions: providerOptions as Parameters<typeof generateText>[0]['providerOptions'] }
+        : {}),
+    })
+    return result as { output: unknown; usage: LanguageModelUsage }
+  }
 }
 
 function inferenceSettings(

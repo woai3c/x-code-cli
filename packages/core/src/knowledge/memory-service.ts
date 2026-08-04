@@ -12,7 +12,7 @@ import type { MemoryConfig } from '../config/index.js'
 import { debugLog, userXcodeDir } from '../utils.js'
 import { MemoryIndex, isMemoryFactActive } from './memory-index.js'
 import { addMemoryRecallAttachment, addMemoryRecallTombstone } from './memory-recall-state.js'
-import { MemoryRetriever } from './memory-retriever.js'
+import { FORGET_INTENT_RE, HISTORY_INTENT_RE, MemoryRetriever } from './memory-retriever.js'
 import { selectMemoryTopics } from './memory-selector.js'
 import { MemoryStore, renderCoreProfile } from './memory-store.js'
 import type {
@@ -67,9 +67,6 @@ function isWildcardMemoryQuery(value: string): boolean {
     /(?:列出|显示|枚举|导出).*(?:全部|所有|一切).*(?:记忆|偏好|事实)|(?:全部|所有).*(?:记忆|偏好)/.test(normalized)
   )
 }
-
-const HISTORY_QUERY_RE = /(?:记得|记忆|之前|以前|上次|曾经|历史|过去|remember|before|previous|last time|history)/i
-const FORGET_QUERY_RE = /(?:忘记|别记|删除.*记忆|forget|remove.*memory)/i
 
 export class MemoryService {
   readonly memoryRoot: string
@@ -184,30 +181,23 @@ export class MemoryService {
     const retrieved = this.retriever.retrieve(query)
     let selected = retrieved.selectedTopicIds
     if (retrieved.needsSelector && config.recall.semanticSelector === 'auto') {
-      const selectorModelId =
-        config.recall.selectorModel === 'inherit' ? this.currentModelId() : config.recall.selectorModel
-      const model = selectorModelId ? this.resolveModel(selectorModelId) : null
-      if (model) {
-        try {
-          selected = await selectMemoryTopics({
-            model,
-            modelId: selectorModelId ?? undefined,
-            reasoningMode: config.reasoning,
-            query,
-            manifest: this.index.manifest(),
-            preferredTopicIds: retrieved.candidates.slice(0, 50).map((candidate) => candidate.topicId),
-          })
-          retrieved.trace.selectorUsed = true
-        } catch (error) {
-          debugLog('memory.selector-fallback', error instanceof Error ? error.message : String(error))
-          selected = retrieved.candidates
-            .filter(
-              (candidate) =>
-                candidate.routes.filter((route) => route !== 'pinned').length >= 2 && candidate.coverage >= 0.6,
-            )
-            .slice(0, 2)
-            .map((candidate) => candidate.topicId)
-        }
+      const outcome = await this.runSelector({
+        query,
+        manifest: this.index.manifest(),
+        preferredTopicIds: retrieved.candidates.slice(0, 50).map((candidate) => candidate.topicId),
+        failureLogTag: 'memory.selector-fallback',
+      })
+      if (outcome.ids) {
+        selected = outcome.ids
+        retrieved.trace.selectorUsed = true
+      } else if (outcome.attempted) {
+        selected = retrieved.candidates
+          .filter(
+            (candidate) =>
+              candidate.routes.filter((route) => route !== 'pinned').length >= 2 && candidate.coverage >= 0.6,
+          )
+          .slice(0, 2)
+          .map((candidate) => candidate.topicId)
       }
     }
     const remainingBudget = config.recall.maxTokensPerCompactionWindow - state.memoryTokensInWindow
@@ -262,37 +252,24 @@ export class MemoryService {
     )
     let selected = protectedExact.length === 1 ? [protectedExact[0]!.topicId] : []
     if (selected.length === 0) {
-      const selectorModelId =
-        config.recall.selectorModel === 'inherit' ? this.currentModelId() : config.recall.selectorModel
-      const model = selectorModelId ? this.resolveModel(selectorModelId) : null
-      if (!model) return null
-      try {
-        selected = (
-          await selectMemoryTopics({
-            model,
-            modelId: selectorModelId ?? undefined,
-            reasoningMode: config.reasoning,
-            query: {
-              currentUserText: signals.currentUserText,
-              recentConversationText: '',
-              repositoryId: signals.repositoryId,
-              mentionedPaths: [],
-              identifiers: [],
-              explicitHistoryIntent: false,
-              explicitForgetIntent: false,
-            },
-            manifest: this.index.manifest(candidateIds),
-            preferredTopicIds: candidateIds,
-            untrustedSignals: signals.text,
-          })
-        )
-          .filter((topicId) => !surfaced.has(topicId))
-          .slice(0, 2)
-        retrieved.trace.selectorUsed = true
-      } catch (error) {
-        debugLog('memory.late-recall-selector-failed', error instanceof Error ? error.message : String(error))
-        return null
-      }
+      const outcome = await this.runSelector({
+        query: {
+          currentUserText: signals.currentUserText,
+          recentConversationText: '',
+          repositoryId: signals.repositoryId,
+          mentionedPaths: [],
+          identifiers: [],
+          explicitHistoryIntent: false,
+          explicitForgetIntent: false,
+        },
+        manifest: this.index.manifest(candidateIds),
+        preferredTopicIds: candidateIds,
+        untrustedSignals: signals.text,
+        failureLogTag: 'memory.late-recall-selector-failed',
+      })
+      if (!outcome.ids) return null
+      selected = outcome.ids.filter((topicId) => !surfaced.has(topicId)).slice(0, 2)
+      retrieved.trace.selectorUsed = true
     }
     const attachment = this.retriever.pack(query, selected, signals.anchorMessageIndex, signals.placement)
     if (!attachment || attachment.estimatedTokens > remainingBudget || !addMemoryRecallAttachment(state, attachment)) {
@@ -331,8 +308,8 @@ export class MemoryService {
       repositoryId: context.repositoryId,
       mentionedPaths: [],
       identifiers: [],
-      explicitHistoryIntent: HISTORY_QUERY_RE.test(query),
-      explicitForgetIntent: FORGET_QUERY_RE.test(query),
+      explicitHistoryIntent: HISTORY_INTENT_RE.test(query),
+      explicitForgetIntent: FORGET_INTENT_RE.test(query),
     }
     const retrieved = this.retriever.retrieve(recallQuery)
     const lexicalCandidateIds = retrieved.candidates
@@ -340,26 +317,14 @@ export class MemoryService {
       .map((candidate) => candidate.topicId)
     let candidateIds = lexicalCandidateIds
     if (args.semantic) {
-      const modelId = this.config().recall.selectorModel
-      const resolvedId = modelId === 'inherit' ? this.currentModelId() : modelId
-      const model = resolvedId ? this.resolveModel(resolvedId) : null
-      if (model) {
-        try {
-          candidateIds = await selectMemoryTopics({
-            model,
-            modelId: resolvedId ?? undefined,
-            reasoningMode: config.reasoning,
-            query: recallQuery,
-            manifest: this.index.manifest(context.allowedTopicIds),
-            preferredTopicIds: lexicalCandidateIds,
-          })
-        } catch (error) {
-          debugLog('memory.search-selector-fallback', error instanceof Error ? error.message : String(error))
-          candidateIds = lexicalCandidateIds
-        }
-      }
+      const outcome = await this.runSelector({
+        query: recallQuery,
+        manifest: this.index.manifest(),
+        preferredTopicIds: lexicalCandidateIds,
+        failureLogTag: 'memory.search-selector-fallback',
+      })
+      if (outcome.ids) candidateIds = outcome.ids
     }
-    if (context.allowedTopicIds) candidateIds = candidateIds.filter((id) => context.allowedTopicIds!.includes(id))
     if (args.topicIds) {
       const candidates = new Set(candidateIds)
       if (args.topicIds.some((id) => !candidates.has(id)))
@@ -513,6 +478,37 @@ export class MemoryService {
   private currentModelId(): string | null {
     const configured = this.config().model
     return configured === 'inherit' ? this.activeModelId : configured
+  }
+
+  /** Shared semantic-selector invocation. attempted=false means no usable
+   *  model was configured; attempted=true with ids=null means the call
+   *  failed and the caller should apply its own local fallback. */
+  private async runSelector(input: {
+    query: RecallQuery
+    manifest: ReturnType<MemoryIndex['manifest']>
+    preferredTopicIds: readonly string[]
+    untrustedSignals?: string
+    failureLogTag: string
+  }): Promise<{ attempted: boolean; ids: string[] | null }> {
+    const configured = this.config().recall.selectorModel
+    const selectorModelId = configured === 'inherit' ? this.currentModelId() : configured
+    const model = selectorModelId ? this.resolveModel(selectorModelId) : null
+    if (!model) return { attempted: false, ids: null }
+    try {
+      const ids = await selectMemoryTopics({
+        model,
+        modelId: selectorModelId ?? undefined,
+        reasoningMode: this.config().reasoning,
+        query: input.query,
+        manifest: input.manifest,
+        preferredTopicIds: input.preferredTopicIds,
+        ...(input.untrustedSignals !== undefined ? { untrustedSignals: input.untrustedSignals } : {}),
+      })
+      return { attempted: true, ids }
+    } catch (error) {
+      debugLog(input.failureLogTag, error instanceof Error ? error.message : String(error))
+      return { attempted: true, ids: null }
+    }
   }
 
   private async extractionContext(job: MemoryJob) {

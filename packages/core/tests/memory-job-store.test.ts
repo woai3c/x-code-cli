@@ -13,7 +13,6 @@ function job(id = 'job-1'): MemoryJob {
     turnStartMessageIndex: 0,
     modelId: 'test:model',
     repositoryId: 'D:/repo',
-    cwd: 'D:/repo',
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:00:01.000Z',
     attempt: 0,

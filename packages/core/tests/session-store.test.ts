@@ -471,7 +471,6 @@ describe('session-store: hydrateLoopState', () => {
     state.memoryGeneration = 7
     await appendHeader(state, 'test:model', 'resume memory')
     await appendMemoryRecall(state, {
-      attachmentId: 'memory-1',
       anchorMessageIndex: 0,
       placement: 'before-user',
       estimatedTokens: 5,
@@ -481,7 +480,6 @@ describe('session-store: hydrateLoopState', () => {
           topicHash: 'topic-hash',
           factIds: ['user.language'],
           factHashes: { 'user.language': 'fact-hash' },
-          path: 'topics/profile.md',
           renderedContent: 'OPAQUE_RECALLED_VALUE',
         },
       ],

@@ -62,6 +62,6 @@ describe('MemoryIndex', () => {
     expect(index.bm25('obsoletequux')).toEqual([])
     expect(index.bm25('expiredquux')).toEqual([])
     expect(index.bm25('currentquux')[0]?.topicId).toBe('profile')
-    expect(index.facts.get('user.expired')?.status).toBe('stale')
+    expect(index.facts.has('user.expired')).toBe(true)
   })
 })

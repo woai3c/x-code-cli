@@ -641,10 +641,18 @@ export async function agentLoop(
   const filesModifiedBefore = new Set(state.filesModified)
   state.turnFilesModified.clear()
 
-  if (!options.toolFilter && options.memoryService) {
-    options.memoryService.setActiveModelId(options.modelId)
-    options.memoryService.setNoticeHandler(callbacks.onMemoryWrite)
-    await options.memoryService.initialize(process.cwd())
+  // Memory features are root-agent only: toolFilter is the authoritative
+  // sub-agent signal (runner.ts always passes one).
+  const memoryService = options.toolFilter ? undefined : options.memoryService
+  const logMemoryFailure = (tag: string) => (error: unknown) => {
+    debugLog(tag, error instanceof Error ? error.message : String(error))
+    return null
+  }
+
+  if (memoryService) {
+    memoryService.setActiveModelId(options.modelId)
+    memoryService.setNoticeHandler(callbacks.onMemoryWrite)
+    await memoryService.initialize(process.cwd())
   }
 
   // ── Plugin hook: SessionStart ──
@@ -730,10 +738,9 @@ export async function agentLoop(
   // user message. Auto-injecting it into every system prompt made the model
   // treat trivial greetings as "continue exploring", so we no longer do that.
   let fullKnowledgeContext: string | null = null
-  const initialRecallQuery =
-    !options.toolFilter && options.memoryService
-      ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, process.cwd())
-      : null
+  const initialRecallQuery = memoryService
+    ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, process.cwd())
+    : null
 
   // Detect git repo once — cheap stat, avoids per-turn disk hit
   const isGitRepo = await fs
@@ -810,12 +817,9 @@ export async function agentLoop(
       abortSignal: options.abortSignal,
     })
 
-    if (!initialRecallAttempted && initialRecallQuery && options.memoryService && !options.abortSignal?.aborted) {
+    if (!initialRecallAttempted && initialRecallQuery && memoryService && !options.abortSignal?.aborted) {
       initialRecallAttempted = true
-      await options.memoryService.recall(initialRecallQuery, state).catch((error) => {
-        debugLog('memory.recall-error', error instanceof Error ? error.message : String(error))
-        return null
-      })
+      await memoryService.recall(initialRecallQuery, state).catch(logMemoryFailure('memory.recall-error'))
     }
     if (fullKnowledgeContext === null) {
       fullKnowledgeContext = await buildKnowledgeContext({ memoryService: options.memoryService, cwd: process.cwd() })
@@ -956,7 +960,7 @@ export async function agentLoop(
       // before attaching recall so providers never see two consecutive user
       // messages (one synthetic memory block plus one queued user message).
       const queuedInputInjected = drainQueuedInputs(state, options, turnMessages)
-      if (!lateRecallAttempted && !options.toolFilter && options.memoryService) {
+      if (!lateRecallAttempted && memoryService) {
         const responseMessages = (await outcome.result.response).messages
         const resultText = successfulToolResultText([...responseMessages, ...manualToolMessages])
         const initialPaths = new Set(initialRecallQuery?.mentionedPaths.map(normalizeMemoryText) ?? [])
@@ -967,7 +971,7 @@ export async function agentLoop(
         )
         if (paths.length || identifiers.length) {
           lateRecallAttempted = true
-          await options.memoryService
+          await memoryService
             .lateRecall(
               {
                 anchorMessageIndex: state.messages.length - 1,
@@ -980,10 +984,7 @@ export async function agentLoop(
               },
               state,
             )
-            .catch((error) => {
-              debugLog('memory.late-recall-error', error instanceof Error ? error.message : String(error))
-              return null
-            })
+            .catch(logMemoryFailure('memory.late-recall-error'))
         }
       }
       continue
@@ -1048,9 +1049,9 @@ export async function agentLoop(
   // runs in those cases). Abort path: useAgent.abort() pushes the
   // `[Request interrupted by user]` notice AFTER agentLoop returns, so
   // it's responsible for its own flush — see use-agent.ts.
-  if (cleanStop && !options.toolFilter && options.memoryService && !options.abortSignal?.aborted) {
+  if (cleanStop && memoryService && !options.abortSignal?.aborted) {
     await flushPendingMessages(state)
-    const memoryConfig = options.memoryService.getConfig()
+    const memoryConfig = memoryService.getConfig()
     const filesThisTurn = new Set([
       ...state.turnFilesModified,
       ...[...state.filesModified].filter((file) => !filesModifiedBefore.has(file)),
@@ -1072,9 +1073,8 @@ export async function agentLoop(
         turnStartMessageIndex,
         modelId: options.modelId,
         repositoryId: process.cwd(),
-        cwd: process.cwd(),
       })
-      await options.memoryService.enqueuePostTurnJob(job).catch((error) => {
+      await memoryService.enqueuePostTurnJob(job).catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
         debugLog('memory.enqueue-error', message)
         callbacks.onMemoryWrite?.({ action: 'failed', error: message })

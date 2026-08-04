@@ -20,7 +20,6 @@ function job(): MemoryJob {
     turnStartMessageIndex: 0,
     modelId: 'test:model',
     repositoryId: 'repo',
-    cwd: 'D:/repo',
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:00:01.000Z',
     attempt: 0,
@@ -64,7 +63,6 @@ describe('memory worker evidence binding', () => {
       rejectedOperationsError(
         {
           status: 'warning',
-          generation: 0,
           notices: [
             { action: 'failed', error: 'Invalid fact ID' },
             { action: 'failed', error: 'Invalid fact ID' },
@@ -80,7 +78,6 @@ describe('memory worker evidence binding', () => {
       rejectedOperationsError(
         {
           status: 'warning',
-          generation: 1,
           notices: [
             { action: 'remembered', topicId: 'product', factId: 'product.stack' },
             { action: 'failed', error: 'Invalid fact ID' },

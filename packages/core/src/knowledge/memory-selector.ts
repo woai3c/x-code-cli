@@ -1,10 +1,10 @@
-import { Output, generateText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { z } from 'zod'
 
-import { runMemoryInference } from '../agent/memory-inference.js'
+import { generateStructuredObject, runMemoryInference } from '../agent/memory-inference.js'
 import type { MemoryReasoningMode } from '../config/index.js'
+import { truncateUtf8 } from '../utils.js'
 import type { RecallQuery } from './memory-types.js'
 
 const SelectorOutputSchema = z.object({
@@ -42,10 +42,10 @@ export interface MemorySelectorInput {
 export async function selectMemoryTopics(input: MemorySelectorInput): Promise<string[]> {
   const manifest = fitManifest(input.manifest, input.preferredTopicIds, 13_000)
   const payload = {
-    query: truncateBytes(input.query.currentUserText, 8000),
-    recentConversation: truncateBytes(input.query.recentConversationText, 2000),
-    repository: truncateBytes(input.query.repositoryId, 1000),
-    untrustedSignals: input.untrustedSignals ? truncateBytes(input.untrustedSignals, 4000) : undefined,
+    query: truncateUtf8(input.query.currentUserText, 8000),
+    recentConversation: truncateUtf8(input.query.recentConversationText, 2000),
+    repository: truncateUtf8(input.query.repositoryId, 1000),
+    untrustedSignals: input.untrustedSignals ? truncateUtf8(input.untrustedSignals, 4000) : undefined,
     topics: manifest,
   }
   while (payload.topics.length > 0 && Buffer.byteLength(JSON.stringify(payload), 'utf-8') > 24_000) {
@@ -63,23 +63,16 @@ export async function selectMemoryTopics(input: MemorySelectorInput): Promise<st
       reasoningMode: input.reasoningMode,
       maxOutputTokens: 1024,
       retryStructuredOutput: false,
-      generate: ({ providerOptions, ...settings }) =>
-        generateText({
-          model: input.model,
-          instructions: SYSTEM_PROMPT,
-          prompt: JSON.stringify(payload),
-          output: Output.object({
-            schema: SelectorOutputSchema,
-            name: 'memory_topic_selection',
-            description: 'Up to five relevant topic IDs copied exactly from the provided manifest',
-          }),
-          maxRetries: 1,
-          abortSignal: controller.signal,
-          ...settings,
-          ...(providerOptions
-            ? { providerOptions: providerOptions as Parameters<typeof generateText>[0]['providerOptions'] }
-            : {}),
-        }),
+      generate: generateStructuredObject({
+        model: input.model,
+        instructions: SYSTEM_PROMPT,
+        payload,
+        outputName: 'memory_topic_selection',
+        outputDescription: 'Up to five relevant topic IDs copied exactly from the provided manifest',
+        outputSchema: SelectorOutputSchema,
+        maxRetries: 1,
+        abortSignal: controller.signal,
+      }),
     })
     const output = SelectorOutputSchema.parse(result.output)
     return [...new Set(output.topicIds)].filter((id) => known.has(id)).slice(0, 5)
@@ -107,18 +100,6 @@ function fitManifest<T extends { id: string; pinned: boolean }>(
     const size = Buffer.byteLength(JSON.stringify(item), 'utf-8')
     if (bytes + size > maxBytes) break
     result.push(item)
-    bytes += size
-  }
-  return result
-}
-
-function truncateBytes(value: string, maxBytes: number): string {
-  let result = ''
-  let bytes = 0
-  for (const char of value) {
-    const size = Buffer.byteLength(char, 'utf-8')
-    if (bytes + size > maxBytes) break
-    result += char
     bytes += size
   }
   return result

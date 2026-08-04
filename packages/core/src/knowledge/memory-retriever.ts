@@ -1,18 +1,18 @@
-import { createHash } from 'node:crypto'
-
 import type { ModelMessage } from 'ai'
 
-import { generateTimestampId } from '../utils.js'
+import { estimateTextTokens } from '../utils.js'
 import { LruCache } from '../utils/lru-cache.js'
 import { extractText } from '../utils/message-helpers.js'
 import {
   MemoryIndex,
+  containsExactKey,
   extractMemoryIdentifiers,
   extractMemoryPaths,
   isMemoryFactActive,
   normalizeMemoryText,
   tokenizeMemoryText,
 } from './memory-index.js'
+import { memoryContentHash } from './memory-transaction-store.js'
 import type {
   MemoryRecallAttachment,
   MemoryRecallAttachmentTopic,
@@ -24,8 +24,9 @@ import type {
   RecallQuery,
 } from './memory-types.js'
 
-const HISTORY_RE = /(?:记得|记忆|之前|以前|上次|曾经|历史|过去|remember|before|previous|last time|history)/i
-const FORGET_RE = /(?:忘记|别记|删除.*记忆|forget|remove.*memory)/i
+export const HISTORY_INTENT_RE =
+  /(?:记得|记忆|之前|以前|上次|曾经|历史|过去|remember|before|previous|last time|history)/i
+export const FORGET_INTENT_RE = /(?:忘记|别记|删除.*记忆|forget|remove.*memory)/i
 const SELF_CONTAINED_RE = /^(?:你好|您好|谢谢|翻译|格式化|hello\b|hi\b|thanks\b|format\b|translate\b)/i
 
 export interface RetrieverOptions {
@@ -78,8 +79,8 @@ export function buildRecallQuery(
     repositoryId: repositoryId.replace(/\\/g, '/'),
     mentionedPaths: extractMemoryPaths(clean),
     identifiers: extractMemoryIdentifiers(clean),
-    explicitHistoryIntent: HISTORY_RE.test(clean),
-    explicitForgetIntent: FORGET_RE.test(clean),
+    explicitHistoryIntent: HISTORY_INTENT_RE.test(clean),
+    explicitForgetIntent: FORGET_INTENT_RE.test(clean),
   }
 }
 
@@ -96,17 +97,7 @@ function repositoryMatches(topic: MemoryTopic, repositoryId: string): boolean {
 
 function includesAlias(message: string, alias: string): boolean {
   const normalized = normalizeMemoryText(alias)
-  if (!normalized) return false
-  if (/[^\x00-\x7F]/u.test(normalized)) return message.includes(normalized)
-  let index = message.indexOf(normalized)
-  while (index >= 0) {
-    const before = index === 0 ? '' : message[index - 1]!
-    const afterIndex = index + normalized.length
-    const after = afterIndex >= message.length ? '' : message[afterIndex]!
-    if (!/[a-z0-9]/i.test(before) && !/[a-z0-9]/i.test(after)) return true
-    index = message.indexOf(normalized, index + 1)
-  }
-  return false
+  return normalized ? containsExactKey(message, normalized) : false
 }
 
 function intentTypes(query: RecallQuery): MemoryType[] {
@@ -139,7 +130,7 @@ export class MemoryRetriever {
   ) {}
 
   retrieve(query: RecallQuery): RetrieveResult {
-    const recentHash = createHash('sha1').update(query.recentConversationText).digest('hex').slice(0, 12)
+    const recentHash = memoryContentHash(query.recentConversationText).slice(0, 12)
     const cacheKey = `${this.index.generation}:${normalizeMemoryText(query.currentUserText)}:${normalizeMemoryText(query.repositoryId)}:${recentHash}:${query.explicitHistoryIntent}:${query.explicitForgetIntent}`
     const cached = this.cache.get(cacheKey)
     if (cached) return structuredClone(cached)
@@ -265,9 +256,6 @@ export class MemoryRetriever {
       selectorUsed: false,
       candidates: candidates.slice(0, 20),
       selectedTopicIds,
-      filtered: candidates
-        .filter((candidate) => !selectedTopicIds.includes(candidate.topicId))
-        .map((candidate) => `${candidate.topicId}: below selection threshold`),
       packedTokens: 0,
     }
     const result = { candidates, selectedTopicIds, protectedTopicIds: [...protectedSet], needsSelector, trace }
@@ -299,12 +287,12 @@ export class MemoryRetriever {
       const rendered: string[] = [`## ${topic.metadata.id}`, topic.metadata.description]
       const factIds: string[] = []
       const factHashes: Record<string, string> = {}
-      let topicTokens = estimateTokens(rendered.join('\n'))
+      let topicTokens = estimateTextTokens(rendered.join('\n'))
       for (const { section, score } of sections) {
         if (score <= 0 && rendered.length > 2) continue
         const content = renderSection(section)
         if (!content) continue
-        const tokens = estimateTokens(content)
+        const tokens = estimateTextTokens(content)
         const candidateContent = [...rendered, content].join('\n\n')
         if (
           topicTokens + tokens > this.options.maxTokensPerTopic ||
@@ -323,24 +311,19 @@ export class MemoryRetriever {
       }
       if (rendered.length <= 2) continue
       const renderedContent = rendered.join('\n\n')
-      const actualTokens = estimateTokens(renderedContent)
+      const actualTokens = estimateTextTokens(renderedContent)
       if (totalTokens + actualTokens > this.options.maxTokensPerTurn) continue
       packed.push({
         topicId: topic.metadata.id,
         topicHash: topic.hash,
         factIds: [...new Set(factIds)],
         factHashes,
-        path: topic.path,
         renderedContent,
       })
       totalTokens += actualTokens
     }
     if (packed.length === 0) return null
     return {
-      attachmentId: `memory-${generateTimestampId()}-${createHash('sha1')
-        .update(packed.map((item) => item.topicHash).join(':'))
-        .digest('hex')
-        .slice(0, 8)}`,
       anchorMessageIndex,
       placement,
       topics: packed,
@@ -409,8 +392,4 @@ function renderSection(section: MemorySection): string {
   manual = manual.replace(/\n{3,}/g, '\n\n').trim()
   if (active.length === 0 && !manual.replace(/^#{1,3}\s+.*$/gm, '').trim()) return ''
   return [manual, ...active.map((fact) => fact.content)].filter(Boolean).join('\n\n')
-}
-
-function estimateTokens(value: string): number {
-  return Math.ceil(Buffer.byteLength(value, 'utf-8') / 3)
 }

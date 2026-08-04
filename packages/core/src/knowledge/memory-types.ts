@@ -2,6 +2,11 @@ export type MemoryType = 'user' | 'portfolio' | 'feedback' | 'workflow' | 'proje
 export type MemoryStatus = 'active' | 'stale'
 export type EvidenceKind = 'explicit' | 'validated' | 'observed'
 
+/** Shared slug format for topic IDs and fact IDs. */
+export const MEMORY_ID_RE = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
+/** Characters allowed in a durable job ID (also used as its filename). */
+export const SAFE_JOB_ID_RE = /^[A-Za-z0-9._-]{1,200}$/
+
 export interface MemoryEvidence {
   kind: EvidenceKind
   sourceId: string
@@ -79,7 +84,6 @@ export interface MemoryJob {
   turnStartMessageIndex: number
   modelId: string
   repositoryId: string
-  cwd: string
   createdAt: string
   sourceOccurredAt: string
   attempt: number
@@ -100,13 +104,11 @@ export interface MemoryFact {
   metadata: MemoryFactMetadata
   content: string
   hash: string
-  sectionId: string
   start: number
   end: number
 }
 
 export interface MemorySection {
-  id: string
   headingPath: string[]
   content: string
   facts: MemoryFact[]
@@ -182,7 +184,6 @@ export interface MemoryRecallTrace {
   selectorUsed: boolean
   candidates: RecallCandidate[]
   selectedTopicIds: string[]
-  filtered: string[]
   packedTokens: number
 }
 
@@ -191,12 +192,10 @@ export interface MemoryRecallAttachmentTopic {
   topicHash: string
   factIds: string[]
   factHashes: Record<string, string>
-  path: string
   renderedContent: string
 }
 
 export interface MemoryRecallAttachment {
-  attachmentId: string
   anchorMessageIndex: number
   placement: 'before-user' | 'after-tool-results'
   topics: MemoryRecallAttachmentTopic[]
@@ -229,7 +228,6 @@ export interface MemorySearchArgs {
 
 export interface MemorySearchContext {
   repositoryId: string
-  allowedTopicIds?: string[]
 }
 
 export interface MemorySearchResult {
@@ -272,5 +270,4 @@ export interface MemoryWriteNotice {
 export interface MemoryOperationResult {
   status: 'success' | 'no-op' | 'warning'
   notices: MemoryWriteNotice[]
-  generation: number
 }

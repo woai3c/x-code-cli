@@ -17,7 +17,6 @@ function job(): MemoryJob {
     turnStartMessageIndex: 2,
     modelId: 'test:model',
     repositoryId: 'D:/repo',
-    cwd: 'D:/repo',
     createdAt: '2026-08-02T00:00:00.000Z',
     sourceOccurredAt: '2026-08-02T00:01:00.000Z',
     attempt: 0,

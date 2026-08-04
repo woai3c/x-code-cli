@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 
 import { redactMemoryValue } from '../knowledge/memory-redaction.js'
-import { atomicWriteFile, syncDirectory } from '../knowledge/memory-transaction-store.js'
 import type { MemoryJob } from '../knowledge/memory-types.js'
+import { fileExists } from '../utils.js'
+import { atomicWriteFile, syncDirectory } from '../utils/atomic-file.js'
+import { acquireFileLock } from '../utils/file-lock.js'
+import type { FileLockLease } from '../utils/file-lock.js'
 
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000, 300_000, 900_000, 1_800_000]
 const LOCK_STALE_MS = 30_000
@@ -14,17 +16,7 @@ const MAX_JOB_BYTES = 2 * 1024 * 1024
 const RECENT_RUNS_MAX_BYTES = 256 * 1024
 const RECENT_RUNS_MAX_RECORDS = 256
 
-interface ExtractorLockFile {
-  ownerId: string
-  pid: number
-  hostname: string
-  startedAt: string
-  heartbeatAt: string
-}
-
-export interface ExtractorLease {
-  release(): Promise<void>
-}
+export type ExtractorLease = FileLockLease
 
 export interface MemoryRunRecord {
   jobId: string
@@ -34,23 +26,6 @@ export interface MemoryRunRecord {
   operations: number
   errorCategory?: string
   completedAt: string
-}
-
-async function exists(target: string): Promise<boolean> {
-  return fs.access(target).then(
-    () => true,
-    () => false,
-  )
-}
-
-function processExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
 }
 
 function validateJob(value: unknown): MemoryJob {
@@ -71,9 +46,6 @@ function validateJob(value: unknown): MemoryJob {
     typeof job.repositoryId !== 'string' ||
     !job.repositoryId.trim() ||
     job.repositoryId.length > 8192 ||
-    typeof job.cwd !== 'string' ||
-    !job.cwd.trim() ||
-    job.cwd.length > 8192 ||
     typeof job.createdAt !== 'string' ||
     !Number.isFinite(Date.parse(job.createdAt)) ||
     typeof job.sourceOccurredAt !== 'string' ||
@@ -168,10 +140,10 @@ export class MemoryJobStore {
   async enqueue(job: MemoryJob): Promise<'created' | 'duplicate'> {
     validateJob(job)
     const fileName = `${job.jobId}.json`
-    if (await exists(path.join(this.appliedDir, fileName))) return 'duplicate'
+    if (await fileExists(path.join(this.appliedDir, fileName))) return 'duplicate'
     if (await this.hasCompletedRun(job.jobId)) return 'duplicate'
     for (const dir of [this.pendingDir, this.runningDir, this.failedDir]) {
-      if (await exists(path.join(dir, fileName))) return 'duplicate'
+      if (await fileExists(path.join(dir, fileName))) return 'duplicate'
     }
     const target = path.join(this.pendingDir, fileName)
     const temp = path.join(this.pendingDir, `.${fileName}.${process.pid}.${randomUUID()}.tmp`)
@@ -199,7 +171,7 @@ export class MemoryJobStore {
           } catch (lockError) {
             if ((lockError as NodeJS.ErrnoException).code !== 'EEXIST') throw lockError
             for (const dir of [this.pendingDir, this.runningDir, this.failedDir, this.appliedDir]) {
-              if (await exists(path.join(dir, fileName))) return 'duplicate'
+              if (await fileExists(path.join(dir, fileName))) return 'duplicate'
             }
             const stat = await fs.stat(lockPath).catch(() => null)
             if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
@@ -212,7 +184,7 @@ export class MemoryJobStore {
         }
         try {
           for (const dir of [this.pendingDir, this.runningDir, this.failedDir, this.appliedDir]) {
-            if (await exists(path.join(dir, fileName))) return 'duplicate'
+            if (await fileExists(path.join(dir, fileName))) return 'duplicate'
           }
           await fs.rename(temp, target)
           await syncDirectory(this.pendingDir)
@@ -225,7 +197,7 @@ export class MemoryJobStore {
       await fs.unlink(temp)
       await syncDirectory(this.pendingDir)
       for (const dir of [this.runningDir, this.failedDir, this.appliedDir]) {
-        if (!(await exists(path.join(dir, fileName)))) continue
+        if (!(await fileExists(path.join(dir, fileName)))) continue
         await fs.unlink(target).catch(() => {})
         await syncDirectory(this.pendingDir)
         return 'duplicate'
@@ -293,7 +265,7 @@ export class MemoryJobStore {
 
   async isApplied(jobId: string): Promise<boolean> {
     if (!SAFE_JOB_ID_RE.test(jobId)) return false
-    return exists(path.join(this.appliedDir, `${jobId}.json`))
+    return fileExists(path.join(this.appliedDir, `${jobId}.json`))
   }
 
   async retry(job: MemoryJob, maxAttempts = RETRY_DELAYS_MS.length): Promise<'pending' | 'failed'> {
@@ -331,76 +303,14 @@ export class MemoryJobStore {
     for (const name of entries) {
       const source = path.join(this.runningDir, name)
       const target = path.join(this.pendingDir, name)
-      if (await exists(target)) await fs.unlink(source).catch(() => {})
+      if (await fileExists(target)) await fs.unlink(source).catch(() => {})
       else await fs.rename(source, target).catch(() => {})
     }
     await Promise.all([syncDirectory(this.runningDir), syncDirectory(this.pendingDir)])
   }
 
   async tryAcquireExtractorLock(): Promise<ExtractorLease | null> {
-    const lockPath = path.join(this.locksDir, 'extractor.lock')
-    const ownerId = `${process.pid}-${randomUUID()}`
-    while (true) {
-      const now = new Date().toISOString()
-      const payload: ExtractorLockFile = {
-        ownerId,
-        pid: process.pid,
-        hostname: os.hostname(),
-        startedAt: now,
-        heartbeatAt: now,
-      }
-      try {
-        const handle = await fs.open(lockPath, 'wx', 0o600)
-        try {
-          await handle.writeFile(JSON.stringify(payload), 'utf-8')
-          await handle.sync().catch(() => {})
-        } finally {
-          await handle.close()
-        }
-        let released = false
-        let heartbeatWrite = Promise.resolve()
-        const heartbeat = setInterval(() => {
-          if (released) return
-          payload.heartbeatAt = new Date().toISOString()
-          heartbeatWrite = heartbeatWrite.then(() => atomicWriteFile(lockPath, JSON.stringify(payload))).catch(() => {})
-        }, 5000)
-        heartbeat.unref?.()
-        return {
-          release: async () => {
-            if (released) return
-            released = true
-            clearInterval(heartbeat)
-            await heartbeatWrite
-            const current = await fs
-              .readFile(lockPath, 'utf-8')
-              .then((raw) => JSON.parse(raw) as Partial<ExtractorLockFile>)
-              .catch(() => null)
-            if (current?.ownerId === ownerId) await fs.unlink(lockPath).catch(() => {})
-          },
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        const current = await fs
-          .readFile(lockPath, 'utf-8')
-          .then((raw) => {
-            const value = JSON.parse(raw) as Partial<ExtractorLockFile>
-            return typeof value.pid === 'number' && Number.isFinite(Date.parse(value.heartbeatAt ?? ''))
-              ? (value as ExtractorLockFile)
-              : null
-          })
-          .catch(() => null)
-        const stat = current ? null : await fs.stat(lockPath).catch(() => null)
-        const heartbeatAge = current
-          ? Date.now() - Date.parse(current.heartbeatAt)
-          : Date.now() - (stat?.mtimeMs ?? Date.now())
-        const ownerDead = !current || current.hostname !== os.hostname() || !processExists(current.pid)
-        if (heartbeatAge > LOCK_STALE_MS && ownerDead) {
-          await fs.unlink(lockPath).catch(() => {})
-          continue
-        }
-        return null
-      }
-    }
+    return acquireFileLock(path.join(this.locksDir, 'extractor.lock'), { heartbeatMs: 5000 })
   }
 
   async appendRun(record: MemoryRunRecord): Promise<void> {

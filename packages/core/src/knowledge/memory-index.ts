@@ -1,5 +1,6 @@
 import path from 'node:path'
 
+import { estimateTextTokens } from '../utils.js'
 import type { MemoryFact, MemoryTopic } from './memory-types.js'
 
 const WORD_RE = /[\p{L}\p{M}\p{N}]+/gu
@@ -80,11 +81,7 @@ interface IndexedTopic {
 
 export interface IndexedFactLocation {
   topicId: string
-  sectionId: string
   factHash: string
-  observedAt: string
-  evidence: MemoryFact['metadata']['evidence']
-  status: MemoryFact['metadata']['status']
 }
 
 export interface Bm25Hit {
@@ -103,7 +100,10 @@ function basename(value: string): string {
   return path.posix.basename(value.replace(/\\/g, '/'))
 }
 
-function containsExactKey(message: string, key: string): boolean {
+/** Boundary-aware substring match: ASCII keys must not be flanked by
+ *  alphanumeric characters; non-ASCII keys match plainly. `key` must already
+ *  be normalized with normalizeMemoryText. */
+export function containsExactKey(message: string, key: string): boolean {
   if (/[^\x00-\x7F]/u.test(key)) return message.includes(key)
   let index = message.indexOf(key)
   while (index >= 0) {
@@ -139,11 +139,7 @@ export class MemoryIndex {
       for (const fact of topic.facts) {
         this.facts.set(fact.metadata.id, {
           topicId: topic.metadata.id,
-          sectionId: fact.sectionId,
           factHash: fact.hash,
-          observedAt: fact.metadata.observedAt,
-          evidence: fact.metadata.evidence,
-          status: isMemoryFactActive(fact) ? 'active' : 'stale',
         })
       }
       const fields = {
@@ -254,7 +250,7 @@ export class MemoryIndex {
       for (const fact of topic.facts.filter((item) => isMemoryFactActive(item))) {
         const summary = fact.content.replace(/\s+/g, ' ').slice(0, 180)
         const line = `${fact.metadata.id}\t${topic.metadata.id}\t${topic.metadata.type}\t${summary}`
-        const lineTokens = Math.ceil(Buffer.byteLength(line, 'utf-8') / 3)
+        const lineTokens = estimateTextTokens(line)
         if (tokens + lineTokens > maxTokens) return lines.join('\n')
         lines.push(line)
         tokens += lineTokens

@@ -220,7 +220,6 @@ describe('agent loop', () => {
       } as any)
     const lateRecall = vi.fn(async (signals: LateRecallSignals, recallState: LoopState) => {
       const attachment: MemoryRecallAttachment = {
-        attachmentId: 'late-memory',
         anchorMessageIndex: signals.anchorMessageIndex,
         placement: signals.placement,
         estimatedTokens: 10,
@@ -230,7 +229,6 @@ describe('agent loop', () => {
             topicHash: 'worker-hash',
             factIds: [],
             factHashes: {},
-            path: 'topics/worker-memory.md',
             renderedContent: 'NewWorker uses the durable worker configuration.',
           },
         ],

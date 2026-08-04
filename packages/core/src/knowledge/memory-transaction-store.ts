@@ -2,52 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { fileExists } from '../utils.js'
+import { atomicWriteFile, syncDirectory } from '../utils/atomic-file.js'
+import { acquireFileLock } from '../utils/file-lock.js'
 import type { MemoryChange, MemorySchemaFile, MemoryTransactionManifest } from './memory-types.js'
-
-const LOCK_RETRY_MS = 25
-const LOCK_TIMEOUT_MS = 10_000
-const STALE_LOCK_MS = 30_000
 
 export function memoryContentHash(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex')
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  return fs.access(target).then(
-    () => true,
-    () => false,
-  )
-}
-
-function processExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-export async function syncDirectory(dir: string): Promise<void> {
-  const handle = await fs.open(dir, 'r').catch(() => null)
-  if (!handle) return
-  await handle.sync().catch(() => {})
-  await handle.close().catch(() => {})
-}
-
-export async function atomicWriteFile(target: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(target), { recursive: true })
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`)
-  const handle = await fs.open(temp, 'wx', 0o600)
-  try {
-    await handle.writeFile(content, 'utf-8')
-    await handle.sync().catch(() => {})
-  } finally {
-    await handle.close()
-  }
-  await fs.rename(temp, target)
-  await syncDirectory(path.dirname(target))
 }
 
 interface CommitInput {
@@ -88,10 +49,10 @@ export class MemoryTransactionStore {
       fs.mkdir(path.join(this.stateRoot, 'jobs', 'applied'), { recursive: true }),
     ])
 
-    if (!(await pathExists(this.schemaPath))) {
+    if (!(await fileExists(this.schemaPath))) {
       const schema: MemorySchemaFile = { version: 2, generation: 0 }
       await atomicWriteFile(this.schemaPath, JSON.stringify(schema, null, 2) + '\n')
-      if (!(await pathExists(this.memoryPath))) {
+      if (!(await fileExists(this.memoryPath))) {
         await atomicWriteFile(this.memoryPath, emptyCoreProfile())
       }
       return schema
@@ -109,50 +70,15 @@ export class MemoryTransactionStore {
   }
 
   async withWriterLock<T>(fn: () => Promise<T>): Promise<T> {
-    const lockPath = path.join(this.locksDir, 'writer.lock')
-    const ownerId = `${process.pid}-${randomUUID()}`
-    const started = Date.now()
-    while (true) {
-      try {
-        const handle = await fs.open(lockPath, 'wx', 0o600)
-        try {
-          await handle.writeFile(
-            JSON.stringify({ ownerId, pid: process.pid, startedAt: new Date().toISOString() }),
-            'utf-8',
-          )
-          await handle.sync().catch(() => {})
-        } finally {
-          await handle.close()
-        }
-        break
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        if (code !== 'EEXIST') throw error
-        const stat = await fs.stat(lockPath).catch(() => null)
-        const owner = await fs
-          .readFile(lockPath, 'utf-8')
-          .then((raw) => JSON.parse(raw) as { pid?: number })
-          .catch(() => null)
-        const staleUnknownOwner = stat && !owner?.pid && Date.now() - stat.mtimeMs > STALE_LOCK_MS
-        const deadKnownOwner = owner?.pid && !processExists(owner.pid)
-        if (staleUnknownOwner || deadKnownOwner) {
-          await fs.unlink(lockPath).catch(() => {})
-          continue
-        }
-        if (Date.now() - started >= LOCK_TIMEOUT_MS) throw new Error('Timed out waiting for memory writer lock')
-        await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
-      }
-    }
-
+    const lease = await acquireFileLock(path.join(this.locksDir, 'writer.lock'), {
+      waitMs: 10_000,
+      timeoutError: 'Timed out waiting for memory writer lock',
+    })
     try {
       await this.recoverCommittedTransactionsLocked()
       return await fn()
     } finally {
-      const currentOwner = await fs
-        .readFile(lockPath, 'utf-8')
-        .then((raw) => (JSON.parse(raw) as { ownerId?: string }).ownerId)
-        .catch(() => undefined)
-      if (currentOwner === ownerId) await fs.unlink(lockPath).catch(() => {})
+      await lease?.release()
     }
   }
 
@@ -160,12 +86,12 @@ export class MemoryTransactionStore {
     await this.withWriterLock(async () => undefined)
   }
 
-  async hasUnfinishedCommit(): Promise<boolean> {
+  private async hasUnfinishedCommit(): Promise<boolean> {
     const entries = await fs.readdir(this.transactionsDir, { withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       const dir = path.join(this.transactionsDir, entry.name)
-      if ((await pathExists(path.join(dir, 'COMMIT'))) && !(await pathExists(path.join(dir, 'DONE')))) return true
+      if ((await fileExists(path.join(dir, 'COMMIT'))) && !(await fileExists(path.join(dir, 'DONE')))) return true
     }
     return false
   }
@@ -240,8 +166,8 @@ export class MemoryTransactionStore {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (!entry.isDirectory()) continue
       const dir = path.join(this.transactionsDir, entry.name)
-      const committed = await pathExists(path.join(dir, 'COMMIT'))
-      const done = await pathExists(path.join(dir, 'DONE'))
+      const committed = await fileExists(path.join(dir, 'COMMIT'))
+      const done = await fileExists(path.join(dir, 'DONE'))
       if (!committed) {
         await fs.rm(dir, { recursive: true, force: true })
         continue
@@ -361,6 +287,6 @@ export class MemoryTransactionStore {
   }
 }
 
-export function emptyCoreProfile(): string {
+function emptyCoreProfile(): string {
   return '<!-- Generated from memory/topics. Manual edits will be overwritten. -->\n\n# Core profile\n\n# Topic registry\n'
 }

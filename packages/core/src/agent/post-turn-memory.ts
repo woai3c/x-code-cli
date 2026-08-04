@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
 import { extractMemoryIdentifiers, extractMemoryPaths } from '../knowledge/memory-index.js'
 import { redactMemoryValue } from '../knowledge/memory-redaction.js'
+import { memoryContentHash } from '../knowledge/memory-transaction-store.js'
 import type { MemoryJob, TurnMemoryProjection } from '../knowledge/memory-types.js'
 import { extractText } from '../utils/message-helpers.js'
 
@@ -245,10 +245,9 @@ export function createMemoryJob(input: {
   turnStartMessageIndex: number
   modelId: string
   repositoryId: string
-  cwd: string
 }): MemoryJob {
   const projection = redactMemoryValue(input.projection)
-  const projectionHash = createHash('sha256').update(stableStringify(projection)).digest('hex').slice(0, 20)
+  const projectionHash = memoryContentHash(stableStringify(projection)).slice(0, 20)
   const jobId = `${input.sessionId}-${input.turnStartMessageIndex}-${projectionHash}`
   return {
     version: 2,
@@ -257,7 +256,6 @@ export function createMemoryJob(input: {
     turnStartMessageIndex: input.turnStartMessageIndex,
     modelId: input.modelId,
     repositoryId: input.repositoryId,
-    cwd: input.cwd,
     createdAt: new Date().toISOString(),
     sourceOccurredAt: projection.turnCompletedAt,
     attempt: 0,

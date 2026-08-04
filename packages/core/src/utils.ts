@@ -248,3 +248,22 @@ export function generateTimestampId(now: Date = new Date()): string {
     `-${pad(now.getMilliseconds(), 3)}`
   )
 }
+
+/** Rough byte-based token estimate (~3 bytes/token) shared by the memory
+ *  budgeting code. Matches the context-window heuristic. */
+export function estimateTextTokens(text: string): number {
+  return Math.ceil(Buffer.byteLength(text, 'utf-8') / 3)
+}
+
+/** Truncate to at most `maxBytes` UTF-8 bytes without splitting a codepoint. */
+export function truncateUtf8(value: string, maxBytes: number): string {
+  let result = ''
+  let bytes = 0
+  for (const char of value) {
+    const size = Buffer.byteLength(char, 'utf-8')
+    if (bytes + size > maxBytes) break
+    result += char
+    bytes += size
+  }
+  return result
+}

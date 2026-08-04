@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto'
-
 import type { LanguageModel } from 'ai'
 
 import type { MemoryReasoningMode } from '../config/index.js'
 import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from '../knowledge/memory-index.js'
+import { memoryContentHash } from '../knowledge/memory-transaction-store.js'
 import type { MemoryJob, MemoryOperation, MemoryOperationResult, MemoryWriteNotice } from '../knowledge/memory-types.js'
 import { debugLog } from '../utils.js'
 import { extractMemoryOperations } from './memory-extractor.js'
@@ -265,7 +264,7 @@ export function bindOperationEvidence(operations: readonly MemoryOperation[], jo
     for (const value of extractMemoryPaths(signals)) observedPaths.add(normalizeMemoryText(value))
     for (const value of extractMemoryIdentifiers(signals)) observedIdentifiers.add(normalizeMemoryText(value))
   }
-  const contentHash = createHash('sha256').update(JSON.stringify(job.projection)).digest('hex')
+  const contentHash = memoryContentHash(JSON.stringify(job.projection))
   const bind = (operation: MemoryOperation): MemoryOperation | null => {
     const supported = new Set<MemoryOperation['evidence'][number]['kind']>(['explicit'])
     if (job.projection.verification.length > 0) supported.add('validated')
