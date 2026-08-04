@@ -15,6 +15,12 @@ export interface ProviderCapabilities {
   image: boolean
   /** Provider can receive inline PDF file parts. */
   pdf: boolean
+  /** Provider can receive inline audio parts (base64 data URL). When true,
+   *  audio files are sent directly to the API — the model handles speech
+   *  recognition natively (better quality: captures pauses, tone, etc.).
+   *  When false, audio is transcribed locally via whisper.cpp and only the
+   *  timestamped text is sent. */
+  audio: boolean
   /** Provider has a dedicated /files upload endpoint (file_id references). */
   filesApi: boolean
   /** How images returned by tools must be represented on this provider.
@@ -28,23 +34,21 @@ export interface ProviderCapabilities {
 }
 
 const CAPS: Record<string, ProviderCapabilities> = {
-  anthropic: { image: true, pdf: true, filesApi: true, toolImageTransport: 'tool-result' },
-  openai: { image: true, pdf: true, filesApi: true, toolImageTransport: 'tool-result' },
-  google: { image: true, pdf: true, filesApi: true, toolImageTransport: 'tool-result' },
-  xai: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
-  moonshotai: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
-  alibaba: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
-  zhipu: { image: true, pdf: true, filesApi: true, toolImageTransport: 'user-message' },
-  deepseek: { image: false, pdf: false, filesApi: false, toolImageTransport: 'unsupported' },
-  // Custom OpenAI-compatible endpoints are conservative-by-default —
-  // users who know their endpoint supports vision can override via env
-  // (X_CODE_CUSTOM_SUPPORTS_IMAGE=1) if we ever add that.
-  custom: { image: false, pdf: false, filesApi: false, toolImageTransport: 'unsupported' },
+  anthropic: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'tool-result' },
+  openai: { image: true, pdf: true, audio: true, filesApi: true, toolImageTransport: 'tool-result' },
+  google: { image: true, pdf: true, audio: true, filesApi: true, toolImageTransport: 'tool-result' },
+  xai: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
+  moonshotai: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
+  alibaba: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
+  zhipu: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
+  deepseek: { image: false, pdf: false, audio: false, filesApi: false, toolImageTransport: 'unsupported' },
+  custom: { image: false, pdf: false, audio: false, filesApi: false, toolImageTransport: 'unsupported' },
 }
 
 const NO_CAPABILITIES: ProviderCapabilities = {
   image: false,
   pdf: false,
+  audio: false,
   filesApi: false,
   toolImageTransport: 'unsupported',
 }

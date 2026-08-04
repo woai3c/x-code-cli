@@ -61,6 +61,8 @@ export {
 export { classifyApiError } from './agent/api-errors.js'
 export { buildUserContent, extractFileReferences, ingestFile, classifyFile } from './agent/file-ingest.js'
 export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'
+export { formatTranscription, isAudioFile, isWhisperAvailable, transcribeAudio } from './agent/audio-transcribe.js'
+export type { TranscribeAudioResult, TranscribeSegment } from './agent/audio-transcribe.js'
 export { captionImage, pickVisionProvider } from './agent/vision-fallback.js'
 export type { VisionProvider } from './agent/vision-fallback.js'
 export {

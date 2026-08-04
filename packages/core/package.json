@@ -34,6 +34,7 @@
     "@ai-sdk/provider": "^4.0.0",
     "@ai-sdk/provider-utils": "^5.0.0",
     "@ai-sdk/xai": "^4.0.0",
+    "@fugood/whisper.node": "^1.1.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tavily/core": "^0.7.0",
     "@vscode/ripgrep": "^1.17.0",

@@ -10,5 +10,15 @@ export function mediaTypeFor(filePath: string): string {
   if (ext === '.webp') return 'image/webp'
   if (ext === '.gif') return 'image/gif'
   if (ext === '.bmp') return 'image/bmp'
+  // Audio
+  if (ext === '.mp3') return 'audio/mpeg'
+  if (ext === '.wav') return 'audio/wav'
+  if (ext === '.m4a') return 'audio/mp4'
+  if (ext === '.ogg' || ext === '.opus') return 'audio/ogg'
+  if (ext === '.flac') return 'audio/flac'
+  if (ext === '.aac') return 'audio/aac'
+  if (ext === '.aiff' || ext === '.aif') return 'audio/aiff'
+  if (ext === '.wma') return 'audio/x-ms-wma'
+  if (ext === '.webm') return 'audio/webm'
   return 'image/png'
 }

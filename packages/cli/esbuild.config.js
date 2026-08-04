@@ -103,5 +103,15 @@ await esbuild.build({
     ...builtinModules.map((m) => `node:${m}`),
     // Native addons that can't be bundled
     '@vscode/ripgrep',
+    '@fugood/whisper.node',
+    '@fugood/node-whisper-darwin-arm64',
+    '@fugood/node-whisper-darwin-x64',
+    '@fugood/node-whisper-win32-x64',
+    '@fugood/node-whisper-win32-arm64',
+    '@fugood/node-whisper-linux-x64',
+    '@fugood/node-whisper-linux-arm64',
+    '@fugood/node-whisper-linux-x64-vulkan',
+    '@fugood/node-whisper-linux-x64-cuda',
+    '@fugood/node-whisper-wasm',
   ],
 })

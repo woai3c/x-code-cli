@@ -18,6 +18,7 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
+import { formatTranscription, transcribeAudio } from '../agent/audio-transcribe.js'
 import { classifyFile, extractOfficeText } from '../agent/file-ingest.js'
 import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
@@ -282,6 +283,7 @@ Usage:
 - You can optionally specify offset and limit (especially handy for long files), but it's recommended to read the whole file first.
 - Results are returned with line numbers starting at 1.
 - This tool can read images (PNG, JPG, etc.) and PDFs — their content is presented inline.
+- This tool can read audio files (MP3, WAV, M4A, OGG, FLAC, AAC, etc.) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
 - This tool renders Jupyter notebooks (.ipynb) as readable cells (source + text outputs), skipping binary image outputs.
 - This tool can only read files, not directories. To list a directory, use listDir or shell with ls.
 - If a file path is provided by the user, assume it is valid.`,
@@ -307,6 +309,22 @@ Usage:
         }
 
         const kind = await classifyFile(filePath).catch(() => 'text' as const)
+
+        if (kind === 'audio') {
+          const result = await transcribeAudio(filePath, {
+            onNotice: (msg) => reportProgress(toolCallId, msg),
+          })
+          if (typeof result === 'string') return result
+          const formatted = formatTranscription(result, filePath)
+          const textBytes = Buffer.byteLength(formatted, 'utf-8')
+          if (textBytes > MAX_READ_BYTES) {
+            return (
+              `[Audio transcription of ${filePath} is too large (${(textBytes / 1024).toFixed(1)} KB, ` +
+              `cap ${MAX_READ_BYTES / 1024} KB). The audio may be very long.]`
+            )
+          }
+          return formatted
+        }
 
         if (kind === 'image') {
           const buffer = await fs.readFile(filePath)

@@ -23,9 +23,11 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
+import { debugLog } from '../utils.js'
 import { userXcodeDir } from '../utils.js'
 import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage, formatBytes } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
+import { formatTranscription, transcribeAudio } from './audio-transcribe.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
 
 /** Where tesseract.js caches its language model weights (`eng.traineddata`,
@@ -45,7 +47,7 @@ async function tesseractCacheDir(): Promise<string> {
  *  directly into a UserModelMessage. */
 export type IngestedPart = TextPart | ImagePart | FilePart
 
-export type FileKind = 'text' | 'image' | 'pdf' | 'office' | 'unknown'
+export type FileKind = 'text' | 'image' | 'pdf' | 'office' | 'audio' | 'unknown'
 
 /** Paths the user pointed at, either via `@file` or a bare absolute path. */
 export interface FileReference {
@@ -122,6 +124,19 @@ const TEXT_EXTENSIONS = new Set([
 ])
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
+const AUDIO_EXTENSIONS = new Set([
+  '.mp3',
+  '.wav',
+  '.m4a',
+  '.ogg',
+  '.flac',
+  '.aac',
+  '.aiff',
+  '.aif',
+  '.wma',
+  '.webm',
+  '.opus',
+])
 const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp'])
 
 /** Max bytes a single inlined file can contribute to a user message before
@@ -163,6 +178,7 @@ export async function classifyFile(filePath: string): Promise<FileKind> {
   const ext = path.extname(filePath).toLowerCase()
   if (TEXT_EXTENSIONS.has(ext)) return 'text'
   if (IMAGE_EXTENSIONS.has(ext)) return 'image'
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
   if (OFFICE_EXTENSIONS.has(ext)) return 'office'
   if (ext === '.pdf') return 'pdf'
 
@@ -172,6 +188,7 @@ export async function classifyFile(filePath: string): Promise<FileKind> {
     const detected = await fileTypeFromFile(filePath)
     if (!detected) return 'text' // Empty signature → assume plain text.
     if (detected.mime.startsWith('image/')) return 'image'
+    if (detected.mime.startsWith('audio/')) return 'audio'
     if (detected.mime === 'application/pdf') return 'pdf'
     if (detected.mime.includes('officedocument') || detected.mime.includes('opendocument')) return 'office'
     if (detected.mime.startsWith('text/')) return 'text'
@@ -468,6 +485,72 @@ export async function ingestFile(
       {
         type: 'text',
         text: `<<file path="${ref.absolutePath}" kind="pdf-ocr">>\n${ocr}\n<</file>>\n[Note: this PDF was OCR'd locally because the current model does not support PDF input; accuracy is limited.]`,
+      },
+    ]
+  }
+
+  // Audio — two strategies depending on provider capabilities:
+  //  1. Provider supports audio input (OpenAI, Google) → send the raw audio
+  //     as a FilePart so the model handles speech recognition natively.
+  //     This is higher quality: captures pauses, tone, speaker identity, etc.
+  //  2. Provider does NOT support audio → transcribe locally via whisper.cpp
+  //     and send only the timestamped text. Still useful, just lower fidelity.
+  if (kind === 'audio') {
+    if (caps.audio) {
+      try {
+        const buffer = await fs.readFile(ref.absolutePath)
+        if (buffer.length > MAX_INGEST_BYTES) {
+          return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, buffer.length) }]
+        }
+        const mime = (await import('../utils/media-type.js')).mediaTypeFor(ref.absolutePath)
+        return [
+          { type: 'text', text: `<<file path="${ref.absolutePath}" kind="audio">>` },
+          {
+            type: 'file',
+            data: buffer.toString('base64'),
+            mediaType: mime,
+            filename: path.basename(ref.absolutePath),
+          },
+        ]
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return [{ type: 'text', text: `[Failed to attach audio ${ref.raw}: ${msg}]` }]
+      }
+    }
+
+    // Provider doesn't support audio input — fall back to local whisper transcription.
+    // onNotice appends a new UI line each call, so only forward key milestones
+    // (first-time download notice, "transcribing…", "done"). Download
+    // percentage ticks go to debugLog only.
+    let lastNotice = ''
+    const throttledNotice = onNotice
+      ? (msg: string) => {
+          if (msg === lastNotice) return
+          const isPercentageTick = /^Downloading whisper model: \d/.test(msg)
+          if (isPercentageTick) {
+            debugLog('audio-transcribe', msg)
+            return
+          }
+          lastNotice = msg
+          onNotice(msg)
+        }
+      : undefined
+    const result = await transcribeAudio(ref.absolutePath, { abortSignal, onNotice: throttledNotice })
+    if (typeof result === 'string') {
+      return [{ type: 'text', text: result }]
+    }
+    const formatted = formatTranscription(result, ref.absolutePath)
+    const textBytes = Buffer.byteLength(formatted, 'utf-8')
+    if (textBytes > MAX_INGEST_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, textBytes) }]
+    }
+    return [
+      {
+        type: 'text',
+        text:
+          `<<file path="${ref.absolutePath}" kind="audio-transcription">>\n${formatted}\n<</file>>\n` +
+          `[Note: this audio was transcribed locally via whisper.cpp because the current model does not support audio input. ` +
+          `Only the timestamped text is visible; pauses, tone, and speaker identity are not captured.]`,
       },
     ]
   }

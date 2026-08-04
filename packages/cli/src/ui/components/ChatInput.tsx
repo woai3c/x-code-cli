@@ -1675,10 +1675,10 @@ export function ChatInput({
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push(...textToCells(titleText, S_WARNING_BOLD))
-      frame.push(titleCells)
+      frame.push(truncateCellRow(titleCells, termWidth))
 
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
-      if (contentCells) frame.push(contentCells)
+      if (contentCells) frame.push(truncateCellRow(contentCells, termWidth))
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
       // When no rule can be suggested (e.g. powershell -Command "...",
@@ -1705,7 +1705,7 @@ export function ChatInput({
           alwaysCells.push(...textToCells('      ', S_NONE))
           alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_DIM))
         }
-        frame.push(alwaysCells)
+        frame.push(truncateCellRow(alwaysCells, termWidth))
       }
 
       const noCells: Cell[] = []
