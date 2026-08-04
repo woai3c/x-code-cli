@@ -1,145 +1,203 @@
-// Tests for the auto-memory system
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 
-import { AutoMemory } from '../src/knowledge/auto-memory.js'
-import type { KnowledgeFact } from '../src/types/index.js'
+import { createLoopState } from '../src/agent/loop-state.js'
+import { MemoryService } from '../src/knowledge/memory-service.js'
+import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 
-function createTestMemory() {
-  return new AutoMemory(path.join(os.tmpdir(), 'x-code-test-memory-' + Date.now() + Math.random() + '.md'))
-}
+describe('Memory v2 knowledge source', () => {
+  it('initializes an empty v2 store without reading legacy auto.md', async () => {
+    const root = await makeMemoryRoot()
+    await fs.writeFile(path.join(root, 'auto.md'), 'legacy content that must be ignored', 'utf-8')
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
 
-describe('AutoMemory', () => {
-  let memory: AutoMemory
-
-  beforeEach(() => {
-    memory = createTestMemory()
-  })
-
-  it('adds a fact', () => {
-    const fact: KnowledgeFact = {
-      key: 'user-role',
-      fact: 'senior Go engineer, new to React',
-      category: 'user',
-      date: '2026-04-18',
-    }
-    memory.add(fact)
-    expect(memory.getAll()).toHaveLength(1)
-    expect(memory.getAll()[0]).toMatchObject(fact)
-  })
-
-  it('replaces fact with same category + key (conflict detection)', () => {
-    memory.add({ key: 'release-freeze', fact: 'starts 2026-03-05', category: 'project', date: '2026-03-01' })
-    memory.add({ key: 'release-freeze', fact: 'extended to 2026-03-12', category: 'project', date: '2026-03-08' })
-
-    expect(memory.getAll()).toHaveLength(1)
-    expect(memory.getAll()[0].fact).toBe('extended to 2026-03-12')
-  })
-
-  it('allows same key in different categories', () => {
-    memory.add({ key: 'testing', fact: 'integration tests hit real DB', category: 'feedback', date: '2026-04-01' })
-    memory.add({
-      key: 'testing',
-      fact: 'Grafana test dashboard at internal/test',
-      category: 'reference',
-      date: '2026-04-01',
+    expect(service.getCoreProfile()).not.toContain('legacy content')
+    expect(JSON.parse(await fs.readFile(path.join(root, '.state', 'schema.json'), 'utf-8'))).toEqual({
+      version: 2,
+      generation: 0,
     })
-
-    expect(memory.getAll()).toHaveLength(2)
+    const status = await service.status()
+    expect(status).not.toHaveProperty('enabled')
+    expect(status).toMatchObject({ initialized: true, schemaVersion: 2 })
+    expect(['idle', 'running']).toContain(status.worker)
+    expect(await fs.readFile(path.join(root, 'auto.md'), 'utf-8')).toContain('legacy content')
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('finds a fact by key', () => {
-    memory.add({ key: 'user-role', fact: 'data scientist', category: 'user', date: '2026-04-01' })
-    const found = memory.find('user-role')
-    expect(found).toBeDefined()
-    expect(found!.fact).toBe('data scientist')
-  })
-
-  it('finds a fact by key and category', () => {
-    memory.add({ key: 'testing', fact: 'no mocks', category: 'feedback', date: '2026-04-01' })
-    memory.add({ key: 'testing', fact: 'Grafana dashboard', category: 'reference', date: '2026-04-01' })
-
-    const found = memory.find('testing', 'feedback')
-    expect(found).toBeDefined()
-    expect(found!.fact).toBe('no mocks')
-  })
-
-  it('deletes a fact by key', () => {
-    memory.add({ key: 'user-role', fact: 'senior Go engineer', category: 'user', date: '2026-04-01' })
-    memory.delete('user-role')
-    expect(memory.getAll()).toHaveLength(0)
-  })
-
-  it('deletes a fact by key and category (leaves other categories intact)', () => {
-    memory.add({ key: 'testing', fact: 'no mocks', category: 'feedback', date: '2026-04-01' })
-    memory.add({ key: 'testing', fact: 'Grafana dashboard', category: 'reference', date: '2026-04-01' })
-
-    memory.delete('testing', 'feedback')
-    expect(memory.getAll()).toHaveLength(1)
-    expect(memory.getAll()[0].category).toBe('reference')
-  })
-
-  it('evicts facts older than maxAgeDays', () => {
-    const oldDate = '2020-01-01'
-    const newDate = new Date().toISOString().split('T')[0]
-
-    memory.add({ key: 'old', fact: 'old fact', category: 'project', date: oldDate })
-    memory.add({ key: 'new', fact: 'new fact', category: 'project', date: newDate })
-
-    memory.evict(90)
-    expect(memory.getAll()).toHaveLength(1)
-    expect(memory.getAll()[0].key).toBe('new')
-  })
-
-  it('rejects writes with an invalid category (defense in depth)', () => {
-    memory.add({
-      key: 'bogus',
-      fact: 'should be dropped',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      category: 'tech-stack' as any,
-      date: '2026-04-20',
-    })
-    expect(memory.getAll()).toHaveLength(0)
-  })
-
-  it('drops legacy entries under unknown categories on load', async () => {
-    const tmp = path.join(os.tmpdir(), 'x-code-legacy-mem-' + Date.now() + Math.random() + '.md')
-    await fs.writeFile(
-      tmp,
-      `## Auto Memory
-
-### context
-- [2026-04-05] junk-task: user asked for a snake game
-
-### tech-stack
-- [2026-04-05] package-manager: pnpm
-
-### user
-- [2026-04-05] user-role: senior Go engineer
-`,
-      'utf-8',
+  it('reloads manual topic edits and isolates a topic as soon as it becomes invalid', async () => {
+    const root = await makeMemoryRoot()
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'profile',
+        type: 'user',
+        aliases: ['user-profile'],
+        keywords: ['language'],
+        facts: [{ id: 'user.language', content: '- OPAQUE_PROFILE_VALUE' }],
+      }),
+      'profile',
     )
-    const mem = new AutoMemory(tmp)
-    await mem.load()
-    const all = mem.getAll()
-    expect(all).toHaveLength(1)
-    expect(all[0].category).toBe('user')
-    await fs.rm(tmp, { force: true })
+    const topicPath = path.join(root, 'topics', 'profile.md')
+
+    await service.reload()
+    expect(service.listTopics().map((topic) => topic.id)).toEqual(['profile'])
+    const freshState = createLoopState()
+    freshState.messages.push({ role: 'user', content: 'user-profile language' })
+    await service.recall(
+      {
+        currentUserText: 'user-profile language',
+        recentConversationText: '',
+        repositoryId: process.cwd(),
+        mentionedPaths: [],
+        identifiers: [],
+        explicitHistoryIntent: false,
+        explicitForgetIntent: false,
+      },
+      freshState,
+    )
+    expect(freshState.memoryRecallAttachments).toHaveLength(1)
+    expect(freshState.memoryRecallTombstones).toEqual([])
+
+    const valid = await fs.readFile(topicPath, 'utf-8')
+    await fs.writeFile(topicPath, valid.replace('status: active', 'status: broken'), 'utf-8')
+    await service.reload()
+
+    expect(service.listTopics()).toEqual([])
+    expect((await service.status()).invalidTopics[0]?.path).toBe(topicPath)
+    expect(await service.search({ query: 'user-profile language' }, { repositoryId: process.cwd() })).toEqual([])
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('getPromptContent groups by category', () => {
-    memory.add({ key: 'user-role', fact: 'senior Go engineer', category: 'user', date: '2026-04-01' })
-    memory.add({ key: 'user-lang', fact: 'reply in Chinese', category: 'user', date: '2026-04-01' })
-    memory.add({ key: 'testing-policy', fact: 'no mocks', category: 'feedback', date: '2026-04-01' })
+  it('invalidates resumed attachments when the memory store generation moved backwards', async () => {
+    const root = await makeMemoryRoot()
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
+    const state = createLoopState()
+    state.memoryGeneration = 7
+    state.messages.push({ role: 'user', content: 'What was my preference?' })
+    state.memoryRecallAttachments.push({
+      anchorMessageIndex: 0,
+      placement: 'before-user',
+      estimatedTokens: 10,
+      topics: [
+        {
+          topicId: 'profile',
+          topicHash: 'old-topic-hash',
+          factIds: ['user.language'],
+          factHashes: { 'user.language': 'old-fact-hash' },
+          renderedContent: 'OPAQUE_RECALLED_VALUE',
+        },
+      ],
+    })
 
-    const content = memory.getPromptContent()
-    expect(content).toContain('## Auto Memory')
-    expect(content).toContain('### user')
-    expect(content).toContain('### feedback')
-    expect(content).toContain('user-role: senior Go engineer')
-    expect(content).toContain('testing-policy: no mocks')
+    await service.recall(
+      {
+        currentUserText: 'What was my preference?',
+        recentConversationText: '',
+        repositoryId: process.cwd(),
+        mentionedPaths: [],
+        identifiers: [],
+        explicitHistoryIntent: true,
+        explicitForgetIntent: false,
+      },
+      state,
+    )
+
+    expect(state.memoryRecallTombstones.at(-1)).toEqual({
+      generation: 0,
+      factIds: ['user.language'],
+      topicIds: ['profile'],
+    })
+    expect(state.memoryGeneration).toBe(0)
+    expect(state.expectCacheMiss).toBe(true)
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('commits manual-only edits and tombstones their previously recalled topic content', async () => {
+    const root = await makeMemoryRoot()
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'manual-notes',
+        type: 'reference',
+        aliases: ['manual-note'],
+        keywords: ['codename'],
+        manual: 'The durable launch codename is Aurora.',
+      }),
+      'manual-notes',
+    )
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
+    const state = createLoopState()
+    state.messages.push({ role: 'user', content: 'What is the manual-note codename?' })
+    await service.recall(
+      {
+        currentUserText: 'What is the manual-note codename?',
+        recentConversationText: '',
+        repositoryId: process.cwd(),
+        mentionedPaths: [],
+        identifiers: [],
+        explicitHistoryIntent: false,
+        explicitForgetIntent: false,
+      },
+      state,
+    )
+    expect(state.memoryRecallAttachments[0]?.topics[0]?.factIds).toEqual([])
+
+    const topicPath = path.join(root, 'topics', 'manual-notes.md')
+    const beforeGeneration = state.memoryGeneration
+    await fs.writeFile(topicPath, (await fs.readFile(topicPath, 'utf-8')).replace('Aurora', 'Borealis'), 'utf-8')
+    await service.reload(state)
+
+    expect(state.memoryGeneration).toBe(beforeGeneration + 1)
+    expect(state.memoryRecallTombstones.at(-1)?.topicIds).toEqual(['manual-notes'])
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('late-recalls a protected exact tool entity without requiring a selector model', async () => {
+    const root = await makeMemoryRoot()
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'worker-reference',
+        type: 'reference',
+        aliases: ['NewWorker'],
+        facts: [{ id: 'reference.worker.location', content: '- NewWorker lives in src/new-worker.ts.' }],
+      }),
+      'worker-reference',
+    )
+    const service = new MemoryService({ memoryRoot: root, config: memoryConfig })
+    await service.initialize(process.cwd())
+    const state = createLoopState()
+    state.messages = [
+      { role: 'user', content: 'inspect the operation' },
+      { role: 'assistant', content: 'tool call' },
+      { role: 'tool', content: [] },
+    ]
+
+    const attachment = await service.lateRecall(
+      {
+        anchorMessageIndex: 2,
+        placement: 'after-tool-results',
+        repositoryId: process.cwd(),
+        currentUserText: 'inspect the operation',
+        paths: [],
+        identifiers: ['NewWorker'],
+        text: 'NewWorker',
+      },
+      state,
+    )
+
+    expect(attachment?.topics.map((topic) => topic.topicId)).toEqual(['worker-reference'])
+    expect(state.lastMemoryRecallTrace?.selectorUsed).toBe(false)
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
   })
 })

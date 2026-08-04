@@ -205,7 +205,7 @@ export async function checkAndCompressContext(
       `Dropped ${light.dropped} looped tool-call message(s) to reclaim context${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
     if (!stillOver) {
-      void markBoundaryAndReflush(state)
+      await markBoundaryAndReflush(state)
       state.lastInputTokens = 0
       state.expectCacheMiss = true
       emitCompactionHook(hookCtx, {
@@ -226,7 +226,7 @@ export async function checkAndCompressContext(
       `Truncated ${trunc.truncatedCount} old tool result(s), saved ~${Math.round(trunc.charsSaved / 3)} tokens${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
     if (!stillOver) {
-      void markBoundaryAndReflush(state)
+      await markBoundaryAndReflush(state)
       state.lastInputTokens = 0
       state.expectCacheMiss = true
       emitCompactionHook(hookCtx, {
@@ -271,7 +271,7 @@ export async function checkAndCompressContext(
   state.lastInputTokens = 0
   state.expectCacheMiss = true
   const tokensAfter = estimateTokenCount(state.messages)
-  void markBoundaryAndReflush(state, summaryText)
+  await markBoundaryAndReflush(state, summaryText)
   const beforeK = Math.round(tokensBefore / 1000)
   const afterK = Math.round(tokensAfter / 1000)
   callbacks.onContextCompressed(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
@@ -311,7 +311,7 @@ export async function handleContextTooLong(
   state.lastInputTokens = 0
   state.expectCacheMiss = true
   const tokensAfter = estimateTokenCount(state.messages)
-  void markBoundaryAndReflush(state)
+  await markBoundaryAndReflush(state)
 
   // Anti-spin guard. If summarizing barely freed context, the overflow
   // lives in the kept recent messages — bail so the user can /clear.

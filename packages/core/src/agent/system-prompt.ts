@@ -79,6 +79,12 @@ Break down and manage your work with the todoWrite tool. The user sees a live ch
 - Do NOT create files unless absolutely necessary for the task
 - Do NOT add comments, docstrings, or type annotations to code you didn't change
 
+### Long-term Memory
+- Long-term memory is maintained by a private post-turn service after a completed root response
+- If the user only asks you to remember, update, or forget something, do not call tools solely for that request; reply briefly and naturally, then let the private service handle persistence
+- Never modify the managed memory store with writeFile, edit, or shell; do not inspect it with readFile, glob, grep, listDir, or shell unless the user explicitly asks to diagnose memory storage
+- In normal replies, do not narrate memory extraction, queues, internal paths, background commits, or persistence notices; /memory commands are the user-facing diagnostic surface
+
 ### Command Execution
 - Generate commands compatible with the current shell ({shell})
 - Use platform-appropriate path separators and syntax
@@ -206,7 +212,7 @@ If you find yourself wanting to ask "is the plan good?" in any form: stop, call 
 **askUser is for**: clarifying requirements, choosing between technical approaches DURING planning (e.g. "Redis vs in-memory cache?"), prioritizing what to include. Never for plan approval.`
 
 /** Build a focused system prompt for a sub-agent invocation.
- *  Shorter than the parent prompt — no plan-mode overlay, no auto-memory
+ *  Shorter than the parent prompt — no plan-mode overlay, no independent memory
  *  guidelines, no response-format rules. Just role + environment + contract. */
 export function buildSubAgentSystemPrompt(options: {
   agentPrompt: string

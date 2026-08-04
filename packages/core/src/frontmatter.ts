@@ -17,6 +17,27 @@ export interface ParseFrontmatterOptions {
    *  need this for `tools: [...]` and `maxTurns: 10`; commands and skills
    *  don't. */
   coerceTypes?: boolean
+  /** Memory topics mode: block lists (`key:` followed by indented `- item`
+   *  lines), `true`/`false` boolean scalars, `[a, b]` inline arrays, and
+   *  strict validation — unrecognized lines throw instead of being skipped. */
+  blockLists?: boolean
+}
+
+/** Scalar parsing for blockLists mode: booleans, JSON-style double quotes,
+ *  and YAML-style single quotes (escaped as ''). */
+function parseBlockListScalar(value: string): string | boolean {
+  const trimmed = value.trim()
+  if (trimmed === 'true') return true
+  if (trimmed === 'false') return false
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed) as string
+    } catch {
+      return trimmed.slice(1, -1)
+    }
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1).replace(/''/g, "'")
+  return trimmed
 }
 
 /** Parse a `---` delimited YAML frontmatter block from the start of a
@@ -30,15 +51,22 @@ export interface ParseFrontmatterOptions {
  *  - Comment lines (lines starting with `#`) */
 export function parseFrontmatter(raw: string, options?: ParseFrontmatterOptions): FrontmatterResult | null {
   const coerce = options?.coerceTypes ?? false
+  const blockLists = options?.blockLists ?? false
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!match) return null
 
   const yamlBlock = match[1]!
-  const body = match[2]!
+  const body = blockLists ? match[2]!.replace(/\r\n/g, '\n') : match[2]!
   const data: Record<string, unknown> = {}
 
   const foldedLines: string[] = []
   for (const line of yamlBlock.split(/\r?\n/)) {
+    if (blockLists) {
+      if (/^\s+-\s/.test(line)) foldedLines.push(line)
+      else if (/^\s/.test(line) && line.trim()) throw new Error(`Unsupported frontmatter line: ${line.trim()}`)
+      else foldedLines.push(line)
+      continue
+    }
     if (/^\s/.test(line) && line.trim() && foldedLines.length > 0) {
       foldedLines[foldedLines.length - 1] += ' ' + line.trim()
     } else {
@@ -46,15 +74,43 @@ export function parseFrontmatter(raw: string, options?: ParseFrontmatterOptions)
     }
   }
 
+  let arrayKey: string | null = null
   for (const line of foldedLines) {
+    if (blockLists) {
+      const item = line.match(/^\s+-\s+(.*)$/)
+      if (item && arrayKey) {
+        const list = data[arrayKey]
+        if (Array.isArray(list)) list.push(String(parseBlockListScalar(item[1]!)))
+        continue
+      }
+    }
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
 
     const colonIdx = trimmed.indexOf(':')
+    if (blockLists && (colonIdx < 1 || !/^[a-z_]+$/.test(trimmed.slice(0, colonIdx)))) {
+      throw new Error(`Unsupported frontmatter line: ${trimmed}`)
+    }
     if (colonIdx < 1) continue
 
     const key = trimmed.slice(0, colonIdx).trim()
     let value: string | number | string[] = trimmed.slice(colonIdx + 1).trim()
+
+    if (blockLists) {
+      arrayKey = null
+      if (!value) {
+        data[key] = []
+        arrayKey = key
+      } else if (value.startsWith('[') && value.endsWith(']')) {
+        data[key] = value
+          .slice(1, -1)
+          .split(',')
+          .map((item) => String(parseBlockListScalar(item)))
+      } else {
+        data[key] = parseBlockListScalar(value)
+      }
+      continue
+    }
 
     if (coerce && value.startsWith('[') && value.endsWith(']')) {
       const inner = value.slice(1, -1)

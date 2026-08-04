@@ -1,6 +1,7 @@
 // @x-code-cli/core — Shared agent loop state
 import type { ModelMessage } from 'ai'
 
+import type { MemoryRecallAttachment, MemoryRecallTombstone, MemoryRecallTrace } from '../knowledge/memory-types.js'
 import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
@@ -39,6 +40,9 @@ export interface LoopState {
   sessionFilePath: string | null
   startedAt: string
   filesModified: Set<string>
+  /** Files changed during the current agentLoop invocation, including paths
+   *  that were already modified by an earlier submit in this session. */
+  turnFilesModified: Set<string>
   /** Rolling record of recently executed tool calls, keyed by a hash of the
    *  tool name + stable-stringified input. Used by the doom-loop guard to
    *  detect when the model is looping on the same failing call. */
@@ -154,6 +158,15 @@ export interface LoopState {
    *  In-memory only; Set iteration order is insertion order, keeping the
    *  spliced-in tail of the tools map stable across turns. */
   activatedTools: Set<string>
+
+  // ── Memory v2 dynamic recall ──
+
+  memoryGeneration: number
+  memoryRecallAttachments: MemoryRecallAttachment[]
+  memoryRecallTombstones: MemoryRecallTombstone[]
+  surfacedMemoryHashes: Set<string>
+  memoryTokensInWindow: number
+  lastMemoryRecallTrace: MemoryRecallTrace | null
 }
 
 /** Generate a human-skimmable session id: `YYYYMMDD-HHMMSS-mmm` (local
@@ -179,6 +192,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     sessionFilePath: null,
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
+    turnFilesModified: new Set(),
     recentToolCalls: [],
     systemPromptCache: null,
     permissionMode: initialMode,
@@ -200,5 +214,11 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     goalInputs: [],
     activatedTools: new Set(),
     stepStats: [],
+    memoryGeneration: 0,
+    memoryRecallAttachments: [],
+    memoryRecallTombstones: [],
+    surfacedMemoryHashes: new Set(),
+    memoryTokensInWindow: 0,
+    lastMemoryRecallTrace: null,
   }
 }

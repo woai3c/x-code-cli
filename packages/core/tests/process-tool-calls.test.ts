@@ -1,8 +1,12 @@
 // Tests for processToolCalls — ghost-call skip path
 import { describe, expect, it, vi } from 'vitest'
 
+import os from 'node:os'
+import path from 'node:path'
+
 import type { ModelMessage } from 'ai'
 
+import { recordToolCall } from '../src/agent/loop-guard.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import { partitionToolCalls, processToolCalls } from '../src/agent/tool-execution.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../src/types/index.js'
@@ -233,18 +237,6 @@ describe('processToolCalls ghost-call skip', () => {
   })
 })
 
-function shellAssistant(ids: string[]): ModelMessage {
-  return {
-    role: 'assistant',
-    content: ids.map((toolCallId) => ({
-      type: 'tool-call',
-      toolCallId,
-      toolName: 'shell',
-      input: { command: 'echo hi' },
-    })),
-  } as ModelMessage
-}
-
 function toolResult(
   toolCallId: string,
   toolName: string,
@@ -265,6 +257,43 @@ function toolResult(
 }
 
 describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)', () => {
+  it('keeps read-only managed-memory shell diagnostics out of UI callbacks', async () => {
+    const memoryRoot = path.join(os.tmpdir(), 'x-code-managed-memory')
+    const command = `echo "${memoryRoot}"`
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'diagnose memory storage' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-memory-read',
+            toolName: 'shell',
+            input: { command },
+          },
+        ],
+      } as ModelMessage,
+    )
+    const onAskPermission = vi.fn().mockResolvedValue('yes')
+    const onShellOutput = vi.fn()
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onAskPermission, onShellOutput, onToolResult })
+
+    await processToolCalls(
+      [{ toolName: 'shell', toolCallId: 'tc-memory-read', input: { command } }],
+      state,
+      { ...options, memoryService: { memoryRoot } as AgentOptions['memoryService'] },
+      callbacks,
+      stubModel,
+    )
+
+    expect(onAskPermission).not.toHaveBeenCalled()
+    expect(onShellOutput).not.toHaveBeenCalled()
+    expect(onToolResult).not.toHaveBeenCalled()
+    expect(JSON.stringify(state.messages)).toContain(memoryRoot.replace(/\\/g, '\\\\'))
+  })
+
   it('denies shell commands blocked by sub-agent shell restrictions before permission checks', async () => {
     const state = createLoopState()
     state.messages.push(
@@ -446,29 +475,43 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
           },
           {
             type: 'tool-call',
-            toolCallId: 'tc-shell',
-            toolName: 'shell',
-            input: { command: 'echo manual' },
+            toolCallId: 'tc-ask',
+            toolName: 'askUser',
+            input: {
+              question: 'continue?',
+              options: [
+                { label: 'yes', description: 'continue' },
+                { label: 'no', description: 'stop' },
+              ],
+            },
           },
         ],
       } as ModelMessage,
       toolResult('tc-read', 'readFile', '/x contents'),
     )
-    const askPermission = vi.fn().mockResolvedValue('yes')
-    const callbacks = makeCallbacks({ onAskPermission: askPermission })
-    // shell will fail to spawn in tests (no real shell provider); we
-    // only care that processToolCalls reaches it and does NOT try to
-    // execute readFile a second time.
+    const onAskUser = vi.fn().mockResolvedValue('yes')
+    const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
         { toolName: 'readFile', toolCallId: 'tc-read', input: { filePath: '/x' } },
-        { toolName: 'shell', toolCallId: 'tc-shell', input: { command: 'echo manual' } },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-ask',
+          input: {
+            question: 'continue?',
+            options: [
+              { label: 'yes', description: 'continue' },
+              { label: 'no', description: 'stop' },
+            ],
+          },
+        },
       ],
       state,
       options,
       callbacks,
       stubModel,
-    ).catch(() => {})
+    )
+    expect(onAskUser).toHaveBeenCalledTimes(1)
     // Only one tool-result for tc-read should exist (the original).
     const readResults = state.messages.filter(
       (m) =>
@@ -528,25 +571,49 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
     // between assistant.tool_calls and a later tool-result. DeepSeek
     // 400s with "Messages with role 'tool' must be a response to a
     // preceding message with 'tool_calls'". We test the deferred-flush
-    // path indirectly by checking message-shape invariants after the
-    // call returns.
+    // path by making an already-fulfilled call trip the loop guard, then
+    // checking message-shape invariants after the next live call returns.
     const state = createLoopState()
+    const readInput = { filePath: '/x' }
+    const askInput = {
+      question: 'continue?',
+      options: [
+        { label: 'yes', description: 'continue' },
+        { label: 'no', description: 'stop' },
+      ],
+    }
+    // Two prior identical calls make the already-fulfilled readFile below
+    // trip the soft loop guard, which queues a deferred user message.
+    recordToolCall(state, 'readFile', readInput)
+    recordToolCall(state, 'readFile', readInput)
     state.messages.push(
       { role: 'user', content: 'hi' } as ModelMessage,
-      shellAssistant(['tc-1', 'tc-2']),
-      toolResult('tc-1', 'shell', 'first result'), // already fulfilled by SDK
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc-read', toolName: 'readFile', input: readInput },
+          { type: 'tool-call', toolCallId: 'tc-ask', toolName: 'askUser', input: askInput },
+        ],
+      } as ModelMessage,
+      toolResult('tc-read', 'readFile', 'file contents'), // already fulfilled by SDK
     )
-    const callbacks = makeCallbacks()
+    const onAskUser = vi.fn().mockResolvedValue('yes')
+    const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
-        { toolName: 'shell', toolCallId: 'tc-1', input: { command: 'echo hi' } },
-        { toolName: 'shell', toolCallId: 'tc-2', input: { command: 'echo bye' } },
+        { toolName: 'readFile', toolCallId: 'tc-read', input: readInput },
+        { toolName: 'askUser', toolCallId: 'tc-ask', input: askInput },
       ],
       state,
       options,
       callbacks,
       stubModel,
-    ).catch(() => {})
+    )
+    expect(onAskUser).toHaveBeenCalledTimes(1)
+    expect(state.messages.at(-1)).toEqual({
+      role: 'user',
+      content: expect.stringContaining('[loop-guard]'),
+    })
     // Walk the messages — every tool-role message must have an
     // assistant-role message earlier in the array (no user message
     // between an assistant.tool_calls and a tool result).

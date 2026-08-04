@@ -47,6 +47,12 @@ describe('toolResultMessage', () => {
     const part = (msg.content as Array<{ output: { type: string; value: string } }>)[0]
     expect(part.output).toEqual({ type: 'text', value: 'done' })
   })
+
+  it('records failures with the structured tool-result error type', () => {
+    const msg = toolResultMessage('tc_4', 'shell', 'opaque failure details', undefined, true)
+    const part = (msg.content as Array<{ output: { type: string; value: string } }>)[0]
+    expect(part.output).toEqual({ type: 'error-text', value: 'opaque failure details' })
+  })
 })
 
 describe('toolMediaUserMessage', () => {

@@ -7,6 +7,7 @@ import path from 'node:path'
 
 import {
   McpPermissionStore,
+  MemoryService,
   PROVIDER_DETECTION_ORDER,
   buildPluginIntegration,
   createCommandRegistry,
@@ -102,6 +103,7 @@ let shutdownInProgress = false
  *  their parent's stdin closed — usually fine, but explicit shutdown
  *  is faster and less surprising. */
 let mcpRegistryForShutdown: McpRegistry | null = null
+let memoryServiceForShutdown: MemoryService | null = null
 /** Plugin hook bus captured at startup so gracefulShutdown can fire
  *  `SessionEnd` to plugin hooks before the process exits. Fire-and-
  *  forget — the 1s shutdown grace window is the only thing standing
@@ -130,11 +132,9 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   if (shutdownInProgress) return undefined as never
   shutdownInProgress = true
 
-  // Kick off cleanup as best-effort in the background, but don't block the
-  // exit on it. saveSession internally calls the model to generate a summary
-  // which can take seconds — that was the "press Ctrl+C and wait 2-5 seconds"
-  // UX problem. None of the competitors (claude-code, gemini-cli, opencode,
-  // codex) make users wait for anything on exit; we align with them.
+  // Session persistence remains best-effort, but the durable memory worker
+  // gets its configured bounded drain window. This keeps exit responsive
+  // without killing a transaction halfway through its final commit.
   //
   // Consequence: if the process exits before saveSession's file write lands,
   // that session isn't saved. Acceptable trade-off given users care far more
@@ -142,6 +142,9 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   // incremental saves during the session (opencode's approach).
   const cleanup = getCleanupFn()
   if (cleanup) cleanup().catch(() => undefined)
+  if (memoryServiceForShutdown) {
+    await memoryServiceForShutdown.shutdown(memoryServiceForShutdown.getConfig().drainTimeoutMs).catch(() => undefined)
+  }
 
   // Fire-and-forget MCP shutdown. Stdio servers also clean themselves up
   // when their stdin closes, so even if process.exit beats this promise
@@ -278,6 +281,12 @@ async function main() {
   // Create registries and get model
   const providerRegistry = createModelRegistry()
   const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
+  const memoryService = new MemoryService({
+    resolveModel: (id) => providerRegistry.languageModel(id as `${string}:${string}`),
+  })
+  memoryServiceForShutdown = memoryService
+  memoryService.setActiveModelId(modelId)
+  await memoryService.initialize(process.cwd())
 
   // --plugin-debug / XC_PLUGIN_DEBUG=1: mirror plugin/hook/marketplace
   // debugLog breadcrumbs to stderr so they're visible live without
@@ -371,6 +380,7 @@ async function main() {
     // unless explicitly requested.
     permissionMode: argv.plan ? 'plan' : 'default',
     modelRegistry: providerRegistry,
+    memoryService,
     subAgentRegistry,
     skillRegistry,
     mcpRegistry: mcpLoadResult.registry,

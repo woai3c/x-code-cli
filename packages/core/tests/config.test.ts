@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getAvailableProviders, resolveModelId } from '../src/config/index.js'
+import {
+  DEFAULT_MEMORY_CONFIG,
+  getAvailableProviders,
+  resolveMemoryConfig,
+  resolveModelId,
+} from '../src/config/index.js'
 
 /** Every provider env var the config module reads. Mirrors `ENV_MAP` in
  *  `src/config/index.ts` plus the `OPENAI_COMPATIBLE_*` pair from
@@ -113,5 +118,45 @@ describe('getAvailableProviders', () => {
     const providers = getAvailableProviders()
     expect(providers).toContain('anthropic')
     expect(providers).toContain('openai')
+  })
+})
+
+describe('memory config', () => {
+  it('keeps memory always active and merges nested recall overrides', () => {
+    expect(resolveMemoryConfig({})).toEqual(DEFAULT_MEMORY_CONFIG)
+    expect(resolveMemoryConfig({ memory: { recall: { semanticSelector: 'off' } } }).recall).toEqual({
+      ...DEFAULT_MEMORY_CONFIG.recall,
+      semanticSelector: 'off',
+    })
+    expect(
+      resolveMemoryConfig({ memory: { enabled: false } } as unknown as Parameters<typeof resolveMemoryConfig>[0]),
+    ).toEqual(DEFAULT_MEMORY_CONFIG)
+  })
+
+  it('rejects malformed and unsafe memory limits from hand-edited config', () => {
+    const malformed = {
+      memory: {
+        maxInputTokens: -1,
+        maxOperationsPerTurn: 99,
+        recall: { maxTopicsPerTurn: 500, semanticSelector: 'sometimes' },
+      },
+    } as unknown as Parameters<typeof resolveMemoryConfig>[0]
+    expect(resolveMemoryConfig(malformed)).toEqual(DEFAULT_MEMORY_CONFIG)
+  })
+
+  it('resolves memory reasoning and total generation budget safely', () => {
+    expect(
+      resolveMemoryConfig({
+        memory: { reasoning: 'low', maxOutputTokens: 2000, maxTotalOutputTokens: 6000 },
+      }).reasoning,
+    ).toBe('low')
+    expect(
+      resolveMemoryConfig({
+        memory: { reasoning: 'low', maxOutputTokens: 2000, maxTotalOutputTokens: 6000 },
+      }).maxTotalOutputTokens,
+    ).toBe(6000)
+    expect(
+      resolveMemoryConfig({ memory: { maxOutputTokens: 4000, maxTotalOutputTokens: 1000 } }).maxTotalOutputTokens,
+    ).toBe(4000)
   })
 })

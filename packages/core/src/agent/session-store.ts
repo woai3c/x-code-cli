@@ -21,6 +21,8 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
+import { resetMemoryRecallWindow } from '../knowledge/memory-recall-state.js'
+import type { MemoryRecallAttachment, MemoryRecallTombstone } from '../knowledge/memory-types.js'
 import { ensureProjectStorageDir } from '../project-storage.js'
 import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
@@ -84,6 +86,7 @@ interface CompactBoundaryEntry {
    *  `listSessions` to show "compacted" hints in the picker without
    *  re-reading the post-boundary messages. */
   summary?: string
+  memoryGeneration?: number
   ts: string
 }
 
@@ -135,6 +138,21 @@ interface StepStatsEntry {
   ts: string
 }
 
+interface MemoryRecallEntry {
+  t: 'meta'
+  kind: 'memory-recall'
+  attachment: MemoryRecallAttachment
+  memoryGeneration?: number
+  ts: string
+}
+
+interface MemoryRecallDeleteEntry {
+  t: 'meta'
+  kind: 'memory-recall-delete'
+  tombstone: MemoryRecallTombstone
+  ts: string
+}
+
 type Entry =
   | HeaderEntry
   | MsgEntry
@@ -146,6 +164,8 @@ type Entry =
   | GoalInputEntry
   | GoalVerificationEntry
   | StepStatsEntry
+  | MemoryRecallEntry
+  | MemoryRecallDeleteEntry
 
 // ── Append helpers (fire-and-forget; never throw) ───────────────────────
 
@@ -374,7 +394,12 @@ export async function appendStepStats(state: LoopState, step: StepStats): Promis
 export async function markBoundaryAndReflush(state: LoopState, summary?: string): Promise<void> {
   const filePath = getSessionFilePath(state)
   const ts = new Date().toISOString()
-  const boundary: CompactBoundaryEntry = { t: 'meta', kind: 'compact-boundary', ts }
+  const boundary: CompactBoundaryEntry = {
+    t: 'meta',
+    kind: 'compact-boundary',
+    memoryGeneration: state.memoryGeneration,
+    ts,
+  }
   if (summary !== undefined) boundary.summary = summary
   const lines = [JSON.stringify(boundary)]
   for (const message of state.messages) {
@@ -388,6 +413,7 @@ export async function markBoundaryAndReflush(state: LoopState, summary?: string)
   // in-memory list to mirror the loader's behaviour (which drops
   // pre-boundary checkpoint lines on resume).
   state.checkpoints = []
+  resetMemoryRecallWindow(state)
 }
 
 /** Append a rewind checkpoint marker. Fire-and-forget, like the other
@@ -463,6 +489,29 @@ export async function appendGoalVerification(
   await appendLine(filePath, entry)
 }
 
+export async function appendMemoryRecall(state: LoopState, attachment: MemoryRecallAttachment): Promise<void> {
+  if (!state.sessionId) return
+  const entry: MemoryRecallEntry = {
+    t: 'meta',
+    kind: 'memory-recall',
+    attachment: structuredClone(attachment),
+    memoryGeneration: state.memoryGeneration,
+    ts: new Date().toISOString(),
+  }
+  await appendLine(getSessionFilePath(state), entry)
+}
+
+export async function appendMemoryRecallDelete(state: LoopState, tombstone: MemoryRecallTombstone): Promise<void> {
+  if (!state.sessionId) return
+  const entry: MemoryRecallDeleteEntry = {
+    t: 'meta',
+    kind: 'memory-recall-delete',
+    tombstone: structuredClone(tombstone),
+    ts: new Date().toISOString(),
+  }
+  await appendLine(getSessionFilePath(state), entry)
+}
+
 // ── Read path: load + list ──────────────────────────────────────────────
 
 export interface LoadedSession {
@@ -482,6 +531,9 @@ export interface LoadedSession {
   checkpoints: CheckpointEntry[]
   /** Per-step token usage snapshots accumulated across the session. */
   stepStats: StepStats[]
+  memoryRecallAttachments: MemoryRecallAttachment[]
+  memoryRecallTombstones: MemoryRecallTombstone[]
+  memoryGeneration: number
   /** Path of the jsonl file so the agent loop can keep appending to the
    *  same file when the user resumes. */
   filePath: string
@@ -521,6 +573,9 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   let goal: GoalState | null = null
   const goalInputs: GoalInput[] = []
   const stepStats: StepStats[] = []
+  let memoryRecallAttachments: MemoryRecallAttachment[] = []
+  let memoryRecallTombstones: MemoryRecallTombstone[] = []
+  let memoryGeneration = 0
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -540,6 +595,9 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         // Checkpoints anchored to pre-compaction message counts are now
         // meaningless — the array shrank under them. Drop along with msgs.
         checkpoints = []
+        memoryRecallAttachments = []
+        memoryRecallTombstones = []
+        memoryGeneration = entry.memoryGeneration ?? 0
       } else if (entry.kind === 'checkpoint') {
         checkpoints.push({
           ckptId: entry.ckptId,
@@ -559,6 +617,12 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         }
       } else if (entry.kind === 'step-stats') {
         stepStats.push(entry.step)
+      } else if (entry.kind === 'memory-recall') {
+        memoryRecallAttachments.push(entry.attachment)
+        memoryGeneration = Math.max(memoryGeneration, entry.memoryGeneration ?? 0)
+      } else if (entry.kind === 'memory-recall-delete') {
+        memoryRecallTombstones.push(entry.tombstone)
+        memoryGeneration = Math.max(memoryGeneration, entry.tombstone.generation)
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg') {
@@ -586,6 +650,9 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     goalInputs,
     checkpoints,
     stepStats,
+    memoryRecallAttachments,
+    memoryRecallTombstones,
+    memoryGeneration,
     filePath,
   }
 }
@@ -815,5 +882,17 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.goal = loaded.goal ? structuredClone(loaded.goal) : null
   state.goalInputs = loaded.goalInputs.map((input) => ({ ...input }))
   state.stepStats = loaded.stepStats.slice()
+  state.memoryRecallAttachments = loaded.memoryRecallAttachments.map((attachment) => structuredClone(attachment))
+  state.memoryRecallTombstones = loaded.memoryRecallTombstones.map((tombstone) => structuredClone(tombstone))
+  state.memoryGeneration = loaded.memoryGeneration
+  state.surfacedMemoryHashes = new Set(
+    state.memoryRecallAttachments.flatMap((attachment) =>
+      attachment.topics.map((topic) => `${topic.topicId}@${topic.topicHash}`),
+    ),
+  )
+  state.memoryTokensInWindow = state.memoryRecallAttachments.reduce(
+    (sum, attachment) => sum + attachment.estimatedTokens,
+    0,
+  )
   return state
 }

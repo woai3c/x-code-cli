@@ -120,6 +120,119 @@ export interface BrowserConfig {
   args?: string[]
 }
 
+export interface MemoryRecallConfig {
+  maxTopicsPerTurn: number
+  maxTokensPerTopic: number
+  maxTokensPerTurn: number
+  maxTokensPerCompactionWindow: number
+  semanticSelector: 'auto' | 'off'
+  selectorModel: string
+  lateBoundRecall: boolean
+}
+
+export type MemoryReasoningMode = 'auto' | 'off' | 'low' | 'provider-default'
+
+export interface MemoryConfig {
+  model: string
+  reasoning: MemoryReasoningMode
+  maxInputTokens: number
+  maxOutputTokens: number
+  maxTotalOutputTokens: number
+  maxOperationsPerTurn: number
+  drainTimeoutMs: number
+  retryMaxAttempts: number
+  recall: MemoryRecallConfig
+}
+
+export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
+  model: 'inherit',
+  reasoning: 'auto',
+  maxInputTokens: 12_000,
+  maxOutputTokens: 1500,
+  maxTotalOutputTokens: 8192,
+  maxOperationsPerTurn: 8,
+  drainTimeoutMs: 5000,
+  retryMaxAttempts: 8,
+  recall: {
+    maxTopicsPerTurn: 5,
+    maxTokensPerTopic: 1500,
+    maxTokensPerTurn: 4000,
+    maxTokensPerCompactionWindow: 15_000,
+    semanticSelector: 'auto',
+    selectorModel: 'inherit',
+    lateBoundRecall: true,
+  },
+}
+
+export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): MemoryConfig {
+  const memory =
+    config.memory && typeof config.memory === 'object' && !Array.isArray(config.memory)
+      ? (config.memory as Record<string, unknown>)
+      : {}
+  const recallValue = memory.recall
+  const recall =
+    recallValue && typeof recallValue === 'object' && !Array.isArray(recallValue)
+      ? (recallValue as Record<string, unknown>)
+      : {}
+  const integer = (value: unknown, fallback: number, min: number, max: number) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback
+  const text = (value: unknown, fallback: string) =>
+    typeof value === 'string' && value.trim() ? value.trim() : fallback
+  const maxTokensPerTopic = integer(
+    recall.maxTokensPerTopic,
+    DEFAULT_MEMORY_CONFIG.recall.maxTokensPerTopic,
+    100,
+    10_000,
+  )
+  const maxTokensPerTurn = Math.max(
+    maxTokensPerTopic,
+    integer(recall.maxTokensPerTurn, DEFAULT_MEMORY_CONFIG.recall.maxTokensPerTurn, 100, 20_000),
+  )
+  const maxOutputTokens = integer(memory.maxOutputTokens, DEFAULT_MEMORY_CONFIG.maxOutputTokens, 128, 8192)
+  return {
+    model: text(memory.model, DEFAULT_MEMORY_CONFIG.model),
+    reasoning:
+      memory.reasoning === 'auto' ||
+      memory.reasoning === 'off' ||
+      memory.reasoning === 'low' ||
+      memory.reasoning === 'provider-default'
+        ? memory.reasoning
+        : DEFAULT_MEMORY_CONFIG.reasoning,
+    maxInputTokens: integer(memory.maxInputTokens, DEFAULT_MEMORY_CONFIG.maxInputTokens, 1000, 100_000),
+    maxOutputTokens,
+    maxTotalOutputTokens: Math.max(
+      maxOutputTokens,
+      integer(memory.maxTotalOutputTokens, DEFAULT_MEMORY_CONFIG.maxTotalOutputTokens, 128, 65_536),
+    ),
+    maxOperationsPerTurn: integer(memory.maxOperationsPerTurn, DEFAULT_MEMORY_CONFIG.maxOperationsPerTurn, 1, 8),
+    drainTimeoutMs: integer(memory.drainTimeoutMs, DEFAULT_MEMORY_CONFIG.drainTimeoutMs, 0, 30_000),
+    retryMaxAttempts: integer(memory.retryMaxAttempts, DEFAULT_MEMORY_CONFIG.retryMaxAttempts, 1, 8),
+    recall: {
+      maxTopicsPerTurn: integer(recall.maxTopicsPerTurn, DEFAULT_MEMORY_CONFIG.recall.maxTopicsPerTurn, 1, 5),
+      maxTokensPerTopic,
+      maxTokensPerTurn,
+      maxTokensPerCompactionWindow: Math.max(
+        maxTokensPerTurn,
+        integer(
+          recall.maxTokensPerCompactionWindow,
+          DEFAULT_MEMORY_CONFIG.recall.maxTokensPerCompactionWindow,
+          100,
+          100_000,
+        ),
+      ),
+      semanticSelector:
+        recall.semanticSelector === 'auto' || recall.semanticSelector === 'off'
+          ? recall.semanticSelector
+          : DEFAULT_MEMORY_CONFIG.recall.semanticSelector,
+      selectorModel: text(recall.selectorModel, DEFAULT_MEMORY_CONFIG.recall.selectorModel),
+      lateBoundRecall:
+        typeof recall.lateBoundRecall === 'boolean'
+          ? recall.lateBoundRecall
+          : DEFAULT_MEMORY_CONFIG.recall.lateBoundRecall,
+    },
+  }
+}
+
 export interface UserConfig {
   model?: string
   thinking?: boolean
@@ -147,6 +260,7 @@ export interface UserConfig {
    *  picker. Key = provider key (e.g. "moonshotai"), value = full base URL
    *  (e.g. "https://api.moonshot.cn/v1"). */
   baseUrls?: Record<string, string>
+  memory?: Partial<Omit<MemoryConfig, 'recall'>> & { recall?: Partial<MemoryRecallConfig> }
 }
 
 /** Path to the user config file. Exposed so other modules that want to

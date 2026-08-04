@@ -1,5 +1,6 @@
 // @x-code-cli/core — Tool execution & dispatch
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
@@ -24,6 +25,93 @@ import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan
 import { runSubAgent } from './sub-agents/runner.js'
 import { runToolSearch } from './tool-search/resolve.js'
 import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
+
+const MEMORY_MUTATING_COMMAND_RE =
+  /(?:^|[\s;|&])(?:add-content|copy-item|mkdir|move-item|mv|new-item|out-file|remove-item|rename-item|rm|sed\s+-i|set-content|tee|touch|truncate)\b/i
+
+function normalizePath(value: string): string {
+  return path.resolve(value).replace(/\\/g, '/').toLowerCase()
+}
+
+function isPathInside(filePath: string, root: string): boolean {
+  const file = normalizePath(filePath)
+  const directory = normalizePath(root)
+  return file === directory || file.startsWith(directory + '/')
+}
+
+function shellMemoryMarkers(memoryRoot: string): string[] {
+  const markers = new Set([normalizePath(memoryRoot)])
+  const relativeToHome = path.relative(os.homedir(), path.resolve(memoryRoot)).replace(/\\/g, '/')
+  if (relativeToHome && relativeToHome !== '..' && !relativeToHome.startsWith('../')) {
+    const relative = relativeToHome.toLowerCase()
+    markers.add(`~/${relative}`)
+    markers.add(`$home/${relative}`)
+    markers.add(`\${home}/${relative}`)
+    markers.add(`%userprofile%/${relative}`)
+  }
+  if (
+    process.env.X_CODE_HOME &&
+    normalizePath(path.join(process.env.X_CODE_HOME, 'memory')) === normalizePath(memoryRoot)
+  ) {
+    markers.add('$x_code_home/memory')
+    markers.add('${x_code_home}/memory')
+    markers.add('%x_code_home%/memory')
+  }
+  return [...markers]
+}
+
+function regexEscape(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** The durable memory store has a single writer. General agent tools must
+ *  never mutate it: those writes bypass generation tracking and can leave
+ *  the post-turn worker retrying forever against a stale snapshot. */
+export function isManagedMemoryMutation(
+  toolName: string,
+  input: Record<string, unknown>,
+  memoryRoot: string | undefined,
+): boolean {
+  if (!memoryRoot) return false
+  if (toolName === 'writeFile' || toolName === 'edit') {
+    const filePath = typeof input.filePath === 'string' ? input.filePath : ''
+    return Boolean(filePath) && isPathInside(filePath, memoryRoot)
+  }
+  if (toolName !== 'shell') return false
+
+  const command = typeof input.command === 'string' ? input.command : ''
+  const normalized = command.replace(/\\/g, '/').toLowerCase()
+  const referencedMarkers = shellMemoryMarkers(memoryRoot).filter((marker) => normalized.includes(marker))
+  if (referencedMarkers.length === 0) return false
+  if (splitShellCommands(command).some((part) => !isReadOnly(part))) return true
+  if (MEMORY_MUTATING_COMMAND_RE.test(command)) return true
+  return referencedMarkers.some((marker) => new RegExp(`>{1,2}\\s*["']?${regexEscape(marker)}`).test(normalized))
+}
+
+/** Memory diagnostics may use ordinary read tools, but their internal file
+ *  access is not useful chat content and should stay out of the renderer. */
+export function isManagedMemoryAccess(
+  toolName: string,
+  input: Record<string, unknown>,
+  memoryRoot: string | undefined,
+): boolean {
+  if (!memoryRoot) return false
+  const pathKeys: Record<string, readonly string[]> = {
+    readFile: ['filePath'],
+    writeFile: ['filePath'],
+    edit: ['filePath'],
+    glob: ['cwd'],
+    grep: ['path'],
+    listDir: ['dirPath'],
+  }
+  const keys = pathKeys[toolName]
+  if (keys?.some((key) => typeof input[key] === 'string' && isPathInside(input[key] as string, memoryRoot))) {
+    return true
+  }
+  if (toolName !== 'shell') return false
+  const command = typeof input.command === 'string' ? input.command.replace(/\\/g, '/').toLowerCase() : ''
+  return shellMemoryMarkers(memoryRoot).some((marker) => command.includes(marker))
+}
 
 /** Count occurrences of a substring without creating intermediate arrays. */
 function countOccurrences(content: string, search: string): number {
@@ -114,6 +202,7 @@ async function executeShell(
   signal: AbortSignal | undefined,
   callbacks: AgentCallbacks,
   toolCallId: string,
+  notifyUi = true,
 ): Promise<{ output: string; isError: boolean }> {
   const proc = getShellProvider().spawn(command, { timeout, signal })
 
@@ -138,7 +227,7 @@ async function executeShell(
 
   const onChunk = (chunk: Buffer) => {
     const s = chunk.toString()
-    callbacks.onShellOutput(s)
+    if (notifyUi) callbacks.onShellOutput(s)
     const now = Date.now()
     if (now - lastProgressTime < PROGRESS_THROTTLE_MS) return
     // Take the last non-empty line of the chunk as the progress message.
@@ -200,14 +289,15 @@ function pushToolResult(
   output: string,
   isError = false,
   images?: readonly ToolImage[],
+  notifyUi = true,
 ): void {
-  state.messages.push(toolResultMessage(toolCallId, toolName, output, images))
+  state.messages.push(toolResultMessage(toolCallId, toolName, output, images, isError))
   // Clear the progress reporter for manually-dispatched tools (shell,
   // writeFile, edit, askUser). Auto-executed tools go through the SDK
   // stream's `tool-result` event and are cleared there — this call is
   // a no-op in that case since the reporter would already be gone.
   clearProgressReporter(toolCallId)
-  callbacks.onToolResult(toolCallId, output, isError)
+  if (notifyUi) callbacks.onToolResult(toolCallId, output, isError)
 }
 
 type ToolCall = { toolName: string; toolCallId: string; input: Record<string, unknown> }
@@ -254,7 +344,16 @@ async function pushSuccessfulToolResult(
       debugLog('agent.hook-post-tool-error', String(err))
     }
   }
-  pushToolResult(ctx.state, ctx.callbacks, ctx.toolCallId, ctx.toolName, effectiveOutput, isError, images)
+  pushToolResult(
+    ctx.state,
+    ctx.callbacks,
+    ctx.toolCallId,
+    ctx.toolName,
+    effectiveOutput,
+    isError,
+    images,
+    !isManagedMemoryAccess(ctx.toolName, ctx.input, ctx.options.memoryService?.memoryRoot),
+  )
 }
 
 type ToolHandler = (ctx: HandlerCtx) => Promise<void>
@@ -564,6 +663,20 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   if (toolName !== 'writeFile' && toolName !== 'edit' && toolName !== 'shell') return true
 
+  if (isManagedMemoryMutation(toolName, input, options.memoryService?.memoryRoot)) {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      'Managed memory is written by the private post-turn service. Do not use general file or shell tools for remember, update, or forget requests; finish the response normally.',
+      true,
+      undefined,
+      false,
+    )
+    return false
+  }
+
   if (toolName === 'shell') {
     const command = typeof input.command === 'string' ? input.command : ''
     const shellCommands = splitShellCommands(command)
@@ -629,7 +742,10 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.
       const isError = isToolErrorString(output)
-      if (!isError) state.filesModified.add(input.filePath as string)
+      if (!isError) {
+        state.filesModified.add(input.filePath as string)
+        state.turnFilesModified.add(input.filePath as string)
+      }
       return { output, isError }
     }
     if (toolName === 'shell') {
@@ -662,6 +778,7 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
             await fs.writeFile(absPath, newContent, 'utf-8')
           }
           state.filesModified.add(absPath)
+          state.turnFilesModified.add(absPath)
           return { output: '', isError: false }
         } catch {
           // File unreadable or unwritable — fall through to real sed
@@ -669,7 +786,14 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
       }
 
       const timeout = (input.timeout as number) ?? 30000
-      const shellResult = await executeShell(command, timeout, options.abortSignal, callbacks, toolCallId)
+      const shellResult = await executeShell(
+        command,
+        timeout,
+        options.abortSignal,
+        callbacks,
+        toolCallId,
+        !isManagedMemoryAccess(toolName, input, options.memoryService?.memoryRoot),
+      )
       return { output: shellResult.output, isError: shellResult.isError }
     }
     // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK

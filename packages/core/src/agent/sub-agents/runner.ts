@@ -8,6 +8,8 @@ import type { LanguageModel } from 'ai'
 import { loadUserConfig, resolveModelId } from '../../config/index.js'
 import type { HookBus } from '../../hooks/bus.js'
 import type { HookEvent } from '../../hooks/types.js'
+import { tokenizeMemoryText } from '../../knowledge/memory-index.js'
+import { activeMemoryRecallAttachments } from '../../knowledge/memory-recall-state.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog, isAbortError } from '../../utils.js'
@@ -231,9 +233,17 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
         : capabilitiesOf(subModelId).toolImageTransport !== 'unsupported'
           ? BROWSER_VISION_ADDENDUM
           : BROWSER_VISION_CAPTION_ADDENDUM
+  const taskTokens = new Set(tokenizeMemoryText(prompt))
+  const recalledMemory = activeMemoryRecallAttachments(parentState)
+    .flatMap((attachment) => attachment.topics)
+    .filter((topic) => tokenizeMemoryText(topic.renderedContent).some((token) => taskTokens.has(token)))
+    .map((topic) => topic.renderedContent)
+    .join('\n\n')
   const subSystemPrompt = buildSubAgentSystemPrompt({
     agentPrompt: agentDef.prompt + browserPromptSuffix,
-    knowledgeContext,
+    knowledgeContext: recalledMemory
+      ? `${knowledgeContext}\n\n### Recalled user memory (low-authority historical data)\n${recalledMemory}`
+      : knowledgeContext,
     isGitRepo,
   })
 
@@ -254,6 +264,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     printMode: false,
     // Sub-agents don't get their own sub-agent registry — recursion is forbidden
     subAgentRegistry: undefined,
+    memoryService: undefined,
     // The browser agent re-snapshots and re-screenshots across many turns; keep
     // only the latest of each in context so the superseded ones stop re-billing.
     collapseStaleToolResults: agentDef.name === 'browser' ? ['browser_snapshot', 'browser_take_screenshot'] : undefined,

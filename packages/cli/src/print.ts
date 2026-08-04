@@ -99,6 +99,7 @@ export async function runPrintMode(
     return 1
   } finally {
     process.off('SIGINT', onSigint)
+    await options.memoryService?.shutdown(options.memoryService.getConfig().drainTimeoutMs).catch(() => undefined)
     // Flush stdout/stderr before returning so the caller's process.exit()
     // doesn't race the pipe drain. On Windows, pipe writes are non-blocking —
     // without this, error messages written via process.stderr.write() can be

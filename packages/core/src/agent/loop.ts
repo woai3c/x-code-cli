@@ -6,12 +6,15 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { streamText } from 'ai'
-import type { LanguageModel, UserContent } from 'ai'
+import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import { loadUserConfig } from '../config/index.js'
 import { aggregateUserPromptSubmit } from '../hooks/bus.js'
 import type { HookEvent } from '../hooks/types.js'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
+import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from '../knowledge/memory-index.js'
+import { applyMemoryRecallAttachments } from '../knowledge/memory-recall-state.js'
+import { buildRecallQuery } from '../knowledge/memory-retriever.js'
 import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { applyCacheControl } from '../providers/cache-control.js'
@@ -20,6 +23,7 @@ import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } f
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { createGetGoalTool } from '../tools/get-goal.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
+import { createMemorySearchTool } from '../tools/memory-search.js'
 import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
@@ -32,9 +36,9 @@ import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
-import { runMemoryExtractor } from './memory-extractor.js'
 import { toolErrorString } from './messages.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
+import { buildTurnMemoryProjection, createMemoryJob, shouldCreateMemoryJob } from './post-turn-memory.js'
 import {
   downgradeBinaryPartsForProvider,
   ensureReasoningContentParts,
@@ -46,7 +50,7 @@ import { createCheckpoint } from './snapshot.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
-import { processToolCalls } from './tool-execution.js'
+import { isManagedMemoryAccess, processToolCalls } from './tool-execution.js'
 import { collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 import { DEFERRED_BUILTIN_TOOLS, buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
@@ -69,7 +73,7 @@ function prependContext(userMessage: UserContent, context: string): UserContent 
  *  some providers' tool-call sequencing (see prependContext). Returns
  *  true when a message was injected. Called at tool-batch boundaries
  *  and on `stop`, never mid-stream. */
-function drainQueuedInputs(state: LoopState, options: AgentOptions): boolean {
+function drainQueuedInputs(state: LoopState, options: AgentOptions, turnMessages?: ModelMessage[]): boolean {
   const queued = options.consumeQueuedInputs?.()
   if (!queued?.length) return false
   const text = queued
@@ -85,8 +89,45 @@ function drainQueuedInputs(state: LoopState, options: AgentOptions): boolean {
     'The user sent a new message while you were working:\n' +
     text +
     "\n\nIMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it."
-  state.messages.push({ role: 'user', content: wrapped })
+  const message = { role: 'user' as const, content: wrapped }
+  state.messages.push(message)
+  turnMessages?.push(message)
   return true
+}
+
+interface ToolResultPart {
+  type?: string
+  output?: unknown
+  isError?: boolean
+}
+
+function isFailedToolResult(part: ToolResultPart): boolean {
+  if (part.isError) return true
+  if (!part.output || typeof part.output !== 'object') return false
+  const output = part.output as Record<string, unknown>
+  return (
+    output.isError === true ||
+    output.success === false ||
+    output.ok === false ||
+    ('error' in output && output.error !== undefined && output.error !== null && output.error !== false) ||
+    output.status === 'error' ||
+    output.status === 'failed' ||
+    (typeof output.exitCode === 'number' && output.exitCode !== 0) ||
+    output.type === 'error-text' ||
+    output.type === 'error-json'
+  )
+}
+
+function successfulToolResultText(messages: readonly ModelMessage[]): string {
+  const outputs: string[] = []
+  for (const message of messages) {
+    if (message.role !== 'tool' || !Array.isArray(message.content)) continue
+    for (const part of message.content as ToolResultPart[]) {
+      if (part.type !== 'tool-result' || isFailedToolResult(part)) continue
+      outputs.push(typeof part.output === 'string' ? part.output : JSON.stringify(part.output ?? ''))
+    }
+  }
+  return outputs.join('\n').slice(0, 12_000)
 }
 
 /** Pull plain text out of a UserContent payload for slugification.
@@ -131,13 +172,19 @@ export interface AgentLoopResult {
  *  etc.) are deliberately ignored: that's the model's internal chain of
  *  thought, not user-facing output. The final user-facing answer arrives
  *  as regular text-delta chunks. */
-async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks, state: LoopState): Promise<void> {
+async function streamChunksToUI(
+  result: StreamResult,
+  callbacks: AgentCallbacks,
+  state: LoopState,
+  options: AgentOptions,
+): Promise<void> {
   // Deferred tools (webSearch / MCP / etc.) are name-only until the model loads
   // them via toolSearch. If the model calls one BEFORE loading it, the tool
   // isn't in this turn's tools map and the SDK rejects it with a tool-error.
   // Track those calls so we can keep them out of the UI entirely.
   const deferredNames = new Set((state.deferredCatalog ?? []).map((e) => e.name))
   const suppressedDeferredCallIds = new Set<string>()
+  const suppressedMemoryAccessCallIds = new Set<string>()
   for await (const chunk of result.stream) {
     if (chunk.type === 'error') {
       // AI SDK doesn't throw from stream iteration on request failure —
@@ -157,6 +204,17 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
       debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
       const toolCallId = chunk.toolCallId ?? ''
       const toolName = chunk.toolName ?? ''
+      if (
+        isManagedMemoryAccess(
+          toolName,
+          (chunk.input ?? {}) as Record<string, unknown>,
+          options.memoryService?.memoryRoot,
+        )
+      ) {
+        suppressedMemoryAccessCallIds.add(toolCallId)
+        debugLog('stream.memory-access-call', `${toolName} ${toolCallId} — suppressed`)
+        continue
+      }
       // Deferred tool called before it was loaded: its schema isn't in this
       // turn's tools map, so the SDK will immediately reject it with a
       // tool-error (NoSuchToolError). Suppress the UI row entirely — otherwise
@@ -182,6 +240,7 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
       debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
       if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
+      if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
     } else if (chunk.type === 'tool-error') {
       // The SDK rejected a tool call mid-stream. Two cases:
@@ -194,6 +253,10 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
       //     stayed "Running…" until the turn ended.
       const toolCallId = chunk.toolCallId ?? ''
       if (toolCallId) clearProgressReporter(toolCallId)
+      if (suppressedMemoryAccessCallIds.has(toolCallId)) {
+        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed memory access`)
+        continue
+      }
       if (suppressedDeferredCallIds.has(toolCallId)) {
         debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed deferred early-call`)
         continue
@@ -215,6 +278,7 @@ async function collectTurnResponse(
   state: LoopState,
   modelId: string,
   callbacks: AgentCallbacks,
+  turnMessages: ModelMessage[],
 ): Promise<string> {
   const response = await result.response
   // CRITICAL: auto-executed tools (readFile / grep / glob / listDir / webFetch
@@ -228,6 +292,7 @@ async function collectTurnResponse(
   // budget used elsewhere in the loop.
   truncateToolResultsInMessages(response.messages)
   state.messages.push(...response.messages)
+  turnMessages.push(...response.messages)
   ensureReasoningContentParts(state.messages, modelId)
 
   const usage = await result.usage
@@ -344,6 +409,10 @@ function buildTools(options: AgentOptions, state: LoopState) {
     tools.updateGoal = createUpdateGoalTool(state)
   }
 
+  if (!options.toolFilter && options.memoryService) {
+    tools.memorySearch = createMemorySearchTool(options.memoryService, state, process.cwd())
+  }
+
   // Deferred loading is a top-level-agent feature only. The presence of a
   // toolFilter is the authoritative "this is a sub-agent" signal (runner.ts
   // always passes one; the main loop never does).
@@ -409,6 +478,7 @@ async function runTurn(
   callbacks: AgentCallbacks,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   effectiveTools: Record<string, any>,
+  turnMessages: ModelMessage[],
   /** Current turn number — diagnostic only, threaded in so the debug log
    *  can tag each finish with which iteration of the outer loop it was. */
   turn: number,
@@ -434,7 +504,10 @@ async function runTurn(
   // Chat Completions providers keep the tool role text-only and receive raw
   // tool images in one following user message. This also handles images from
   // auto-executed tools such as readFile, which bypass manual tool dispatch.
-  const requestMessages = reattachToolResultImagesForProvider(state.messages, options.modelId)
+  const requestMessages = reattachToolResultImagesForProvider(
+    applyMemoryRecallAttachments(state.messages, state),
+    options.modelId,
+  )
 
   // Text-only providers (DeepSeek, custom) would 400 on any surviving
   // image/file parts. Rewrite those parts to OCR'd text in-place before
@@ -526,7 +599,7 @@ async function runTurn(
   drainStreamResult(result)
 
   try {
-    await streamChunksToUI(result, callbacks, state)
+    await streamChunksToUI(result, callbacks, state, options)
   } catch (err) {
     // Silently drain all pending AI SDK promises so unhandled-rejection
     // warnings (NoOutputGeneratedError) don't leak to stderr.
@@ -561,7 +634,7 @@ async function runTurn(
   }
 
   try {
-    const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks)
+    const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks, turnMessages)
     debugLog(
       'turn.finish',
       `reason=${finishReason} turn=${turn} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
@@ -584,6 +657,25 @@ export async function agentLoop(
   existingState?: LoopState,
 ): Promise<AgentLoopResult> {
   const state = existingState ?? createLoopState(options.permissionMode ?? 'default')
+  const turnStartMessageIndex = state.messages.length
+  const turnMessages: ModelMessage[] = []
+  const turnStartedAt = new Date().toISOString()
+  const filesModifiedBefore = new Set(state.filesModified)
+  state.turnFilesModified.clear()
+
+  // Memory features are root-agent only: toolFilter is the authoritative
+  // sub-agent signal (runner.ts always passes one).
+  const memoryService = options.toolFilter ? undefined : options.memoryService
+  const logMemoryFailure = (tag: string) => (error: unknown) => {
+    debugLog(tag, error instanceof Error ? error.message : String(error))
+    return null
+  }
+
+  if (memoryService) {
+    memoryService.setActiveModelId(options.modelId)
+    memoryService.setNoticeHandler(callbacks.onMemoryWrite)
+    await memoryService.initialize(process.cwd())
+  }
 
   // ── Plugin hook: SessionStart ──
   // First-invocation-of-the-session marker. Fire-and-forget, but awaited
@@ -634,7 +726,9 @@ export async function agentLoop(
     }
   }
 
-  state.messages.push({ role: 'user', content: effectiveUserMessage })
+  const initialUserMessage = { role: 'user' as const, content: effectiveUserMessage }
+  state.messages.push(initialUserMessage)
+  turnMessages.push(initialUserMessage)
 
   // Per-invocation turn counter. Scoped to this single `agentLoop` call
   // — re-entering the function (next user submit) starts at 0 again.
@@ -665,7 +759,10 @@ export async function agentLoop(
   // the resume prompt, the pending work is embedded directly in their first
   // user message. Auto-injecting it into every system prompt made the model
   // treat trivial greetings as "continue exploring", so we no longer do that.
-  const fullKnowledgeContext = await buildKnowledgeContext()
+  let fullKnowledgeContext: string | null = null
+  const initialRecallQuery = memoryService
+    ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, process.cwd())
+    : null
 
   // Detect git repo once — cheap stat, avoids per-turn disk hit
   const isGitRepo = await fs
@@ -673,8 +770,8 @@ export async function agentLoop(
     .then(() => true)
     .catch(() => false)
 
-  // Cache knowledge context and git status on state for sub-agent use
-  state.knowledgeContext = fullKnowledgeContext
+  // Cache git status on state for sub-agent use. Knowledge is loaded after the
+  // first compaction and memory generation sync below.
   state.isGitRepo = isGitRepo
 
   // Lazy plan-file path derivation. We derive ONCE per plan-mode
@@ -716,6 +813,9 @@ export async function agentLoop(
   // Tracks whether we exited the loop on a clean `stop` finish reason —
   // the only case where the post-turn memory extractor should run.
   let completedNormally = false
+  let cleanStop = false
+  let lateRecallAttempted = false
+  let initialRecallAttempted = false
 
   // No `maxTurns` → run until the model says stop or the user aborts.
   // This is the default for interactive mode (and Codex's main loop has
@@ -738,6 +838,15 @@ export async function agentLoop(
       cwd: process.cwd(),
       abortSignal: options.abortSignal,
     })
+
+    if (!initialRecallAttempted && initialRecallQuery && memoryService && !options.abortSignal?.aborted) {
+      initialRecallAttempted = true
+      await memoryService.recall(initialRecallQuery, state).catch(logMemoryFailure('memory.recall-error'))
+    }
+    if (fullKnowledgeContext === null) {
+      fullKnowledgeContext = await buildKnowledgeContext({ memoryService: options.memoryService, cwd: process.cwd() })
+      state.knowledgeContext = fullKnowledgeContext
+    }
 
     // ── Rewind checkpoint (first turn only) ──
     // Snapshot the working tree AFTER compaction so that
@@ -775,7 +884,7 @@ export async function agentLoop(
         debugLog('agent.skills.system-prompt', `enabled=[${enabled.join(',')}] disabled=[${disabled.join(',')}]`)
       }
       state.systemPromptCache = buildSystemPrompt({
-        knowledgeContext: fullKnowledgeContext,
+        knowledgeContext: fullKnowledgeContext ?? '',
         modelId: options.modelId,
         isGitRepo,
         planMode: state.permissionMode === 'plan',
@@ -809,7 +918,7 @@ export async function agentLoop(
     // search keep a byte-stable tools prefix across turns.
     const effectiveTools = composeTurnTools(baseTools, state.deferredCatalog, state.activatedTools)
 
-    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turn)
+    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turnMessages, turn)
 
     // ── Plugin hook: TurnComplete ──
     // Fires regardless of finish reason (including error / abort) so
@@ -862,15 +971,44 @@ export async function agentLoop(
         break
       }
       stepToolCallCount += toolCalls.length
+      const toolResultStartIndex = state.messages.length
       await processToolCalls(toolCalls, state, options, callbacks, model)
+      const manualToolMessages = state.messages.slice(toolResultStartIndex)
+      turnMessages.push(...manualToolMessages)
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
       if (options.abortSignal?.aborted) break
-      // Mid-turn steering: inject user messages queued while this tool
-      // batch ran. Safe only here — the batch's tool_results are all
-      // recorded, so the merged user message never interleaves with
-      // pending tool_result parts (providers reject that ordering).
-      drainQueuedInputs(state, options)
+      // A queued user message is the natural anchor for late memory. Drain it
+      // before attaching recall so providers never see two consecutive user
+      // messages (one synthetic memory block plus one queued user message).
+      const queuedInputInjected = drainQueuedInputs(state, options, turnMessages)
+      if (!lateRecallAttempted && memoryService) {
+        const responseMessages = (await outcome.result.response).messages
+        const resultText = successfulToolResultText([...responseMessages, ...manualToolMessages])
+        const initialPaths = new Set(initialRecallQuery?.mentionedPaths.map(normalizeMemoryText) ?? [])
+        const initialIdentifiers = new Set(initialRecallQuery?.identifiers.map(normalizeMemoryText) ?? [])
+        const paths = extractMemoryPaths(resultText).filter((value) => !initialPaths.has(normalizeMemoryText(value)))
+        const identifiers = extractMemoryIdentifiers(resultText).filter(
+          (value) => !initialIdentifiers.has(normalizeMemoryText(value)),
+        )
+        if (paths.length || identifiers.length) {
+          lateRecallAttempted = true
+          await memoryService
+            .lateRecall(
+              {
+                anchorMessageIndex: state.messages.length - 1,
+                placement: queuedInputInjected ? 'before-user' : 'after-tool-results',
+                repositoryId: process.cwd(),
+                currentUserText: initialRecallQuery?.currentUserText ?? taskTextForMeta ?? taskText,
+                paths,
+                identifiers,
+                text: `${paths.join(' ')} ${identifiers.join(' ')}`,
+              },
+              state,
+            )
+            .catch(logMemoryFailure('memory.late-recall-error'))
+        }
+      }
       continue
     }
 
@@ -881,11 +1019,13 @@ export async function agentLoop(
         // Nudge the model to pick up exactly where it stopped. This goes
         // into state.messages but NOT into UI messages, so the user sees
         // one continuous streamed reply with at most a brief pause.
-        state.messages.push({
+        const continuationMessage = {
           role: 'user',
           content:
             'Output token limit hit. Resume directly — no apology, no recap. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.',
-        })
+        } as const
+        state.messages.push(continuationMessage)
+        turnMessages.push(continuationMessage)
         continue
       }
       callbacks.onError(
@@ -904,11 +1044,12 @@ export async function agentLoop(
       // needs_follow_up equivalent. Messages that land after this drain
       // (sub-millisecond race) stay queued; the UI's idle-drain submits
       // them as a fresh agentLoop call.
-      if (drainQueuedInputs(state, options)) {
+      if (drainQueuedInputs(state, options, turnMessages)) {
         continuationAttempts = 0
         continue
       }
       completedNormally = true
+      cleanStop = true
     }
 
     break
@@ -930,22 +1071,40 @@ export async function agentLoop(
   // runs in those cases). Abort path: useAgent.abort() pushes the
   // `[Request interrupted by user]` notice AFTER agentLoop returns, so
   // it's responsible for its own flush — see use-agent.ts.
-  void flushPendingMessages(state)
-
-  // Post-turn memory extractor: runs ONLY on a clean `stop` finish (no
-  // error, no abort, no content-filter, no length-cap give-up). Fire-and-
-  // forget — the user can type the next prompt immediately while a single
-  // generateText + Output.object call scans the transcript for durable
-  // knowledge to persist. Writes go directly to AutoMemory (silent path)
-  // so the ChatInput frame doesn't render a tool row after the user's
-  // reply is already complete.
-  if (completedNormally && !options.abortSignal?.aborted) {
-    void runMemoryExtractor({
-      parentState: state,
-      parentModel: model,
-      abortSignal: options.abortSignal,
-      onWrite: callbacks.onMemoryWrite,
+  if (cleanStop && memoryService && !options.abortSignal?.aborted) {
+    await flushPendingMessages(state)
+    const memoryConfig = memoryService.getConfig()
+    const filesThisTurn = new Set([
+      ...state.turnFilesModified,
+      ...[...state.filesModified].filter((file) => !filesModifiedBefore.has(file)),
+    ])
+    const projection = buildTurnMemoryProjection({
+      messages: turnMessages,
+      turnStartMessageIndex: 0,
+      filesModifiedBefore: new Set(),
+      filesModifiedAfter: filesThisTurn,
+      repositoryId: process.cwd(),
+      turnStartedAt,
+      turnCompletedAt: new Date().toISOString(),
+      maxInputTokens: memoryConfig.maxInputTokens,
     })
+    if (shouldCreateMemoryJob(projection)) {
+      const job = createMemoryJob({
+        projection,
+        sessionId: state.sessionId,
+        turnStartMessageIndex,
+        modelId: options.modelId,
+        repositoryId: process.cwd(),
+      })
+      await memoryService.enqueuePostTurnJob(job).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        debugLog('memory.enqueue-error', message)
+        callbacks.onMemoryWrite?.({ action: 'failed', error: message })
+        return 'skipped' as const
+      })
+    }
+  } else {
+    void flushPendingMessages(state)
   }
 
   // ── Record per-step stats ──

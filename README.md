@@ -205,29 +205,29 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 
 ## Slash Commands
 
-| Command               | Description                                                          |
-| --------------------- | -------------------------------------------------------------------- |
-| `/help`               | Show available commands                                              |
-| `/model [alias]`      | Switch model or list available models                                |
-| `/thinking [on\|off]` | Enable / disable thinking mode                                       |
-| `/theme [name]`       | Switch UI theme                                                      |
-| `/plan [on\|off]`     | Enable / disable plan mode                                           |
-| `/goal [objective]`   | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
-| `/usage`              | Show current-session token usage                                     |
-| `/usage-history`      | List past session usage                                              |
-| `/clear`              | Clear the current conversation                                       |
-| `/compact`            | Manually compress context                                            |
-| `/resume`             | Pick a past session to resume                                        |
-| `/rewind`             | Roll back to a previous message (restores files + truncates history) |
-| `/init`               | Create or update `AGENTS.md` at project root                         |
-| `/review [PR#]`       | Review a GitHub PR (requires `gh`)                                   |
-| `/memory`             | List auto-memory entries                                             |
-| `/skill <sub>`        | Manage Skills                                                        |
-| `/mcp <sub>`          | Manage MCP servers                                                   |
-| `/plugin <sub>`       | Manage plugins and marketplaces                                      |
-| `/browser [on\|off]`  | Toggle the browser sub-agent (off by default)                        |
-| `/doctor`             | Diagnose the runtime environment                                     |
-| `/exit`               | Save session and exit                                                |
+| Command                | Description                                                          |
+| ---------------------- | -------------------------------------------------------------------- |
+| `/help`                | Show available commands                                              |
+| `/model [alias]`       | Switch model or list available models                                |
+| `/thinking [on\|off]`  | Enable / disable thinking mode                                       |
+| `/theme [name]`        | Switch UI theme                                                      |
+| `/plan [on\|off]`      | Enable / disable plan mode                                           |
+| `/goal [objective]`    | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
+| `/usage`               | Show current-session token usage                                     |
+| `/usage-history`       | List past session usage                                              |
+| `/clear`               | Clear the current conversation                                       |
+| `/compact`             | Manually compress context                                            |
+| `/resume`              | Pick a past session to resume                                        |
+| `/rewind`              | Roll back to a previous message (restores files + truncates history) |
+| `/init`                | Create or update `AGENTS.md` at project root                         |
+| `/review [PR#]`        | Review a GitHub PR (requires `gh`)                                   |
+| `/memory [subcommand]` | Inspect, search, explain, or reload global long-term memory          |
+| `/skill <sub>`         | Manage Skills                                                        |
+| `/mcp <sub>`           | Manage MCP servers                                                   |
+| `/plugin <sub>`        | Manage plugins and marketplaces                                      |
+| `/browser [on\|off]`   | Toggle the browser sub-agent (off by default)                        |
+| `/doctor`              | Diagnose the runtime environment                                     |
+| `/exit`                | Save session and exit                                                |
 
 ## Detailed Docs
 

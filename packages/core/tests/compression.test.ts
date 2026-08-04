@@ -12,6 +12,7 @@ import {
   handleContextTooLong,
 } from '../src/agent/compression.js'
 import { createLoopState } from '../src/agent/loop-state.js'
+import { markBoundaryAndReflush } from '../src/agent/session-store.js'
 import type { AgentCallbacks } from '../src/types/index.js'
 
 vi.mock('ai', async () => {
@@ -211,6 +212,28 @@ describe('checkAndCompressContext', () => {
 
     expect(state.lastInputTokens).toBe(0)
     expect(state.expectCacheMiss).toBe(true)
+  })
+
+  it('does not return until the compact boundary and recall-window reset are durable', async () => {
+    vi.mocked(generateText).mockResolvedValue({ text: 'summary' } as any)
+    let releaseBoundary!: () => void
+    vi.mocked(markBoundaryAndReflush).mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseBoundary = resolve)),
+    )
+    const state = createLoopState()
+    state.messages = padMessages(10)
+    state.lastInputTokens = 999_999
+    let settled = false
+
+    const compression = checkAndCompressContext(state, fakeModel, 1, makeCallbacks()).then(() => {
+      settled = true
+    })
+    await vi.waitFor(() => expect(markBoundaryAndReflush).toHaveBeenCalled())
+
+    expect(settled).toBe(false)
+    releaseBoundary()
+    await compression
+    expect(settled).toBe(true)
   })
 })
 
