@@ -603,23 +603,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         onError: (error) => {
           setState((prev) => ({ ...prev, error: error.message }))
         },
-        onMemoryWrite: (notice) => {
-          const labels = {
-            remembered: 'Remembered',
-            updated: 'Updated memory',
-            forgotten: 'Forgotten',
-            failed: 'Memory failed',
-          } as const
-          const subject = [notice.topicId, notice.factId].filter(Boolean).join(' · ')
-          const detail = notice.error ?? notice.content ?? ''
-          appendMessage({
-            id: `mem-${Date.now()}-${notice.factId ?? notice.action}`,
-            role: 'assistant',
-            content: `${labels[notice.action]}${subject ? ` (${subject})` : ''}${detail ? `: ${detail}` : ''}`,
-            timestamp: Date.now(),
-            kind: 'command-result',
-          })
-        },
       }
 
       try {

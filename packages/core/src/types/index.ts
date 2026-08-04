@@ -176,7 +176,8 @@ export interface AgentCallbacks {
   /** Fired by the sub-agent runner to stream progress from child agent loops.
    *  The CLI UI uses these events to build the collapsed/expanded task block. */
   onSubAgentEvent?: (event: SubAgentEvent) => void
-  /** Fired by the durable memory worker after a fact commit or failure. */
+  /** Optional programmatic telemetry from the durable memory worker. The CLI
+   *  intentionally leaves this unset so background persistence stays silent. */
   onMemoryWrite?: (notice: MemoryWriteNotice) => void
 }
 

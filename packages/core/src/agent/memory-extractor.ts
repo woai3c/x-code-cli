@@ -84,7 +84,7 @@ Persist:
 
 Do not persist current tasks, routine diffs, temporary errors, dependency inventories, secrets, or model inference. Never persist inferred facts. Temporary project state is excluded unless it is an explicit deadline or durable decision.
 
-Use the fact registry for semantic deduplication. A fact ID is a stable subject+predicate slot and never includes a value, date, or random suffix. Reuse the existing fact ID for the same slot. If a newer accurate value conflicts, emit replace-conflict and identify every old location to remove. If accuracy is ambiguous, emit no operation. topicId and factId MUST match ^[a-z0-9]+(?:[.-][a-z0-9]+)*$; colons, slashes, spaces, underscores, and uppercase letters are forbidden.
+Use the fact registry for semantic deduplication. A fact ID is a stable subject+predicate slot and never includes a value, date, or random suffix. Reuse the existing fact ID for the same slot. If a newer accurate value conflicts, emit replace-conflict and identify every old location to remove. When the existing topic description contains the superseded value, include a corrected topicPatch.description. If accuracy is ambiguous, emit no operation. topicId and factId MUST match ^[a-z0-9]+(?:[.-][a-z0-9]+)*$; colons, slashes, spaces, underscores, and uppercase letters are forbidden.
 
 The payload includes existingTopicIds. For EVERY upsert or replace-conflict whose topicId is not in that exact list, topicPatch MUST include type, a non-empty description, at least one addAlias, and at least one addKeyword. Do not assume a topic exists merely because its name appears in the transcript. Only stable high-frequency user, portfolio, or feedback topics may be pinned. Fact content is plain Markdown and must never contain an x-memory marker.
 

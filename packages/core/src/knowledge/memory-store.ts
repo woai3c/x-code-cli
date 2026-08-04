@@ -387,18 +387,28 @@ function appendFact(topic: MemoryTopic, factId: string, content: string, evidenc
   topic.body = `${topic.body}\n\n${marker}\n\n${clean}\n`
 }
 
-function refreshTopic(topic: MemoryTopic, now: string): MemoryTopic {
+function derivedFactSummary(facts: readonly MemoryFact[]): string {
+  const derived = facts
+    .filter((fact) => fact.metadata.status === 'active')
+    .map((fact) => fact.content)
+    .join(' ')
+    .replace(/<!--[^]*?-->/g, '')
+    .replace(/^#{1,3}\s+/gm, '')
+    .replace(/^[-*]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+  return cleanLine(truncateUtf8(derived, 360))
+}
+
+function refreshTopic(topic: MemoryTopic, now: string, refreshDescription = false): MemoryTopic {
   topic.metadata.updatedAt = now
   const rawFacts = parseFacts(topic.body)
   topic.metadata.status = rawFacts.some((fact) => fact.metadata.status === 'active') ? 'active' : 'stale'
+  if (refreshDescription) {
+    const description = derivedFactSummary(rawFacts)
+    if (description) topic.metadata.description = description
+  }
   if (topic.metadata.pinned) {
-    const active = rawFacts.filter((fact) => fact.metadata.status === 'active').map((fact) => fact.content)
-    const derived = active
-      .join(' ')
-      .replace(/<!--[^]*?-->/g, '')
-      .replace(/^[-*]\s+/gm, '')
-      .replace(/\s+/g, ' ')
-    topic.metadata.summary = cleanLine(truncateUtf8(derived, 360))
+    topic.metadata.summary = derivedFactSummary(rawFacts)
     if (!topic.metadata.summary) topic.metadata.pinned = false
   }
   const raw = formatMemoryTopic(topic)
@@ -903,7 +913,7 @@ export class MemoryStore {
             if (fact) deleted.push({ topicId, factId: id, previousHash: fact.hash })
           }
           removeFactBlocks(topic, ids)
-          const refreshed = refreshTopic(topic, now)
+          const refreshed = refreshTopic(topic, now, operation.action === 'replace-conflict')
           if (topicId !== operation.topicId && refreshed.facts.length === 0 && !hasManualContent(refreshed)) {
             topics.delete(topicId)
             deletes.add(topic.path)
@@ -916,7 +926,11 @@ export class MemoryStore {
         if (!target) target = newTopic(this.memoryRoot, operation.topicId, operation.topicPatch, now)
         applyPatch(target.metadata, operation.topicPatch)
         appendFact(target, factId, safeContent, operation.evidence)
-        target = refreshTopic(target, now)
+        target = refreshTopic(
+          target,
+          now,
+          operation.action === 'replace-conflict' && operation.topicPatch?.description === undefined,
+        )
         topics.set(target.metadata.id, target)
         touched.add(target.metadata.id)
         changed.push({

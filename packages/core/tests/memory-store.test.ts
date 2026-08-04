@@ -59,6 +59,56 @@ describe('MemoryStore', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
+  it('refreshes derived descriptions and MEMORY.md after a conflict replacement', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryStore(root)
+    await store.initialize()
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'memory-v2-test-mode',
+        type: 'reference',
+        description: 'memory-v2-test-mode is currently alpha.',
+        manual: 'Human-authored verification notes stay intact.',
+        facts: [{ id: 'memory-v2-test-mode.status', content: 'memory-v2-test-mode is currently alpha.' }],
+      }),
+      'memory-v2-test-mode',
+    )
+    const topic = (await store.load()).topics[0]!
+
+    const result = await store.applyOperations([
+      {
+        action: 'replace-conflict',
+        topicId: topic.metadata.id,
+        factId: 'memory-v2-test-mode.status',
+        expectedTopicHash: topic.hash,
+        content: 'memory-v2-test-mode is currently beta.',
+        remove: [
+          {
+            topicId: topic.metadata.id,
+            factId: 'memory-v2-test-mode.status',
+            expectedTopicHash: topic.hash,
+          },
+        ],
+        evidence: [{ kind: 'explicit', sourceId: 'session:2', occurredAt: '2026-08-04T00:00:00.000Z' }],
+        reason: 'The user corrected the current test mode.',
+      },
+    ])
+
+    expect(result.status).toBe('success')
+    const written = await fs.readFile(topic.path, 'utf-8')
+    const memory = await fs.readFile(path.join(root, 'MEMORY.md'), 'utf-8')
+    expect(written).toContain('description: memory-v2-test-mode is currently beta.')
+    expect(written).toContain('Human-authored verification notes stay intact.')
+    expect(written).not.toContain('alpha')
+    expect(memory).toContain('memory-v2-test-mode is currently beta.')
+    expect(memory).not.toContain('alpha')
+    expect(JSON.parse(await fs.readFile(path.join(root, '.state', 'changes', '1.json'), 'utf-8'))).toMatchObject({
+      reason: 'replace-conflict',
+    })
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
   it('treats nested headings as part of a fact until a same-level boundary', async () => {
     const root = await makeMemoryRoot()
     const store = new MemoryStore(root)

@@ -50,7 +50,7 @@ import { createCheckpoint } from './snapshot.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import { buildSystemPrompt } from './system-prompt.js'
-import { processToolCalls } from './tool-execution.js'
+import { isManagedMemoryAccess, processToolCalls } from './tool-execution.js'
 import { collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 import { DEFERRED_BUILTIN_TOOLS, buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
@@ -172,13 +172,19 @@ export interface AgentLoopResult {
  *  etc.) are deliberately ignored: that's the model's internal chain of
  *  thought, not user-facing output. The final user-facing answer arrives
  *  as regular text-delta chunks. */
-async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks, state: LoopState): Promise<void> {
+async function streamChunksToUI(
+  result: StreamResult,
+  callbacks: AgentCallbacks,
+  state: LoopState,
+  options: AgentOptions,
+): Promise<void> {
   // Deferred tools (webSearch / MCP / etc.) are name-only until the model loads
   // them via toolSearch. If the model calls one BEFORE loading it, the tool
   // isn't in this turn's tools map and the SDK rejects it with a tool-error.
   // Track those calls so we can keep them out of the UI entirely.
   const deferredNames = new Set((state.deferredCatalog ?? []).map((e) => e.name))
   const suppressedDeferredCallIds = new Set<string>()
+  const suppressedMemoryAccessCallIds = new Set<string>()
   for await (const chunk of result.stream) {
     if (chunk.type === 'error') {
       // AI SDK doesn't throw from stream iteration on request failure —
@@ -198,6 +204,17 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
       debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
       const toolCallId = chunk.toolCallId ?? ''
       const toolName = chunk.toolName ?? ''
+      if (
+        isManagedMemoryAccess(
+          toolName,
+          (chunk.input ?? {}) as Record<string, unknown>,
+          options.memoryService?.memoryRoot,
+        )
+      ) {
+        suppressedMemoryAccessCallIds.add(toolCallId)
+        debugLog('stream.memory-access-call', `${toolName} ${toolCallId} — suppressed`)
+        continue
+      }
       // Deferred tool called before it was loaded: its schema isn't in this
       // turn's tools map, so the SDK will immediately reject it with a
       // tool-error (NoSuchToolError). Suppress the UI row entirely — otherwise
@@ -223,6 +240,7 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
       debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
       if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
+      if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
     } else if (chunk.type === 'tool-error') {
       // The SDK rejected a tool call mid-stream. Two cases:
@@ -235,6 +253,10 @@ async function streamChunksToUI(result: StreamResult, callbacks: AgentCallbacks,
       //     stayed "Running…" until the turn ended.
       const toolCallId = chunk.toolCallId ?? ''
       if (toolCallId) clearProgressReporter(toolCallId)
+      if (suppressedMemoryAccessCallIds.has(toolCallId)) {
+        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed memory access`)
+        continue
+      }
       if (suppressedDeferredCallIds.has(toolCallId)) {
         debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed deferred early-call`)
         continue
@@ -577,7 +599,7 @@ async function runTurn(
   drainStreamResult(result)
 
   try {
-    await streamChunksToUI(result, callbacks, state)
+    await streamChunksToUI(result, callbacks, state, options)
   } catch (err) {
     // Silently drain all pending AI SDK promises so unhandled-rejection
     // warnings (NoOutputGeneratedError) don't leak to stderr.

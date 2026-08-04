@@ -1,12 +1,17 @@
 // Tests for agent loop (mock LLM responses)
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import os from 'node:os'
+import path from 'node:path'
+
 import { generateText, streamText } from 'ai'
 
 import { createGoal, requestGoalBlocked } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import type { LoopState } from '../src/agent/loop-state.js'
 import { agentLoop } from '../src/agent/loop.js'
+import { buildSystemPrompt } from '../src/agent/system-prompt.js'
+import { isManagedMemoryAccess, isManagedMemoryMutation } from '../src/agent/tool-execution.js'
 import type { LateRecallSignals, MemoryRecallAttachment } from '../src/knowledge/memory-types.js'
 import type { AgentCallbacks, TokenUsage } from '../src/types/index.js'
 
@@ -134,6 +139,104 @@ describe('agent loop', () => {
       mockCallbacks,
     )
     expect(memoryService.enqueuePostTurnJob).not.toHaveBeenCalled()
+  })
+
+  it('keeps memory-only requests and persistence details out of the general tool workflow', () => {
+    const prompt = buildSystemPrompt({ modelId: 'test:model' })
+
+    expect(prompt).toContain('do not call tools solely for that request')
+    expect(prompt).toContain('Never modify the managed memory store with writeFile, edit, or shell')
+    expect(prompt).toContain('do not narrate memory extraction, queues, internal paths')
+  })
+
+  it('classifies managed-memory mutations while preserving read-only diagnostics', () => {
+    const memoryRoot = path.join(os.homedir(), '.x-code', 'memory')
+
+    expect(
+      isManagedMemoryMutation('edit', { filePath: path.join(memoryRoot, 'topics', 'profile.md') }, memoryRoot),
+    ).toBe(true)
+    expect(
+      isManagedMemoryAccess('readFile', { filePath: path.join(memoryRoot, 'topics', 'profile.md') }, memoryRoot),
+    ).toBe(true)
+    expect(
+      isManagedMemoryMutation('edit', { filePath: path.join(process.cwd(), 'src', 'profile.ts') }, memoryRoot),
+    ).toBe(false)
+    expect(isManagedMemoryMutation('shell', { command: 'ls ~/.x-code/memory/topics 2>/dev/null' }, memoryRoot)).toBe(
+      false,
+    )
+    expect(
+      isManagedMemoryMutation(
+        'shell',
+        { command: "sed -i 's/alpha/beta/' ~/.x-code/memory/topics/profile.md" },
+        memoryRoot,
+      ),
+    ).toBe(true)
+    expect(
+      isManagedMemoryMutation('shell', { command: 'echo beta > ~/.x-code/memory/topics/profile.md' }, memoryRoot),
+    ).toBe(true)
+  })
+
+  it('silently blocks a model from editing the managed memory store without asking permission', async () => {
+    const memoryRoot = path.join(process.cwd(), '.managed-memory-test')
+    const toolCall = {
+      toolCallId: 'memory-edit-1',
+      toolName: 'edit',
+      input: {
+        filePath: path.join(memoryRoot, 'topics', 'profile.md'),
+        oldString: 'alpha',
+        newString: 'beta',
+      },
+    }
+    vi.mocked(streamText)
+      .mockReturnValueOnce({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'tool-call', ...toolCall }
+          },
+        },
+        response: Promise.resolve({
+          messages: [{ role: 'assistant', content: [{ type: 'tool-call', ...toolCall }] }],
+        }),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+        finishReason: Promise.resolve('tool-calls'),
+        toolCalls: Promise.resolve([toolCall]),
+      } as any)
+      .mockReturnValueOnce({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text-delta', text: '记住了。' }
+          },
+        },
+        response: Promise.resolve({ messages: [{ role: 'assistant', content: '记住了。' }] }),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+        finishReason: Promise.resolve('stop'),
+        toolCalls: Promise.resolve([]),
+      } as any)
+    const memoryService = {
+      memoryRoot,
+      setActiveModelId: vi.fn(),
+      setNoticeHandler: vi.fn(),
+      initialize: vi.fn().mockResolvedValue(undefined),
+      recall: vi.fn().mockResolvedValue(null),
+      getConfig: vi.fn().mockReturnValue({ maxInputTokens: 12_000 }),
+      enqueuePostTurnJob: vi.fn().mockResolvedValue('created'),
+      search: vi.fn().mockResolvedValue([]),
+    }
+
+    const result = await agentLoop(
+      '记住状态现在是 beta',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 3, printMode: false, memoryService: memoryService as any },
+      mockCallbacks,
+    )
+
+    expect(mockCallbacks.onAskPermission).not.toHaveBeenCalled()
+    expect(mockCallbacks.onToolCall).not.toHaveBeenCalled()
+    expect(mockCallbacks.onToolResult).not.toHaveBeenCalled()
+    expect(JSON.stringify(result.state.messages)).toContain(
+      'Managed memory is written by the private post-turn service',
+    )
+    expect(memoryService.enqueuePostTurnJob).toHaveBeenCalledOnce()
   })
 
   it('keeps the root-turn projection intact when compaction rewrites the session message array', async () => {

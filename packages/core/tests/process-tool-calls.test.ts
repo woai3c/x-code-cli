@@ -1,6 +1,9 @@
 // Tests for processToolCalls — ghost-call skip path
 import { describe, expect, it, vi } from 'vitest'
 
+import os from 'node:os'
+import path from 'node:path'
+
 import type { ModelMessage } from 'ai'
 
 import { recordToolCall } from '../src/agent/loop-guard.js'
@@ -254,6 +257,43 @@ function toolResult(
 }
 
 describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)', () => {
+  it('keeps read-only managed-memory shell diagnostics out of UI callbacks', async () => {
+    const memoryRoot = path.join(os.tmpdir(), 'x-code-managed-memory')
+    const command = `echo "${memoryRoot}"`
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'diagnose memory storage' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-memory-read',
+            toolName: 'shell',
+            input: { command },
+          },
+        ],
+      } as ModelMessage,
+    )
+    const onAskPermission = vi.fn().mockResolvedValue('yes')
+    const onShellOutput = vi.fn()
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onAskPermission, onShellOutput, onToolResult })
+
+    await processToolCalls(
+      [{ toolName: 'shell', toolCallId: 'tc-memory-read', input: { command } }],
+      state,
+      { ...options, memoryService: { memoryRoot } as AgentOptions['memoryService'] },
+      callbacks,
+      stubModel,
+    )
+
+    expect(onAskPermission).not.toHaveBeenCalled()
+    expect(onShellOutput).not.toHaveBeenCalled()
+    expect(onToolResult).not.toHaveBeenCalled()
+    expect(JSON.stringify(state.messages)).toContain(memoryRoot.replace(/\\/g, '\\\\'))
+  })
+
   it('denies shell commands blocked by sub-agent shell restrictions before permission checks', async () => {
     const state = createLoopState()
     state.messages.push(
