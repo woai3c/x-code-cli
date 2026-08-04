@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
+import { recordToolCall } from '../src/agent/loop-guard.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import { partitionToolCalls, processToolCalls } from '../src/agent/tool-execution.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../src/types/index.js'
@@ -232,18 +233,6 @@ describe('processToolCalls ghost-call skip', () => {
     expect(onAskUser).toHaveBeenCalledTimes(1)
   })
 })
-
-function shellAssistant(ids: string[]): ModelMessage {
-  return {
-    role: 'assistant',
-    content: ids.map((toolCallId) => ({
-      type: 'tool-call',
-      toolCallId,
-      toolName: 'shell',
-      input: { command: 'echo hi' },
-    })),
-  } as ModelMessage
-}
 
 function toolResult(
   toolCallId: string,
@@ -542,25 +531,49 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
     // between assistant.tool_calls and a later tool-result. DeepSeek
     // 400s with "Messages with role 'tool' must be a response to a
     // preceding message with 'tool_calls'". We test the deferred-flush
-    // path indirectly by checking message-shape invariants after the
-    // call returns.
+    // path by making an already-fulfilled call trip the loop guard, then
+    // checking message-shape invariants after the next live call returns.
     const state = createLoopState()
+    const readInput = { filePath: '/x' }
+    const askInput = {
+      question: 'continue?',
+      options: [
+        { label: 'yes', description: 'continue' },
+        { label: 'no', description: 'stop' },
+      ],
+    }
+    // Two prior identical calls make the already-fulfilled readFile below
+    // trip the soft loop guard, which queues a deferred user message.
+    recordToolCall(state, 'readFile', readInput)
+    recordToolCall(state, 'readFile', readInput)
     state.messages.push(
       { role: 'user', content: 'hi' } as ModelMessage,
-      shellAssistant(['tc-1', 'tc-2']),
-      toolResult('tc-1', 'shell', 'first result'), // already fulfilled by SDK
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc-read', toolName: 'readFile', input: readInput },
+          { type: 'tool-call', toolCallId: 'tc-ask', toolName: 'askUser', input: askInput },
+        ],
+      } as ModelMessage,
+      toolResult('tc-read', 'readFile', 'file contents'), // already fulfilled by SDK
     )
-    const callbacks = makeCallbacks()
+    const onAskUser = vi.fn().mockResolvedValue('yes')
+    const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
-        { toolName: 'shell', toolCallId: 'tc-1', input: { command: 'echo hi' } },
-        { toolName: 'shell', toolCallId: 'tc-2', input: { command: 'echo bye' } },
+        { toolName: 'readFile', toolCallId: 'tc-read', input: readInput },
+        { toolName: 'askUser', toolCallId: 'tc-ask', input: askInput },
       ],
       state,
       options,
       callbacks,
       stubModel,
-    ).catch(() => {})
+    )
+    expect(onAskUser).toHaveBeenCalledTimes(1)
+    expect(state.messages.at(-1)).toEqual({
+      role: 'user',
+      content: expect.stringContaining('[loop-guard]'),
+    })
     // Walk the messages — every tool-role message must have an
     // assistant-role message earlier in the array (no user message
     // between an assistant.tool_calls and a tool result).

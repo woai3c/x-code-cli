@@ -1,6 +1,6 @@
 // Tests for installer (local source path) + loader integration
 import { execa } from 'execa'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -553,43 +553,70 @@ async function makeLocalGitRepo(manifest: Record<string, unknown>): Promise<{ ur
   return { url: root, sha }
 }
 
+// Windows CI process startup can consume most of Vitest's five-second default
+// before the local clone itself runs. Keep this real Git integration bounded,
+// but give it enough room to test installer behavior rather than runner load.
+const GIT_INTEGRATION_TIMEOUT_MS = 15_000
+
 describe('install sha integrity check (marketplace.json `sha` field)', () => {
-  it('accepts an install when the declared sha matches the cloned HEAD', async () => {
-    const { url, sha } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
-    const result = await installPlugin({
-      source: { kind: 'git', url, expectedSha: sha },
-      marketplace: 'local',
-    })
-    expect(result.pluginId).toBe('demo@local')
+  let repo: Awaited<ReturnType<typeof makeLocalGitRepo>>
+
+  beforeAll(async () => {
+    repo = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
+
+  afterAll(async () => {
+    await fs.rm(repo.url, { recursive: true, force: true })
   })
 
-  it('rejects an install when the declared sha does not match', async () => {
-    const { url } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
-    const fakeSha = '0000000000000000000000000000000000000000'
-    await expect(
-      installPlugin({
-        source: { kind: 'git', url, expectedSha: fakeSha },
+  it(
+    'accepts an install when the declared sha matches the cloned HEAD',
+    async () => {
+      const result = await installPlugin({
+        source: { kind: 'git', url: repo.url, expectedSha: repo.sha },
         marketplace: 'local',
-      }),
-    ).rejects.toThrow(/sha integrity check failed/)
-  })
+      })
+      expect(result.pluginId).toBe('demo@local')
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  )
 
-  it('skips the check entirely when no sha is declared (back-compat with sha-less marketplaces)', async () => {
-    const { url } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
-    const result = await installPlugin({
-      source: { kind: 'git', url }, // no expectedSha
-      marketplace: 'local',
-    })
-    expect(result.pluginId).toBe('demo@local')
-  })
+  it(
+    'rejects an install when the declared sha does not match',
+    async () => {
+      const fakeSha = '0000000000000000000000000000000000000000'
+      await expect(
+        installPlugin({
+          source: { kind: 'git', url: repo.url, expectedSha: fakeSha },
+          marketplace: 'local',
+        }),
+      ).rejects.toThrow(/sha integrity check failed/)
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  )
 
-  it('accepts a short (≥7 char) sha that prefix-matches the full HEAD — same tolerance as `git checkout <short>`', async () => {
-    const { url, sha } = await makeLocalGitRepo({ name: 'demo', version: '1.0.0' })
-    const shortSha = sha.slice(0, 7)
-    const result = await installPlugin({
-      source: { kind: 'git', url, expectedSha: shortSha },
-      marketplace: 'local',
-    })
-    expect(result.pluginId).toBe('demo@local')
-  })
+  it(
+    'skips the check entirely when no sha is declared (back-compat with sha-less marketplaces)',
+    async () => {
+      const result = await installPlugin({
+        source: { kind: 'git', url: repo.url }, // no expectedSha
+        marketplace: 'local',
+      })
+      expect(result.pluginId).toBe('demo@local')
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  )
+
+  it(
+    'accepts a short (≥7 char) sha that prefix-matches the full HEAD — same tolerance as `git checkout <short>`',
+    async () => {
+      const shortSha = repo.sha.slice(0, 7)
+      const result = await installPlugin({
+        source: { kind: 'git', url: repo.url, expectedSha: shortSha },
+        marketplace: 'local',
+      })
+      expect(result.pluginId).toBe('demo@local')
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  )
 })
