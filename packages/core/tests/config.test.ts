@@ -143,4 +143,20 @@ describe('memory config', () => {
     } as unknown as Parameters<typeof resolveMemoryConfig>[0]
     expect(resolveMemoryConfig(malformed)).toEqual(DEFAULT_MEMORY_CONFIG)
   })
+
+  it('resolves memory reasoning and total generation budget safely', () => {
+    expect(
+      resolveMemoryConfig({
+        memory: { reasoning: 'low', maxOutputTokens: 2000, maxTotalOutputTokens: 6000 },
+      }).reasoning,
+    ).toBe('low')
+    expect(
+      resolveMemoryConfig({
+        memory: { reasoning: 'low', maxOutputTokens: 2000, maxTotalOutputTokens: 6000 },
+      }).maxTotalOutputTokens,
+    ).toBe(6000)
+    expect(
+      resolveMemoryConfig({ memory: { maxOutputTokens: 4000, maxTotalOutputTokens: 1000 } }).maxTotalOutputTokens,
+    ).toBe(4000)
+  })
 })

@@ -36,7 +36,7 @@ export {
   loadUserConfig,
   saveUserConfig,
 } from './config/index.js'
-export type { MemoryConfig, MemoryRecallConfig, UserConfig } from './config/index.js'
+export type { MemoryConfig, MemoryReasoningMode, MemoryRecallConfig, UserConfig } from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'

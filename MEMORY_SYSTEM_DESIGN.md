@@ -339,9 +339,9 @@ pending --claim(rename)--> running --success/no-op--> delete payload
 4. 紧凑 fact registry：每项只含 factId、topicId、类型和一句事实摘要；总计最多 2,000 tokens，预算内发送全部，超限时保留同类型、exact/alias/entity 命中和最近更新项。
 5. 最多 3 个本地检索命中的 topic。
 
-输出必须是结构化 MemoryOperation[]，最多 8 个 operation，输出最多 1,500 tokens，无工具调用。
+输出必须是结构化 MemoryOperation[]，最多 8 个 operation，基础输出预算 1,500 tokens，无工具调用。结构化输出为空、截断或无法解析时，预算按 1,500 → 4,096 → 8,192 的配置上限阶梯扩容；不得对参数错误重复相同请求。
 
-后台结构化提取显式关闭 reasoning/thinking，避免推理 token 吃完输出预算后没有 JSON；schema 必须携带稳定 name、description 和 ID pattern，provider 返回的结果仍由宿主再次解析校验。
+后台结构化提取将关闭 reasoning/thinking 视为优化而非正确性前提：支持关闭的模型使用 off；强制 thinking 模型使用最低 effort 并省略 temperature；provider 拒绝 reasoning 或 temperature 参数时在当前进程记忆该能力并依次降级为 low、provider default。schema 必须携带稳定 name、description 和 ID pattern，provider 返回的结果仍由宿主再次解析校验。
 
 提取规则：
 
@@ -503,7 +503,7 @@ CLI 启动
 用户问题
   -> 本地 exact/BM25F/alias/path 检索                       0 token
   -> 强匹配：读取命中 section，直接注入主模型               最多 4,000 tokens
-  -> 模糊历史问题：AI selector 只看 topic manifest          最多 8,000 input + 256 output tokens
+  -> 模糊历史问题：AI selector 只看 topic manifest          最多 8,000 input + 1,024 output tokens
   -> selector 返回 topic IDs，本地再读取命中 section        最多 4,000 tokens
 
 完整 agentLoop 结束
@@ -616,8 +616,8 @@ pinned=0.5
 - 输入只含 query、repository 和 topic manifest，不含 topic 正文。
 - manifest 包含 id、type、description、aliases、keywords、applies_to。
 - 输入最多 8,000 tokens；超限时保留 exact/protected、pinned 和本地 top 50。
-- 无工具，结构化输出最多 5 个真实 topic ID，maxOutputTokens=256。
-- selector 的结构化调用关闭 reasoning/thinking，并明确处理跨语言同义词、指代和语义改写。
+- 无工具，结构化输出最多 5 个真实 topic ID，maxOutputTokens=1,024。
+- selector 的结构化调用优先关闭 reasoning/thinking；强制 thinking 模型使用最低 effort，且不发送 temperature。它明确处理跨语言同义词、指代和语义改写。
 - selector 超时、abort、schema 失败时回退本地候选，不阻塞主请求。
 - exact protected candidate 已存在时不调用。
 - 翻译、格式化、问候、简单 shell 等自包含请求不调用。
@@ -760,8 +760,10 @@ MemoryService.initialize() 执行：
 {
   "memory": {
     "model": "inherit",
+    "reasoning": "auto",
     "maxInputTokens": 12000,
     "maxOutputTokens": 1500,
+    "maxTotalOutputTokens": 8192,
     "maxOperationsPerTurn": 8,
     "drainTimeoutMs": 5000,
     "retryMaxAttempts": 8,

@@ -142,8 +142,10 @@ Memory v2 不迁移旧系统：
   "memory": {
     "enabled": true,
     "model": "inherit",
+    "reasoning": "auto",
     "maxInputTokens": 12000,
     "maxOutputTokens": 1500,
+    "maxTotalOutputTokens": 8192,
     "maxOperationsPerTurn": 8,
     "drainTimeoutMs": 5000,
     "retryMaxAttempts": 8,
@@ -160,7 +162,7 @@ Memory v2 不迁移旧系统：
 }
 ```
 
-`inherit` 表示使用当前主模型。provider 凭据始终只从环境变量读取，不会写入 job。
+`inherit` 表示使用当前主模型。`reasoning` 支持 `auto`、`off`、`low` 和 `provider-default`；`auto` 会在模型无法关闭 thinking 时降到最低 effort。`maxOutputTokens` 是第一次提取的基础预算，只有结构化输出为空或截断时才逐步增加到 `maxTotalOutputTokens`。provider 凭据始终只从环境变量读取，不会写入 job。
 
 ## 故障排查
 

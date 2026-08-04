@@ -446,29 +446,43 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
           },
           {
             type: 'tool-call',
-            toolCallId: 'tc-shell',
-            toolName: 'shell',
-            input: { command: 'echo manual' },
+            toolCallId: 'tc-ask',
+            toolName: 'askUser',
+            input: {
+              question: 'continue?',
+              options: [
+                { label: 'yes', description: 'continue' },
+                { label: 'no', description: 'stop' },
+              ],
+            },
           },
         ],
       } as ModelMessage,
       toolResult('tc-read', 'readFile', '/x contents'),
     )
-    const askPermission = vi.fn().mockResolvedValue('yes')
-    const callbacks = makeCallbacks({ onAskPermission: askPermission })
-    // shell will fail to spawn in tests (no real shell provider); we
-    // only care that processToolCalls reaches it and does NOT try to
-    // execute readFile a second time.
+    const onAskUser = vi.fn().mockResolvedValue('yes')
+    const callbacks = makeCallbacks({ onAskUser })
     await processToolCalls(
       [
         { toolName: 'readFile', toolCallId: 'tc-read', input: { filePath: '/x' } },
-        { toolName: 'shell', toolCallId: 'tc-shell', input: { command: 'echo manual' } },
+        {
+          toolName: 'askUser',
+          toolCallId: 'tc-ask',
+          input: {
+            question: 'continue?',
+            options: [
+              { label: 'yes', description: 'continue' },
+              { label: 'no', description: 'stop' },
+            ],
+          },
+        },
       ],
       state,
       options,
       callbacks,
       stubModel,
-    ).catch(() => {})
+    )
+    expect(onAskUser).toHaveBeenCalledTimes(1)
     // Only one tool-result for tc-read should exist (the original).
     const readResults = state.messages.filter(
       (m) =>

@@ -3,7 +3,8 @@ import type { LanguageModel } from 'ai'
 
 import { z } from 'zod'
 
-import { getReasoningLevel, getThinkingProviderOptions } from '../providers/thinking.js'
+import { runMemoryInference } from '../agent/memory-inference.js'
+import type { MemoryReasoningMode } from '../config/index.js'
 import type { RecallQuery } from './memory-types.js'
 
 const SelectorOutputSchema = z.object({
@@ -21,6 +22,7 @@ Never invent an ID.`
 export interface MemorySelectorInput {
   model: LanguageModel
   modelId?: string
+  reasoningMode?: MemoryReasoningMode
   query: RecallQuery
   manifest: Array<{
     id: string
@@ -56,25 +58,28 @@ export async function selectMemoryTopics(input: MemorySelectorInput): Promise<st
   const timer = setTimeout(() => controller.abort(new Error('Memory selector timed out')), input.timeoutMs ?? 3000)
   timer.unref?.()
   try {
-    const reasoning = input.modelId ? getReasoningLevel(input.modelId, false) : undefined
-    const thinkingOptions = input.modelId ? getThinkingProviderOptions(input.modelId, false) : {}
-    const result = await generateText({
-      model: input.model,
-      instructions: SYSTEM_PROMPT,
-      prompt: JSON.stringify(payload),
-      output: Output.object({
-        schema: SelectorOutputSchema,
-        name: 'memory_topic_selection',
-        description: 'Up to five relevant topic IDs copied exactly from the provided manifest',
-      }),
-      maxOutputTokens: 256,
-      maxRetries: 1,
-      abortSignal: controller.signal,
-      temperature: 0,
-      ...(reasoning ? { reasoning } : {}),
-      ...(Object.keys(thinkingOptions).length
-        ? { providerOptions: thinkingOptions as Parameters<typeof generateText>[0]['providerOptions'] }
-        : {}),
+    const result = await runMemoryInference({
+      modelId: input.modelId,
+      reasoningMode: input.reasoningMode,
+      maxOutputTokens: 1024,
+      retryStructuredOutput: false,
+      generate: ({ providerOptions, ...settings }) =>
+        generateText({
+          model: input.model,
+          instructions: SYSTEM_PROMPT,
+          prompt: JSON.stringify(payload),
+          output: Output.object({
+            schema: SelectorOutputSchema,
+            name: 'memory_topic_selection',
+            description: 'Up to five relevant topic IDs copied exactly from the provided manifest',
+          }),
+          maxRetries: 1,
+          abortSignal: controller.signal,
+          ...settings,
+          ...(providerOptions
+            ? { providerOptions: providerOptions as Parameters<typeof generateText>[0]['providerOptions'] }
+            : {}),
+        }),
     })
     const output = SelectorOutputSchema.parse(result.output)
     return [...new Set(output.topicIds)].filter((id) => known.has(id)).slice(0, 5)

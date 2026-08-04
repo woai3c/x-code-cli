@@ -142,8 +142,10 @@ Users may back up or remove those files themselves if they no longer need them. 
   "memory": {
     "enabled": true,
     "model": "inherit",
+    "reasoning": "auto",
     "maxInputTokens": 12000,
     "maxOutputTokens": 1500,
+    "maxTotalOutputTokens": 8192,
     "maxOperationsPerTurn": 8,
     "drainTimeoutMs": 5000,
     "retryMaxAttempts": 8,
@@ -160,7 +162,7 @@ Users may back up or remove those files themselves if they no longer need them. 
 }
 ```
 
-`inherit` uses the active main model. Provider credentials remain environment-only and are never persisted in a job.
+`inherit` uses the active main model. `reasoning` accepts `auto`, `off`, `low`, and `provider-default`; `auto` falls back to the lowest effort when thinking cannot be disabled. `maxOutputTokens` is the initial extraction budget and grows toward `maxTotalOutputTokens` only after empty or truncated structured output. Provider credentials remain environment-only and are never persisted in a job.
 
 ## Troubleshooting
 

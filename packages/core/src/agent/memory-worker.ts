@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import type { LanguageModel } from 'ai'
 
+import type { MemoryReasoningMode } from '../config/index.js'
 import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from '../knowledge/memory-index.js'
 import type { MemoryJob, MemoryOperation, MemoryOperationResult, MemoryWriteNotice } from '../knowledge/memory-types.js'
 import { debugLog } from '../utils.js'
@@ -26,6 +27,8 @@ export interface MemoryWorkerOptions {
   onNotice(notice: MemoryWriteNotice): void
   maxOperations(): number
   maxOutputTokens(): number
+  maxTotalOutputTokens?(): number
+  reasoningMode?(): MemoryReasoningMode
   maxAttempts(): number
 }
 
@@ -154,6 +157,8 @@ export class MemoryWorker {
         ...context,
         maxOperations: this.options.maxOperations(),
         maxOutputTokens: this.options.maxOutputTokens(),
+        maxTotalOutputTokens: this.options.maxTotalOutputTokens?.(),
+        reasoningMode: this.options.reasoningMode?.(),
         abortSignal: controller.signal,
       })
       tokens = extracted.tokens

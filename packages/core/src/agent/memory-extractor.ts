@@ -3,9 +3,10 @@ import type { LanguageModel } from 'ai'
 
 import { z } from 'zod'
 
+import type { MemoryReasoningMode } from '../config/index.js'
 import { redactMemoryValue } from '../knowledge/memory-redaction.js'
 import type { MemoryJob, MemoryOperation } from '../knowledge/memory-types.js'
-import { getReasoningLevel, getThinkingProviderOptions } from '../providers/thinking.js'
+import { runMemoryInference } from './memory-inference.js'
 
 const MEMORY_ID_RE = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/
 const MemoryIdSchema = z
@@ -102,6 +103,8 @@ export interface ExtractMemoryInput {
   existingTopicIds?: readonly string[]
   maxOperations?: number
   maxOutputTokens?: number
+  maxTotalOutputTokens?: number
+  reasoningMode?: MemoryReasoningMode
   abortSignal?: AbortSignal
 }
 
@@ -122,25 +125,28 @@ export async function extractMemoryOperations(input: ExtractMemoryInput): Promis
     relatedTopics: input.relatedTopics,
     existingTopicIds,
   })
-  const reasoning = input.modelId ? getReasoningLevel(input.modelId, false) : undefined
-  const thinkingOptions = input.modelId ? getThinkingProviderOptions(input.modelId, false) : {}
-  const result = await generateText({
-    model: input.model,
-    instructions: SYSTEM_PROMPT,
-    prompt: JSON.stringify(payload),
-    output: Output.object({
-      schema: OutputSchema,
-      name: 'memory_operations',
-      description: 'Validated durable memory operations; return an empty operations array when no fact qualifies',
-    }),
+  const result = await runMemoryInference({
+    modelId: input.modelId,
+    reasoningMode: input.reasoningMode,
     maxOutputTokens: input.maxOutputTokens ?? 1500,
-    maxRetries: 2,
-    abortSignal: input.abortSignal,
-    temperature: 0,
-    ...(reasoning ? { reasoning } : {}),
-    ...(Object.keys(thinkingOptions).length
-      ? { providerOptions: thinkingOptions as Parameters<typeof generateText>[0]['providerOptions'] }
-      : {}),
+    maxTotalOutputTokens: input.maxTotalOutputTokens ?? 8192,
+    generate: ({ providerOptions, ...settings }) =>
+      generateText({
+        model: input.model,
+        instructions: SYSTEM_PROMPT,
+        prompt: JSON.stringify(payload),
+        output: Output.object({
+          schema: OutputSchema,
+          name: 'memory_operations',
+          description: 'Validated durable memory operations; return an empty operations array when no fact qualifies',
+        }),
+        maxRetries: 2,
+        abortSignal: input.abortSignal,
+        ...settings,
+        ...(providerOptions
+          ? { providerOptions: providerOptions as Parameters<typeof generateText>[0]['providerOptions'] }
+          : {}),
+      }),
   })
   const output = OutputSchema.parse(result.output)
   validateOperations(output.operations, new Set(existingTopicIds))

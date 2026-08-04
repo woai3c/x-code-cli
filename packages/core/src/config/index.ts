@@ -130,10 +130,14 @@ export interface MemoryRecallConfig {
   lateBoundRecall: boolean
 }
 
+export type MemoryReasoningMode = 'auto' | 'off' | 'low' | 'provider-default'
+
 export interface MemoryConfig {
   model: string
+  reasoning: MemoryReasoningMode
   maxInputTokens: number
   maxOutputTokens: number
+  maxTotalOutputTokens: number
   maxOperationsPerTurn: number
   drainTimeoutMs: number
   retryMaxAttempts: number
@@ -142,8 +146,10 @@ export interface MemoryConfig {
 
 export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
   model: 'inherit',
+  reasoning: 'auto',
   maxInputTokens: 12_000,
   maxOutputTokens: 1500,
+  maxTotalOutputTokens: 8192,
   maxOperationsPerTurn: 8,
   drainTimeoutMs: 5000,
   retryMaxAttempts: 8,
@@ -182,10 +188,22 @@ export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): Memo
     maxTokensPerTopic,
     integer(recall.maxTokensPerTurn, DEFAULT_MEMORY_CONFIG.recall.maxTokensPerTurn, 100, 20_000),
   )
+  const maxOutputTokens = integer(memory.maxOutputTokens, DEFAULT_MEMORY_CONFIG.maxOutputTokens, 128, 8192)
   return {
     model: text(memory.model, DEFAULT_MEMORY_CONFIG.model),
+    reasoning:
+      memory.reasoning === 'auto' ||
+      memory.reasoning === 'off' ||
+      memory.reasoning === 'low' ||
+      memory.reasoning === 'provider-default'
+        ? memory.reasoning
+        : DEFAULT_MEMORY_CONFIG.reasoning,
     maxInputTokens: integer(memory.maxInputTokens, DEFAULT_MEMORY_CONFIG.maxInputTokens, 1000, 100_000),
-    maxOutputTokens: integer(memory.maxOutputTokens, DEFAULT_MEMORY_CONFIG.maxOutputTokens, 128, 8192),
+    maxOutputTokens,
+    maxTotalOutputTokens: Math.max(
+      maxOutputTokens,
+      integer(memory.maxTotalOutputTokens, DEFAULT_MEMORY_CONFIG.maxTotalOutputTokens, 128, 65_536),
+    ),
     maxOperationsPerTurn: integer(memory.maxOperationsPerTurn, DEFAULT_MEMORY_CONFIG.maxOperationsPerTurn, 1, 8),
     drainTimeoutMs: integer(memory.drainTimeoutMs, DEFAULT_MEMORY_CONFIG.drainTimeoutMs, 0, 30_000),
     retryMaxAttempts: integer(memory.retryMaxAttempts, DEFAULT_MEMORY_CONFIG.retryMaxAttempts, 1, 8),

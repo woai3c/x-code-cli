@@ -112,6 +112,8 @@ export class MemoryService {
       onNotice: (notice) => this.noticeHandler?.(notice),
       maxOperations: () => this.config().maxOperationsPerTurn,
       maxOutputTokens: () => this.config().maxOutputTokens,
+      maxTotalOutputTokens: () => this.config().maxTotalOutputTokens,
+      reasoningMode: () => this.config().reasoning,
       maxAttempts: () => this.config().retryMaxAttempts,
     })
   }
@@ -190,6 +192,7 @@ export class MemoryService {
           selected = await selectMemoryTopics({
             model,
             modelId: selectorModelId ?? undefined,
+            reasoningMode: config.reasoning,
             query,
             manifest: this.index.manifest(),
             preferredTopicIds: retrieved.candidates.slice(0, 50).map((candidate) => candidate.topicId),
@@ -268,6 +271,7 @@ export class MemoryService {
           await selectMemoryTopics({
             model,
             modelId: selectorModelId ?? undefined,
+            reasoningMode: config.reasoning,
             query: {
               currentUserText: signals.currentUserText,
               recentConversationText: '',
@@ -344,6 +348,7 @@ export class MemoryService {
           candidateIds = await selectMemoryTopics({
             model,
             modelId: resolvedId ?? undefined,
+            reasoningMode: config.reasoning,
             query: recallQuery,
             manifest: this.index.manifest(context.allowedTopicIds),
             preferredTopicIds: lexicalCandidateIds,
