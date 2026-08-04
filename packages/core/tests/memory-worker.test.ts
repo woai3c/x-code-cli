@@ -2,7 +2,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { MemoryJobStore } from '../src/agent/memory-job-store.js'
-import { MemoryWorker, bindOperationEvidence, isDeleteOperationAuthorized } from '../src/agent/memory-worker.js'
+import {
+  MemoryWorker,
+  bindOperationEvidence,
+  isDeleteOperationAuthorized,
+  rejectedOperationsError,
+  shouldRetryUngroundedOperations,
+} from '../src/agent/memory-worker.js'
 import type { MemoryJob, MemoryOperation } from '../src/knowledge/memory-types.js'
 import { makeMemoryRoot } from './memory-test-helpers.js'
 
@@ -53,12 +59,54 @@ function deleteOperation(userRequest: string): Extract<MemoryOperation, { action
 }
 
 describe('memory worker evidence binding', () => {
+  it('retries a commit when every extracted operation was rejected', () => {
+    expect(
+      rejectedOperationsError(
+        {
+          status: 'warning',
+          generation: 0,
+          notices: [
+            { action: 'failed', error: 'Invalid fact ID' },
+            { action: 'failed', error: 'Invalid fact ID' },
+          ],
+        },
+        2,
+      ),
+    ).toBe('All 2 memory operations were rejected: Invalid fact ID')
+  })
+
+  it('does not retry a partially successful commit', () => {
+    expect(
+      rejectedOperationsError(
+        {
+          status: 'warning',
+          generation: 1,
+          notices: [
+            { action: 'remembered', topicId: 'product', factId: 'product.stack' },
+            { action: 'failed', error: 'Invalid fact ID' },
+          ],
+        },
+        2,
+      ),
+    ).toBeNull()
+  })
+
+  it('retries ungrounded operations only for explicit memory requests', () => {
+    expect(shouldRetryUngroundedOperations(true, 1, 0)).toBe(true)
+    expect(shouldRetryUngroundedOperations(false, 1, 0)).toBe(false)
+    expect(shouldRetryUngroundedOperations(true, 1, 1)).toBe(false)
+  })
+
   it('derives evidence authority, source, and time from the durable projection', () => {
     const source = job()
     const bound = bindOperationEvidence(
       [
         operation([
-          { kind: 'explicit', sourceId: 'forged', occurredAt: '2099-01-01T00:00:00.000Z' },
+          {
+            kind: 'explicit',
+            sourceId: 'The project uses TypeScript.',
+            occurredAt: '2099-01-01T00:00:00.000Z',
+          },
           { kind: 'validated', sourceId: 'forged', occurredAt: '2099-01-01T00:00:00.000Z' },
           { kind: 'observed', sourceId: 'forged', occurredAt: '2099-01-01T00:00:00.000Z' },
         ]),
@@ -92,6 +140,45 @@ describe('memory worker evidence binding', () => {
 
   it('rejects partial user-message provenance for deletion', () => {
     expect(isDeleteOperationAuthorized(deleteOperation('x'), ['prefix-x-suffix'])).toBe(false)
+  })
+
+  it('rejects explicit evidence attributed to a user question', () => {
+    const source = job()
+    source.projection.userMessages = ['What stack does the project use?']
+
+    expect(
+      bindOperationEvidence(
+        [
+          operation([
+            {
+              kind: 'explicit',
+              sourceId: 'What stack does the project use?',
+              occurredAt: source.sourceOccurredAt,
+            },
+          ]),
+        ],
+        source,
+      ),
+    ).toEqual([])
+  })
+
+  it('accepts a quoted explicit fact from a declarative user message', () => {
+    const source = job()
+
+    expect(
+      bindOperationEvidence(
+        [
+          operation([
+            {
+              kind: 'explicit',
+              sourceId: 'The project uses TypeScript.',
+              occurredAt: source.sourceOccurredAt,
+            },
+          ]),
+        ],
+        source,
+      ),
+    ).toHaveLength(1)
   })
 
   it('accepts observed evidence only when durable tool signals ground the operation', () => {

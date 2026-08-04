@@ -61,6 +61,7 @@ describe('memory extractor', () => {
     const result = await extractMemoryOperations({
       job: job(),
       model: {} as LanguageModel,
+      modelId: 'deepseek:deepseek-v4-pro',
       coreProfile: '',
       factRegistry: '',
       relatedTopics: [],
@@ -69,7 +70,98 @@ describe('memory extractor', () => {
     expect(result.tokens).toBe(120)
     expect(generateText).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(vi.mocked(generateText).mock.calls[0]?.[0])).not.toContain('sk-proj-abcdefghijklmnop')
+    expect(vi.mocked(generateText).mock.calls[0]?.[0]).toMatchObject({ reasoning: 'none', temperature: 0 })
     const payload = JSON.parse(String(vi.mocked(generateText).mock.calls[0]?.[0].prompt))
     expect(payload.explicitMemoryIntent).toBe(true)
+    expect(payload.existingTopicIds).toEqual([])
+  })
+
+  it('rejects invalid memory identifiers before commit', async () => {
+    vi.mocked(generateText).mockResolvedValueOnce({
+      output: {
+        operations: [
+          {
+            action: 'upsert',
+            topicId: 'product:x-code',
+            factId: 'product:x-code:stack',
+            content: '- Uses TypeScript.',
+            evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-02T00:01:00.000Z' }],
+            topicPatch: {
+              type: 'portfolio',
+              description: 'User products',
+              addAliases: ['x-code'],
+              addKeywords: ['coding agent'],
+            },
+          },
+        ],
+      },
+      usage: { inputTokens: 100, outputTokens: 20 },
+    } as never)
+
+    await expect(
+      extractMemoryOperations({
+        job: job(),
+        model: {} as LanguageModel,
+        coreProfile: '',
+        factRegistry: '',
+        relatedTopics: [],
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('rejects incomplete metadata for a new topic instead of losing the operation at commit', async () => {
+    vi.mocked(generateText).mockResolvedValueOnce({
+      output: {
+        operations: [
+          {
+            action: 'upsert',
+            topicId: 'x-code-cli',
+            factId: 'x-code-cli.stack',
+            content: '- Uses TypeScript.',
+            evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-02T00:01:00.000Z' }],
+          },
+        ],
+      },
+      usage: { inputTokens: 100, outputTokens: 20 },
+    } as never)
+
+    await expect(
+      extractMemoryOperations({
+        job: job(),
+        model: {} as LanguageModel,
+        coreProfile: '',
+        factRegistry: '',
+        relatedTopics: [],
+        existingTopicIds: [],
+      }),
+    ).rejects.toThrow('new topic x-code-cli lacks complete topic metadata')
+  })
+
+  it('allows an existing topic update without a metadata patch', async () => {
+    vi.mocked(generateText).mockResolvedValueOnce({
+      output: {
+        operations: [
+          {
+            action: 'upsert',
+            topicId: 'x-code-cli',
+            factId: 'x-code-cli.stack',
+            content: '- Uses TypeScript.',
+            evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-02T00:01:00.000Z' }],
+          },
+        ],
+      },
+      usage: { inputTokens: 100, outputTokens: 20 },
+    } as never)
+
+    const result = await extractMemoryOperations({
+      job: job(),
+      model: {} as LanguageModel,
+      coreProfile: '',
+      factRegistry: '',
+      relatedTopics: [],
+      existingTopicIds: ['x-code-cli'],
+    })
+
+    expect(result.operations).toHaveLength(1)
   })
 })

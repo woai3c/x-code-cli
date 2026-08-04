@@ -395,6 +395,42 @@ describe('MemoryStore', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
+  it('does not mark a fully rejected durable job as applied', async () => {
+    const root = await makeMemoryRoot()
+    const store = new MemoryStore(root)
+    await store.initialize()
+    const context = { jobId: 'job-rejected', sourceOccurredAt: '2026-08-04T00:00:00.000Z' }
+
+    const result = await store.applyOperations(
+      [
+        {
+          action: 'upsert',
+          topicId: 'product',
+          factId: 'product:x-code:stack',
+          content: '- Stack is TypeScript.',
+          evidence: [
+            {
+              kind: 'explicit',
+              sourceId: 'memory-job:job-rejected:explicit',
+              occurredAt: context.sourceOccurredAt,
+            },
+          ],
+          topicPatch: {
+            type: 'portfolio',
+            description: 'Product stack',
+            addAliases: ['x-code'],
+            addKeywords: ['stack'],
+          },
+        },
+      ],
+      context,
+    )
+
+    expect(result.status).toBe('warning')
+    await expect(fs.access(path.join(root, '.state', 'jobs', 'applied', 'job-rejected.json'))).rejects.toThrow()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
   it('redacts secrets again at the final persistence boundary', async () => {
     const root = await makeMemoryRoot()
     const store = new MemoryStore(root)

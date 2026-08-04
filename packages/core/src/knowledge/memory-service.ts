@@ -189,6 +189,7 @@ export class MemoryService {
         try {
           selected = await selectMemoryTopics({
             model,
+            modelId: selectorModelId ?? undefined,
             query,
             manifest: this.index.manifest(),
             preferredTopicIds: retrieved.candidates.slice(0, 50).map((candidate) => candidate.topicId),
@@ -266,6 +267,7 @@ export class MemoryService {
         selected = (
           await selectMemoryTopics({
             model,
+            modelId: selectorModelId ?? undefined,
             query: {
               currentUserText: signals.currentUserText,
               recentConversationText: '',
@@ -341,6 +343,7 @@ export class MemoryService {
         try {
           candidateIds = await selectMemoryTopics({
             model,
+            modelId: resolvedId ?? undefined,
             query: recallQuery,
             manifest: this.index.manifest(context.allowedTopicIds),
             preferredTopicIds: lexicalCandidateIds,
@@ -525,6 +528,7 @@ export class MemoryService {
     return {
       coreProfile: this.coreProfile,
       factRegistry: this.index.compactFactRegistry(2000, ids),
+      existingTopicIds: [...this.index.topics.keys()],
       relatedTopics: ids
         .map((id) => this.index.topics.get(id))
         .filter((topic): topic is MemoryTopic => Boolean(topic))

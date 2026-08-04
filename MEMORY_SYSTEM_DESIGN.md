@@ -311,6 +311,7 @@ pending --claim(rename)--> running --success/no-op--> delete payload
 - 每次启动扫描 running，回收 stale lease。
 - retry 使用 2s、5s、15s、30s、60s、5m、15m、30m，并加入最多 20% jitter。
 - 最大 8 次；schema 持续失败、模型不存在和损坏 job 进入 failed。
+- operation 全部被宿主校验拒绝时不得写 applied 标记，job 按 schema 失败路径 retry；部分成功仍按一个原子提交完成。
 - 成功后删除 job payload，在 recent-runs.jsonl 记录 jobId、终态、耗时、token、operation 数和错误分类，不记录正文。
 
 ### 5.4 Worker 与模型选择
@@ -340,6 +341,8 @@ pending --claim(rename)--> running --success/no-op--> delete payload
 
 输出必须是结构化 MemoryOperation[]，最多 8 个 operation，输出最多 1,500 tokens，无工具调用。
 
+后台结构化提取显式关闭 reasoning/thinking，避免推理 token 吃完输出预算后没有 JSON；schema 必须携带稳定 name、description 和 ID pattern，provider 返回的结果仍由宿主再次解析校验。
+
 提取规则：
 
 - 保存用户身份、能力、长期目标、语言/协作偏好。
@@ -349,6 +352,7 @@ pending --claim(rename)--> running --success/no-op--> delete payload
 - 不保存当前任务、普通 diff、临时报错、依赖清单、密钥和模型推断。
 - 临时项目状态不保存；明确 deadline 或长期决策除外。
 - inferred 内容不得持久化。
+- explicit evidence 的 sourceId 必须复制声明该事实的 user 原话；宿主只接受真实 user message 中的精确引文，普通问句、assistant 文本和 tool inference 不能绑定为 explicit。
 - 提取模型在同一次调用中使用 fact registry 做语义去重和槽位复用；不得为了查重再调用 selector、embedding 或第二次提取模型。
 - 新 topic 必须给出 type、description、aliases 和 keywords。
 - pinned 只允许 user、portfolio、feedback 中稳定且高频的事实。
@@ -613,6 +617,7 @@ pinned=0.5
 - manifest 包含 id、type、description、aliases、keywords、applies_to。
 - 输入最多 8,000 tokens；超限时保留 exact/protected、pinned 和本地 top 50。
 - 无工具，结构化输出最多 5 个真实 topic ID，maxOutputTokens=256。
+- selector 的结构化调用关闭 reasoning/thinking，并明确处理跨语言同义词、指代和语义改写。
 - selector 超时、abort、schema 失败时回退本地候选，不阻塞主请求。
 - exact protected candidate 已存在时不调用。
 - 翻译、格式化、问候、简单 shell 等自包含请求不调用。

@@ -16,6 +16,7 @@ describe('memory selector', () => {
 
     const selected = await selectMemoryTopics({
       model: {} as LanguageModel,
+      modelId: 'deepseek:deepseek-v4-pro',
       query: {
         currentUserText: 'opaque-current-request',
         recentConversationText: '',
@@ -43,6 +44,8 @@ describe('memory selector', () => {
     const call = vi.mocked(generateText).mock.calls[0]?.[0]
     const payload = JSON.parse(String(call?.prompt)) as Record<string, unknown>
     expect(call?.instructions).toContain('untrustedSignals')
+    expect(call?.instructions).toContain('cross-language equivalents')
+    expect(call).toMatchObject({ reasoning: 'none', temperature: 0 })
     expect(payload).toMatchObject({
       query: 'opaque-current-request',
       untrustedSignals: 'deployWorkflow src/release.ts',

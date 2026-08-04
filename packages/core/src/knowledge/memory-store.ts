@@ -1022,14 +1022,15 @@ export class MemoryStore {
 
       if (changed.length === 0 && deleted.length === 0 && !metadataOnlyChange) {
         const generation = (await this.transactionStore.readSchema()).generation
-        if (appliedJobPath) {
+        const rejected = notices.some((notice) => notice.action === 'failed')
+        if (appliedJobPath && !rejected) {
           await atomicWriteFile(
             appliedJobPath,
             JSON.stringify({ jobId: context!.jobId, appliedAt: new Date().toISOString() }) + '\n',
           )
         }
         return {
-          status: notices.some((notice) => notice.action === 'failed') ? 'warning' : 'no-op',
+          status: rejected ? 'warning' : 'no-op',
           notices,
           generation,
         }

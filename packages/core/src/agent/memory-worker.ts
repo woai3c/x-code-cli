@@ -16,6 +16,7 @@ export interface MemoryWorkerOptions {
     coreProfile: string
     factRegistry: string
     relatedTopics: Array<{ topicId: string; topicHash: string; content: string }>
+    existingTopicIds?: readonly string[]
   }>
   commitOperations(
     operations: Awaited<ReturnType<typeof extractMemoryOperations>>['operations'],
@@ -123,8 +124,12 @@ export class MemoryWorker {
       }
       const preferred = this.options.preferredModelId()
       const modelId = preferred && preferred !== 'inherit' ? preferred : job.modelId
-      const model =
-        this.options.resolveModel(modelId) ?? (modelId === job.modelId ? null : this.options.resolveModel(job.modelId))
+      let resolvedModelId = modelId
+      let model = this.options.resolveModel(modelId)
+      if (!model && modelId !== job.modelId) {
+        resolvedModelId = job.modelId
+        model = this.options.resolveModel(job.modelId)
+      }
       if (!model) {
         const retry = await this.options.jobStore.retry(job, this.options.maxAttempts())
         if (retry === 'failed') {
@@ -145,6 +150,7 @@ export class MemoryWorker {
       const extracted = await extractMemoryOperations({
         job,
         model,
+        modelId: resolvedModelId,
         ...context,
         maxOperations: this.options.maxOperations(),
         maxOutputTokens: this.options.maxOutputTokens(),
@@ -158,8 +164,15 @@ export class MemoryWorker {
         ),
         job,
       )
+      if (
+        shouldRetryUngroundedOperations(job.explicitMemoryIntent, extracted.operations.length, safeOperations.length)
+      ) {
+        throw new Error('All extracted memory operations lacked grounded evidence')
+      }
       operations = safeOperations.length
       const committed = await this.options.commitOperations(safeOperations, job)
+      const rejection = rejectedOperationsError(committed, operations)
+      if (rejection && !(await this.options.jobStore.isApplied(job.jobId))) throw new Error(rejection)
       await this.options.onCommitted(committed)
       const status = committed.status === 'success' ? 'success' : committed.status
       await this.options.jobStore.appendRun({
@@ -209,6 +222,23 @@ export class MemoryWorker {
   }
 }
 
+export function rejectedOperationsError(result: MemoryOperationResult, operationCount: number): string | null {
+  if (operationCount === 0 || result.status !== 'warning' || !result.notices.length) return null
+  if (result.notices.some((notice) => notice.action !== 'failed')) return null
+  const reasons = [...new Set(result.notices.map((notice) => notice.error).filter(Boolean))]
+  return `All ${operationCount} memory operation${operationCount === 1 ? '' : 's'} were rejected${
+    reasons.length ? `: ${reasons.join('; ')}` : ''
+  }`
+}
+
+export function shouldRetryUngroundedOperations(
+  explicitMemoryIntent: boolean,
+  extractedCount: number,
+  groundedCount: number,
+): boolean {
+  return explicitMemoryIntent && extractedCount > 0 && groundedCount === 0
+}
+
 export function isDeleteOperationAuthorized(
   operation: Extract<MemoryOperation, { action: 'delete' }>,
   userMessages: readonly string[],
@@ -244,7 +274,12 @@ export function bindOperationEvidence(operations: readonly MemoryOperation[], jo
       if (hasObservedPath || hasObservedIdentifier) supported.add('observed')
     }
     const evidence = operation.evidence
-      .filter((item) => supported.has(item.kind))
+      .filter(
+        (item) =>
+          supported.has(item.kind) &&
+          (item.kind !== 'explicit' ||
+            isExplicitEvidenceSupported(item.sourceId, job.projection.userMessages, job.explicitMemoryIntent)),
+      )
       .map((item) => ({
         kind: item.kind,
         sourceId: `memory-job:${job.jobId}:${item.kind}`,
@@ -255,4 +290,26 @@ export function bindOperationEvidence(operations: readonly MemoryOperation[], jo
     return { ...operation, evidence } as MemoryOperation
   }
   return operations.map(bind).filter((operation): operation is MemoryOperation => Boolean(operation))
+}
+
+function isExplicitEvidenceSupported(
+  sourceId: string,
+  userMessages: readonly string[],
+  explicitMemoryIntent: boolean,
+): boolean {
+  const quote = sourceId.normalize('NFKC').replace(/\s+/g, ' ').trim()
+  if ([...quote].length < 2) return false
+  return userMessages.some((message) => {
+    const normalized = message.normalize('NFKC').replace(/\s+/g, ' ').trim()
+    if (!normalized.includes(quote)) return false
+    return explicitMemoryIntent || !isQuestionLike(normalized)
+  })
+}
+
+function isQuestionLike(value: string): boolean {
+  return (
+    /[?？]\s*$/.test(value) ||
+    /^(?:what|which|who|whose|where|when|why|how|do|does|did|is|are|was|were|can|could|would|should)\b/i.test(value) ||
+    /(?:吗|么|呢|什么|哪个|哪一个|为什么|怎么|如何|是否)[？?。！!\s]*$/.test(value)
+  )
 }
