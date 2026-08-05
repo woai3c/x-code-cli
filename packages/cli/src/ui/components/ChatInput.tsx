@@ -97,6 +97,9 @@ import type { MenuItem, PermissionRequest, SelectRequest, SlashCommand, SpinnerS
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
 const MAX_VISIBLE_LINES = 10
+// Shared by the render effect (frame layout) and Up/Down cursor movement
+// so both compute the soft-wrap viewport width identically.
+const PROMPT_WIDTH = 2
 const MAX_AT_RESULTS = 50
 const MAX_VISIBLE_MENU_ITEMS = 8
 
@@ -197,6 +200,91 @@ export function computePostContentScrollRows(
   const naturalScroll = Math.max(0, startRow + contentRows - 1 - terminalRows)
   const effectiveContentEnd = Math.min(terminalRows, startRow + contentRows - 1 - naturalScroll)
   return Math.max(0, effectiveContentEnd - frameTop + 1)
+}
+
+// ── Input soft-wrap geometry ───────────────────────────────────────────
+// Single source of truth for how raw input text maps onto visual rows:
+// the render effect paints with these helpers and Up/Down cursor movement
+// navigates in the same coordinate system. Two independent computations
+// would eventually drift on wide-char handling and the wrap-boundary
+// cursor-ownership rule.
+
+type VisualLine = { text: string; rawLineIdx: number; startCol: number }
+
+/** Soft-wrap each raw line at `vpWidth` columns into visual lines. */
+export function buildVisualLines(rawLines: string[], vpWidth: number): VisualLine[] {
+  const visualLines: VisualLine[] = []
+  for (let r = 0; r < rawLines.length; r++) {
+    const line = rawLines[r]
+    if (line.length === 0) {
+      visualLines.push({ text: '', rawLineIdx: r, startCol: 0 })
+      continue
+    }
+    let pos = 0
+    while (pos < line.length) {
+      const chunk = sliceByWidth(line.slice(pos), vpWidth)
+      const advance = chunk.length > 0 ? chunk.length : line.length - pos // wide-char-overflow safety
+      visualLines.push({ text: chunk, rawLineIdx: r, startCol: pos })
+      pos += advance
+    }
+  }
+  return visualLines
+}
+
+/** Map a raw cursor offset to (visualLine, col-within-visual-line). When
+ *  the cursor sits at the end of a wrapped line that continues on the next
+ *  visual line, ownership goes to the NEXT line's leading position, for
+ *  UX parity with shell prompts. */
+export function locateVisualCursor(
+  visualLines: VisualLine[],
+  rawLines: string[],
+  cursor: number,
+): { line: number; col: number } {
+  let rawCursorLine = 0,
+    cursorColInRaw = cursor
+  let charsSoFar = 0
+  for (let i = 0; i < rawLines.length; i++) {
+    if (cursor >= charsSoFar && cursor <= charsSoFar + rawLines[i].length) {
+      rawCursorLine = i
+      cursorColInRaw = cursor - charsSoFar
+      break
+    }
+    charsSoFar += rawLines[i].length + 1
+  }
+  for (let v = 0; v < visualLines.length; v++) {
+    const vl = visualLines[v]
+    if (vl.rawLineIdx !== rawCursorLine) continue
+    const endCol = vl.startCol + vl.text.length
+    const isLastChunkOfRawLine = v + 1 >= visualLines.length || visualLines[v + 1].rawLineIdx !== rawCursorLine
+    if (
+      cursorColInRaw >= vl.startCol &&
+      (cursorColInRaw < endCol || (cursorColInRaw === endCol && isLastChunkOfRawLine))
+    ) {
+      return { line: v, col: cursorColInRaw - vl.startCol }
+    }
+  }
+  return { line: 0, col: 0 }
+}
+
+/** Move the cursor `delta` VISUAL lines up/down within `text`, preserving
+ *  the display column. Returns the new raw cursor offset, or `null` when
+ *  the cursor is already on the first/last visual line — the null is what
+ *  lets Up/Down handlers fall through to the history-navigation path. */
+export function moveCursorVisual(text: string, cursor: number, delta: number, vpWidth: number): number | null {
+  const rawLines = text.length === 0 ? [''] : text.split('\n')
+  const visualLines = buildVisualLines(rawLines, vpWidth)
+  const { line, col } = locateVisualCursor(visualLines, rawLines, cursor)
+  const targetLine = Math.max(0, Math.min(visualLines.length - 1, line + delta))
+  if (targetLine === line) return null
+  const target = visualLines[targetLine]
+  // Preserve the DISPLAY column, not the char index: sliceByWidth stops
+  // before a wide char that would straddle the boundary, which doubles as
+  // the clamp when the target line is narrower than the desired column.
+  const desiredWidth = visualWidth(visualLines[line].text.slice(0, col))
+  const targetCol = sliceByWidth(target.text, desiredWidth).length
+  let newPos = 0
+  for (let i = 0; i < target.rawLineIdx; i++) newPos += rawLines[i].length + 1
+  return newPos + target.startCol + targetCol
 }
 
 export function ChatInput({
@@ -654,29 +742,18 @@ export function ChatInput({
     setCompletionIndex(0)
   }
 
-  /** Move the cursor up/down by `delta` logical lines. Returns `true` if the
-   *  cursor actually moved, `false` if it was already at the top/bottom edge —
-   *  the falsy return is what lets the Up/Down handlers fall through to the
-   *  history-navigation path (same trick Claude Code's `upOrHistoryUp` uses). */
+  /** Move the cursor up/down by `delta` VISUAL lines (soft-wrap aware, so a
+   *  long single logical line wrapped across terminal rows is navigable
+   *  row-by-row). Returns `true` if the cursor actually moved, `false` if it
+   *  was already at the top/bottom visual edge — the falsy return is what
+   *  lets the Up/Down handlers fall through to the history-navigation path
+   *  (same trick Claude Code's `upOrHistoryUp` uses). */
   const moveCursorVertically = (delta: number): boolean => {
-    const lines = text.split('\n')
-    let line = 0,
-      col = cursorRef.current,
-      charsSoFar = 0
-    for (let i = 0; i < lines.length; i++) {
-      if (charsSoFar + lines[i].length >= cursorRef.current && cursorRef.current >= charsSoFar) {
-        line = i
-        col = cursorRef.current - charsSoFar
-        break
-      }
-      charsSoFar += lines[i].length + 1
-    }
-    const targetLine = Math.max(0, Math.min(lines.length - 1, line + delta))
-    if (targetLine === line) return false
-    const targetCol = Math.min(col, lines[targetLine].length)
-    let newPos = 0
-    for (let i = 0; i < targetLine; i++) newPos += lines[i].length + 1
-    newPos += targetCol
+    // Computed at keypress time from the live terminal width — a resize
+    // re-wraps the input, and navigation must use the NEW geometry.
+    const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
+    const newPos = moveCursorVisual(text, cursorRef.current, delta, vpWidth)
+    if (newPos === null) return false
     dispatch({ type: 'SET_CURSOR', cursor: newPos })
     return true
   }
@@ -1352,7 +1429,6 @@ export function ChatInput({
     }
     prevHadPermissionRef.current = !!permission
 
-    const PROMPT_WIDTH = 2
     const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
     const sepChar = '─'
     const sepText = sepChar.repeat(Math.max(0, termWidth - 1))
@@ -1366,63 +1442,12 @@ export function ChatInput({
     // soft-wrapped at vpWidth columns into one or more visual lines, so
     // the input doesn't run off the right edge of the terminal. The
     // cursor's character offset is mapped into the matching (visualLine,
-    // visualCol) pair for the render/diff paths below.
+    // visualCol) pair for the render/diff paths below. Both computations
+    // share their implementation with Up/Down cursor movement — see the
+    // module-level soft-wrap geometry helpers.
     const rawLines = text.length === 0 ? [''] : text.split('\n')
-
-    type VisualLine = { text: string; rawLineIdx: number; startCol: number }
-    const visualLines: VisualLine[] = []
-    for (let r = 0; r < rawLines.length; r++) {
-      const line = rawLines[r]
-      if (line.length === 0) {
-        visualLines.push({ text: '', rawLineIdx: r, startCol: 0 })
-        continue
-      }
-      let pos = 0
-      while (pos < line.length) {
-        const chunk = sliceByWidth(line.slice(pos), vpWidth)
-        const advance = chunk.length > 0 ? chunk.length : line.length - pos // wide-char-overflow safety
-        visualLines.push({ text: chunk, rawLineIdx: r, startCol: pos })
-        pos += advance
-      }
-    }
-
-    // Locate cursor in visual coordinates. Scan visual lines in order:
-    // the cursor lies inside the first visual line whose raw range
-    // `[startCol, startCol + text.length]` contains `cursorCol` for the
-    // matching rawLineIdx. When cursor is at the end of a wrapped line
-    // that continues to the next visual line (startCol + text.length ===
-    // cursorCol AND the next visual line has the same rawLineIdx), we
-    // prefer the next line's leading position for UX parity with shell
-    // prompts.
-    let visCursorLine = 0
-    let visCursorCol = 0
-    {
-      let rawCursorLine = 0,
-        cursorColInRaw = cursor
-      let charsSoFar = 0
-      for (let i = 0; i < rawLines.length; i++) {
-        if (cursor >= charsSoFar && cursor <= charsSoFar + rawLines[i].length) {
-          rawCursorLine = i
-          cursorColInRaw = cursor - charsSoFar
-          break
-        }
-        charsSoFar += rawLines[i].length + 1
-      }
-      for (let v = 0; v < visualLines.length; v++) {
-        const vl = visualLines[v]
-        if (vl.rawLineIdx !== rawCursorLine) continue
-        const endCol = vl.startCol + vl.text.length
-        const isLastChunkOfRawLine = v + 1 >= visualLines.length || visualLines[v + 1].rawLineIdx !== rawCursorLine
-        if (
-          cursorColInRaw >= vl.startCol &&
-          (cursorColInRaw < endCol || (cursorColInRaw === endCol && isLastChunkOfRawLine))
-        ) {
-          visCursorLine = v
-          visCursorCol = cursorColInRaw - vl.startCol
-          break
-        }
-      }
-    }
+    const visualLines = buildVisualLines(rawLines, vpWidth)
+    const { line: visCursorLine, col: visCursorCol } = locateVisualCursor(visualLines, rawLines, cursor)
 
     let displayLines: string[]
     let cursorLine: number
