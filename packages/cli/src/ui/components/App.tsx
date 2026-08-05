@@ -1884,6 +1884,10 @@ export function App({
           ? { used: state.usage.currentContextTokens, window: getContextWindow(state.modelId) }
           : null
       }
+      // Footer right side: active model label, always shown. Re-renders
+      // automatically on /model switch since switchModel updates
+      // state.modelId.
+      modelLabel={renderModelLabel(state.modelId)}
       activeToolCalls={state.activeToolCalls}
       todos={state.todos}
       queuedMessages={state.queuedMessages}

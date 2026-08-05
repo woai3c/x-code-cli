@@ -59,11 +59,12 @@ export function renderHeader(modelId: string): string {
   const newlineKey = isMac ? '⌥⏎ or \\⏎' : 'Alt+Enter or \\+Enter'
 
   const primary = paint('primary')
-  // chalk's dim ATTRIBUTE (not a flat hex gray): it renders as a darkened
-  // step of the terminal's OWN default foreground, which stays readable
-  // on any user color scheme. A fixed mid-gray like #999999 reads
-  // noticeably darker on terminals whose default fg is a bright white.
-  const dim = (s: string) => c.dim(s)
+  // Meta text (version, model label, hints) uses the brightened textDim
+  // token instead of chalk's dim ATTRIBUTE: the attribute renders as a
+  // darkened step of the terminal's own default foreground, which lands
+  // uncomfortably dark on many dark schemes. textDim resolves against
+  // the active theme, so `/theme` switching keeps the banner consistent.
+  const dim = paint('textDim')
 
   const lines = [
     primary(c.bold(logo)),

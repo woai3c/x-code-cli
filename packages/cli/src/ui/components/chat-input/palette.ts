@@ -23,6 +23,14 @@ export let S_PRIMARY_BOLD = cellFg('primary', { bold: true })
 export let S_TEXT_DIM = cellFg('textDim')
 /** Weakest gray rung — prompt glyph, placeholders. */
 export let S_TEXT_MUTED = cellFg('textMuted')
+/** Workhorse meta/hints gray — footer model label, menu descriptions,
+ *  permission option labels. An explicit textDim hex rather than the
+ *  ANSI dim attribute: `\x1b[2m` on the terminal default fg renders as
+ *  a darkened default step (often ~#808080 on dark themes), which users
+ *  read as "too dark to read". The hex keeps the same reset-first
+ *  guarantee (cellFg always emits `\x1b[0m` first) so no cell inherits
+ *  SGR state from its predecessor. */
+export let S_DIM = cellFg('textDim')
 /** Spinner glyph. Same hue as S_PRIMARY but a distinct semantic slot so
  *  the spinner can diverge later without touching emphasis styles. */
 export let S_SPINNER = cellFg('primary')
@@ -55,6 +63,7 @@ export function rebuildPalette(): void {
   S_PRIMARY_BOLD = cellFg('primary', { bold: true })
   S_TEXT_DIM = cellFg('textDim')
   S_TEXT_MUTED = cellFg('textMuted')
+  S_DIM = cellFg('textDim')
   S_SPINNER = cellFg('primary')
   S_SUCCESS = cellFg('success', { bold: true })
   S_SUCCESS_DOT = cellFg('success')
@@ -69,20 +78,9 @@ export function rebuildPalette(): void {
 
 // Bold with NO foreground color — matches committed `c.bold(label)`.
 // Must start with `\x1b[0m` to reset any prior foreground so bold doesn't
-// inherit a color from the preceding cell (same reasoning as S_DIM).
+// inherit a color from the preceding cell (same reasoning as the derived
+// styles above).
 export const S_BOLD = '\x1b[0m\x1b[1m'
-// NB: leading `\x1b[0m` matters. Plain `\x1b[2m` just adds the "dim"
-// attribute ON TOP of whatever foreground color is active — so meta
-// text rendered after a colored span (e.g. the spinner row, where
-// S_SPINNER blue is emitted just before the meta transition) comes out
-// as BLUE-dim instead of gray-dim. And on a spinner tick where only
-// the seconds cell changes, the diff loop emits S_NONE (reset) first
-// and then S_DIM starting from the seconds digit — so the SAME meta
-// text is redrawn as WHITE-dim. Result: meta flashes white/blue every
-// tick depending on which diff path fires ("一会白一会蓝"). Resetting
-// SGR first then applying dim pins the color to the terminal default,
-// so meta looks consistent regardless of prior SGR state.
-export const S_DIM = '\x1b[0m\x1b[2m'
 // ANSI 90 (bright black). Equivalent to chalk's `c.gray()` output —
 // `c.gray('⎿')` emits `\x1b[90m...\x1b[39m`. Use this for cells that
 // MUST visually match a `c.gray()`-styled glyph in committed scrollback

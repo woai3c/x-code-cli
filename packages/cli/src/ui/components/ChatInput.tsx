@@ -50,6 +50,7 @@ import {
   GLYPH_BULLET,
   GLYPH_ELLIPSIS,
   GLYPH_PLAN_MODE,
+  GLYPH_PROMPT_ARROW,
   GLYPH_RESULT_BRACKET,
   GLYPH_SELECT_POINTER,
   GLYPH_TODO_BRACKET,
@@ -187,6 +188,11 @@ interface ChatInputProps {
    *  footer, not next to the spinner). Pass null to hide entirely (e.g.
    *  before any API response has landed). */
   contextUsage?: { used: number; window: number } | null
+  /** Friendly label of the active model (e.g. `Kimi K3`). Always rendered
+   *  on the right side of the footer row; context usage appends after it
+   *  when available. Being always-set makes the footer row permanent
+   *  (1-row footprint even in a fresh session). */
+  modelLabel?: string
 }
 
 // ── Component ───────────────────────────────────────────────────────────
@@ -309,6 +315,7 @@ export function ChatInput({
   commands = [],
   permissionMode = 'default',
   contextUsage,
+  modelLabel,
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const textRef = useRef('')
@@ -2066,7 +2073,11 @@ export function ChatInput({
     // position. So we don't compute or emit a cursor-park CSI here.
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
-      const prompt = i === 0 ? '> ' : '  '
+      // Same `❯` glyph the committed echo uses (stdout-writer) — the
+      // plain ASCII `>` reads pointier and out of place next to it.
+      // U+276F is width-1 per text-width.ts, so the prompt keeps its
+      // two-cell footprint (arrow + space).
+      const prompt = i === 0 ? `${GLYPH_PROMPT_ARROW} ` : '  '
       const showCursor = !disabled && i === cursorLine && cursorLine >= 0
       const cells: Cell[] = []
 
@@ -2125,11 +2136,10 @@ export function ChatInput({
     //              commands only (/plan); the Shift+Tab keybinding was
     //              removed because Windows needs Node ≥22.17 VT input mode
     //              and Alt+M is too easily clobbered by IDE menus.
-    // Right side — context-window occupancy (`6.6k / 200k · 3%`), shown
-    //              whenever a usage snapshot is available.
-    //
-    // The row is omitted entirely when neither side has content, so a
-    // fresh session in default mode keeps a zero-row footer footprint.
+    // Right side — the active model label is always shown (makes the
+    //              footer row permanent); context-window occupancy
+    //              (`6.6k / 200k · 3%`) appends after it whenever a usage
+    //              snapshot is available.
     let leftCells: Cell[] | null = null
     if (notice) {
       const cells: Cell[] = []
@@ -2152,10 +2162,11 @@ export function ChatInput({
       leftCells = cells
     }
 
-    let rightText: string | null = null
+    let rightText: string | null = modelLabel ?? null
     if (contextUsage && contextUsage.used > 0 && contextUsage.window > 0) {
       const pct = Math.round((contextUsage.used / contextUsage.window) * 100)
-      rightText = `${formatTokenCount(contextUsage.used)} / ${formatTokenCount(contextUsage.window)} · ${pct}%`
+      const usage = `${formatTokenCount(contextUsage.used)} / ${formatTokenCount(contextUsage.window)} · ${pct}%`
+      rightText = rightText ? `${rightText} · ${usage}` : usage
     }
 
     if (leftCells || rightText) {
@@ -2188,7 +2199,10 @@ export function ChatInput({
         }
         cells.push(...textToCells(rightText, S_DIM))
       }
-      frame.push(cells)
+      // Truncate defensively: the model label made this row longer than it
+      // used to be, and a hard physical wrap would desync the cell-diff
+      // grid (same reasoning as the menu-row truncation above).
+      frame.push(truncateCellRow(cells, Math.max(20, termWidth - 1)))
     }
 
     // Completion menu — at most one of slash / at renders per frame

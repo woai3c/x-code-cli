@@ -67,12 +67,14 @@ const TOKENS: Record<ChromeToken, TokenDef> = {
   // body text stays on the terminal's own default foreground.
   textStrong: { dark: '#f8f8f2', light: '#1f2328', ansi: 'white' },
   // Gray ladder: textDim for meta/hints, textMuted for placeholder/
-  // gutter/hr, border for the input rules and ❯ echo arrow. Dark border
-  // is CC's promptBorder rgb(136,136,136) — the shade those elements
-  // have always used.
-  textDim: { dark: '#999999', light: '#6a737d', ansi: 'white' },
-  textMuted: { dark: '#5c5c5c', light: '#959da5', ansi: 'gray' },
-  border: { dark: '#888888', light: '#c8cdd3', ansi: 'gray' },
+  // gutter/hr, border for the input rules and ❯ echo arrow. Dark values
+  // are brightened a step above CC's originals (border #888 → #a0a0,
+  // textDim #999 → #b3b3, textMuted #5c5c → #8f8f): at CC's depths the
+  // ladder reads muddy on many dark terminals, and the dim attribute
+  // (previously used for live-UI meta) came out darker still.
+  textDim: { dark: '#b3b3b3', light: '#6a737d', ansi: 'white' },
+  textMuted: { dark: '#8f8f8f', light: '#959da5', ansi: 'gray' },
+  border: { dark: '#a0a0a0', light: '#c8cdd3', ansi: 'gray' },
   borderFocus: { dark: '#89b4fa', light: '#2f6fdd', ansi: 'blueBright' },
   success: { dark: '#4eba65', light: '#248a3d', ansi: 'green' },
   warning: { dark: '#ffc107', light: '#9a6700', ansi: 'yellow' },
