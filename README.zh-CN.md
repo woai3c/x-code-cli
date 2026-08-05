@@ -29,6 +29,8 @@
 
 ## 安装
 
+> 需要 **Node.js >= 22**（不支持 Node 20）。
+
 ```bash
 npm install -g @x-code-cli/cli
 
@@ -147,7 +149,8 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **子 Agent** — 内置 5 个（explore / general-purpose / plan / code-reviewer / goal-verifier），支持自定义
 - **Plan 模式** — `--plan` 或 `/plan` 进入只读探索，Agent 先制定方案、批准后再执行
 - **持续目标循环** — `/goal` 自动执行→验证→修复，直到验证通过或触发停止条件
-- **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / docx / xlsx / pptx / 图片
+- **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / Office 文档（docx / xlsx / pptx / odt / ods / odp）/ 图片 / 音频
+- **本地音频转写** — 附件支持 MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus；当前模型不支持音频输入时，X-Code CLI 用 Whisper（whisper.cpp）在本地转写，只把带时间戳的文字交给模型——音频不会离开你的电脑。Whisper 模型首次使用时自动下载，缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
 - **视觉辅助** — DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
 
 ### 上下文管理
@@ -174,6 +177,8 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **统一思考模式** — `/thinking on|off` 将各厂商的 thinking 参数统一为单一开关
 - **多行输入** — `Alt+Enter` 或行尾 `\` 插入换行
 - **历史回溯** — 空输入框时 `↑`/`↓` 召回已提交的提示词
+- **中途转向（steering）** — Agent 运行中也能继续输入：消息先排队显示在 spinner 上方，在下一个工具边界自动注入
+- **实时页脚** — 输入框下方常驻当前模型与上下文用量（如 `Kimi K3 · 6.6k / 200k · 3%`）
 - **跨平台** — Windows、macOS、Linux
 
 ## 命令行参数
@@ -205,29 +210,29 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 
 ## 斜杠命令
 
-| 命令                  | 说明                                                    |
-| --------------------- | ------------------------------------------------------- |
-| `/help`               | 查看所有可用命令                                        |
-| `/model [alias]`      | 切换模型或查看可用模型列表                              |
-| `/thinking [on\|off]` | 启用 / 禁用思考模式                                     |
-| `/theme [name]`       | 切换 UI 主题                                            |
-| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式                                   |
-| `/goal [目标]`        | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)） |
-| `/usage`              | 查看本次会话 Token 用量                                 |
-| `/usage-history`      | 列出历史会话用量                                        |
-| `/clear`              | 清空当前会话                                            |
-| `/compact`            | 手动压缩上下文                                          |
-| `/resume`             | 从历史会话中选择恢复                                    |
-| `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）             |
-| `/init`               | 分析代码库后创建或更新 `AGENTS.md`                      |
-| `/review [PR号]`      | 评审 GitHub PR（需本地装好 `gh`）                       |
-| `/memory`             | 查看自动记忆条目                                        |
-| `/skill <sub>`        | 管理 Skills                                             |
-| `/mcp <sub>`          | 管理 MCP 服务器                                         |
-| `/plugin <sub>`       | 管理插件与 marketplace                                  |
-| `/browser [on\|off]`  | 开关浏览器子 Agent（默认关闭）                          |
-| `/doctor`             | 一键诊断运行环境                                        |
-| `/exit`               | 保存会话并退出                                          |
+| 命令                  | 说明                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `/help`               | 查看所有可用命令                                                                    |
+| `/model [alias]`      | 切换模型或查看可用模型列表                                                          |
+| `/thinking [on\|off]` | 启用 / 禁用思考模式                                                                 |
+| `/theme [name]`       | 切换 UI 主题                                                                        |
+| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式                                                               |
+| `/goal [目标]`        | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)）                             |
+| `/usage`              | 查看本次会话 Token 用量（含分步明细）                                               |
+| `/usage-history`      | 列出历史会话用量                                                                    |
+| `/clear`              | 清空当前会话                                                                        |
+| `/compact`            | 手动压缩上下文                                                                      |
+| `/resume`             | 从历史会话中选择恢复                                                                |
+| `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
+| `/init`               | 分析代码库后创建或更新 `AGENTS.md`                                                  |
+| `/review [PR号]`      | 评审 GitHub PR（需本地装好 `gh`）                                                   |
+| `/memory [子命令]`    | 查看、搜索、解释或重载全局长期记忆（详见 [docs/knowledge.md](./docs/knowledge.md)） |
+| `/skill <sub>`        | 管理 Skills                                                                         |
+| `/mcp <sub>`          | 管理 MCP 服务器                                                                     |
+| `/plugin <sub>`       | 管理插件与 marketplace                                                              |
+| `/browser [on\|off]`  | 开关浏览器子 Agent（默认关闭）                                                      |
+| `/doctor`             | 一键诊断运行环境                                                                    |
+| `/exit`               | 保存会话并退出                                                                      |
 
 ## 详细文档
 

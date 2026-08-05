@@ -8,7 +8,7 @@ X-Code CLI (`xc`) is a terminal AI coding assistant in the same shape as Claude 
 
 ## Commands
 
-This is a pnpm workspace; Node ≥20.19 is required.
+This is a pnpm workspace; Node ≥22 is required.
 
 ```bash
 pnpm install            # install all workspaces
@@ -81,7 +81,7 @@ agentLoop()
 
 The `task` tool delegates a sub-task to a specialized sub-agent that runs in isolated context — only the sub-agent's final assistant message is returned to the parent. Implementation lives in `core/src/agent/sub-agents/`:
 
-- `built-in.ts` — four hardcoded definitions (`explore`, `general-purpose`, `plan`, `code-reviewer`) with their tool whitelists and system prompts.
+- `built-in.ts` — five hardcoded definitions (`explore`, `general-purpose`, `plan`, `code-reviewer`, `goal-verifier`) with their tool whitelists and system prompts (plus the opt-in `browser` agent).
 - `loader.ts` — scans `~/.x-code/agents/*.md` and `<repo-root>/.x-code/agents/*.md` for custom agents (YAML frontmatter + markdown body = system prompt). Project-level wins on name conflicts.
 - `registry.ts` — built at CLI startup, frozen for the session. **Adding or editing an agent file requires a CLI restart**: the `task` tool description embeds the agent list, and that string lives in `systemPromptCache` which must stay byte-stable.
 - `runner.ts:runSubAgent` — recursively calls `agentLoop` with a fresh `LoopState` (no parent message history), the agent's `toolFilter` (always denies `task` itself — recursion is forbidden), and the **same `abortSignal`** as the parent so Esc cascades cleanly. Token usage flows back into `parentState.tokenUsage`; nothing else does.
@@ -121,17 +121,18 @@ Do **not** use `USER_XCODE_DIR` for new file reads/writes.
 
 ### Knowledge & memory
 
-`buildKnowledgeContext` (in `core/src/knowledge`) merges five layers, in order:
+`buildKnowledgeContext` (in `core/src/knowledge`) merges four layers, in order:
 
 ```
-~/.x-code/AGENTS.md            user-scope preferences (human-written)
-~/.x-code/memory/auto.md       user-scope auto-memory  (AI-written)
-<repo-root>/AGENTS.md chain    walked from cwd up to .git root, root→leaf
-.x-code/memory/auto.md         project auto-memory (AI-written)
-<repo-root>/AGENTS.local.md    per-user, gitignored (personal preferences)
+~/.x-code/AGENTS.md                 user-scope preferences (human-written; falls back to CLAUDE.md)
+~/.x-code/memory/MEMORY.md          user-scope Memory v2 Core profile (derived from topics/*.md)
+<repo-root>/AGENTS.md chain         walked from cwd up to .git root, root→leaf
+<repo-root>/AGENTS.local.md         per-user, gitignored (personal preferences)
 ```
 
 The AGENTS.md chain lets monorepo subpackages override repo-root guidance — leaf wins. `~/.x-code` is overridable via the `X_CODE_HOME` env var (used by tests).
+
+Memory v2 (see [docs/knowledge.md](./docs/knowledge.md)) is a cross-repo, user-level memory system: raw facts live in `~/.x-code/memory/topics/*.md` (single source of truth), `MEMORY.md` is deterministically derived from them, and recall happens per-turn via local exact/BM25F retrieval plus an optional AI semantic selector. Project-level auto-memory files (`<repo>/.x-code/memory/auto.md`) are no longer read or written — repo relationships are recorded in each topic's `applies_to` instead.
 
 ### Provider configuration
 

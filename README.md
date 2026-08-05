@@ -29,6 +29,8 @@ English · [简体中文](./README.zh-CN.md)
 
 ## Install
 
+> Requires **Node.js >= 22** (Node 20 is not supported).
+
 ```bash
 npm install -g @x-code-cli/cli
 
@@ -147,7 +149,8 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Sub-agents** — ships with 5 (explore / general-purpose / plan / code-reviewer / goal-verifier), supports custom agents
 - **Plan mode** — `--plan` or `/plan` enters read-only exploration; the agent designs a plan, then executes after approval
 - **Durable goal loops** — `/goal` runs execute → verify → repair cycles until passing or hitting a stop condition
-- **File attachments** — `@path` or bare absolute paths auto-ingest text / code / PDF / docx / xlsx / pptx / images
+- **File attachments** — `@path` or bare absolute paths auto-ingest text / code / PDF / Office docs (docx / xlsx / pptx / odt / ods / odp) / images / audio
+- **Local audio transcription** — attach MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus files; when the active model can't take audio input, X-Code CLI transcribes them locally via Whisper (whisper.cpp) and feeds the model timestamped text — the audio never leaves your machine. The Whisper model auto-downloads on first use and is cached under `~/.x-code/whisper-models/` (default `tiny`; set `X_CODE_WHISPER_MODEL` to pick another, e.g. `base`)
 - **Vision sub-agent** — text-only providers (e.g. DeepSeek) can borrow a configured vision model for image understanding
 
 ### Context Management
@@ -174,6 +177,8 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Unified thinking mode** — `/thinking on|off` consolidates provider-specific reasoning parameters
 - **Multiline input** — `Alt+Enter` or trailing `\` inserts a newline
 - **Input history** — `↑`/`↓` on empty prompt recalls previous messages
+- **Mid-turn steering** — keep typing while the agent is working: your message is queued above the spinner and injected at the next tool boundary
+- **Live footer** — the active model and current context usage (e.g. `Kimi K3 · 6.6k / 200k · 3%`) are always visible under the input
 - **Cross-platform** — Windows, macOS, Linux
 
 ## CLI Options
@@ -213,7 +218,7 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/theme [name]`        | Switch UI theme                                                      |
 | `/plan [on\|off]`      | Enable / disable plan mode                                           |
 | `/goal [objective]`    | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
-| `/usage`               | Show current-session token usage                                     |
+| `/usage`               | Show current-session token usage (with per-step breakdown)           |
 | `/usage-history`       | List past session usage                                              |
 | `/clear`               | Clear the current conversation                                       |
 | `/compact`             | Manually compress context                                            |

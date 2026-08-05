@@ -8,14 +8,15 @@ X-Code CLI 通过 `task` 工具支持子 agent 委派：模型可以把某个独
 
 ## 内置子 agent
 
-CLI 自带 4 个：
+CLI 自带 5 个（另有可选的 `browser`，见下文）：
 
-| 名字              | 适合                                                      | 工具白名单                                             |
-| ----------------- | --------------------------------------------------------- | ------------------------------------------------------ |
-| `explore`         | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限） |
-| `general-purpose` | 不归类的杂项研究 / 多步骤任务                             | 默认完整工具集（task 除外）                            |
-| `plan`            | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）          |
-| `code-reviewer`   | 审查改动 / PR / diff                                      | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限） |
+| 名字              | 适合                                                      | 工具白名单                                                         |
+| ----------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
+| `explore`         | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限）             |
+| `general-purpose` | 不归类的杂项研究 / 多步骤任务                             | 默认完整工具集（task 除外）                                        |
+| `plan`            | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）                      |
+| `code-reviewer`   | 审查改动 / PR / diff                                      | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限）             |
+| `goal-verifier`   | `/goal` 完成度的只读独立验收，返回严格 JSON               | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限，仅只读命令） |
 
 > 工具名是 **camelCase**（跟代码里 `toolRegistry` 的 key 一致）——`read_file`、`write_file` 这种 snake_case 写法**不会匹配**，会让子 agent 拿到一个空工具集。
 >
@@ -37,7 +38,7 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 ## 浏览器子 agent（可选，需启用）
 
-`browser` 是第 5 个内置子 agent，但**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）。
+`browser` 是第 6 个内置子 agent，但**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。优先基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）；在支持视觉的模型上还能截图处理 canvas、地图、图表等纯视觉内容，纯文本模型则通过视觉辅助模型读取截图并返回文字描述。
 
 **启用**（二选一）：
 
@@ -141,7 +142,7 @@ shellRestrictions: [rm, sudo, npm publish]
 
 1. **禁递归**：子 agent 不能调 `task` 工具。运行时会拒绝。
 2. **共享 AbortSignal**：用户 Esc 会同时杀掉主 agent 和所有运行中的子 agent。
-3. **Plan 模式继承**：父 session 在 plan 模式下，`general-purpose` 子 agent 会被禁掉写工具（其他子 agent 的工具白名单可能本来就只读）。
+3. **Plan 模式继承**：父 session 在 plan 模式下，**所有**子 agent 的写工具（`writeFile` / `edit` / `shell`）都会被禁用，`general-purpose` 也不例外。
 4. **独立上下文**：子 agent 看不到主 session 的 message history——它只看到自己的 system prompt + task 调用的 prompt 参数。
 5. **Token 共享**：所有子 agent 的 token 用量加进父 session 的总账。
 
@@ -165,7 +166,7 @@ tools: [readFile, shell, glob]
 shellRestrictions: [rm, sudo, npm publish, git push]
 ```
 
-可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`enterPlanMode`、`exitPlanMode`、`todoWrite`。**`task` 工具永远禁用**（防递归）。
+可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`enterPlanMode`、`exitPlanMode`、`todoWrite`、`shellOutput`、`killShell`。**`task` 工具永远禁用**（防递归），`memorySearch` 只注册给根 Agent，子 agent 拿不到。
 
 ---
 

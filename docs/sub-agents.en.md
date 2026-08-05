@@ -13,14 +13,15 @@ doesn't pollute the main conversation.
 
 ## Built-in sub-agents
 
-Four ship in the box:
+Five ship in the box (plus the opt-in `browser`, see below):
 
-| Name              | Best for                                                                  | Tool whitelist                                              |
-| ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `explore`         | Searching a large codebase for a symbol / keyword / call chain; read-only | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted) |
-| `general-purpose` | Catch-all research / multi-step tasks that don't fit elsewhere            | default full tool set (minus `task`)                        |
-| `plan`            | Given a task, explore the code and produce an implementation plan         | `readFile`, `glob`, `grep`, `listDir` (read-only)           |
-| `code-reviewer`   | Reviewing diffs / PRs                                                     | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted) |
+| Name              | Best for                                                                       | Tool whitelist                                                                       |
+| ----------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `explore`         | Searching a large codebase for a symbol / keyword / call chain; read-only      | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted)                          |
+| `general-purpose` | Catch-all research / multi-step tasks that don't fit elsewhere                 | default full tool set (minus `task`)                                                 |
+| `plan`            | Given a task, explore the code and produce an implementation plan              | `readFile`, `glob`, `grep`, `listDir` (read-only)                                    |
+| `code-reviewer`   | Reviewing diffs / PRs                                                          | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted)                          |
+| `goal-verifier`   | Read-only independent verification for `/goal` completion, returns strict JSON | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted, read-only commands only) |
 
 > Tool names are **camelCase** — they match the keys in `toolRegistry`
 > (`packages/core/src/tools/index.ts`). The snake_case spellings
@@ -52,12 +53,16 @@ session.
 
 ## Browser sub-agent (opt-in)
 
-`browser` is a fifth built-in sub-agent, but it is **not registered by
+`browser` is a sixth built-in sub-agent, but it is **not registered by
 default**. It drives a real browser (powered by
 [@playwright/mcp](https://github.com/microsoft/playwright-mcp)) for tasks that
 `webFetch` / `webSearch` can't handle: logged-in pages, JS-rendered SPAs, form
-filling, multi-step flows. It works from the **accessibility tree** (text-based,
-so it works across every provider, including non-multimodal models).
+filling, multi-step flows. It works primarily from the **accessibility tree**
+(text-based, so it works across every provider, including non-multimodal
+models); on vision-capable models it can also screenshot the page for
+canvas / maps / charts and other visual-only content, while text-only models
+fall back to a vision model reading the screenshot and returning a text
+description.
 
 **Enable** (either way):
 
@@ -182,8 +187,8 @@ auto-dispatches via task:
 2. **Shared AbortSignal**: Esc cancels the main agent and all running
    sub-agents simultaneously.
 3. **Plan mode inherited**: when the parent session is in plan mode,
-   the `general-purpose` sub-agent has write tools denied (the other
-   sub-agents may already be read-only via their whitelist).
+   **all** sub-agents have their write tools (`writeFile` / `edit` /
+   `shell`) denied — `general-purpose` included.
 4. **Isolated context**: a sub-agent doesn't see the parent's message
    history — only its own system prompt + the `prompt` argument passed
    to `task()`.
@@ -214,8 +219,10 @@ shellRestrictions: [rm, sudo, npm publish, git push]
 The full set of tool names (**must be camelCase**, matches the
 `toolRegistry` keys in `packages/core/src/tools/index.ts`): `readFile`,
 `writeFile`, `edit`, `shell`, `glob`, `grep`, `listDir`, `webSearch`,
-`webFetch`, `askUser`, `enterPlanMode`, `exitPlanMode`, `todoWrite`.
-The `task` tool is always denied (recursion guard).
+`webFetch`, `askUser`, `enterPlanMode`, `exitPlanMode`, `todoWrite`,
+`shellOutput`, `killShell`. The `task` tool is always denied (recursion
+guard), and `memorySearch` is registered for the root agent only — sub-agents
+never receive it.
 
 ---
 

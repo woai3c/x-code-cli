@@ -4,7 +4,7 @@ This file is loaded into the agent's context at the start of every session. Keep
 
 ## Commands
 
-pnpm workspace; Node >= 20.19.
+pnpm workspace; Node >= 22.
 
 ```bash
 pnpm build              # tsc -b (core) then esbuild (cli → dist/cli.js)
@@ -34,7 +34,7 @@ packages/
 
 **Sub-agents** (`core/src/agent/sub-agents/`): `task` tool delegates to isolated agentLoop with fresh LoopState. Registry is built at CLI startup and frozen. Adding/editing agent files requires a CLI restart because the agent list is embedded in the byte-stable `systemPromptCache`. Sub-agents always deny `task` (no recursion). In plan mode, write tools are denied via tool filter.
 
-**Knowledge** (`core/src/knowledge/`): five layers merged into system prompt — user AGENTS.md, user auto-memory, project AGENTS.md chain (root→leaf, leaf wins), project auto-memory, AGENTS.local.md.
+**Knowledge** (`core/src/knowledge/`): four layers merged into system prompt — user AGENTS.md, user memory Core profile (`~/.x-code/memory/MEMORY.md`), project AGENTS.md chain (root→leaf, leaf wins), AGENTS.local.md.
 
 **Provider config**: API keys read only from env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `ALIBABA_API_KEY`, `XAI_API_KEY`, `ZHIPU_API_KEY`, `MOONSHOT_API_KEY`) plus escape hatch `OPENAI_COMPATIBLE_API_KEY` + `OPENAI_COMPATIBLE_BASE_URL`. When adding a provider, also update `packages/core/tests/config.test.ts:PROVIDER_ENV_VARS`.
 
