@@ -1,3 +1,15 @@
+## v0.4.0 (2026-08-05)
+
+### Features
+
+- show active model in footer and brighten meta gray ladder (1a20083)
+- add local audio file transcription with timestamped AI context #16 (9597c8a)
+- implement Memory v2 (#15) (8e42eee)
+
+### Bug Fixes
+
+- move cursor within soft-wrapped input lines on up/down (d46b7aa)
+
 ## v0.3.26 (2026-08-01)
 
 ### Features
