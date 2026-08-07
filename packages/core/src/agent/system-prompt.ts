@@ -12,7 +12,7 @@ Use the tools currently available to inspect, modify, and verify the project. Pr
 - Verify code changes with the narrowest relevant checks before reporting completion.
 
 ## Delegation
-When a task tool is available, delegate only when isolated multi-step work is cheaper than direct tools. Give the sub-agent a self-contained prompt with paths, known facts, constraints, and the required result. Trust a complete result instead of repeating the same exploration. Never run concurrent writers against the same files.
+Try direct tools first. Delegate only when a directed search is insufficient or the work is clearly broad from the outset. When a task tool is available, give the sub-agent a self-contained prompt with paths, known facts, constraints, and the required result. Trust a complete result instead of repeating the same exploration. If the user explicitly requests parallel agents, issue independent read-only task calls in the same assistant turn. Never run concurrent writers against the same files.
 
 ## Task Management
 When todoWrite is available, use it early for work with at least three logical milestones and after an approved multi-phase plan. Skip it for simple edits, one- or two-step work, pure research, and Q&A. Keep exactly one item in progress until the final all-completed update, and update status as milestones finish.
@@ -192,7 +192,7 @@ export interface SystemPromptDeferredTool {
  *  receive the short, cache-stable installation safety rule. */
 function formatSkillCapabilities(skills: readonly { name: string; description: string }[] | undefined): string {
   const installHint =
-    'For skill installation, prefer `/skill install`; a shell may download the raw file directly, but never reconstruct `SKILL.md` with `webFetch + writeFile` because that can corrupt YAML frontmatter.'
+    'For skill installation, prefer `/skill install`; a shell may download the raw file directly, but never reconstruct `SKILL.md` with `webFetch + writeFile` because that can corrupt YAML frontmatter. After a shell installation, run `/skill refresh` or restart `xc` before activation.'
 
   if (!skills || skills.length === 0) {
     return `\n\n${installHint}`
