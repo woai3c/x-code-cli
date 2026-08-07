@@ -17,76 +17,17 @@ import { z } from 'zod'
  *  notifying the UI) is handled manually in `processToolCalls`. Same
  *  pattern as askUser / enterPlanMode. */
 export const todoWrite = tool({
-  description: `Use this tool to track multi-step tasks. The user sees a live checklist (☐ ◼ ✔) above the spinner — it makes long tasks feel structured and gives them visibility into your plan.
+  description: `Maintain the complete live checklist for a task with at least three logical milestones. Use it after an approved multi-phase plan or when the user asks for several concrete changes. Skip it for trivial edits, one- or two-step work, pure research, Q&A, and conversational replies.
 
-## When to Use
+Rules:
+1. Every call replaces the entire list; include unchanged items.
+2. Status is pending, in_progress, or completed. Keep exactly one item in_progress until the final all-completed update.
+3. Mark the current milestone in_progress before work starts and update completed items at the next decision point. Do not mark work complete while tests fail or follow-up remains.
+4. Use logical, verifiable milestones rather than individual tool calls or files.
+5. Provide imperative content ("Run tests") and present-continuous activeForm ("Running tests").
+6. An all-completed list is automatically cleared.
 
-- Multi-step tasks that involve 3+ logical steps
-- Right after exitPlanMode is approved and you have an approved plan with several files / phases — translate the plan into todos before starting work
-- The user gives multiple requests in one message ("do A, then B, then C")
-- When you start a step (mark it \`in_progress\` BEFORE doing the work)
-- After a tool-call batch finishes and you have observed its results (update every affected status at the next decision opportunity)
-
-## When NOT to Use
-
-- Single-file edits, typos, trivial fixes — todos add ceremony with no benefit
-- Pure Q&A or research questions
-- Tasks doable in 1-2 obvious steps
-- Conversational replies that don't involve concrete work
-
-## Hard Rules
-
-1. **Status values**: \`pending\` | \`in_progress\` | \`completed\` (exactly these three).
-2. **Exactly ONE task MUST be in_progress at all times** — not zero, not two, except for the final all-completed update. The user reads the in_progress item as "the current logical milestone".
-3. **Mark tasks completed IMMEDIATELY after finishing — do NOT batch completions.** Update every affected status at the next decision opportunity. You can combine todoWrite with other tool calls in the same turn to avoid extra round-trips — updating the checklist is cheap and should never be deferred. Do NOT wait until the end of the overall task to update multiple items at once.
-4. **Only mark complete when truly done** — if tests are failing, the implementation is partial, you hit an error, or you're going to follow up later: leave it as \`in_progress\` and add a NEW pending todo describing the unresolved part.
-5. **Provide both \`content\` and \`activeForm\`**:
-   - \`content\` is imperative: "Run tests", "Update auth handler"
-   - \`activeForm\` is present-continuous: "Running tests", "Updating auth handler"
-   - The activeForm is what shows in the live UI for the in_progress item.
-6. **Pass the FULL list every call** — todoWrite REPLACES the list, not merges. Include unchanged items.
-7. When you submit a list where every item is \`completed\`, the system auto-clears the checklist for you. No need to clear it manually.
-
-## Example
-
-User: "Refactor the auth system to use JWT and update the login flow"
-
-After exploration / planning, on the first implementation turn:
-\`\`\`
-todoWrite({
-  todos: [
-    { content: "Read existing auth implementation",  activeForm: "Reading auth code",        status: "in_progress" },
-    { content: "Add JWT signing/verification utility", activeForm: "Adding JWT utility",     status: "pending" },
-    { content: "Update login handler",               activeForm: "Updating login",          status: "pending" },
-    { content: "Update protected routes middleware", activeForm: "Updating middleware",     status: "pending" },
-    { content: "Add tests for new auth flow",        activeForm: "Writing auth tests",      status: "pending" }
-  ]
-})
-\`\`\`
-
-After reading the code:
-\`\`\`
-todoWrite({
-  todos: [
-    { content: "Read existing auth implementation",  activeForm: "Reading auth code",        status: "completed" },
-    { content: "Add JWT signing/verification utility", activeForm: "Adding JWT utility",     status: "in_progress" },
-    ...rest stay pending
-  ]
-})
-\`\`\`
-
-After finishing all five (auto-cleared next call):
-\`\`\`
-todoWrite({ todos: [/* all five with status: "completed" */] })
-\`\`\`
-
-## Bad usage
-
-User: "fix this typo in README"
-You: <do not call todoWrite — single edit, no value in a checklist>
-
-User: "what does X do?"
-You: <do not call todoWrite — pure Q&A, no work to track>`,
+Example: [{ content: "Inspect auth flow", activeForm: "Inspecting auth flow", status: "completed" }, { content: "Update login handler", activeForm: "Updating login handler", status: "in_progress" }, { content: "Run auth tests", activeForm: "Running auth tests", status: "pending" }]`,
   // SCHEMA LENIENCY (deliberate): all three per-todo fields are
   // marked optional even though the tool description tells the model
   // they are required. Reason: weaker provider models (DeepSeek-flash,

@@ -2,18 +2,26 @@
 // model without ever degrading base64 bytes into ordinary prompt text.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { createLoopState } from '../src/agent/loop-state.js'
+import { appendUsage } from '../src/agent/session-store.js'
 import { deliverToolImages } from '../src/agent/tool-execution.js'
 import { captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
+
+vi.mock('../src/agent/session-store.js', () => ({
+  appendUsage: vi.fn(async () => undefined),
+}))
 
 vi.mock('../src/agent/vision-fallback.js', () => ({
   captionImageBuffer: vi.fn(async () => 'A MAP OF BERLIN WITH A SEARCH BOX AT [40,20]'),
   pickVisionProvider: vi.fn(() => null),
 }))
 
-// Minimal HandlerCtx — deliverToolImages only reads ctx.options.modelId and
-// ctx.options.abortSignal.
 function ctx(modelId: string) {
-  return { options: { modelId } } as unknown as Parameters<typeof deliverToolImages>[0]
+  return {
+    options: { modelId },
+    state: createLoopState(),
+    callbacks: { onUsageUpdate: vi.fn() },
+  } as unknown as Parameters<typeof deliverToolImages>[0]
 }
 
 const IMG = [{ data: Buffer.from('fake-png-bytes').toString('base64'), mediaType: 'image/png' }]
@@ -24,6 +32,8 @@ describe('deliverToolImages', () => {
     vi.mocked(captionImageBuffer).mockResolvedValue('A MAP OF BERLIN WITH A SEARCH BOX AT [40,20]')
     vi.mocked(pickVisionProvider).mockReset()
     vi.mocked(pickVisionProvider).mockReturnValue(null)
+    vi.mocked(appendUsage).mockReset()
+    vi.mocked(appendUsage).mockResolvedValue(undefined)
   })
 
   it('passes images through in tool results on native transports', async () => {
@@ -63,6 +73,45 @@ describe('deliverToolImages', () => {
     expect(r.images).toBeUndefined()
     expect(r.text).toContain('A MAP OF BERLIN')
     expect(vi.mocked(captionImageBuffer).mock.calls[0]?.[2]).toBe('google:gemini-2.5-flash')
+  })
+
+  it('persists borrowed-vision usage before returning the tool result', async () => {
+    vi.mocked(pickVisionProvider).mockReturnValue({
+      provider: 'google',
+      modelId: 'google:gemini-2.5-flash',
+      label: 'Gemini 2.5 Flash',
+    })
+    vi.mocked(captionImageBuffer).mockImplementationOnce(async (_buffer, _mediaType, _modelId, options) => {
+      options?.onUsage?.({
+        modelId: 'google:gemini-2.5-flash',
+        usage: { inputTokens: 50, outputTokens: 10, totalTokens: 60 } as any,
+      })
+      return 'A MAP OF BERLIN'
+    })
+
+    let releaseUsageWrite: (() => void) | undefined
+    vi.mocked(appendUsage).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseUsageWrite = resolve
+        }),
+    )
+    const context = ctx('deepseek:deepseek-v4-flash')
+    let completed = false
+    const resultPromise = deliverToolImages(context, 'shot taken', IMG).then((result) => {
+      completed = true
+      return result
+    })
+
+    await vi.waitFor(() => expect(appendUsage).toHaveBeenCalledOnce())
+    expect(completed).toBe(false)
+    expect(context.state.tokenUsage).toMatchObject({ inputTokens: 50, outputTokens: 10, totalTokens: 60 })
+    expect(context.callbacks.onUsageUpdate).toHaveBeenCalledOnce()
+
+    releaseUsageWrite?.()
+    const result = await resultPromise
+    expect(result.text).toContain('A MAP OF BERLIN')
+    expect(appendUsage).toHaveBeenCalledWith(context.state, 'google:gemini-2.5-flash')
   })
 
   it('drops the image with a clear note when no vision model is available', async () => {

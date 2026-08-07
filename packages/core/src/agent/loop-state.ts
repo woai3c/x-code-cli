@@ -6,9 +6,12 @@ import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
 import { generateTimestampId } from '../utils.js'
+import type { CacheMissReason, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState } from './goal/types.js'
 import type { CheckpointEntry } from './snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
+import { createUsageBreakdown } from './usage.js'
+import type { UsageBreakdown } from './usage.js'
 
 /** Per-user-submit token snapshot. Each `agentLoop` invocation pushes one
  *  entry recording the delta tokens and tool calls for that step. Persisted
@@ -31,6 +34,9 @@ export interface StepStats {
 export interface LoopState {
   messages: ModelMessage[]
   tokenUsage: TokenUsage
+  /** Cumulative usage indexed two ways. Source and model are parallel views
+   *  over the same requests and must never be added together. */
+  usageBreakdown: UsageBreakdown
   /** Real input-token count from the most recent API response, used to trigger compression. */
   lastInputTokens: number
   sessionId: string
@@ -109,6 +115,10 @@ export interface LoopState {
    *  compaction or permissionMode change) and should not trigger a
    *  warning. Automatically cleared after one turn. */
   expectCacheMiss: boolean
+  /** Structured reasons consumed by the next main provider request. */
+  expectedCacheMissReasons: Set<CacheMissReason>
+  /** Main-request samples only; auxiliary usage snapshots never enter this list. */
+  providerTurns: ProviderTurnUsage[]
 
   // ── Sub-agent support (set once in agentLoop, read by tool-execution) ──
 
@@ -187,6 +197,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
       cacheCreationTokens: 0,
       currentContextTokens: 0,
     },
+    usageBreakdown: createUsageBreakdown(),
     lastInputTokens: 0,
     sessionId: generateTimestampId(),
     sessionFilePath: null,
@@ -208,6 +219,8 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     pendingFlush: null,
     prevTurnCacheRead: 0,
     expectCacheMiss: false,
+    expectedCacheMissReasons: new Set(),
+    providerTurns: [],
     readFileCache: new Map(),
     bgShells: new BackgroundShellRegistry(),
     goal: null,

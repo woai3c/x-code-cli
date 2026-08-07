@@ -413,11 +413,18 @@ describe('agent loop', () => {
       toolCalls: Promise.resolve([]),
     } as any)
 
+    const initialState = createLoopState()
+    const providerTurnCountsAtUsageUpdate: number[] = []
+    mockCallbacks.onUsageUpdate = vi.fn(() => {
+      providerTurnCountsAtUsageUpdate.push(initialState.providerTurns.length)
+    })
+
     const { state, turnCount } = await agentLoop(
       'Say hello',
       {} as any,
       { modelId: 'anthropic:claude-sonnet-5', trustMode: false, maxTurns: 1, printMode: false },
       mockCallbacks,
+      initialState,
     )
 
     expect(mockCallbacks.onTextDelta).toHaveBeenCalledWith('Hello')
@@ -429,6 +436,7 @@ describe('agent loop', () => {
     expect(usageArg.outputTokens).toBe(20)
     expect(usageArg.totalTokens).toBe(120)
     expect(usageArg.currentContextTokens).toBe(120)
+    expect(providerTurnCountsAtUsageUpdate).toEqual([1])
 
     expect(turnCount).toBe(1)
     expect(state.messages.length).toBeGreaterThan(0)

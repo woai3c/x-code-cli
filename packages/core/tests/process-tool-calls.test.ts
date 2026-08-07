@@ -1,6 +1,7 @@
 // Tests for processToolCalls — ghost-call skip path
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -17,6 +18,7 @@ function makeCallbacks(overrides: Partial<AgentCallbacks> = {}): AgentCallbacks 
     onToolCall: vi.fn(),
     onToolProgress: vi.fn(),
     onToolResult: vi.fn(),
+    onFileEdit: vi.fn(),
     onAskPermission: vi.fn().mockResolvedValue('yes'),
     onAskUser: vi.fn().mockResolvedValue('answer'),
     onPlanApprovalRequest: vi.fn().mockResolvedValue(true),
@@ -38,6 +40,12 @@ const options: AgentOptions = {
 }
 
 const stubModel = {} as LanguageModel
+
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })))
+})
 
 function assistantWithToolCalls(ids: string[]): ModelMessage {
   return {
@@ -234,6 +242,128 @@ describe('processToolCalls ghost-call skip', () => {
     )
     // new-id runs; old-id is from a prior turn, must be treated as ghost.
     expect(onAskUser).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('processToolCalls edit validation', () => {
+  async function runInvalidEdit(oldString: string, newString: string) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-edit-validation-'))
+    temporaryDirectories.push(dir)
+    const filePath = path.join(dir, 'input.txt')
+    await fs.writeFile(filePath, 'alpha\nbeta\n', 'utf8')
+
+    const toolCallId = 'tc-invalid-edit'
+    const input = { filePath, oldString, newString, replaceAll: true }
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'edit the file' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName: 'edit', input }],
+      } as ModelMessage,
+    )
+    const callbacks = makeCallbacks()
+
+    await processToolCalls([{ toolName: 'edit', toolCallId, input }], state, options, callbacks, stubModel)
+
+    return { callbacks, content: await fs.readFile(filePath, 'utf8'), state }
+  }
+
+  it('rejects an empty oldString without writing the file', async () => {
+    const { callbacks, content, state } = await runInvalidEdit('', 'x')
+
+    expect(content).toBe('alpha\nbeta\n')
+    expect(callbacks.onAskPermission).not.toHaveBeenCalled()
+    expect(state.filesModified.size).toBe(0)
+    expect(callbacks.onFileEdit).not.toHaveBeenCalled()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      'tc-invalid-edit',
+      expect.stringContaining('oldString must not be empty'),
+      true,
+    )
+  })
+
+  it('rejects a no-op replacement without writing the file', async () => {
+    const { callbacks, content, state } = await runInvalidEdit('alpha', 'alpha')
+
+    expect(content).toBe('alpha\nbeta\n')
+    expect(callbacks.onAskPermission).not.toHaveBeenCalled()
+    expect(state.filesModified.size).toBe(0)
+    expect(callbacks.onFileEdit).not.toHaveBeenCalled()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith('tc-invalid-edit', expect.stringContaining('must change'), true)
+  })
+
+  it('normalizes JSON batch input before the loop guard and applies one atomic write', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-batch-edit-'))
+    temporaryDirectories.push(dir)
+    const filePath = path.join(dir, 'input.txt')
+    await fs.writeFile(filePath, 'alpha beta gamma\n', 'utf8')
+    const edits = [
+      { oldString: 'alpha', newString: 'one' },
+      { oldString: 'beta', newString: 'two' },
+      { oldString: 'gamma', newString: 'three' },
+    ]
+    const input = { filePath, edits: JSON.stringify(edits) }
+    const toolCallId = 'tc-batch-edit'
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'edit the file' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName: 'edit', input }],
+      } as ModelMessage,
+    )
+    const hookBus = {
+      has: vi.fn().mockReturnValue(true),
+      emit: vi.fn().mockResolvedValue([]),
+    }
+    const callbacks = makeCallbacks()
+
+    await processToolCalls(
+      [{ toolName: 'edit', toolCallId, input }],
+      state,
+      { ...options, hookBus: hookBus as any },
+      callbacks,
+      stubModel,
+    )
+
+    expect(await fs.readFile(filePath, 'utf8')).toBe('one two three\n')
+    expect(callbacks.onAskPermission).toHaveBeenCalledOnce()
+    expect(callbacks.onFileEdit).toHaveBeenCalledOnce()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(toolCallId, expect.stringContaining('(3 replacements)'), false)
+    expect(state.filesModified).toEqual(new Set([filePath]))
+    expect(hookBus.emit.mock.calls.map(([event]) => event.name)).toEqual(['PreToolUse', 'PostToolUse'])
+    expect(hookBus.emit.mock.calls[1]?.[0].tool.args.edits).toEqual(edits)
+  })
+
+  it('leaves the file unchanged when any batch replacement fails', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-batch-edit-failure-'))
+    temporaryDirectories.push(dir)
+    const filePath = path.join(dir, 'input.txt')
+    const original = 'alpha beta\n'
+    await fs.writeFile(filePath, original, 'utf8')
+    const edits = [
+      { oldString: 'alpha', newString: 'one' },
+      { oldString: 'missing', newString: 'two' },
+    ]
+    const toolCallId = 'tc-batch-edit-failure'
+    const input = { filePath, edits }
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'edit the file' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName: 'edit', input }],
+      } as ModelMessage,
+    )
+    const callbacks = makeCallbacks()
+
+    await processToolCalls([{ toolName: 'edit', toolCallId, input }], state, options, callbacks, stubModel)
+
+    expect(await fs.readFile(filePath, 'utf8')).toBe(original)
+    expect(callbacks.onFileEdit).not.toHaveBeenCalled()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(toolCallId, expect.stringContaining('was not found'), true)
+    expect(state.filesModified.size).toBe(0)
   })
 })
 

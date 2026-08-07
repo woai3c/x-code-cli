@@ -27,6 +27,7 @@ import {
 } from '@x-code-cli/core'
 import type {
   AgentOptions,
+  CacheMissSummary,
   DiffStats,
   GoalState,
   LanguageModel,
@@ -34,6 +35,7 @@ import type {
   SkillDefinition,
   StepStats,
   TokenUsage,
+  UsageBreakdown,
 } from '@x-code-cli/core'
 
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
@@ -210,6 +212,8 @@ function formatUsageReport(
   source: 'live' | 'snapshot' | 'history',
   sessionName?: string,
   stepStats?: StepStats[],
+  breakdown?: UsageBreakdown | null,
+  cacheMissSummary?: CacheMissSummary | null,
 ): string {
   const fmt = (n: number) => n.toLocaleString('en-US')
   const hitRatio = usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
@@ -222,15 +226,49 @@ function formatUsageReport(
   const lines = [header, '']
   if (sessionName) lines.push(`- Session:         ${sessionName}`)
   lines.push(
-    `- Model:           ${modelId}`,
-    `- Input tokens:    ${fmt(usage.inputTokens)}`,
+    `- Active model:    ${modelId}`,
+    `- Input (all):     ${fmt(usage.inputTokens)}`,
     `- Output tokens:   ${fmt(usage.outputTokens)}`,
     `- Cache read:      ${fmt(usage.cacheReadTokens)}  (${hitRatio} of input)`,
+    `- Uncached input:  ${fmt(Math.max(0, usage.inputTokens - usage.cacheReadTokens))}`,
     `- Cache creation:  ${fmt(usage.cacheCreationTokens)}`,
     `- Total:           ${fmt(usage.totalTokens)}`,
-    '',
-    'Cache numbers depend on the provider — DeepSeek/Moonshot/Qwen may report 0 even when prefix caching is active.',
   )
+  if (breakdown) {
+    const sources = Object.entries(breakdown.bySource).filter(
+      ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,
+    )
+    if (sources.length > 0) {
+      lines.push('', '**By source** (included above):')
+      for (const [name, value] of sources) {
+        lines.push(`- ${name}: ${fmt(value.inputTokens + value.outputTokens)}`)
+      }
+    }
+    const models = Object.entries(breakdown.byModel).filter(
+      ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,
+    )
+    if (models.length > 0) {
+      lines.push('', '**By model** (included above):')
+      for (const [name, value] of models) {
+        lines.push(`- ${name}: ${fmt(value.inputTokens + value.outputTokens)}`)
+      }
+    }
+  }
+  if (cacheMissSummary && (cacheMissSummary.expectedCount > 0 || cacheMissSummary.unexpectedCount > 0)) {
+    lines.push(
+      '',
+      '**Estimated re-billed input**:',
+      `- Expected: ${fmt(cacheMissSummary.expectedTokens)} (${cacheMissSummary.expectedCount} miss${cacheMissSummary.expectedCount === 1 ? '' : 'es'})`,
+      `- Unexpected: ${fmt(cacheMissSummary.unexpectedTokens)} (${cacheMissSummary.unexpectedCount} miss${cacheMissSummary.unexpectedCount === 1 ? '' : 'es'})`,
+    )
+    const probableTtlCount = cacheMissSummary.probableTtlCount ?? 0
+    if (probableTtlCount > 0) {
+      lines.push(
+        `- Probable TTL expiry: ${fmt(cacheMissSummary.probableTtlTokens ?? 0)} (${probableTtlCount} miss${probableTtlCount === 1 ? '' : 'es'}, included in Expected)`,
+      )
+    }
+  }
+  lines.push('', 'Cache fields are provider-reported; asynchronous post-turn memory jobs are not included.')
   if (stepStats && stepStats.length > 0) {
     lines.push('', '**Steps:**', '')
     const idxWidth = String(stepStats.length).length
@@ -1594,6 +1632,8 @@ export function App({
     let usage: TokenUsage = state.usage
     let modelId = state.modelId
     let source: 'live' | 'snapshot' = 'live'
+    let breakdown: UsageBreakdown | null | undefined = state.usageBreakdown
+    let cacheMissSummary: CacheMissSummary | null | undefined = state.cacheMissSummary
     let sessionName: string | undefined
     let steps: StepStats[] | undefined = state.stepStats.length > 0 ? state.stepStats : undefined
     const info = getSessionInfo()
@@ -1608,9 +1648,11 @@ export function App({
         source = 'snapshot'
         sessionName = latest.firstPrompt.slice(0, 80) || undefined
         steps = undefined
+        breakdown = latest.usageBreakdown
+        cacheMissSummary = latest.cacheMissSummary
       }
     }
-    addInfoMessage(formatUsageReport(usage, modelId, source, sessionName, steps))
+    addInfoMessage(formatUsageReport(usage, modelId, source, sessionName, steps, breakdown, cacheMissSummary))
   }
 
   async function handleUsageHistory() {
@@ -1652,7 +1694,17 @@ export function App({
           `**${(s.firstPrompt || '(empty)').slice(0, 60)}**\n\nNo usage data recorded (interrupted before first turn).`,
         )
       } else {
-        addInfoMessage(formatUsageReport(usage, s.modelId, 'history', s.firstPrompt.slice(0, 80) || undefined))
+        addInfoMessage(
+          formatUsageReport(
+            usage,
+            s.modelId,
+            'history',
+            s.firstPrompt.slice(0, 80) || undefined,
+            undefined,
+            s.usageBreakdown,
+            s.cacheMissSummary,
+          ),
+        )
       }
 
       await tick()

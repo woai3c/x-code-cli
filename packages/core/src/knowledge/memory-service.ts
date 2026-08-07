@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import type { LanguageModel } from 'ai'
 
+import { markExpectedCacheMiss } from '../agent/cache-stats.js'
 import type { LoopState } from '../agent/loop-state.js'
 import { MemoryJobStore } from '../agent/memory-job-store.js'
 import { MemoryWorker } from '../agent/memory-worker.js'
@@ -372,7 +373,7 @@ export class MemoryService {
       await this.applyChangesToState(state, previousGeneration, loaded.generation)
       if (previousCore !== this.coreProfile) {
         state.systemPromptCache = null
-        state.expectCacheMiss = true
+        markExpectedCacheMiss(state, 'memory-context-change')
       }
     }
   }
@@ -580,7 +581,7 @@ export class MemoryService {
         void appendMemoryRecallDelete(state, tombstone)
       }
       state.systemPromptCache = null
-      state.expectCacheMiss = true
+      markExpectedCacheMiss(state, 'memory-context-change')
       state.memoryGeneration = toGeneration
       return
     }
@@ -650,7 +651,7 @@ export class MemoryService {
       (this.pinnedInvalidationGeneration > fromGeneration && this.pinnedInvalidationGeneration <= toGeneration)
     ) {
       state.systemPromptCache = null
-      state.expectCacheMiss = true
+      markExpectedCacheMiss(state, 'memory-context-change')
     }
     state.memoryGeneration = toGeneration
   }

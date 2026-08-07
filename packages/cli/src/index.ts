@@ -363,6 +363,7 @@ async function main() {
   // the file-read latency.
   await mcpPermissionStore.preload()
 
+  const userConfig = loadUserConfig()
   const options: AgentOptions = {
     modelId,
     trustMode: argv.trust,
@@ -373,7 +374,8 @@ async function main() {
     // (provider-default thinking behavior, no surprise latency / cost
     // jumps). The /thinking command in App.tsx hot-swaps this flag
     // without restart via useAgent's setThinking.
-    thinking: loadUserConfig().thinking ?? false,
+    thinking: userConfig.thinking ?? false,
+    toolProfile: userConfig.experimentalToolProfile === 'standard' ? 'standard' : 'full',
     // Plan mode is session-scoped (matches Claude Code) — only the
     // `--plan` CLI flag opts in at startup. Mid-session toggles via
     // /plan don't persist, so each new launch starts in 'default'

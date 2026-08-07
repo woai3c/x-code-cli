@@ -29,6 +29,7 @@ import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage, formatBytes
 import { mediaTypeFor } from '../utils/media-type.js'
 import { formatTranscription, transcribeAudio } from './audio-transcribe.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
+import type { VisionUsageEvent } from './vision-fallback.js'
 
 /** Where tesseract.js caches its language model weights (`eng.traineddata`,
  *  `chi_sim.traineddata`, ~7.6 MB total). Without this the worker writes
@@ -399,6 +400,7 @@ export async function ingestFile(
   caps: ProviderCapabilities,
   onNotice?: (msg: string) => void,
   abortSignal?: AbortSignal,
+  onVisionUsage?: (event: VisionUsageEvent) => void,
 ): Promise<IngestedPart[]> {
   if (abortSignal?.aborted) {
     return [{ type: 'text', text: `[File ingest cancelled: ${ref.raw}]` }]
@@ -595,7 +597,7 @@ export async function ingestFile(
   const sub = pickVisionProvider()
   if (sub) {
     try {
-      const caption = await captionImage(ref.absolutePath, sub, { abortSignal })
+      const caption = await captionImage(ref.absolutePath, sub, { abortSignal, onUsage: onVisionUsage })
       onNotice?.(`Captioned image via ${sub.modelId}`)
       return [
         {
@@ -633,6 +635,7 @@ export async function buildUserContent(
   caps: ProviderCapabilities,
   onNotice?: (msg: string) => void,
   abortSignal?: AbortSignal,
+  onVisionUsage?: (event: VisionUsageEvent) => void,
 ): Promise<string | Array<TextPart | ImagePart | FilePart>> {
   const refs = extractFileReferences(text)
   if (refs.length === 0) return text
@@ -640,7 +643,7 @@ export async function buildUserContent(
   const parts: IngestedPart[] = [{ type: 'text', text }]
   for (const ref of refs) {
     if (abortSignal?.aborted) break
-    const ingested = await ingestFile(ref, caps, onNotice, abortSignal)
+    const ingested = await ingestFile(ref, caps, onNotice, abortSignal, onVisionUsage)
     parts.push(...ingested)
   }
   return parts

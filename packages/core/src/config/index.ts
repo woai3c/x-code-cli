@@ -236,6 +236,8 @@ export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): Memo
 export interface UserConfig {
   model?: string
   thinking?: boolean
+  /** Explicit opt-in only. Unknown/custom/weak models still fall back to full. */
+  experimentalToolProfile?: 'full' | 'standard'
   /** Persisted UI theme name. Drives both diff bg colors and the
    *  associated syntax-highlight palette. Validated at load time by
    *  `parseThemeName` in the CLI; the type stays loose `string` here

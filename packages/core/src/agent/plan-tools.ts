@@ -5,6 +5,7 @@
 // pushToolResult, and return void.
 import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
 import { extractText } from '../utils/message-helpers.js'
+import { markExpectedCacheMiss } from './cache-stats.js'
 import type { LoopState } from './loop-state.js'
 import { toolErrorString } from './messages.js'
 import { makePlanFilePath, readPlan, writePlan } from './plan-storage.js'
@@ -111,7 +112,7 @@ export async function handleEnterPlanMode(
   }
   state.permissionMode = 'plan'
   state.systemPromptCache = null
-  state.expectCacheMiss = true
+  markExpectedCacheMiss(state, 'permission-mode-change')
   if (!state.currentPlanPath) {
     const topic = (input.topic as string | undefined)?.trim()
     const fallbackText = lastUserMessageText(state.messages)
@@ -196,7 +197,7 @@ export async function handleExitPlanMode(
   if (approved) {
     state.permissionMode = 'acceptEdits'
     state.systemPromptCache = null
-    state.expectCacheMiss = true
+    markExpectedCacheMiss(state, 'permission-mode-change')
     const persisted = savedPath ?? state.currentPlanPath
     state.currentPlanPath = null
     callbacks.onPlanModeChange('acceptEdits')

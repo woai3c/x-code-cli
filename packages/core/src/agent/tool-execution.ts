@@ -9,6 +9,7 @@ import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import { checkPermission } from '../permissions/index.js'
 import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/capabilities.js'
+import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { getShellProvider } from '../tools/shell-provider.js'
@@ -16,15 +17,19 @@ import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
 import { debugLog, isAbortError } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
+import { markExpectedCacheMiss } from './cache-stats.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
 import type { ToolImage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
+import { appendUsage } from './session-store.js'
 import { runSubAgent } from './sub-agents/runner.js'
 import { runToolSearch } from './tool-search/resolve.js'
+import { accumulateUsage, normalizeLanguageModelUsage } from './usage.js'
 import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
+import type { VisionUsageEvent } from './vision-fallback.js'
 
 const MEMORY_MUTATING_COMMAND_RE =
   /(?:^|[\s;|&])(?:add-content|copy-item|mkdir|move-item|mv|new-item|out-file|remove-item|rename-item|rm|sed\s+-i|set-content|tee|touch|truncate)\b/i
@@ -168,12 +173,28 @@ async function executeWriteTool(
 
   if (toolName === 'edit') {
     const filePath = input.filePath as string
+    const edits = input.edits
+
+    reportProgress(toolCallId, `Editing ${filePath}`)
+    const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
+    if (Array.isArray(edits)) {
+      const newContent = applyBatchEdits(content, edits)
+      if (signal?.aborted) throw signal.reason ?? new Error('Edit interrupted by user')
+      await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
+
+      const payload = computeEditDiff(filePath, content, newContent)
+      if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
+
+      return `File edited: ${filePath} (${edits.length} replacements)`
+    }
+
     const oldString = input.oldString as string
     const newString = input.newString as string
     const replaceAll = (input.replaceAll as boolean) ?? false
 
-    reportProgress(toolCallId, `Editing ${filePath}`)
-    const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
+    if (!oldString) return toolErrorString('oldString must not be empty.')
+    if (oldString === newString) return toolErrorString('oldString and newString must be different.')
+
     if (!replaceAll) {
       const count = countOccurrences(content, oldString)
       if (count === 0) return toolErrorString(`old_string not found in ${filePath}`)
@@ -184,6 +205,7 @@ async function executeWriteTool(
     }
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
+    if (signal?.aborted) throw signal.reason ?? new Error('Edit interrupted by user')
     await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
 
     const payload = computeEditDiff(filePath, content, newContent)
@@ -572,7 +594,7 @@ async function handleToolSearch(ctx: HandlerCtx): Promise<void> {
   }
   // Newly activated tools grow the tool list this turn → the tool-schema cache
   // prefix changes once. Flag it so the cache-break detector doesn't warn.
-  if (added) state.expectCacheMiss = true
+  if (added) markExpectedCacheMiss(state, 'tool-activation')
 
   // If the model re-searched tools it had ALREADY loaded (nothing new added),
   // tell it plainly. The "## Deferred Tools" system-prompt list is byte-frozen
@@ -866,6 +888,15 @@ async function handleToolCall(
     }
   }
 
+  if (ctx.toolName === 'edit') {
+    try {
+      ctx.input = normalizedEditRecord(normalizeEditInput(ctx.input))
+    } catch (err) {
+      pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, toolErrorFromUnknown(err), true)
+      return
+    }
+  }
+
   const bypassHandler = BYPASS_LOOP_GUARD_HANDLERS[ctx.toolName]
   if (bypassHandler) {
     await bypassHandler(ctx)
@@ -980,10 +1011,22 @@ export async function deliverToolImages(
     const signal = guards.length === 1 ? guards[0] : AbortSignal.any(guards)
     try {
       const buffer = Buffer.from(img.data, 'base64')
+      const captionUsageEvents: VisionUsageEvent[] = []
       const caption = await captionImageBuffer(buffer, img.mediaType, captionModelId, {
         prompt: SCREENSHOT_CAPTION_PROMPT,
         abortSignal: signal,
+        onUsage: (event) => captionUsageEvents.push(event),
       })
+      const captionUsage = captionUsageEvents[0]
+      if (captionUsage) {
+        accumulateUsage(ctx.state, {
+          source: 'vision',
+          modelId: captionUsage.modelId,
+          usage: normalizeLanguageModelUsage(captionUsage.usage),
+        })
+        ctx.callbacks.onUsageUpdate(ctx.state.tokenUsage)
+        await appendUsage(ctx.state, captionUsage.modelId)
+      }
       captions.push(
         `[Screenshot ${i + 1} — visual description (your model cannot view the raw image; a vision model looked at it for you):\n${caption}\n]`,
       )

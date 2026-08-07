@@ -197,6 +197,9 @@ export interface AgentOptions {
    *  Persisted in `~/.x-code/config.json` as `thinking: boolean`,
    *  toggled at runtime via `/thinking on|off`. Defaults to false. */
   thinking?: boolean
+  /** Experimental tool-surface policy. Defaults to full; standard is honored
+   *  only for an explicit allowlist of validated strong models. */
+  toolProfile?: 'full' | 'standard'
   /** Initial permission mode for the session. Defaults to 'default'.
    *  Set from `--plan` CLI flag or `loadUserConfig().permissionMode`. */
   permissionMode?: PermissionMode

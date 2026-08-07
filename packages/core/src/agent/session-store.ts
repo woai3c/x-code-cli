@@ -26,10 +26,14 @@ import type { MemoryRecallAttachment, MemoryRecallTombstone } from '../knowledge
 import { ensureProjectStorageDir } from '../project-storage.js'
 import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
+import { scanCacheMisses } from './cache-stats.js'
+import type { CacheMissSummary, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState, GoalVerificationResult } from './goal/types.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
 import type { CheckpointEntry } from './snapshot.js'
+import { cloneUsageBreakdown, createUsageBreakdown } from './usage.js'
+import type { UsageBreakdown } from './usage.js'
 
 const SESSIONS_SUBDIR = 'sessions'
 
@@ -73,6 +77,13 @@ interface UsageEntry {
   t: 'meta'
   kind: 'usage'
   usage: TokenUsage
+  /** Optional for backward compatibility with sessions written before usage
+   *  attribution was introduced. This is a cumulative snapshot. */
+  breakdown?: UsageBreakdown
+  /** Present only for main provider requests. */
+  turn?: ProviderTurnUsage
+  /** Cumulative diagnostic snapshot so tail scans do not need every turn. */
+  cacheMissSummary?: CacheMissSummary
   modelId: string
   ts: string
 }
@@ -349,12 +360,19 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
  *  after `collectTurnResponse` accepts the provider's `usage` object. The
  *  picker reads only the LAST usage line (tail scan) to display per-session
  *  totals — no need to keep older snapshots around any more efficiently. */
-export async function appendUsage(state: LoopState, modelId: string): Promise<void> {
+export async function appendUsage(state: LoopState, modelId: string, turn?: ProviderTurnUsage): Promise<void> {
   const filePath = getSessionFilePath(state)
+  const cacheMissSummary = scanCacheMisses(state.providerTurns)
+  // Full loads reconstruct individual estimates from persisted turns. Keeping
+  // only cumulative totals here avoids duplicating the entire turn history in
+  // every usage snapshot while preserving cheap tail reads for the picker.
   const entry: UsageEntry = {
     t: 'meta',
     kind: 'usage',
     usage: { ...state.tokenUsage },
+    breakdown: cloneUsageBreakdown(state.usageBreakdown),
+    turn,
+    cacheMissSummary: { ...cacheMissSummary, estimates: [] },
     modelId,
     ts: new Date().toISOString(),
   }
@@ -524,6 +542,9 @@ export interface LoadedSession {
   firstPrompt: string
   messages: ModelMessage[]
   tokenUsage: TokenUsage
+  usageBreakdown?: UsageBreakdown
+  providerTurns?: ProviderTurnUsage[]
+  cacheMissSummary?: CacheMissSummary
   goal: GoalState | null
   goalInputs: GoalInput[]
   /** Rewind checkpoints surviving the last compact-boundary (if any).
@@ -568,6 +589,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   }
   let header: HeaderEntry | null = null
   let lastUsage: UsageEntry | null = null
+  const providerTurns: ProviderTurnUsage[] = []
   let messages: ModelMessage[] = []
   let checkpoints: CheckpointEntry[] = []
   let goal: GoalState | null = null
@@ -590,6 +612,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         header = entry
       } else if (entry.kind === 'usage') {
         lastUsage = entry
+        if (entry.turn) providerTurns.push(entry.turn)
       } else if (entry.kind === 'compact-boundary') {
         messages = []
         // Checkpoints anchored to pre-compaction message counts are now
@@ -640,12 +663,15 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     sessionId: header.sessionId,
     taskSlug: header.taskSlug,
     startedAt: header.startedAt,
-    modelId: header.modelId,
+    modelId: lastUsage?.modelId ?? header.modelId,
     cwd: header.cwd,
     gitBranch: header.gitBranch,
     firstPrompt: header.firstPrompt,
     messages: sanitizeMessageTail(messages),
     tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
+    usageBreakdown: lastUsage?.breakdown ?? createUsageBreakdown(),
+    providerTurns,
+    cacheMissSummary: lastUsage?.cacheMissSummary ?? scanCacheMisses(providerTurns),
     goal,
     goalInputs,
     checkpoints,
@@ -776,6 +802,8 @@ export interface SessionListEntry {
   /** File mtime in epoch milliseconds — sort key for the picker. */
   mtime: number
   tokenUsage: TokenUsage | null
+  usageBreakdown?: UsageBreakdown | null
+  cacheMissSummary?: CacheMissSummary | null
 }
 
 /** Enumerate every session jsonl in the current project, newest first.
@@ -809,6 +837,9 @@ export async function listSessions(cwd: string = process.cwd()): Promise<Session
         const tailStart = Math.max(0, stat.size - 4 * 1024)
         const tail = await readRange(filePath, tailStart, stat.size - tailStart)
         let tokenUsage: TokenUsage | null = null
+        let usageBreakdown: UsageBreakdown | null = null
+        let cacheMissSummary: CacheMissSummary | null = null
+        let latestModelId = header.modelId
         const tailLines = tail.split('\n').reverse()
         for (const l of tailLines) {
           if (!l.trim()) continue
@@ -816,6 +847,9 @@ export async function listSessions(cwd: string = process.cwd()): Promise<Session
             try {
               const e = JSON.parse(l) as UsageEntry
               tokenUsage = e.usage
+              usageBreakdown = e.breakdown ?? null
+              cacheMissSummary = e.cacheMissSummary ?? null
+              latestModelId = e.modelId || header.modelId
               break
             } catch {
               // Malformed line — keep scanning earlier lines.
@@ -828,16 +862,20 @@ export async function listSessions(cwd: string = process.cwd()): Promise<Session
           taskSlug: header.taskSlug,
           firstPrompt: header.firstPrompt,
           startedAt: header.startedAt,
-          modelId: header.modelId,
+          modelId: latestModelId,
           mtime: stat.mtimeMs,
           tokenUsage,
+          usageBreakdown,
+          cacheMissSummary,
         } satisfies SessionListEntry
       } catch {
         return null
       }
     }),
   )
-  return results.filter((r): r is SessionListEntry => r !== null).sort((a, b) => b.mtime - a.mtime)
+  return results
+    .filter((r): r is Exclude<(typeof results)[number], null> => r !== null)
+    .sort((a, b) => b.mtime - a.mtime)
 }
 
 /** Read [offset, offset+length) bytes of a file as utf-8. Used by
@@ -876,6 +914,8 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.startedAt = loaded.startedAt
   state.messages = loaded.messages.slice()
   state.tokenUsage = { ...loaded.tokenUsage }
+  state.usageBreakdown = loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown()
+  state.providerTurns = loaded.providerTurns?.slice() ?? []
   state.lastInputTokens = loaded.tokenUsage.inputTokens
   state.persistedMessageCount = loaded.messages.length
   state.checkpoints = loaded.checkpoints.slice()

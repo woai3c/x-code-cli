@@ -42,12 +42,28 @@ export type { MemoryConfig, MemoryReasoningMode, MemoryRecallConfig, UserConfig 
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'
 
 // Agent
-export { agentLoop, saveSession, compressMessages } from './agent/loop.js'
-export type { AgentLoopResult } from './agent/loop.js'
+export { agentLoop, saveSession, compressMessages, compressMessagesWithUsage } from './agent/loop.js'
+export type { AgentLoopResult, CompressionResult } from './agent/loop.js'
 export { createLoopState } from './agent/loop-state.js'
 export { KEEP_RECENT, KEEP_RECENT_TOKENS, MIN_KEEP_MESSAGES } from './agent/compression.js'
 export type { LoopState } from './agent/loop.js'
 export type { StepStats } from './agent/loop-state.js'
+export {
+  consumeExpectedCacheMissReasons,
+  createProviderTurnUsage,
+  estimateCacheMiss,
+  markExpectedCacheMiss,
+  scanCacheMisses,
+} from './agent/cache-stats.js'
+export type { CacheMissEstimate, CacheMissReason, CacheMissSummary, ProviderTurnUsage } from './agent/cache-stats.js'
+export {
+  accumulateUsage,
+  attributedModelId,
+  cloneUsageBreakdown,
+  createUsageBreakdown,
+  normalizeLanguageModelUsage,
+} from './agent/usage.js'
+export type { UsageAttribution, UsageBreakdown, UsageDelta, UsageSource } from './agent/usage.js'
 export { computeEditDiff } from './agent/diff.js'
 export type { EditDiffHunk, EditDiffPayload } from './agent/diff.js'
 export { buildSystemPrompt, buildSubAgentSystemPrompt } from './agent/system-prompt.js'
@@ -64,7 +80,7 @@ export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.
 export { formatTranscription, isAudioFile, isWhisperAvailable, transcribeAudio } from './agent/audio-transcribe.js'
 export type { TranscribeAudioResult, TranscribeSegment } from './agent/audio-transcribe.js'
 export { captionImage, pickVisionProvider } from './agent/vision-fallback.js'
-export type { VisionProvider } from './agent/vision-fallback.js'
+export type { VisionProvider, VisionUsageEvent } from './agent/vision-fallback.js'
 export {
   admitGoalInput,
   buildVerifierFailurePrompt,
@@ -285,6 +301,7 @@ export {
   appendGoalVerification,
   appendHeader,
   appendInterrupted,
+  appendUsage,
   appendMemoryRecall,
   appendMemoryRecallDelete,
   flushPendingMessages,

@@ -2,12 +2,15 @@
 // the select: exact-load path, catalog construction, and per-turn composition.
 import { describe, expect, it, vi } from 'vitest'
 
+import { createLoopState } from '../src/agent/loop-state.js'
+import { buildTools } from '../src/agent/loop.js'
 import {
   DEFERRED_BUILTIN_TOOLS,
   type DeferredToolEntry,
   buildDeferredCatalog,
   composeTurnTools,
   isWeakModel,
+  resolveEffectiveToolProfile,
 } from '../src/agent/tool-search/catalog.js'
 import { runToolSearch } from '../src/agent/tool-search/resolve.js'
 import { searchDeferredTools } from '../src/agent/tool-search/search.js'
@@ -160,6 +163,16 @@ describe('composeTurnTools', () => {
     const result = composeTurnTools(base, CATALOG, new Set(['ghost_tool']))
     expect(Object.keys(result)).not.toContain('ghost_tool')
   })
+
+  it('exposes only the mode transition tool valid for the current turn', () => {
+    const modeBase = { readFile: { id: 'read' }, enterPlanMode: { id: 'enter' }, exitPlanMode: { id: 'exit' } }
+
+    expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'default'))).toEqual([
+      'readFile',
+      'enterPlanMode',
+    ])
+    expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'plan'))).toEqual(['readFile', 'exitPlanMode'])
+  })
 })
 
 describe('buildDeferredCatalog', () => {
@@ -241,6 +254,27 @@ describe('buildDeferredCatalog', () => {
     expect(names).toContain('mcp__db__query_rows')
   })
 
+  it('keeps alwaysLoad MCP tools in the direct map while deferral is active', () => {
+    const toolsWithAlwaysLoad = [
+      ...mcpTools,
+      {
+        callableName: 'mcp__db__always_tool',
+        rawName: 'always_tool',
+        serverName: 'db',
+        description: 'Always loaded',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { alwaysLoad: true },
+      },
+    ]
+    const mcpRegistry = { list: () => toolsWithAlwaysLoad }
+    const state = createLoopState()
+    const tools = buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+
+    expect(state.deferredCatalog?.some((entry) => entry.name === 'mcp__db__query_rows')).toBe(true)
+    expect(tools).toHaveProperty('mcp__db__always_tool')
+    expect(tools).not.toHaveProperty('mcp__db__query_rows')
+  })
+
   it('includes searchHint from annotations in searchText', () => {
     const toolsWithHint = [
       {
@@ -259,6 +293,52 @@ describe('buildDeferredCatalog', () => {
     expect(s3Tool!.searchText).toContain('upload file to cloud storage')
     expect(searchDeferredTools('upload cloud', catalog, 5)).toContain('mcp__s3__put_object')
   })
+
+  it('defers task but keeps todo direct only for an explicit supported standard profile', () => {
+    const subAgentRegistry = {
+      list: () => [{ name: 'reviewer', description: 'Review changes' }],
+      names: () => ['reviewer'],
+    }
+    const state = createLoopState()
+    const tools = buildTools(
+      {
+        modelId: 'anthropic:claude-sonnet-5',
+        toolProfile: 'standard',
+        subAgentRegistry,
+      } as any,
+      state,
+      1_000_000,
+    )
+
+    expect(state.deferredCatalog?.map((entry) => entry.name)).toContain('task')
+    expect(tools).not.toHaveProperty('task')
+    expect(tools).toHaveProperty('todoWrite')
+    expect(tools).toHaveProperty('toolSearch')
+  })
+
+  it('reduces the directly injected schema surface by at least fifteen percent', () => {
+    const subAgentRegistry = {
+      list: () => [{ name: 'reviewer', description: 'Review changes' }],
+      names: () => ['reviewer'],
+    }
+    const full = buildTools(
+      { modelId: 'anthropic:claude-sonnet-5', toolProfile: 'full', subAgentRegistry } as any,
+      createLoopState(),
+      1_000_000,
+    )
+    const standard = buildTools(
+      { modelId: 'anthropic:claude-sonnet-5', toolProfile: 'standard', subAgentRegistry } as any,
+      createLoopState(),
+      1_000_000,
+    )
+    const wireSize = (tools: Record<string, unknown>) =>
+      Object.entries(tools).reduce(
+        (sum, [name, definition]) => sum + name.length + JSON.stringify(definition).length,
+        0,
+      )
+
+    expect(wireSize(standard)).toBeLessThan(wireSize(full) * 0.85)
+  })
 })
 
 describe('isWeakModel', () => {
@@ -272,6 +352,21 @@ describe('isWeakModel', () => {
     expect(isWeakModel('anthropic:claude-sonnet-5')).toBe(false)
     expect(isWeakModel('openai:gpt-5.6-sol')).toBe(false)
     expect(isWeakModel('deepseek:deepseek-v4-pro')).toBe(false)
+  })
+})
+
+describe('resolveEffectiveToolProfile', () => {
+  it('defaults to full and honors standard only for allowlisted strong models', () => {
+    expect(resolveEffectiveToolProfile(undefined, 'anthropic:claude-sonnet-5')).toBe('full')
+    expect(resolveEffectiveToolProfile('full', 'anthropic:claude-sonnet-5')).toBe('full')
+    expect(resolveEffectiveToolProfile('standard', 'anthropic:claude-sonnet-5')).toBe('standard')
+    expect(resolveEffectiveToolProfile('standard', 'openai:gpt-5.6-sol')).toBe('standard')
+  })
+
+  it('falls back to full for weak, unknown, and custom models', () => {
+    expect(resolveEffectiveToolProfile('standard', 'anthropic:claude-haiku-4-5')).toBe('full')
+    expect(resolveEffectiveToolProfile('standard', 'custom:anything')).toBe('full')
+    expect(resolveEffectiveToolProfile('standard', 'future:unknown')).toBe('full')
   })
 })
 

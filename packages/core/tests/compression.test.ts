@@ -9,6 +9,7 @@ import {
   KEEP_RECENT_TOKENS,
   checkAndCompressContext,
   compressMessages,
+  compressMessagesWithUsage,
   handleContextTooLong,
 } from '../src/agent/compression.js'
 import { createLoopState } from '../src/agent/loop-state.js'
@@ -25,6 +26,7 @@ vi.mock('../src/knowledge/session.js', () => ({
 }))
 
 vi.mock('../src/agent/session-store.js', () => ({
+  appendUsage: vi.fn().mockResolvedValue(undefined),
   markBoundaryAndReflush: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -93,6 +95,25 @@ describe('compressMessages', () => {
     expect(result[0].content).toContain('[Previous conversation summary]')
     expect(result[0].content).toContain('Summary of old conversation')
     expect(result.length).toBeLessThan(msgs.length)
+  })
+
+  it('returns summary metadata and provider usage from the detailed API', async () => {
+    const usage = {
+      inputTokens: 120,
+      outputTokens: 30,
+      inputTokenDetails: { cacheReadTokens: 40, cacheWriteTokens: 10 },
+    }
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'Detailed summary',
+      usage,
+      response: { modelId: 'summary-model' },
+    } as any)
+
+    const result = await compressMessagesWithUsage(padMessages(10), fakeModel)
+
+    expect(result.summary).toBe('Detailed summary')
+    expect(result.usage).toBe(usage)
+    expect(result.modelId).toBe('summary-model')
   })
 
   it('passes the abort signal to the summary request', async () => {
@@ -181,12 +202,49 @@ describe('checkAndCompressContext', () => {
     const progressCalls = vi.mocked(cb.onCompressionProgress!).mock.calls.map((c) => c[0])
     expect(progressCalls).toContain('Removing duplicate tool calls...')
     expect(progressCalls).toContain('Truncating old tool results...')
-    expect(progressCalls).toContain('Generating session summary...')
     expect(progressCalls).toContain('Summarizing conversation...')
+    expect(generateText).toHaveBeenCalledOnce()
 
     expect(cb.onContextCompressed).toHaveBeenCalledOnce()
     const compressedMsg = vi.mocked(cb.onContextCompressed).mock.calls[0][0]
     expect(compressedMsg).toMatch(/Context compressed: ~\d+k → ~\d+k tokens\./)
+  })
+
+  it('uses one summary for context, boundary metadata, and usage accounting', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'single summary',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 25,
+        inputTokenDetails: { cacheReadTokens: 20, cacheWriteTokens: 5 },
+      },
+      response: { modelId: 'actual-summary-model' },
+    } as any)
+    const state = createLoopState()
+    state.messages = padMessages(10)
+    state.lastInputTokens = 999_999
+    state.tokenUsage.currentContextTokens = 777
+    const callbacks = makeCallbacks()
+
+    await checkAndCompressContext(state, fakeModel, 1, callbacks, {
+      modelId: 'test:requested-model',
+      cwd: process.cwd(),
+    })
+
+    expect(generateText).toHaveBeenCalledOnce()
+    expect(markBoundaryAndReflush).toHaveBeenCalledWith(state, 'single summary')
+    expect(state.messages[0]?.content).toContain('single summary')
+    expect(state.tokenUsage).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 25,
+      totalTokens: 125,
+      cacheReadTokens: 20,
+      cacheCreationTokens: 5,
+      currentContextTokens: 777,
+    })
+    expect(state.usageBreakdown.bySource.compaction.inputTokens).toBe(100)
+    expect(state.usageBreakdown.byModel['test:actual-summary-model']?.outputTokens).toBe(25)
+    expect(callbacks.onUsageUpdate).toHaveBeenCalledWith(state.tokenUsage)
   })
 
   it('works when onCompressionProgress is undefined', async () => {

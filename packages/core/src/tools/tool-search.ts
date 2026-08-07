@@ -15,15 +15,7 @@ import { jsonSchema, tool } from 'ai'
 
 export const TOOL_SEARCH_TOOL_NAME = 'toolSearch'
 
-const DESCRIPTION = `Loads ("activates") deferred tools so you can call them.
-
-Deferred tools are listed by NAME ONLY under "## Deferred Tools" in the system prompt — their schemas are not loaded until you load them here. Until then they cannot be called.
-
-Pass \`query\` as either:
-- keywords describing the capability you need (e.g. "search the web", "github create issue", "read mcp resource") — returns the best-matching deferred tools, or
-- "select:<name>,<name>" to load specific tools by their EXACT name from the Deferred Tools list (prefer this when you already know the name).
-
-The matched tools' full schemas are added to your tool set and become directly callable on your NEXT step. Core tools (readFile, writeFile, edit, shell, grep, glob, listDir, task) are always loaded — never search for those.`
+const DESCRIPTION = `Load deferred tools listed by name in the system prompt. Use capability keywords to find matches, or \`select:<exact_name>,<exact_name>\` when you know the names. Their schemas become callable on the next step. Do not search for tools already present in the current tool list.`
 
 export const toolSearch = tool({
   description: DESCRIPTION,

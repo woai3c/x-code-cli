@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
+  accumulateUsage,
   admitGoalInput,
   agentLoop,
   appendCheckpoint,
@@ -10,6 +11,8 @@ import {
   appendGoalVerification,
   appendHeader,
   appendInterrupted,
+  appendUsage,
+  attributedModelId,
   buildUserContent,
   buildVerifierFailurePrompt,
   cancelGoal as cancelCoreGoal,
@@ -17,10 +20,12 @@ import {
   classifyApiError,
   clearGoal as clearCoreGoal,
   clearPendingTransition,
-  compressMessages,
+  cloneUsageBreakdown,
+  compressMessagesWithUsage,
   createGoal as createCoreGoal,
   createGoalRunCoordinator,
   createLoopState,
+  createUsageBreakdown,
   debugLog,
   flushPendingMessages,
   generateTaskSlug,
@@ -28,7 +33,9 @@ import {
   hydrateLoopState,
   loadPersistedRules,
   markBoundaryAndReflush,
+  markExpectedCacheMiss,
   modelSupportsVision,
+  normalizeLanguageModelUsage,
   pauseGoal as pauseCoreGoal,
   recordVerificationFailure,
   resetVerificationFailures,
@@ -37,6 +44,7 @@ import {
   runGoalLoop,
   runVerifierLadder,
   saveSession,
+  scanCacheMisses,
   updateGoalStatus,
 } from '@x-code-cli/core'
 import { extractText } from '@x-code-cli/core'
@@ -44,6 +52,7 @@ import type {
   AgentCallbacks,
   AgentLoopResult,
   AgentOptions,
+  CacheMissSummary,
   CheckpointEntry,
   DiffStats,
   DisplayMessage,
@@ -56,9 +65,12 @@ import type {
   StepStats,
   TodoItem,
   TokenUsage,
+  UsageBreakdown,
+  VisionUsageEvent,
 } from '@x-code-cli/core'
 
 import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from './agent-tool-lifecycle.js'
+import { invalidateModelDependentState, invalidateToolSurfaceState } from './model-switch-state.js'
 import { useAgentDisplayHelpers } from './use-agent-display-helpers.js'
 import { modelMessagesToDisplay } from './use-agent-display.js'
 import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
@@ -148,6 +160,8 @@ export interface AgentState {
    *  `nonce` lets ChatInput's effect distinguish consecutive restores. */
   restoredDraft: { text: string; nonce: number } | null
   usage: TokenUsage
+  usageBreakdown: UsageBreakdown
+  cacheMissSummary: CacheMissSummary
   error: string | null
   /** Live model id — mirrors modelIdRef so UI can re-render on /model change. */
   modelId: string
@@ -207,6 +221,8 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
     cacheCreationTokens: 0,
     currentContextTokens: 0,
   },
+  usageBreakdown: createUsageBreakdown(),
+  cacheMissSummary: scanCacheMisses([]),
   error: null,
   todos: [],
   bufferingReads: false,
@@ -230,6 +246,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     permissionMode: options.permissionMode ?? 'default',
     messages: initialSession ? modelMessagesToDisplay(initialSession.messages) : initialState.messages,
     usage: initialSession ? { ...initialSession.tokenUsage } : initialState.usage,
+    usageBreakdown: initialSession?.usageBreakdown
+      ? cloneUsageBreakdown(initialSession.usageBreakdown)
+      : createUsageBreakdown(),
+    cacheMissSummary: initialSession?.cacheMissSummary ?? scanCacheMisses(initialSession?.providerTurns ?? []),
     stepStats: initialSession ? initialSession.stepStats.slice() : initialState.stepStats,
     goalStatus: initialSession?.goal ? { ...initialSession.goal } : null,
   })
@@ -411,10 +431,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   // tools with the newly-available MCP entries.
   useEffect(() => {
     options.onMcpReady = () => {
-      if (loopStateRef.current) {
-        loopStateRef.current.systemPromptCache = null
-        loopStateRef.current.deferredCatalog = undefined
-      }
+      invalidateToolSurfaceState(loopStateRef.current)
     }
     return () => {
       options.onMcpReady = undefined
@@ -585,7 +602,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           setState((prev) => ({ ...prev, todos }))
         },
         onUsageUpdate: (usage) => {
-          setState((prev) => ({ ...prev, usage }))
+          setState((prev) => ({
+            ...prev,
+            usage,
+            usageBreakdown: loopStateRef.current
+              ? cloneUsageBreakdown(loopStateRef.current.usageBreakdown)
+              : prev.usageBreakdown,
+            cacheMissSummary: loopStateRef.current
+              ? scanCacheMisses(loopStateRef.current.providerTurns)
+              : prev.cacheMissSummary,
+          }))
         },
         onCompressionProgress: (description) => {
           setState((prev) => ({ ...prev, compressionLabel: description }))
@@ -617,6 +643,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // to a sub-agent (Gemini, GLM-4V, etc.) instead of being OCR'd.
         const modelId = modelIdRef.current
         const providerCaps = capabilitiesOf(modelId)
+        const pendingVisionUsage: VisionUsageEvent[] = []
         const content = await buildUserContent(
           text,
           modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
@@ -630,7 +657,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             })
           },
           abortControllerRef.current.signal,
+          (event) => pendingVisionUsage.push(event),
         )
+
+        const activeLoopState = loopStateRef.current ?? createLoopState(permissionModeRef.current)
+        loopStateRef.current = activeLoopState
+        for (const event of pendingVisionUsage) {
+          accumulateUsage(activeLoopState, {
+            source: 'vision',
+            modelId: event.modelId,
+            usage: normalizeLanguageModelUsage(event.usage),
+          })
+        }
+        if (pendingVisionUsage.length > 0) {
+          callbacks.onUsageUpdate(activeLoopState.tokenUsage)
+
+          // The vision caption request has already been billed before the main
+          // agent loop starts. Persist it now so an abort or provider failure in
+          // the main request cannot silently drop that cost from session usage.
+          const firstPrompt = text.replace(/<activated_skill\b[^>]*>[\s\S]*?<\/activated_skill>/gi, '').trim() || text
+          if (!activeLoopState.taskSlug) activeLoopState.taskSlug = generateTaskSlug(firstPrompt)
+          await appendHeader(activeLoopState, modelId, firstPrompt)
+          await appendUsage(activeLoopState, pendingVisionUsage.at(-1)!.modelId)
+        }
 
         // agentLoop returns { state, turnCount } — we only keep the state
         // (long-lived session). turnCount is per-invocation and the main
@@ -638,7 +687,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // sub-agents and --print mode use).
         if (submitOptions?.toolFilter && loopStateRef.current) {
           loopStateRef.current.systemPromptCache = null
-          loopStateRef.current.expectCacheMiss = true
+          markExpectedCacheMiss(loopStateRef.current, 'tool-surface-change')
         }
 
         const agentResult = await agentLoop(
@@ -662,12 +711,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             consumeQueuedInputs,
           },
           callbacks,
-          loopStateRef.current ?? undefined,
+          activeLoopState,
         )
         loopStateRef.current = agentResult.state
         if (submitOptions?.toolFilter) {
           loopStateRef.current.systemPromptCache = null
-          loopStateRef.current.expectCacheMiss = true
+          markExpectedCacheMiss(loopStateRef.current, 'tool-surface-change')
         }
         const finalGoal = agentResult.state.goal ? { ...agentResult.state.goal } : null
 
@@ -1090,6 +1139,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     }
     ls.goal.updatedAt = new Date().toISOString()
     ls.systemPromptCache = null
+    markExpectedCacheMiss(ls, 'goal-change')
     await appendGoalState(ls)
     setState((prev) => ({ ...prev, goalStatus: ls.goal ? { ...ls.goal } : null }))
     return ls.goal
@@ -1322,6 +1372,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         restoredDraft: null,
         messages: [...prev.messages, ...converted],
         usage: { ...loaded.tokenUsage },
+        usageBreakdown: loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown(),
+        cacheMissSummary: loaded.cacheMissSummary ?? scanCacheMisses(loaded.providerTurns ?? []),
         stepStats: loaded.stepStats.slice(),
         goalStatus: loaded.goal ? { ...loaded.goal } : null,
       }))
@@ -1447,7 +1499,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       const filesTracked = { modified, read }
 
       const originalMessages = ls.messages
-      const compressedMessages = await compressMessages(
+      const compressed = await compressMessagesWithUsage(
         originalMessages,
         modelRef.current,
         previousSummary,
@@ -1458,7 +1510,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         debugLog('compression.manual.cancelled', `tokens=${before}`)
         return { status: 'cancelled' as const }
       }
-      if (compressedMessages === originalMessages) {
+      if (compressed.messages === originalMessages) {
         debugLog('compression.manual.skipped', `messages=${ls.messages.length} tokens=${before}`)
         return {
           status: 'nothing' as const,
@@ -1467,15 +1519,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           retentionTokens: KEEP_RECENT_TOKENS,
         }
       }
-      ls.messages = compressedMessages
+      ls.messages = compressed.messages
+      if (compressed.usage) {
+        const usageModelId = attributedModelId(modelIdRef.current, compressed.modelId)
+        accumulateUsage(ls, {
+          source: 'compaction',
+          modelId: usageModelId,
+          usage: normalizeLanguageModelUsage(compressed.usage),
+        })
+        setState((prev) => ({
+          ...prev,
+          usage: { ...ls.tokenUsage },
+          usageBreakdown: cloneUsageBreakdown(ls.usageBreakdown),
+        }))
+        await appendUsage(ls, usageModelId)
+      }
       // Messages changed — mirror the auto-compression paths: reset the
       // cache-hit signal so the next turn doesn't wrongly assume a prefix
       // match, and reset lastInputTokens so checkAndCompressContext won't
       // re-trigger on a stale high value. Also write a compact-boundary
       // to the jsonl so the loader can pick up the post-compaction state.
       ls.lastInputTokens = 0
-      ls.expectCacheMiss = true
-      await markBoundaryAndReflush(ls)
+      markExpectedCacheMiss(ls, 'compaction')
+      await markBoundaryAndReflush(ls, compressed.summary)
       const after = estimateTokenCount(ls.messages)
       // Include the system prompt overhead so the reported numbers match
       // the footer's "N / M · X%" indicator (which shows the full context
@@ -1511,6 +1577,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     (newModelId: string, newModel: LanguageModel) => {
       modelRef.current = newModel
       modelIdRef.current = newModelId
+      invalidateModelDependentState(loopStateRef.current)
       options.memoryService?.setActiveModelId(newModelId)
       setState((prev) => ({ ...prev, modelId: newModelId }))
     },
@@ -1542,9 +1609,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  model would see tools that don't exist (or miss new ones), and
    *  the loop's `MCP tool not found: …` error path would fire. */
   const invalidateSystemPromptCache = useCallback(() => {
-    if (loopStateRef.current) {
-      loopStateRef.current.systemPromptCache = null
-    }
+    invalidateToolSurfaceState(loopStateRef.current)
   }, [])
 
   /** Set permission mode directly. Use this for /plan-style direct
@@ -1560,6 +1625,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (loopStateRef.current) {
       loopStateRef.current.permissionMode = next
       loopStateRef.current.systemPromptCache = null
+      markExpectedCacheMiss(loopStateRef.current, 'permission-mode-change')
       // Clear the path on leaving plan mode so a future re-entry gets a
       // fresh slug derived from whatever the user is asking next; the
       // path is re-derived lazily in agentLoop / enterPlanMode handler

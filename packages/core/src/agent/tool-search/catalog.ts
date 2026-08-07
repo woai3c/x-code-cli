@@ -21,7 +21,7 @@
 import { listMcpResources, readMcpResource } from '../../mcp/resources.js'
 import { bridgeMcpTool, truncateDescription } from '../../mcp/tool-bridge.js'
 import { toolRegistry } from '../../tools/index.js'
-import type { AgentOptions } from '../../types/index.js'
+import type { AgentOptions, PermissionMode } from '../../types/index.js'
 
 /** Approximate chars-per-token for catalog size estimation. Conservative
  *  (lower = over-counts) so the threshold errs toward enabling deferral. */
@@ -52,6 +52,23 @@ const WEAK_MODEL_PATTERNS = [
  *  WebSearch / WebFetch / TodoWrite (and background-shell-style helpers) as
  *  shouldDefer while keeping file / grep / exec direct. */
 export const DEFERRED_BUILTIN_TOOLS = ['webSearch', 'webFetch', 'todoWrite', 'shellOutput', 'killShell'] as const
+
+const STANDARD_DEFERRED_BUILTIN_TOOLS = ['task', 'webSearch', 'webFetch', 'shellOutput', 'killShell'] as const
+
+export type ToolProfile = 'full' | 'standard'
+
+const STANDARD_MODEL_PATTERNS = [
+  'anthropic:claude-sonnet-',
+  'anthropic:claude-opus-',
+  'openai:gpt-5.6-sol',
+  'openai:gpt-5.6-terra',
+] as const
+
+export function resolveEffectiveToolProfile(requested: ToolProfile | undefined, modelId: string): ToolProfile {
+  if (requested !== 'standard') return 'full'
+  const normalized = modelId.toLowerCase()
+  return STANDARD_MODEL_PATTERNS.some((pattern) => normalized.startsWith(pattern)) ? 'standard' : 'full'
+}
 
 export interface DeferredToolEntry {
   /** Model-facing callable name — the catalog key, the name the model passes
@@ -126,15 +143,21 @@ export function isWeakModel(modelId: string): boolean {
  *
  *  Order is stable (built-ins first, then MCP grouped by server in registry
  *  order) so the system-prompt listing and any cache prefix stay byte-stable. */
-export function buildDeferredCatalog(options: AgentOptions, contextWindow: number): DeferredToolEntry[] {
+export function buildDeferredCatalog(
+  options: AgentOptions,
+  contextWindow: number,
+  availableTools: Record<string, unknown> = toolRegistry,
+): DeferredToolEntry[] {
   // Gate 1: weak models fall back to full injection — they may not call
   // toolSearch unprompted and the user loses access to deferred tools.
   if (options.modelId && isWeakModel(options.modelId)) return []
 
   const entries: DeferredToolEntry[] = []
+  const profile = resolveEffectiveToolProfile(options.toolProfile, options.modelId)
+  const deferredBuiltins = profile === 'standard' ? STANDARD_DEFERRED_BUILTIN_TOOLS : DEFERRED_BUILTIN_TOOLS
 
-  for (const name of DEFERRED_BUILTIN_TOOLS) {
-    const def = (toolRegistry as Record<string, unknown>)[name]
+  for (const name of deferredBuiltins) {
+    const def = availableTools[name]
     if (def) entries.push(builtinEntry(name, def))
   }
 
@@ -170,7 +193,7 @@ export function buildDeferredCatalog(options: AgentOptions, contextWindow: numbe
   // Estimate using the full tool definition's serialised size (name +
   // description + JSON Schema) — NOT the searchText haystack, which is
   // much smaller than the actual wire payload sent to the API.
-  if (entries.length > 0) {
+  if (profile === 'full' && entries.length > 0) {
     const totalChars = entries.reduce((sum, e) => {
       const defStr = typeof e.def === 'object' ? JSON.stringify(e.def) : ''
       return sum + e.name.length + defStr.length
@@ -193,15 +216,21 @@ export function composeTurnTools(
   base: Record<string, any>,
   catalog: readonly DeferredToolEntry[] | undefined,
   activated: ReadonlySet<string>,
+  permissionMode?: PermissionMode,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Record<string, any> {
-  if (!catalog || activated.size === 0) return base
-  const byName = new Map(catalog.map((e) => [e.name, e]))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tools: Record<string, any> = { ...base }
-  for (const name of activated) {
-    const e = byName.get(name)
-    if (e) tools[name] = e.def
+  let tools = base
+  if (catalog && activated.size > 0) {
+    const byName = new Map(catalog.map((e) => [e.name, e]))
+    tools = { ...base }
+    for (const name of activated) {
+      const e = byName.get(name)
+      if (e) tools[name] = e.def
+    }
   }
+  if (permissionMode === undefined) return tools
+  if (tools === base) tools = { ...base }
+  if (permissionMode === 'plan') delete tools.enterPlanMode
+  else delete tools.exitPlanMode
   return tools
 }

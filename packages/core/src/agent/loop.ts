@@ -32,6 +32,7 @@ import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
+import { consumeExpectedCacheMissReasons, createProviderTurnUsage, estimateCacheMiss } from './cache-stats.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
@@ -53,7 +54,8 @@ import { buildSystemPrompt } from './system-prompt.js'
 import { isManagedMemoryAccess, processToolCalls } from './tool-execution.js'
 import { collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
-import { DEFERRED_BUILTIN_TOOLS, buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
+import { buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
+import { accumulateUsage, attributedModelId, normalizeLanguageModelUsage } from './usage.js'
 
 /** Prepend an injected context block to a UserContent payload. Used by
  *  the UserPromptSubmit hook decision: plugins can inject context (e.g.
@@ -151,7 +153,8 @@ function userContentToText(content: UserContent): string {
 
 export type { LoopState } from './loop-state.js'
 // Re-exported for the CLI's resume / manual-compact path (see use-agent.ts).
-export { compressMessages } from './compression.js'
+export { compressMessages, compressMessagesWithUsage } from './compression.js'
+export type { CompressionResult } from './compression.js'
 
 /** What `agentLoop` returns to its caller.
  *
@@ -297,31 +300,15 @@ async function collectTurnResponse(
 
   const usage = await result.usage
   if (usage) {
-    // AI SDK v6 (createOpenAICompatible) returns inputTokens / outputTokens
-    // as objects { total, noCache, cacheRead, etc. }; older adapters
-    // (DeepSeek, Anthropic, etc.) return them as raw numbers. Normalize.
+    const expectedMissReasons = consumeExpectedCacheMissReasons(state)
     const raw = usage as Record<string, unknown>
-    const inputTokens =
-      typeof raw.inputTokens === 'number'
-        ? raw.inputTokens
-        : typeof raw.inputTokens === 'object' && raw.inputTokens !== null
-          ? (((raw.inputTokens as Record<string, unknown>).total as number) ?? 0)
-          : 0
-    const outputTokens =
-      typeof raw.outputTokens === 'number'
-        ? raw.outputTokens
-        : typeof raw.outputTokens === 'object' && raw.outputTokens !== null
-          ? (((raw.outputTokens as Record<string, unknown>).total as number) ?? 0)
-          : 0
-    state.tokenUsage.inputTokens += inputTokens
-    state.tokenUsage.outputTokens += outputTokens
-    // AI SDK v6 normalizes provider cache fields into inputTokenDetails:
-    //   cacheReadTokens  ← Anthropic cache_read_input_tokens / OpenAI cached_tokens
-    //   cacheWriteTokens ← Anthropic cache_creation_input_tokens (others: 0)
-    // Both are subsets of inputTokens, so we don't double-count into total.
-    state.tokenUsage.cacheReadTokens += usage.inputTokenDetails?.cacheReadTokens ?? 0
-    state.tokenUsage.cacheCreationTokens += usage.inputTokenDetails?.cacheWriteTokens ?? 0
-    state.tokenUsage.totalTokens = state.tokenUsage.inputTokens + state.tokenUsage.outputTokens
+    const normalized = normalizeLanguageModelUsage(raw)
+    const effectiveModelId = attributedModelId(modelId, response.modelId)
+    accumulateUsage(
+      state,
+      { source: 'main', modelId: effectiveModelId, usage: normalized },
+      { updateCurrentContext: true },
+    )
     // Snapshot the current context-window occupancy from this response —
     // overwrite, not accumulate. Includes input + output because every
     // major provider (Anthropic, OpenAI, Google, DeepSeek, Moonshot,
@@ -332,27 +319,32 @@ async function collectTurnResponse(
     // prompt-the-model-saw plus what it just wrote — directly comparable
     // to `getContextWindow(modelId)` in the footer "N / M · X%" indicator.
     // Cumulative counters above remain for /usage billing summaries.
-    state.tokenUsage.currentContextTokens = inputTokens + outputTokens
-    if (raw.inputTokens != null) state.lastInputTokens = inputTokens
-    callbacks.onUsageUpdate(state.tokenUsage)
+    if (raw.inputTokens != null) state.lastInputTokens = normalized.inputTokens
 
-    // ── Cache break detection ──
-    const turnCacheRead = usage.inputTokenDetails?.cacheReadTokens ?? 0
-    if (state.expectCacheMiss) {
-      state.expectCacheMiss = false
-    } else if (state.prevTurnCacheRead > 2000 && turnCacheRead < state.prevTurnCacheRead * 0.5) {
+    const turnCacheRead = normalized.cacheReadTokens
+    const turnUsage = createProviderTurnUsage({
+      modelId: effectiveModelId,
+      usage: raw,
+      normalized,
+      expectedMissReasons,
+    })
+    const previousTurn = state.providerTurns.at(-1)
+    state.providerTurns.push(turnUsage)
+    const cacheMiss = previousTurn ? estimateCacheMiss(previousTurn, turnUsage) : undefined
+    if (cacheMiss && !cacheMiss.expected) {
       debugLog(
         'cache-break',
-        `Cache read dropped ${state.prevTurnCacheRead} → ${turnCacheRead} (${Math.round((1 - turnCacheRead / state.prevTurnCacheRead) * 100)}% drop). Possible unintended cache invalidation.`,
+        `Estimated ${cacheMiss.missedTokens} re-billed input tokens after ${cacheMiss.idleMs}ms idle.`,
       )
     }
     state.prevTurnCacheRead = turnCacheRead
+    callbacks.onUsageUpdate(state.tokenUsage)
 
     // Persist a usage snapshot inline with the jsonl transcript. Per-turn
     // cadence: the picker's tail-scan only ever needs the LATEST entry, but
     // we write every turn so a crashed process doesn't lose its final
     // counts. Fire-and-forget — never blocks the loop.
-    void appendUsage(state, modelId)
+    void appendUsage(state, effectiveModelId, turnUsage)
   }
 
   return result.finishReason
@@ -386,7 +378,7 @@ type TurnOutcome =
  *     down. They never get a deferredCatalog.
  *
  *  Computed once per session — the base set is stable within a session. */
-function buildTools(options: AgentOptions, state: LoopState) {
+export function buildTools(options: AgentOptions, state: LoopState, contextWindow = getContextWindow(options.modelId)) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = { ...toolRegistry }
 
@@ -421,13 +413,25 @@ function buildTools(options: AgentOptions, state: LoopState) {
     state.deferredCatalog = undefined
   }
   if (deferralActive) {
-    const catalog = buildDeferredCatalog(options, getContextWindow(options.modelId))
+    const catalog = buildDeferredCatalog(options, contextWindow, tools)
     state.deferredCatalog = catalog
 
     if (catalog.length > 0) {
+      // alwaysLoad MCP tools deliberately stay out of the deferred catalog,
+      // so register them before this branch returns. Otherwise they would be
+      // absent from both the direct tool map and toolSearch results.
+      if (options.mcpRegistry) {
+        for (const entry of options.mcpRegistry.list()) {
+          if (entry.annotations?.alwaysLoad === true) {
+            tools[entry.callableName] = bridgeMcpTool(entry)
+          }
+        }
+      }
       // Deferral enabled: strip non-core built-ins (they're in the catalog)
       // and register toolSearch as the entry point.
-      for (const name of DEFERRED_BUILTIN_TOOLS) delete tools[name]
+      for (const entry of catalog) {
+        if (entry.source === 'builtin') delete tools[entry.name]
+      }
       tools.toolSearch = toolSearch
       return tools
     }
@@ -916,7 +920,12 @@ export async function agentLoop(
     // Splice in any deferred tools the model has loaded via toolSearch. Returns
     // `baseTools` unchanged until the first activation, so sessions that never
     // search keep a byte-stable tools prefix across turns.
-    const effectiveTools = composeTurnTools(baseTools, state.deferredCatalog, state.activatedTools)
+    const effectiveTools = composeTurnTools(
+      baseTools,
+      state.deferredCatalog,
+      state.activatedTools,
+      state.permissionMode,
+    )
 
     const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turnMessages, turn)
 

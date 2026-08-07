@@ -16,7 +16,7 @@ export interface StreamResult {
      *  Our streamChunksToUI re-throws so the outer try/catch can classify. */
     error?: unknown
   }>
-  response: Promise<{ messages: ModelMessage[] }>
+  response: Promise<{ messages: ModelMessage[]; modelId?: string }>
   usage: Promise<
     | {
         inputTokens?: number

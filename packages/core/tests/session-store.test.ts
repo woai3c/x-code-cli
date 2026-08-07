@@ -23,6 +23,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { createProviderTurnUsage } from '../src/agent/cache-stats.js'
 import { admitGoalInput, promoteNextGoalInput } from '../src/agent/goal/input.js'
 import { createGoal } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
@@ -40,6 +41,7 @@ import {
   markBoundaryAndReflush,
   pickLatestSession,
 } from '../src/agent/session-store.js'
+import { accumulateUsage, normalizeLanguageModelUsage } from '../src/agent/usage.js'
 
 let tempDir: string
 let originalCwd: string
@@ -102,6 +104,58 @@ describe('session-store: round-trip', () => {
     expect(loaded!.messages[1]).toEqual({ role: 'assistant', content: 'Hi there' })
     expect(loaded!.tokenUsage.inputTokens).toBe(100)
     expect(loaded!.tokenUsage.totalTokens).toBe(120)
+  })
+
+  it('restores source/model attribution and main-turn cache diagnostics', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-001'
+    await appendHeader(state, 'openai:test', 'cache test')
+
+    for (const [index, cacheReadTokens] of [4_000, 0].entries()) {
+      const raw = {
+        inputTokens: 5_000 + index * 1_000,
+        outputTokens: 100,
+        inputTokenDetails: { cacheReadTokens, cacheWriteTokens: 0 },
+      }
+      const normalized = normalizeLanguageModelUsage(raw as any)
+      accumulateUsage(state, { source: 'main', modelId: 'openai:test', usage: normalized })
+      const turn = createProviderTurnUsage({
+        modelId: 'openai:test',
+        usage: raw,
+        normalized,
+        expectedMissReasons: index === 1 ? ['compaction'] : [],
+        timestamp: `2026-08-07T00:0${index}:00.000Z`,
+      })
+      state.providerTurns.push(turn)
+      await appendUsage(state, 'openai:test', turn)
+    }
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    expect(loaded?.providerTurns).toHaveLength(2)
+    expect(loaded?.usageBreakdown?.bySource.main.inputTokens).toBe(11_000)
+    expect(loaded?.usageBreakdown?.byModel['openai:test']?.outputTokens).toBe(200)
+    expect(loaded?.cacheMissSummary).toMatchObject({ expectedTokens: 5_000, expectedCount: 1 })
+
+    const hydrated = hydrateLoopState(loaded!)
+    expect(hydrated.providerTurns).toHaveLength(2)
+    expect(hydrated.usageBreakdown.byModel['openai:test']?.inputTokens).toBe(11_000)
+  })
+
+  it('uses the latest persisted usage model after an in-session model switch', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-002'
+    await appendHeader(state, 'openai:initial', 'switch models')
+
+    state.tokenUsage.inputTokens = 100
+    state.tokenUsage.totalTokens = 100
+    await appendUsage(state, 'anthropic:switched')
+
+    const filePath = getSessionFilePath(state)
+    const loaded = await loadSession(filePath)
+    const listed = await listSessions()
+
+    expect(loaded?.modelId).toBe('anthropic:switched')
+    expect(listed.find((session) => session.filePath === filePath)?.modelId).toBe('anthropic:switched')
   })
 
   it('persistedMessageCount stays in sync after multiple flushes', async () => {

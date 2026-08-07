@@ -16,7 +16,7 @@
 import fs from 'node:fs/promises'
 
 import { generateText } from 'ai'
-import type { LanguageModel } from 'ai'
+import type { LanguageModel, LanguageModelUsage } from 'ai'
 
 import { getAvailableProviders } from '../config/index.js'
 import { createModelRegistry } from '../providers/registry.js'
@@ -24,6 +24,7 @@ import { debugLog } from '../utils.js'
 import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
 import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
 import { mediaTypeFor } from '../utils/media-type.js'
+import { attributedModelId } from './usage.js'
 
 export interface VisionProvider {
   /** Provider id, e.g. "google" / "zhipu". */
@@ -32,6 +33,11 @@ export interface VisionProvider {
   modelId: string
   /** Short label for UI notices ("Gemini 2.5 Flash"). */
   label: string
+}
+
+export interface VisionUsageEvent {
+  modelId: string
+  usage: LanguageModelUsage
 }
 
 /** Vision-capable model id + display label per provider. Models picked to
@@ -116,7 +122,7 @@ export async function captionImageBuffer(
   buffer: Buffer,
   mediaType: string,
   modelId: string,
-  opts: { prompt?: string; abortSignal?: AbortSignal } = {},
+  opts: { prompt?: string; abortSignal?: AbortSignal; onUsage?: (event: VisionUsageEvent) => void } = {},
 ): Promise<string> {
   const key = `${modelId}:${bufferFingerprint(buffer)}`
   const cached = captionCache.get(key)
@@ -138,7 +144,7 @@ export async function captionImageBuffer(
   const model = getVisionModel(modelId)
 
   debugLog('vision-fallback.caption', `${modelId} ${finalBuf.length}B`)
-  const { text } = await generateText({
+  const result = await generateText({
     model,
     abortSignal: opts.abortSignal,
     messages: [
@@ -151,8 +157,9 @@ export async function captionImageBuffer(
       },
     ],
   })
+  opts.onUsage?.({ modelId: attributedModelId(modelId, result.response?.modelId), usage: result.usage })
 
-  const caption = text.trim()
+  const caption = result.text.trim()
   captionCache.set(key, caption)
   return caption
 }
@@ -166,10 +173,11 @@ export async function captionImageBuffer(
 export async function captionImage(
   filePath: string,
   sub: VisionProvider,
-  opts?: { abortSignal?: AbortSignal },
+  opts?: { abortSignal?: AbortSignal; onUsage?: (event: VisionUsageEvent) => void },
 ): Promise<string> {
   const buffer = await fs.readFile(filePath)
   return captionImageBuffer(buffer, mediaTypeFor(filePath), sub.modelId, {
     abortSignal: opts?.abortSignal,
+    onUsage: opts?.onUsage,
   })
 }

@@ -1,3 +1,4 @@
+import { createUsageBreakdown, scanCacheMisses } from '@x-code-cli/core'
 import type { EditDiffPayload } from '@x-code-cli/core'
 
 import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from '../src/ui/hooks/agent-tool-lifecycle.js'
@@ -21,6 +22,8 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
       cacheCreationTokens: 0,
       currentContextTokens: 0,
     },
+    usageBreakdown: createUsageBreakdown(),
+    cacheMissSummary: scanCacheMisses([]),
     error: null,
     modelId: 'test:model',
     permissionMode: 'default',

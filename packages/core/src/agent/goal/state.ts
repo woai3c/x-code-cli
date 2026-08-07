@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { TokenUsage } from '../../types/index.js'
+import { markExpectedCacheMiss } from '../cache-stats.js'
 import type { LoopState } from '../loop-state.js'
 import type {
   GoalAttempt,
@@ -71,7 +72,7 @@ export function createGoal(state: LoopState, input: CreateGoalInput): GoalState 
   state.goal = goal
   state.goalInputs = []
   state.systemPromptCache = null
-  state.expectCacheMiss = true
+  markExpectedCacheMiss(state, 'goal-change')
   return goal
 }
 
@@ -97,7 +98,7 @@ export function resumeGoal(state: LoopState): GoalState {
   state.goal.status = 'active'
   state.goal.updatedAt = new Date().toISOString()
   state.systemPromptCache = null
-  state.expectCacheMiss = true
+  markExpectedCacheMiss(state, 'goal-change')
   return state.goal
 }
 
@@ -112,7 +113,7 @@ export function clearGoal(state: LoopState): void {
   state.goal = null
   state.goalInputs = []
   state.systemPromptCache = null
-  state.expectCacheMiss = true
+  markExpectedCacheMiss(state, 'goal-change')
 }
 
 export function requestGoalComplete(

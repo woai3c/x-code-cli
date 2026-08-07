@@ -1,9 +1,25 @@
 // Tests for vision-fallback module — pickVisionProvider() priority logic.
 // captionImage() is not exercised here because it makes a real API call;
 // integration testing is handled separately in scripts/.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { pickVisionProvider } from '../src/agent/vision-fallback.js'
+import { generateText } from 'ai'
+
+import { captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
+
+vi.mock('ai', async () => {
+  const actual = await vi.importActual('ai')
+  return { ...actual, generateText: vi.fn() }
+})
+
+vi.mock('../src/providers/registry.js', () => ({
+  createModelRegistry: () => ({ languageModel: () => ({}) }),
+}))
+
+vi.mock('../src/utils/image-compress.js', () => ({
+  ATTACH_BYTE_BUDGET: 1024,
+  compressImage: vi.fn(async (data: Buffer, mimeType: string) => ({ data, mimeType, changed: false })),
+}))
 
 const VISION_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -69,5 +85,29 @@ describe('pickVisionProvider', () => {
     process.env.DEEPSEEK_API_KEY = 'test'
     process.env.ANTHROPIC_API_KEY = 'test'
     expect(pickVisionProvider()?.provider).toBe('anthropic')
+  })
+})
+
+describe('caption usage', () => {
+  it('reports provider usage once and does not report again on a cache hit', async () => {
+    const usage = {
+      inputTokens: 12,
+      outputTokens: 3,
+      inputTokenDetails: { cacheReadTokens: 0, cacheWriteTokens: 0 },
+    }
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'caption',
+      usage,
+      response: { modelId: 'actual-vision' },
+    } as any)
+    const onUsage = vi.fn()
+    const buffer = Buffer.from(`unique-image-${Date.now()}`)
+
+    await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { onUsage })
+    await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { onUsage })
+
+    expect(generateText).toHaveBeenCalledOnce()
+    expect(onUsage).toHaveBeenCalledOnce()
+    expect(onUsage).toHaveBeenCalledWith({ modelId: 'google:actual-vision', usage })
   })
 })

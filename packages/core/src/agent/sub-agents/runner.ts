@@ -17,7 +17,9 @@ import { type BrowserMcp, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
 import { agentLoop } from '../loop.js'
+import { appendUsage } from '../session-store.js'
 import { buildSubAgentSystemPrompt } from '../system-prompt.js'
+import { accumulateChildUsage } from '../usage.js'
 import { BROWSER_TREE_ONLY_NOTE, BROWSER_VISION_ADDENDUM, BROWSER_VISION_CAPTION_ADDENDUM } from './built-in.js'
 import type { SubAgentRegistry } from './registry.js'
 import type { SubAgentDefinition } from './types.js'
@@ -323,13 +325,9 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     const finalText = extractFinalText(finalSubState.messages)
     const toolUseCount = countToolCalls(finalSubState.messages)
 
-    // Accumulate sub-agent token usage into parent
-    parentState.tokenUsage.inputTokens += finalSubState.tokenUsage.inputTokens
-    parentState.tokenUsage.outputTokens += finalSubState.tokenUsage.outputTokens
-    parentState.tokenUsage.totalTokens = parentState.tokenUsage.inputTokens + parentState.tokenUsage.outputTokens
-    parentState.tokenUsage.cacheReadTokens += finalSubState.tokenUsage.cacheReadTokens
-    parentState.tokenUsage.cacheCreationTokens += finalSubState.tokenUsage.cacheCreationTokens
+    accumulateChildUsage(parentState, finalSubState, subModelId)
     callbacks.onUsageUpdate(parentState.tokenUsage)
+    void appendUsage(parentState, parentOptions.modelId)
 
     const durationMs = Date.now() - startTime
     const resultText = finalText || '[Sub-agent completed without producing a final response]'

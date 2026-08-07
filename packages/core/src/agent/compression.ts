@@ -11,16 +11,17 @@
 // to `compressMessages`, which makes a generateText round-trip for an
 // LLM-written summary.
 import { generateText } from 'ai'
-import type { LanguageModel, ModelMessage } from 'ai'
+import type { LanguageModel, LanguageModelUsage, ModelMessage } from 'ai'
 
 import type { HookBus } from '../hooks/bus.js'
-import { generateSessionSummary } from '../knowledge/session.js'
 import type { AgentCallbacks } from '../types/index.js'
 import { debugLog } from '../utils.js'
+import { markExpectedCacheMiss } from './cache-stats.js'
 import { estimateMessageTokenCount, estimateTokenCount } from './context-window.js'
 import { lightCompactMessages, truncateOldToolResults } from './light-compact.js'
 import type { LoopState } from './loop-state.js'
-import { markBoundaryAndReflush } from './session-store.js'
+import { appendUsage, markBoundaryAndReflush } from './session-store.js'
+import { accumulateUsage, attributedModelId, normalizeLanguageModelUsage } from './usage.js'
 
 /** Optional hook surface threaded through both compression paths. Lets
  *  plugins observe (PreCompact) and react to (PostCompact) the act of
@@ -100,13 +101,20 @@ Use the SAME structured format as the previous summary (## Goal, ## Constraints 
  *  The filesTracked set (if provided) is appended to the summary as
  *  <files-modified> / <files-read> tags so the model knows which files
  *  were touched even after the original messages are gone. */
-export async function compressMessages(
+export interface CompressionResult {
+  messages: ModelMessage[]
+  summary: string
+  usage?: LanguageModelUsage
+  modelId?: string
+}
+
+export async function compressMessagesWithUsage(
   messages: ModelMessage[],
   model: LanguageModel,
   previousSummary?: string,
   filesTracked?: { modified: string[]; read: string[] },
   abortSignal?: AbortSignal,
-): Promise<ModelMessage[]> {
+): Promise<CompressionResult> {
   // Walk from newest to oldest accumulating estimated tokens until we
   // hit KEEP_RECENT_TOKENS. This replaces the old fixed-count slice.
   let keepCount = 0
@@ -127,7 +135,7 @@ export async function compressMessages(
   const recent = messages.slice(-keepCount)
   const old = messages.slice(0, -keepCount)
 
-  if (old.length === 0) return messages
+  if (old.length === 0) return { messages, summary: previousSummary ?? '' }
 
   const isUpdate = !!previousSummary
   const systemPrompt = isUpdate ? UPDATE_SUMMARY_SYSTEM : INITIAL_SUMMARY_SYSTEM
@@ -142,12 +150,13 @@ export async function compressMessages(
     ? [{ role: 'user' as const, content: userContent! }, ...old]
     : old
 
-  const { text: summary } = await generateText({
+  const result = await generateText({
     model,
     abortSignal,
     instructions: systemPrompt,
     messages: messagesToSummarize,
   })
+  const summary = result.text
 
   // Append file tracking metadata
   let enrichedSummary = summary
@@ -161,7 +170,23 @@ export async function compressMessages(
     }
   }
 
-  return [{ role: 'user', content: `[Previous conversation summary]\n${enrichedSummary}` }, ...recent]
+  return {
+    messages: [{ role: 'user', content: `[Previous conversation summary]\n${enrichedSummary}` }, ...recent],
+    summary: enrichedSummary,
+    usage: result.usage,
+    modelId: result.response?.modelId,
+  }
+}
+
+/** Backward-compatible public API. */
+export async function compressMessages(
+  messages: ModelMessage[],
+  model: LanguageModel,
+  previousSummary?: string,
+  filesTracked?: { modified: string[]; read: string[] },
+  abortSignal?: AbortSignal,
+): Promise<ModelMessage[]> {
+  return (await compressMessagesWithUsage(messages, model, previousSummary, filesTracked, abortSignal)).messages
 }
 
 /**
@@ -207,7 +232,7 @@ export async function checkAndCompressContext(
     if (!stillOver) {
       await markBoundaryAndReflush(state)
       state.lastInputTokens = 0
-      state.expectCacheMiss = true
+      markExpectedCacheMiss(state, 'compaction')
       emitCompactionHook(hookCtx, {
         name: 'PostCompact',
         trigger: 'proactive',
@@ -228,7 +253,7 @@ export async function checkAndCompressContext(
     if (!stillOver) {
       await markBoundaryAndReflush(state)
       state.lastInputTokens = 0
-      state.expectCacheMiss = true
+      markExpectedCacheMiss(state, 'compaction')
       emitCompactionHook(hookCtx, {
         name: 'PostCompact',
         trigger: 'proactive',
@@ -239,24 +264,6 @@ export async function checkAndCompressContext(
     }
   }
 
-  callbacks.onCompressionProgress?.('Generating session summary...')
-  let summaryText = ''
-  try {
-    const summary = await generateSessionSummary(
-      state.messages,
-      model,
-      state.sessionId,
-      state.startedAt,
-      [...state.filesModified],
-      hookCtx?.abortSignal,
-    )
-    summaryText = summary.summary
-  } catch {
-    // Summary generation failed — fall through with empty text. The
-    // compressMessages call below still runs its own LLM summarisation,
-    // so context still shrinks; we just lose the structured summary
-    // that would have ridden along on the boundary line for picker UX.
-  }
   callbacks.onCompressionProgress?.('Summarizing conversation...')
   const tokensBefore = estimateTokenCount(state.messages)
 
@@ -267,11 +274,19 @@ export async function checkAndCompressContext(
   // Build file-tracking metadata from state.filesModified + readFileCache
   const filesTracked = buildFilesTracked(state)
 
-  state.messages = await compressMessages(state.messages, model, previousSummary, filesTracked, hookCtx?.abortSignal)
+  const compressed = await compressMessagesWithUsage(
+    state.messages,
+    model,
+    previousSummary,
+    filesTracked,
+    hookCtx?.abortSignal,
+  )
+  state.messages = compressed.messages
+  await recordCompressionUsage(state, compressed, model, callbacks, hookCtx)
   state.lastInputTokens = 0
-  state.expectCacheMiss = true
+  markExpectedCacheMiss(state, 'compaction')
   const tokensAfter = estimateTokenCount(state.messages)
-  await markBoundaryAndReflush(state, summaryText)
+  await markBoundaryAndReflush(state, compressed.summary)
   const beforeK = Math.round(tokensBefore / 1000)
   const afterK = Math.round(tokensAfter / 1000)
   callbacks.onContextCompressed(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
@@ -279,7 +294,7 @@ export async function checkAndCompressContext(
     name: 'PostCompact',
     trigger: 'proactive',
     messageCount: state.messages.length,
-    summary: summaryText,
+    summary: compressed.summary,
   })
 }
 
@@ -307,11 +322,19 @@ export async function handleContextTooLong(
   const previousSummary = extractPreviousSummary(state.messages)
   const filesTracked = buildFilesTracked(state)
 
-  state.messages = await compressMessages(state.messages, model, previousSummary, filesTracked, hookCtx?.abortSignal)
+  const compressed = await compressMessagesWithUsage(
+    state.messages,
+    model,
+    previousSummary,
+    filesTracked,
+    hookCtx?.abortSignal,
+  )
+  state.messages = compressed.messages
+  await recordCompressionUsage(state, compressed, model, callbacks, hookCtx)
   state.lastInputTokens = 0
-  state.expectCacheMiss = true
+  markExpectedCacheMiss(state, 'compaction')
   const tokensAfter = estimateTokenCount(state.messages)
-  await markBoundaryAndReflush(state)
+  await markBoundaryAndReflush(state, compressed.summary)
 
   // Anti-spin guard. If summarizing barely freed context, the overflow
   // lives in the kept recent messages — bail so the user can /clear.
@@ -327,7 +350,7 @@ export async function handleContextTooLong(
     name: 'PostCompact',
     trigger: 'reactive',
     messageCount: state.messages.length,
-    summary: '',
+    summary: compressed.summary,
   })
   return true
 }
@@ -335,6 +358,25 @@ export async function handleContextTooLong(
 // ── Helpers ──
 
 const SUMMARY_PREFIX = '[Previous conversation summary]\n'
+
+async function recordCompressionUsage(
+  state: LoopState,
+  result: CompressionResult,
+  model: LanguageModel,
+  callbacks: AgentCallbacks,
+  hookCtx?: CompactionHookContext,
+): Promise<void> {
+  if (!result.usage) return
+  const requestedModelId = hookCtx?.modelId ?? 'unknown'
+  const modelId = attributedModelId(requestedModelId, result.modelId)
+  accumulateUsage(state, {
+    source: 'compaction',
+    modelId,
+    usage: normalizeLanguageModelUsage(result.usage),
+  })
+  callbacks.onUsageUpdate(state.tokenUsage)
+  await appendUsage(state, modelId)
+}
 
 /** Extract the previous compaction summary from messages[0] if it was
  *  produced by an earlier compressMessages call. Returns undefined for
