@@ -1,3 +1,13 @@
+## v0.4.1 (2026-08-07)
+
+### Features
+
+- improve token efficiency and usage diagnostics (0ed1bc2)
+
+### Bug Fixes
+
+- preserve essential prompt guidance (a315482)
+
 ## v0.4.0 (2026-08-05)
 
 ### Features
