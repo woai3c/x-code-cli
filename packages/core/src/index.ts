@@ -66,14 +66,34 @@ export {
 export type { UsageAttribution, UsageBreakdown, UsageDelta, UsageSource } from './agent/usage.js'
 export { computeEditDiff } from './agent/diff.js'
 export type { EditDiffHunk, EditDiffPayload } from './agent/diff.js'
-export { buildSystemPrompt, buildSubAgentSystemPrompt } from './agent/system-prompt.js'
 export { generateTaskSlug, makePlanFilePath } from './agent/plan-storage.js'
 export {
   COMPRESSION_TRIGGER_RATIO,
+  estimateMessageTokenCount,
+  estimateTextTokenCount,
   estimateTokenCount,
   getCompressionThreshold,
   getContextWindow,
 } from './agent/context-window.js'
+export {
+  buildContextBreakdownInput,
+  calibrateContextBreakdown,
+  estimateContextBreakdown,
+} from './agent/context-usage.js'
+export type {
+  CalibratedContextCategory,
+  ContextBreakdown,
+  ContextBreakdownInput,
+  ContextCategoryEstimate,
+  ContextCategoryKey,
+} from './agent/context-usage.js'
+export {
+  buildSystemPrompt,
+  buildSubAgentSystemPrompt,
+  formatDeferredCapabilities,
+  formatMcpCapabilities,
+  formatSkillCapabilities,
+} from './agent/system-prompt.js'
 export { classifyApiError } from './agent/api-errors.js'
 export { buildUserContent, extractFileReferences, ingestFile, classifyFile } from './agent/file-ingest.js'
 export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'

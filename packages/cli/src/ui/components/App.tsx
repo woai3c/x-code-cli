@@ -10,6 +10,7 @@ import {
   PROVIDER_BASE_URLS,
   PROVIDER_MODELS,
   PROVIDER_REASONING_TIERS,
+  calibrateContextBreakdown,
   createModelRegistry,
   estimateTokenCount,
   expandCommandBody,
@@ -28,6 +29,7 @@ import {
 import type {
   AgentOptions,
   CacheMissSummary,
+  ContextBreakdown,
   DiffStats,
   GoalState,
   LanguageModel,
@@ -203,6 +205,15 @@ export const SLASH_COMMANDS = [
   { name: '/exit', description: 'Exit (flushes session)' },
 ] as const
 
+/** Plain-English names for the usage-by-source buckets shown in the
+ *  /usage attribution section. Keys mirror core's UsageSource. */
+const SOURCE_LABELS = {
+  main: 'Main agent',
+  'sub-agent': 'Sub-agents',
+  compaction: 'Compression',
+  vision: 'Vision fallback',
+} as const
+
 /** Render TokenUsage as a markdown block for /usage. cacheReadTokens is a
  *  subset of inputTokens, so the hit ratio is cacheRead / inputTokens — that
  *  matches what users care about ("of the prompt I sent, how much was cached"). */
@@ -214,6 +225,7 @@ function formatUsageReport(
   stepStats?: StepStats[],
   breakdown?: UsageBreakdown | null,
   cacheMissSummary?: CacheMissSummary | null,
+  contextEstimate?: ContextBreakdown | null,
 ): string {
   const fmt = (n: number) => n.toLocaleString('en-US')
   const hitRatio = usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
@@ -225,32 +237,69 @@ function formatUsageReport(
   const header = headerMap[source]
   const lines = [header, '']
   if (sessionName) lines.push(`- Session:         ${sessionName}`)
+  lines.push(`- Active model:    ${modelId}`)
+
+  // Cursor-style context breakdown: local per-category estimates scaled so
+  // they sum exactly to the last request's real reported count. Only
+  // meaningful for the live session (history snapshots can't rebuild the
+  // system prompt they used) and only after the first turn produced a count.
+  // The header carries the total, so there is no second "Total" row to
+  // confuse with the cumulative totals below.
+  if (contextEstimate && source === 'live' && usage.currentContextTokens > 0) {
+    const calibrated = calibrateContextBreakdown(contextEstimate, usage.currentContextTokens)
+    if (calibrated.length > 0) {
+      const window = getContextWindow(modelId)
+      const pct = Math.round((usage.currentContextTokens / window) * 100)
+      const labelW = Math.max(...calibrated.map((c) => c.label.length))
+      lines.push(
+        '',
+        `**Context usage** — ~${formatTokenCount(usage.currentContextTokens)} / ${formatTokenCount(window)} · ${pct}% (latest request, same number as the footer):`,
+      )
+      for (const category of calibrated) {
+        lines.push(`- ${category.label.padEnd(labelW)}  ${formatTokenCount(category.tokens).padStart(9)}`)
+      }
+    }
+  }
+
+  lines.push('', '**Session totals** (cumulative):')
   lines.push(
-    `- Active model:    ${modelId}`,
-    `- Input (all):     ${fmt(usage.inputTokens)}`,
-    `- Output tokens:   ${fmt(usage.outputTokens)}`,
+    `- Input:           ${fmt(usage.inputTokens)}`,
+    `- Output:          ${fmt(usage.outputTokens)}`,
     `- Cache read:      ${fmt(usage.cacheReadTokens)}  (${hitRatio} of input)`,
     `- Uncached input:  ${fmt(Math.max(0, usage.inputTokens - usage.cacheReadTokens))}`,
     `- Cache creation:  ${fmt(usage.cacheCreationTokens)}`,
     `- Total:           ${fmt(usage.totalTokens)}`,
   )
+
+  // Source and model are two views over the SAME requests — each sums to
+  // Total, but they must never be added together. Hidden entirely in the
+  // default case (all main-agent traffic on one model); only shown when
+  // something non-obvious happened (sub-agents, compaction, vision, or a
+  // model switch mid-session).
   if (breakdown) {
     const sources = Object.entries(breakdown.bySource).filter(
       ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,
     )
-    if (sources.length > 0) {
-      lines.push('', '**By source** (included above):')
-      for (const [name, value] of sources) {
-        lines.push(`- ${name}: ${fmt(value.inputTokens + value.outputTokens)}`)
-      }
-    }
     const models = Object.entries(breakdown.byModel).filter(
       ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,
     )
-    if (models.length > 0) {
-      lines.push('', '**By model** (included above):')
-      for (const [name, value] of models) {
-        lines.push(`- ${name}: ${fmt(value.inputTokens + value.outputTokens)}`)
+    if (sources.length > 1 || models.length > 1) {
+      lines.push('', '**Attribution** (the same totals, two ways — do not add them together):')
+      if (sources.length > 1) {
+        const parts = sources.map(([name, value]) => {
+          const label = SOURCE_LABELS[name as keyof typeof SOURCE_LABELS] ?? name
+          const tokens = fmt(value.inputTokens + value.outputTokens)
+          const share =
+            usage.totalTokens > 0
+              ? ` (${Math.round(((value.inputTokens + value.outputTokens) / usage.totalTokens) * 100)}%)`
+              : ''
+          return `${label} ${tokens}${share}`
+        })
+        lines.push(`- Who: ${parts.join(' · ')}`)
+      }
+      if (models.length > 1) {
+        const parts = models.map(([name, value]) => `${name} ${fmt(value.inputTokens + value.outputTokens)}`)
+        lines.push(`- Which model: ${parts.join(' · ')}`)
       }
     }
   }
@@ -268,7 +317,10 @@ function formatUsageReport(
       )
     }
   }
-  lines.push('', 'Cache fields are provider-reported; asynchronous post-turn memory jobs are not included.')
+  lines.push(
+    '',
+    '_Context usage covers only the most recent request; session totals accumulate every request. The per-row split is estimated; only the totals are provider-reported. Cache fields are provider-reported; asynchronous post-turn memory jobs are not included._',
+  )
   if (stepStats && stepStats.length > 0) {
     lines.push('', '**Steps:**', '')
     const idxWidth = String(stepStats.length).length
@@ -500,6 +552,7 @@ export function App({
     rewind,
     getCheckpoints,
     getDiffStats,
+    getContextBreakdown,
     getSessionInfo,
     switchModel,
     setThinking,
@@ -1652,7 +1705,10 @@ export function App({
         cacheMissSummary = latest.cacheMissSummary
       }
     }
-    addInfoMessage(formatUsageReport(usage, modelId, source, sessionName, steps, breakdown, cacheMissSummary))
+    const contextEstimate = source === 'live' && usage.currentContextTokens > 0 ? getContextBreakdown() : null
+    addInfoMessage(
+      formatUsageReport(usage, modelId, source, sessionName, steps, breakdown, cacheMissSummary, contextEstimate),
+    )
   }
 
   async function handleUsageHistory() {

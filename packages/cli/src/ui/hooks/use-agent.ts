@@ -13,6 +13,7 @@ import {
   appendInterrupted,
   appendUsage,
   attributedModelId,
+  buildContextBreakdownInput,
   buildUserContent,
   buildVerifierFailurePrompt,
   cancelGoal as cancelCoreGoal,
@@ -27,6 +28,7 @@ import {
   createLoopState,
   createUsageBreakdown,
   debugLog,
+  estimateContextBreakdown,
   flushPendingMessages,
   generateTaskSlug,
   getDiffStatsForCheckpoint,
@@ -54,6 +56,7 @@ import type {
   AgentOptions,
   CacheMissSummary,
   CheckpointEntry,
+  ContextBreakdown,
   DiffStats,
   DisplayMessage,
   GoalState,
@@ -1641,6 +1644,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     return getDiffStatsForCheckpoint(ls, ckptId)
   }, [])
 
+  /** Estimate the per-category token split of the current context (system
+   *  prompt / tools / rules / skills / MCP / subagents / summary /
+   *  conversation), mirroring what the next request would actually send.
+   *  Returns null before the first turn builds the system prompt. Used by
+   *  /usage to show a Cursor-style context composition — raw estimates;
+   *  calibration against the real reported input count happens at render. */
+  const getContextBreakdown = useCallback((): ContextBreakdown | null => {
+    const ls = loopStateRef.current
+    if (!ls) return null
+    const input = buildContextBreakdownInput(options, ls)
+    return input ? estimateContextBreakdown(input) : null
+  }, [options])
+
   const { addInfoMessage, addUserMessage, echoCommand, addCommandMessage, addCommandResult } =
     useAgentDisplayHelpers(appendMessage)
 
@@ -1667,6 +1683,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     rewind,
     getCheckpoints,
     getDiffStats,
+    getContextBreakdown,
     getSessionInfo,
     switchModel,
     setThinking,

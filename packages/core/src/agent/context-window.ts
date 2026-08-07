@@ -128,6 +128,13 @@ function textBytes(value: string): number {
   return Buffer.byteLength(value, 'utf8')
 }
 
+/** Estimate one text blob's token contribution (UTF-8 bytes / per-token
+ *  ratio). Shared by message estimation, pre-call compression checks, and
+ *  the context-composition breakdown. */
+export function estimateTextTokenCount(text: string): number {
+  return Math.ceil(textBytes(text) / BYTES_PER_TOKEN_ESTIMATE)
+}
+
 function jsonBytes(value: unknown): number {
   try {
     const serialized = JSON.stringify(value)

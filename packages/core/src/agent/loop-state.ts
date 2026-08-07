@@ -59,6 +59,13 @@ export interface LoopState {
    *  Invalidated (set to null) on `permissionMode` change so the next turn
    *  rebuilds it with / without the plan-mode overlay. */
   systemPromptCache: string | null
+  /** Exact capability blocks embedded in the cached system prompt, snapshotted
+   *  at build time. The context-composition estimator (context-usage.ts)
+   *  subtracts these from the prompt to isolate per-category token counts —
+   *  recomputing them later would mismatch after a mid-session /skill or
+   *  /mcp refresh. Set together with systemPromptCache; undefined for
+   *  sub-agents and pre-first-turn states. */
+  systemPromptBlocks?: { knowledge: string; skill: string; mcpDeferred: string }
   /** Current approval mode — flips between 'default' and 'plan' via
    *  the /plan slash command (user) or the enterPlanMode/exitPlanMode
    *  tools (model). Read by tool-execution to decide which system
@@ -206,6 +213,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     turnFilesModified: new Set(),
     recentToolCalls: [],
     systemPromptCache: null,
+    systemPromptBlocks: undefined,
     permissionMode: initialMode,
     // Plan path is derived LAZILY from the user's task text once a
     // message lands — done in agentLoop / enterPlanMode handler. We

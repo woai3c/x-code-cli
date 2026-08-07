@@ -50,7 +50,12 @@ import { appendCheckpoint, appendHeader, appendStepStats, appendUsage, flushPend
 import { createCheckpoint } from './snapshot.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
-import { buildSystemPrompt } from './system-prompt.js'
+import {
+  buildSystemPrompt,
+  formatDeferredCapabilities,
+  formatMcpCapabilities,
+  formatSkillCapabilities,
+} from './system-prompt.js'
 import { isManagedMemoryAccess, processToolCalls } from './tool-execution.js'
 import { collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
@@ -914,6 +919,25 @@ export async function agentLoop(
             : undefined,
         skills: options.skillRegistry ? options.skillRegistry.list() : undefined,
       })
+      // Snapshot the exact capability blocks embedded in the prompt above.
+      // The context-composition estimator subtracts these strings from the
+      // cached prompt to isolate each category — recomputing them later
+      // would mismatch after a mid-session /skill or /mcp refresh and skew
+      // the per-row split (the total stays exact either way, it's calibrated
+      // to the real reported input).
+      state.systemPromptBlocks = {
+        knowledge: fullKnowledgeContext ?? '',
+        skill: formatSkillCapabilities(options.skillRegistry ? options.skillRegistry.list() : undefined),
+        mcpDeferred: state.deferredCatalog
+          ? formatDeferredCapabilities(
+              state.deferredCatalog.map((e) => ({
+                name: e.name,
+                serverName: e.serverName,
+                source: e.source,
+              })),
+            )
+          : formatMcpCapabilities(options.mcpRegistry ? toSystemPromptEntries(options.mcpRegistry.list()) : undefined),
+      }
     }
     const systemPrompt = state.systemPromptCache
 

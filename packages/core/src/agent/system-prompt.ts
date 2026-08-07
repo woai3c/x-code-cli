@@ -189,8 +189,11 @@ export interface SystemPromptDeferredTool {
 }
 
 /** Format the skill guidance block. Sessions without registered skills still
- *  receive the short, cache-stable installation safety rule. */
-function formatSkillCapabilities(skills: readonly { name: string; description: string }[] | undefined): string {
+ *  receive the short, cache-stable installation safety rule.
+ *
+ *  Exported for the context-composition estimator: the CLI recomputes this
+ *  exact block to split `systemPromptCache` into per-category token counts. */
+export function formatSkillCapabilities(skills: readonly { name: string; description: string }[] | undefined): string {
   const installHint =
     'For skill installation, prefer `/skill install`; a shell may download the raw file directly, but never reconstruct `SKILL.md` with `webFetch + writeFile` because that can corrupt YAML frontmatter. After a shell installation, run `/skill refresh` or restart `xc` before activation.'
 
@@ -220,8 +223,9 @@ function formatSkillCapabilities(skills: readonly { name: string; description: s
  *  resource tools (listMcpResources / readMcpResource) at the top
  *  even if no server-specific tools exist — because the resource
  *  tools only get registered when MCP is active, so their advertising
- *  must travel with this same block. */
-function formatMcpCapabilities(mcpTools: readonly SystemPromptMcpTool[] | undefined): string {
+ *  must travel with this same block. Exported for the context-composition
+ *  estimator (same recompute-and-subtract pattern as formatSkillCapabilities). */
+export function formatMcpCapabilities(mcpTools: readonly SystemPromptMcpTool[] | undefined): string {
   if (mcpTools === undefined) return ''
 
   const lines: string[] = [
@@ -260,8 +264,9 @@ function formatMcpCapabilities(mcpTools: readonly SystemPromptMcpTool[] | undefi
  *  by source, plus instructions to load them via `toolSearch`. Returns "" when
  *  `deferredTools` is undefined (sub-agents / no deferral) so the byte layout
  *  matches the non-deferred shape. The list is fixed at boot, so the block is
- *  byte-stable across turns — a prerequisite for prefix caching. */
-function formatDeferredCapabilities(deferredTools: readonly SystemPromptDeferredTool[] | undefined): string {
+ *  byte-stable across turns — a prerequisite for prefix caching. Exported for
+ *  the context-composition estimator. */
+export function formatDeferredCapabilities(deferredTools: readonly SystemPromptDeferredTool[] | undefined): string {
   if (deferredTools === undefined) return ''
 
   const lines: string[] = [
