@@ -4,8 +4,8 @@ import {
   addMemoryRecallAttachment,
   addMemoryRecallTombstone,
   applyMemoryRecallAttachments,
-} from '../src/knowledge/memory-recall-state.js'
-import type { MemoryRecallAttachment } from '../src/knowledge/memory-types.js'
+} from '../src/knowledge/memory/recall-state.js'
+import type { MemoryRecallAttachment } from '../src/knowledge/memory/types.js'
 
 function attachment(): MemoryRecallAttachment {
   return {

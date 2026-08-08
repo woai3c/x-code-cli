@@ -29,7 +29,7 @@ import {
 } from '@x-code-cli/core'
 import type { ConsentPreview, PluginScope, PluginSource } from '@x-code-cli/core'
 
-import { formatPluginSource } from './ui/commands/plugin.js'
+import { formatPluginSource } from './ui/app/commands/plugin.js'
 
 const chalk = new Chalk()
 

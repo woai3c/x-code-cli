@@ -1,8 +1,8 @@
 import { generateText } from 'ai'
 import type { LanguageModel } from 'ai'
 
-import { extractMemoryOperations } from '../src/agent/memory-extractor.js'
-import type { MemoryJob } from '../src/knowledge/memory-types.js'
+import { extractMemoryOperations } from '../src/knowledge/memory/extractor.js'
+import type { MemoryJob } from '../src/knowledge/memory/types.js'
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>()

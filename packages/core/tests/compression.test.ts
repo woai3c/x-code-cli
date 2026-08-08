@@ -21,7 +21,7 @@ vi.mock('ai', async () => {
   return { ...actual, generateText: vi.fn() }
 })
 
-vi.mock('../src/knowledge/session.js', () => ({
+vi.mock('../src/agent/session-summary.js', () => ({
   generateSessionSummary: vi.fn().mockResolvedValue({ summary: 'session summary' }),
 }))
 

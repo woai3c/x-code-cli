@@ -10,8 +10,8 @@ import { render } from 'ink'
 
 import type { AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
 
-import { App } from './ui/components/App.js'
-import { printHeader } from './ui/components/AppHeader.js'
+import { App } from './ui/app/App.js'
+import { printHeader } from './ui/app/AppHeader.js'
 
 /** Global cleanup ref — set by App component via onCleanupReady prop */
 let registeredCleanup: (() => Promise<void>) | null = null

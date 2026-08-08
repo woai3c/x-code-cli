@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { DEFAULT_MEMORY_CONFIG } from '../src/config/index.js'
 import type { MemoryConfig } from '../src/config/index.js'
-import type { EvidenceKind, MemoryStatus, MemoryType } from '../src/knowledge/memory-types.js'
+import type { EvidenceKind, MemoryStatus, MemoryType } from '../src/knowledge/memory/types.js'
 
 export async function makeMemoryRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'x-code-memory-v2-'))

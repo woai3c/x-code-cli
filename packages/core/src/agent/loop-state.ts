@@ -1,7 +1,7 @@
 // @x-code-cli/core — Shared agent loop state
 import type { ModelMessage } from 'ai'
 
-import type { MemoryRecallAttachment, MemoryRecallTombstone, MemoryRecallTrace } from '../knowledge/memory-types.js'
+import type { MemoryRecallAttachment, MemoryRecallTombstone, MemoryRecallTrace } from '../knowledge/memory/types.js'
 import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'

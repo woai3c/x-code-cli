@@ -21,7 +21,7 @@
 import path from 'node:path'
 
 import { fileExists, readFileSafe, userXcodeDir } from '../utils.js'
-import type { MemoryService } from './memory-service.js'
+import type { MemoryService } from './memory/service.js'
 
 /** Filenames recognised at each directory, tried in order. The first one
  *  found wins for that directory; the rest are skipped. AGENTS.md is our

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { findSafeBoundary, hasOpenCodeFence, hasOpenMarkdownBlock } from '../src/ui/hooks/use-stream-buffer.js'
+import { findSafeBoundary, hasOpenCodeFence, hasOpenMarkdownBlock } from '../src/ui/agent/use-stream-buffer.js'
 
 describe('stream buffer markdown boundaries', () => {
   it('holds a long markdown table instead of treating it as a splittable code fence', () => {

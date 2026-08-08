@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { createLoopState } from '../src/agent/loop-state.js'
-import { MemoryService } from '../src/knowledge/memory-service.js'
+import { MemoryService } from '../src/knowledge/memory/service.js'
 import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 
 describe('Memory v2 knowledge source', () => {

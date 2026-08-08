@@ -21,8 +21,8 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
-import { resetMemoryRecallWindow } from '../knowledge/memory-recall-state.js'
-import type { MemoryRecallAttachment, MemoryRecallTombstone } from '../knowledge/memory-types.js'
+import { resetMemoryRecallWindow } from '../knowledge/memory/recall-state.js'
+import type { MemoryRecallAttachment, MemoryRecallTombstone } from '../knowledge/memory/types.js'
 import { ensureProjectStorageDir } from '../project-storage.js'
 import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { computePostContentScrollRows, moveCursorVisual } from '../src/ui/components/chat-input/geometry.js'
+import { computePostContentScrollRows, moveCursorVisual } from '../src/ui/chat-input/geometry.js'
 
 describe('ChatInput large commit geometry', () => {
   it('reserves the frame rows after content taller than the viewport', () => {

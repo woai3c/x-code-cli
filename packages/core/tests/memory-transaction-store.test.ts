@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { MemoryTransactionStore, memoryContentHash } from '../src/knowledge/memory-transaction-store.js'
-import type { MemoryChange, MemoryTransactionManifest } from '../src/knowledge/memory-types.js'
+import { MemoryTransactionStore, memoryContentHash } from '../src/knowledge/memory/transaction-store.js'
+import type { MemoryChange, MemoryTransactionManifest } from '../src/knowledge/memory/types.js'
 import { makeMemoryRoot } from './memory-test-helpers.js'
 
 describe('MemoryTransactionStore', () => {

@@ -5,7 +5,7 @@ import {
   reasoningControls,
   resetMemoryInferenceState,
   runMemoryInference,
-} from '../src/agent/memory-inference.js'
+} from '../src/knowledge/memory/inference.js'
 
 describe('memory inference policy', () => {
   beforeEach(() => resetMemoryInferenceState())

@@ -3,8 +3,8 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import type { LoopState } from '../agent/loop-state.js'
-import { tokenizeMemoryText } from '../knowledge/memory-index.js'
-import type { MemoryService } from '../knowledge/memory-service.js'
+import { tokenizeMemoryText } from '../knowledge/memory/search-index.js'
+import type { MemoryService } from '../knowledge/memory/service.js'
 import { extractText } from '../utils/message-helpers.js'
 
 const MAX_TOPICS_PER_TURN = 5

@@ -164,10 +164,10 @@ export { ensureProjectStorageDir } from './project-storage.js'
 
 // Knowledge
 export { buildKnowledgeContext } from './knowledge/loader.js'
-export { MemoryService } from './knowledge/memory-service.js'
-export { MemoryIndex, normalizeMemoryText, tokenizeMemoryText } from './knowledge/memory-index.js'
-export { MemoryStore, formatMemoryTopic, parseMemoryTopic, renderCoreProfile } from './knowledge/memory-store.js'
-export { buildRecallQuery, MemoryRetriever } from './knowledge/memory-retriever.js'
+export { MemoryService } from './knowledge/memory/service.js'
+export { MemoryIndex, normalizeMemoryText, tokenizeMemoryText } from './knowledge/memory/search-index.js'
+export { MemoryStore, formatMemoryTopic, parseMemoryTopic, renderCoreProfile } from './knowledge/memory/store.js'
+export { buildRecallQuery, MemoryRetriever } from './knowledge/memory/retriever.js'
 export type {
   EvidenceKind,
   LateRecallSignals,
@@ -189,8 +189,8 @@ export type {
   RecallQuery,
   TopicMetadataPatch,
   TurnMemoryProjection,
-} from './knowledge/memory-types.js'
-export { generateSessionSummary } from './knowledge/session.js'
+} from './knowledge/memory/types.js'
+export { generateSessionSummary } from './agent/session-summary.js'
 
 // Sub-agents
 export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from './agent/sub-agents/index.js'

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { MemoryStore, formatMemoryTopic, parseMemoryTopic } from '../src/knowledge/memory-store.js'
+import { MemoryStore, formatMemoryTopic, parseMemoryTopic } from '../src/knowledge/memory/store.js'
 import { makeMemoryRoot, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 
 describe('MemoryStore', () => {

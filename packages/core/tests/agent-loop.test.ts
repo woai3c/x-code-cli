@@ -12,7 +12,7 @@ import type { LoopState } from '../src/agent/loop-state.js'
 import { agentLoop } from '../src/agent/loop.js'
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
 import { isManagedMemoryAccess, isManagedMemoryMutation } from '../src/agent/tool-execution.js'
-import type { LateRecallSignals, MemoryRecallAttachment } from '../src/knowledge/memory-types.js'
+import type { LateRecallSignals, MemoryRecallAttachment } from '../src/knowledge/memory/types.js'
 import type { AgentCallbacks, TokenUsage } from '../src/types/index.js'
 
 // Mock cheerio + turndown (pulled in via toolRegistry → webFetch)
@@ -46,7 +46,7 @@ vi.mock('../src/knowledge/loader.js', () => ({
   buildKnowledgeContext: vi.fn().mockResolvedValue(''),
 }))
 
-vi.mock('../src/knowledge/session.js', () => ({
+vi.mock('../src/agent/session-summary.js', () => ({
   generateSessionSummary: vi.fn().mockResolvedValue({}),
 }))
 

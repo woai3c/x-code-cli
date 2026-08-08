@@ -1,4 +1,4 @@
-import { parseScopeFlag } from '../src/ui/commands/scope-flag.js'
+import { parseScopeFlag } from '../src/ui/app/commands/scope-flag.js'
 
 describe('parseScopeFlag', () => {
   it('extracts long and short scope flags while preserving the remaining argument', () => {

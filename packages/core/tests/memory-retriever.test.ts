@@ -1,9 +1,9 @@
 import path from 'node:path'
 
-import { MemoryIndex } from '../src/knowledge/memory-index.js'
-import { MemoryRetriever, buildRecallQuery } from '../src/knowledge/memory-retriever.js'
-import { parseMemoryTopic } from '../src/knowledge/memory-store.js'
-import type { RecallQuery } from '../src/knowledge/memory-types.js'
+import { MemoryRetriever, buildRecallQuery } from '../src/knowledge/memory/retriever.js'
+import { MemoryIndex } from '../src/knowledge/memory/search-index.js'
+import { parseMemoryTopic } from '../src/knowledge/memory/store.js'
+import type { RecallQuery } from '../src/knowledge/memory/types.js'
 import { topicMarkdown } from './memory-test-helpers.js'
 
 function query(text: string): RecallQuery {

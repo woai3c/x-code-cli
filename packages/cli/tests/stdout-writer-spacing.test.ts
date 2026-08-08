@@ -1,4 +1,4 @@
-import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/stdout-writer.js'
+import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/render/stdout-writer.js'
 
 describe('stdout writer spacing', () => {
   beforeEach(() => resetScrollbackSpacing())

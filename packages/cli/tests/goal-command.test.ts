@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseGoalCreateArgs } from '../src/ui/commands/goal.js'
+import { parseGoalCreateArgs } from '../src/ui/app/commands/goal.js'
 
 describe('/goal command parsing', () => {
   it('applies --verifier-prompt to the sub-agent verifier without leaking it into the objective', () => {

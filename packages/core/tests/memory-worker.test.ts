@@ -1,15 +1,15 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { MemoryJobStore } from '../src/agent/memory-job-store.js'
+import { MemoryJobStore } from '../src/knowledge/memory/job-store.js'
+import type { MemoryJob, MemoryOperation } from '../src/knowledge/memory/types.js'
 import {
   MemoryWorker,
   bindOperationEvidence,
   isDeleteOperationAuthorized,
   rejectedOperationsError,
   shouldRetryUngroundedOperations,
-} from '../src/agent/memory-worker.js'
-import type { MemoryJob, MemoryOperation } from '../src/knowledge/memory-types.js'
+} from '../src/knowledge/memory/worker.js'
 import { makeMemoryRoot } from './memory-test-helpers.js'
 
 function job(): MemoryJob {

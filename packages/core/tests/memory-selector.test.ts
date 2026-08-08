@@ -1,7 +1,7 @@
 import { generateText } from 'ai'
 import type { LanguageModel } from 'ai'
 
-import { selectMemoryTopics } from '../src/knowledge/memory-selector.js'
+import { selectMemoryTopics } from '../src/knowledge/memory/selector.js'
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>()

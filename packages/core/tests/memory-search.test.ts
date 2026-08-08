@@ -4,7 +4,7 @@ import { generateText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { createLoopState } from '../src/agent/loop-state.js'
-import { MemoryService } from '../src/knowledge/memory-service.js'
+import { MemoryService } from '../src/knowledge/memory/service.js'
 import { createMemorySearchTool } from '../src/tools/memory-search.js'
 import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 

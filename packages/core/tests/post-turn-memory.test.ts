@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 
-import { buildTurnMemoryProjection, createMemoryJob, shouldCreateMemoryJob } from '../src/agent/post-turn-memory.js'
+import { buildTurnMemoryProjection, createMemoryJob, shouldCreateMemoryJob } from '../src/knowledge/memory/post-turn.js'
 
 describe('post-turn memory projection', () => {
   it('contains only the current root turn increment', () => {

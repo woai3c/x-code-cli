@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { MemoryJobStore } from '../src/agent/memory-job-store.js'
-import type { MemoryJob } from '../src/knowledge/memory-types.js'
+import { MemoryJobStore } from '../src/knowledge/memory/job-store.js'
+import type { MemoryJob } from '../src/knowledge/memory/types.js'
 import { makeMemoryRoot } from './memory-test-helpers.js'
 
 function job(id = 'job-1'): MemoryJob {

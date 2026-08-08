@@ -5,8 +5,8 @@ import {
   extractMemoryIdentifiers,
   normalizeMemoryText,
   tokenizeMemoryText,
-} from '../src/knowledge/memory-index.js'
-import { parseMemoryTopic } from '../src/knowledge/memory-store.js'
+} from '../src/knowledge/memory/search-index.js'
+import { parseMemoryTopic } from '../src/knowledge/memory/store.js'
 import { topicMarkdown } from './memory-test-helpers.js'
 
 describe('MemoryIndex', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createLoopState } from '@x-code-cli/core'
 
-import { invalidateModelDependentState, invalidateToolSurfaceState } from '../src/ui/hooks/model-switch-state.js'
+import { invalidateModelDependentState, invalidateToolSurfaceState } from '../src/ui/agent/model-switch-state.js'
 
 describe('model switch state invalidation', () => {
   it('drops model-dependent caches while retaining activated tool names', () => {

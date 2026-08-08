@@ -2,6 +2,19 @@
 
 This file is loaded into the agent's context at the start of every session. Keep it concise — the agent reads it every turn.
 
+## Rules
+
+- Use visualizations when they help explain complex concepts.
+- Keep responses concise and direct, and clearly distinguish facts from assumptions.
+- Base research on reliable sources.
+- Stay aligned with the user's goals and constraints.
+- Avoid unnecessary questions; ask only when a key decision requires confirmation.
+- Use sub-agents judiciously and avoid unnecessary parallelism.
+- Keep code changes minimal and avoid unrelated refactoring.
+- Verify actual results through testing; do not assume something is complete just because it looks complete.
+- Protect existing code and data.
+- Report key results without unnecessary progress updates.
+
 ## Commands
 
 pnpm workspace; Node >= 22.

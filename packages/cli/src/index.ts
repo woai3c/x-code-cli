@@ -39,9 +39,9 @@ import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
 import { runPluginCli } from './plugin-cli.js'
 import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
-import { rebuildPalette } from './ui/components/chat-input/palette.js'
-import { setSyntaxTheme } from './ui/syntax-highlight.js'
-import { getThemeColors, parseThemeName, setTheme } from './ui/theme.js'
+import { rebuildPalette } from './ui/chat-input/palette.js'
+import { setSyntaxTheme } from './ui/render/syntax-highlight.js'
+import { getThemeColors, parseThemeName, setTheme } from './ui/render/theme.js'
 
 restoreInvocationCwd()
 
