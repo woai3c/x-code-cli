@@ -44,6 +44,7 @@ import type { McpServerConfig } from '../mcp/types.js'
 import { debugLog } from '../utils.js'
 import { loadAllPlugins } from './loader.js'
 import type { LoadResult, ResolvedContributions } from './loader.js'
+import { extractMcpServersBlock } from './mcp-contributions.js'
 import type { InlineMcpServers, LoadedPlugin } from './types.js'
 import { getPluginUserConfigEnv } from './user-config.js'
 
@@ -169,25 +170,6 @@ async function resolvePluginHooks(
   }
 }
 
-/** Extract the `name → cfg` block from the contents of a `.mcp.json`
- *  file. Two shapes are accepted:
- *
- *    - Wrapped:  `{ "mcpServers": { "name": cfg, ... } }`
- *    - Flat:     `{ "name": cfg, ... }`  (no wrapper key)
- *
- *  Claude Code's official plugins (e.g. linear@anthropic-marketplace)
- *  ship the flat form; the wrapped form matches our own config.json
- *  layout. The detection rule is: if the parsed object has a
- *  `mcpServers` key at all, treat it as wrapped (and pass through the
- *  value as-is so the schema parser produces a clean error on
- *  misshape). Otherwise treat the whole object as the flat block. */
-export function extractMcpServersBlock(parsed: unknown): unknown {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-  const obj = parsed as Record<string, unknown>
-  if ('mcpServers' in obj) return obj.mcpServers
-  return obj
-}
-
 async function resolvePluginMcpServers(
   plugin: LoadedPlugin,
   contrib: NonNullable<ResolvedContributions['mcpServers']>,
@@ -279,8 +261,3 @@ export async function getPluginMcpServersFromDisk(cwd: string): Promise<Record<s
     return {}
   }
 }
-
-// Re-export commonly used pieces so a single import from this module is
-// enough for typical CLI startup wiring.
-export type { LoadResult, ResolvedContributions } from './loader.js'
-export { loadAllPlugins }

@@ -85,7 +85,7 @@ const COLLAPSIBLE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'ls',
 ])
 
-export function basename(p: string): string {
+function basename(p: string): string {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
   return i >= 0 ? p.slice(i + 1) : p
 }

@@ -52,10 +52,9 @@ import { parseGoalCreateArgs, tokenizeArgs } from './commands/goal.js'
 import { createMcpCommandHandler } from './commands/mcp.js'
 import { createPluginCommandHandler } from './commands/plugin.js'
 import { createSkillCommandHandler } from './commands/skill.js'
+import type { SessionExitInfo } from './session-exit.js'
 import { canResumeGoalStatus, compactionHintForResume, formatGoalStatus, formatRelativeTime } from './session-format.js'
 import { formatUsageReport } from './usage-report.js'
-
-export { SLASH_COMMANDS } from './command-content.js'
 
 interface AppProps {
   model: LanguageModel
@@ -75,7 +74,7 @@ interface AppProps {
    *  index.ts's gracefulShutdown after the terminal is reset, so the
    *  hint lands in the user's shell prompt area where they can copy
    *  the `xc --resume <id>` command. */
-  onSessionInfoReady?: (getter: () => { sessionId: string; taskSlug: string; messageCount: number } | null) => void
+  onSessionInfoReady?: (getter: () => SessionExitInfo | null) => void
 }
 
 export function App({

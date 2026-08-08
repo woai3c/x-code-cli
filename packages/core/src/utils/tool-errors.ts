@@ -5,7 +5,7 @@
 // it here keeps the wording consistent and removes ~7 copies of the
 // `err instanceof Error ? err.message : String(err)` snippet.
 
-export function toErrorMessage(err: unknown): string {
+function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 

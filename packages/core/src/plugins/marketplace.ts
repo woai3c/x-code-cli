@@ -79,7 +79,7 @@ export const RESERVED_MARKETPLACE_NAMES: Readonly<Record<string, string>> = {
  *  by the installer's post-clone `git rev-parse HEAD` integrity check —
  *  see installer.ts's `fetchToTemp` sha check. Non-hex / malformed values
  *  are silently dropped so a typo doesn't masquerade as a real mismatch. */
-export function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceCloneUrl?: string } = {}): PluginSource {
+function normalizeMarketplaceSource(raw: unknown, ctx: { marketplaceCloneUrl?: string } = {}): PluginSource {
   if (typeof raw === 'string') {
     if (raw.startsWith('./') || raw.startsWith('../')) {
       const cloneUrl = ctx.marketplaceCloneUrl

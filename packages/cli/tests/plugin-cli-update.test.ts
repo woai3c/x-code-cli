@@ -15,7 +15,7 @@ import path from 'node:path'
 
 import { installPlugin, listInstalledPlugins } from '@x-code-cli/core'
 
-import { runPluginCli } from '../src/plugin-cli.js'
+import { runPluginCli } from '../src/plugins/cli.js'
 
 let originalPluginsDir: string | undefined
 let logSpy: ReturnType<typeof vi.spyOn>

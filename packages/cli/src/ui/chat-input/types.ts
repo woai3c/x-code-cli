@@ -61,12 +61,12 @@ export interface SlashCommand {
   subcommands?: ReadonlyArray<{ name: string; description: string }>
 }
 
-export interface SpinnerState {
+interface SpinnerState {
   label: string
   mode: 'requesting' | 'responding' | 'thinking' | 'tool-use'
 }
 
-export interface PermissionRequest {
+interface PermissionRequest {
   toolName: string
   input: Record<string, unknown>
   onResolve: (decision: 'yes' | 'always' | 'no') => void
@@ -76,7 +76,7 @@ export interface PermissionRequest {
   mcp?: { serverName: string; rawName: string }
 }
 
-export interface SelectRequest {
+interface SelectRequest {
   question: string
   /** `freeform: true` marks the auto-appended "Other" row that opens an
    *  inline text input instead of resolving with the literal label.

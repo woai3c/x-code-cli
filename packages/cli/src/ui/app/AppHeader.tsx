@@ -33,7 +33,7 @@ export function getHeaderRowCount(modelId: string): number {
 /**
  * Build the startup banner as a string.
  */
-export function renderHeader(modelId: string): string {
+function renderHeader(modelId: string): string {
   const cols = process.stdout.columns ?? 80
 
   const isWide = cols >= 52

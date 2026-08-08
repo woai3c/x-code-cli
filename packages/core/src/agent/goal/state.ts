@@ -35,7 +35,7 @@ export function isGoalTerminal(status: GoalStatus): boolean {
   return TERMINAL_STATUSES.has(status)
 }
 
-export function assertActiveGoal(state: LoopState, goalId?: string): GoalState {
+function assertActiveGoal(state: LoopState, goalId?: string): GoalState {
   const goal = state.goal
   if (!goal) throw new Error('No goal exists in this session')
   if (goalId && goal.id !== goalId) throw new Error(`Goal ${goalId} is not the current goal`)

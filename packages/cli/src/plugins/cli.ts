@@ -29,7 +29,8 @@ import {
 } from '@x-code-cli/core'
 import type { ConsentPreview, PluginScope, PluginSource } from '@x-code-cli/core'
 
-import { formatPluginSource } from './ui/app/commands/plugin.js'
+import { formatPluginSource } from './format.js'
+import { searchMarketplacePlugins } from './search.js'
 
 const chalk = new Chalk()
 
@@ -595,20 +596,7 @@ async function cliSearch(args: string[]): Promise<number> {
     }
     return 1
   }
-  const matches: Array<{ marketplace: string; name: string; description?: string; verified?: boolean }> = []
-  for (const m of marketplaces) {
-    for (const entry of m.plugins) {
-      const hay = [entry.name, entry.description ?? '', ...(entry.keywords ?? [])].join(' ').toLowerCase()
-      if (hay.includes(kw)) {
-        matches.push({
-          marketplace: m.name,
-          name: entry.name,
-          description: entry.description,
-          verified: entry.verified,
-        })
-      }
-    }
-  }
+  const matches = searchMarketplacePlugins(marketplaces, kw)
   if (matches.length === 0) {
     console.log(`No plugins matching '${kw}'.`)
     return 0

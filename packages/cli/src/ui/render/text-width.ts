@@ -14,7 +14,7 @@
 // place but not the other used to re-create the alignment drift this
 // module was extracted to fix.
 
-export function isWide(cp: number): boolean {
+function isWide(cp: number): boolean {
   return (
     // CJK Unified Ideographs + Extension A + Compatibility Ideographs
     (cp >= 0x4e00 && cp <= 0x9fff) ||

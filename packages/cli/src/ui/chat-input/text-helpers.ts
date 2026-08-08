@@ -94,7 +94,7 @@ export function truncatePathFromStart(p: string, maxCols: number): string {
  *  Used to count how many TERMINAL rows a scrollback payload will occupy,
  *  which drives the pre-scroll line count — over/under-counting would leave
  *  visible gaps or let content overflow into the frame area. */
-export function stripAnsi(s: string): string {
+function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
 }
 

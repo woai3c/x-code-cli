@@ -24,7 +24,7 @@ export async function readSettingsFile(filePath: string): Promise<Record<string,
 
 /** Write a settings object back to disk, creating parent directories as needed.
  *  Uses 2-space indentation + trailing newline matching the project convention. */
-export async function writeSettingsFile(filePath: string, data: Record<string, unknown>): Promise<void> {
+async function writeSettingsFile(filePath: string, data: Record<string, unknown>): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
 }

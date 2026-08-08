@@ -37,7 +37,7 @@ import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-
 import { getCleanupFn, startApp } from './app.js'
 import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
-import { runPluginCli } from './plugin-cli.js'
+import { runPluginCli } from './plugins/cli.js'
 import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
 import { rebuildPalette } from './ui/chat-input/palette.js'
 import { setSyntaxTheme } from './ui/render/syntax-highlight.js'

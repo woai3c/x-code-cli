@@ -101,8 +101,6 @@ const PROMPT_WIDTH = 2
 const MAX_AT_RESULTS = 50
 const MAX_VISIBLE_MENU_ITEMS = 8
 
-export { buildVisualLines, computePostContentScrollRows, locateVisualCursor, moveCursorVisual } from './geometry.js'
-
 export function ChatInput({
   messages,
   initialContentRows = 0,

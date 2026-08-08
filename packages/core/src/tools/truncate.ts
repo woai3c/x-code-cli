@@ -22,7 +22,7 @@ export const MAX_TOOL_RESULT_LINES = 2000
 export const MAX_TOOL_RESULT_BYTES = 50 * 1024
 
 /** Head:tail ratio when slicing. 0.2 keeps the first 20% + last 80%. */
-export const DEFAULT_HEAD_RATIO = 0.2
+const DEFAULT_HEAD_RATIO = 0.2
 
 export interface TruncateOptions {
   /** Max lines before truncation kicks in. Default {@link MAX_TOOL_RESULT_LINES}. */

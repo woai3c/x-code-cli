@@ -14,7 +14,7 @@ export type ShellType = 'bash' | 'zsh' | 'powershell'
 // workloads, small enough to prevent an accidental `yes` or `find /` from
 // eating all memory. When exceeded, execa terminates the child with SIGTERM
 // and surfaces a "maxBuffer exceeded" error.
-export const MAX_SHELL_BUFFER = 20 * 1024 * 1024
+const MAX_SHELL_BUFFER = 20 * 1024 * 1024
 
 export interface ShellSpawnOptions {
   timeout: number

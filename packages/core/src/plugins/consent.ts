@@ -30,7 +30,7 @@ import { parseHookConfig } from '../hooks/config-schema.js'
 import type { HookEventName } from '../hooks/types.js'
 import { parseServersBlock } from '../mcp/config-schema.js'
 import { isDir, isFile } from '../utils.js'
-import { extractMcpServersBlock } from './integration.js'
+import { extractMcpServersBlock } from './mcp-contributions.js'
 import type { PluginManifest, PluginSource } from './types.js'
 
 export interface ConsentPreview {

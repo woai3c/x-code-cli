@@ -28,7 +28,7 @@ import { getTheme } from './theme.js'
 // wins over it (CI log viewers set both). Forcing level 3 bypasses chalk's
 // own env detection, so we must honor the convention ourselves. Read once —
 // env vars don't change mid-process.
-export const COLORS_ENABLED = !process.env.NO_COLOR || !!process.env.FORCE_COLOR
+const COLORS_ENABLED = !process.env.NO_COLOR || !!process.env.FORCE_COLOR
 
 /** Shared chalk instance for every UI surface. Centralized so NO_COLOR /
  *  FORCE_COLOR handling lives in exactly one place — previously each

@@ -8,9 +8,9 @@ import path from 'node:path'
 
 import { PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS, USER_XCODE_DIR } from '@x-code-cli/core'
 
-import { getSessionExitInfo } from './app.js'
 import { detectShell, formatPersistCommand } from './shell.js'
 import type { ShellType } from './shell.js'
+import { getSessionExitInfo } from './ui/app/session-exit.js'
 import { VERSION } from './version.js'
 
 const chalk = new Chalk({ level: process.stderr.isTTY && !process.env.NO_COLOR ? 3 : 0 })

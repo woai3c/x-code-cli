@@ -52,7 +52,7 @@ function detailValue(
   return { value: 0, reported: false }
 }
 
-export function emptyUsageDelta(): UsageDelta {
+function emptyUsageDelta(): UsageDelta {
   return {
     inputTokens: 0,
     outputTokens: 0,

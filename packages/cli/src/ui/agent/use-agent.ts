@@ -78,7 +78,7 @@ import { useAgentDisplayHelpers } from './use-agent-display-helpers.js'
 import { modelMessagesToDisplay } from './use-agent-display.js'
 import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
 
-export interface PendingPermission {
+interface PendingPermission {
   toolCallId: string
   toolName: string
   input: Record<string, unknown>

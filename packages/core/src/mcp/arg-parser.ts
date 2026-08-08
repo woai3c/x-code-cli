@@ -105,12 +105,10 @@ export function parseAdd(rawArg: string): ParseResult<AddCommand> {
       continue
     }
     if (t === '--scope') {
-      const v = tokens[i + 1]
-      if (v !== 'user' && v !== 'project') {
-        return err(`--scope requires "user" or "project" (got ${v ?? '(missing)'})`)
-      }
-      scope = v
-      i += 2
+      const scopeResult = parseScopeValue(tokens, i)
+      if (!scopeResult.ok) return scopeResult
+      scope = scopeResult.scope
+      i = scopeResult.nextIndex
       continue
     }
     if (t === '--env') {
@@ -227,22 +225,10 @@ export function parseAddJson(rawArg: string): ParseResult<AddJsonCommand> {
   if (!tokRes.ok) return tokRes
   const tokens = tokRes.tokens
 
-  let scope: ConfigScope = 'user'
-  let i = 0
-  while (i < tokens.length) {
-    const t = tokens[i]!
-    if (t === '--scope') {
-      const v = tokens[i + 1]
-      if (v !== 'user' && v !== 'project') {
-        return err(`--scope requires "user" or "project" (got ${v ?? '(missing)'})`)
-      }
-      scope = v
-      i += 2
-      continue
-    }
-    if (!t.startsWith('-')) break
-    return err(`Unknown flag for add-json: ${t}`)
-  }
+  const scopeResult = parseScopeOnlyFlags(tokens, 'user', 'add-json')
+  if (!scopeResult.ok) return scopeResult
+  const { scope } = scopeResult
+  let i = scopeResult.nextIndex
 
   if (i >= tokens.length) {
     return err("Usage: /mcp add-json [--scope user|project] <name> '<json>'")
@@ -288,22 +274,9 @@ export function parseRemove(rawArg: string): ParseResult<RemoveCommand> {
     return err('Usage: /mcp remove [--scope user|project] <name>')
   }
 
-  let scope: ConfigScope | undefined
-  let i = 0
-  while (i < tokens.length) {
-    const t = tokens[i]!
-    if (t === '--scope') {
-      const v = tokens[i + 1]
-      if (v !== 'user' && v !== 'project') {
-        return err(`--scope requires "user" or "project" (got ${v ?? '(missing)'})`)
-      }
-      scope = v
-      i += 2
-      continue
-    }
-    if (!t.startsWith('-')) break
-    return err(`Unknown flag for remove: ${t}`)
-  }
+  const scopeResult = parseScopeOnlyFlags(tokens, undefined, 'remove')
+  if (!scopeResult.ok) return scopeResult
+  const { scope, nextIndex: i } = scopeResult
 
   if (i >= tokens.length) {
     return err('Usage: /mcp remove [--scope user|project] <name>')
@@ -325,6 +298,52 @@ function ok<T extends ParsedCommand>(command: T): ParseResult<T> {
 }
 function err(message: string): { ok: false; error: string } {
   return { ok: false, error: message }
+}
+
+type ScopeParseResult<TScope extends ConfigScope | undefined> =
+  | { ok: true; scope: TScope; nextIndex: number }
+  | { ok: false; error: string }
+
+function parseScopeValue(tokens: readonly string[], index: number): ScopeParseResult<ConfigScope> {
+  const value = tokens[index + 1]
+  if (value !== 'user' && value !== 'project') {
+    return err(`--scope requires "user" or "project" (got ${value ?? '(missing)'})`)
+  }
+  return { ok: true, scope: value, nextIndex: index + 2 }
+}
+
+function parseScopeOnlyFlags(
+  tokens: readonly string[],
+  initialScope: ConfigScope,
+  commandName: string,
+): ScopeParseResult<ConfigScope>
+function parseScopeOnlyFlags(
+  tokens: readonly string[],
+  initialScope: undefined,
+  commandName: string,
+): ScopeParseResult<ConfigScope | undefined>
+function parseScopeOnlyFlags(
+  tokens: readonly string[],
+  initialScope: ConfigScope | undefined,
+  commandName: string,
+): ScopeParseResult<ConfigScope | undefined> {
+  let scope = initialScope
+  let index = 0
+
+  while (index < tokens.length) {
+    const token = tokens[index]!
+    if (token === '--scope') {
+      const scopeResult = parseScopeValue(tokens, index)
+      if (!scopeResult.ok) return scopeResult
+      scope = scopeResult.scope
+      index = scopeResult.nextIndex
+      continue
+    }
+    if (!token.startsWith('-')) break
+    return err(`Unknown flag for ${commandName}: ${token}`)
+  }
+
+  return { ok: true, scope, nextIndex: index }
 }
 
 /** Minimal POSIX-ish tokeniser. Supports "..."/'...' quoting and

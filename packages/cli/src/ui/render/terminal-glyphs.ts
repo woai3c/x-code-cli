@@ -20,7 +20,7 @@
 /** True when the terminal is a legacy ConHost that can't reliably render
  *  Unicode beyond CP437 / Latin-1 Supplement (U+0000–U+00FF) and the
  *  Box Drawing block (U+2500–U+257F). */
-export const IS_LEGACY_TERMINAL =
+const IS_LEGACY_TERMINAL =
   process.platform === 'win32' && !process.env.WT_SESSION && process.env.TERM_PROGRAM !== 'vscode'
 
 // ── Glyph table ─────────────────────────────────────────────────────────

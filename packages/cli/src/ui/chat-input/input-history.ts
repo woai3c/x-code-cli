@@ -38,7 +38,7 @@ const HISTORY_FILE = '.x-code/history.jsonl'
  *  disk grows unbounded, but the user only ever sees the most recent 100
  *  entries when pressing Up. Files containing more lines are sliced down
  *  in memory, never trimmed on disk. */
-export const HISTORY_MAX = 100
+const HISTORY_MAX = 100
 
 export interface InputHistoryEntry {
   /** Pre-paste-expansion text (the placeholder form with `[Pasted text #N]`
@@ -56,7 +56,7 @@ function historyPath(cwd: string): string {
 /** Read up to HISTORY_MAX most-recent entries. Returned oldest-first so the
  *  caller can `push` new submits onto the tail and walk backwards via
  *  `arr[arr.length - 1 - i]` — same shape `historyRef` uses in-memory. */
-export async function loadInputHistory(cwd: string = process.cwd()): Promise<InputHistoryEntry[]> {
+async function loadInputHistory(cwd: string = process.cwd()): Promise<InputHistoryEntry[]> {
   let raw: string
   try {
     raw = await fs.readFile(historyPath(cwd), 'utf-8')
@@ -91,7 +91,7 @@ export async function loadInputHistory(cwd: string = process.cwd()): Promise<Inp
  *  but the call site can ignore it. Errors are swallowed because input
  *  history is a UX nicety, not load-bearing — losing one entry to a disk
  *  hiccup is preferable to surfacing an error to the user mid-prompt. */
-export async function appendInputHistory(entry: InputHistoryEntry, cwd: string = process.cwd()): Promise<void> {
+async function appendInputHistory(entry: InputHistoryEntry, cwd: string = process.cwd()): Promise<void> {
   const file = historyPath(cwd)
   const line = JSON.stringify(entry) + '\n'
   try {

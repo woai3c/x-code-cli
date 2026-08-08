@@ -27,6 +27,8 @@ import {
 } from '@x-code-cli/core'
 import type { AgentOptions, PluginScope, PluginSource } from '@x-code-cli/core'
 
+import { formatPluginSource } from '../../../plugins/format.js'
+import { searchMarketplacePlugins } from '../../../plugins/search.js'
 import { parseScopeFlag } from './scope-flag.js'
 
 export interface PluginCommandDeps {
@@ -39,13 +41,6 @@ export interface PluginCommandDeps {
   ) => Promise<string>
   invalidateSystemPromptCache: () => void
   bumpSkillRegistryVersion: () => void
-}
-
-export function formatPluginSource(s: PluginSource | undefined): string {
-  if (!s) return '(unknown)'
-  if (s.kind === 'local') return `local: ${s.path}`
-  if (s.kind === 'git') return `git: ${s.url}${s.ref ? `#${s.ref}` : ''}`
-  return `github:${s.owner}/${s.repo}${s.ref ? `#${s.ref}` : ''}`
 }
 
 /** Parse a `/plugin enable|disable` argument string, recognizing the
@@ -314,20 +309,7 @@ export function createPluginCommandHandler(deps: PluginCommandDeps) {
       }
       return
     }
-    const matches: Array<{ marketplace: string; name: string; description?: string; verified?: boolean }> = []
-    for (const m of marketplaces) {
-      for (const entry of m.plugins) {
-        const hay = [entry.name, entry.description ?? '', ...(entry.keywords ?? [])].join(' ').toLowerCase()
-        if (hay.includes(kw)) {
-          matches.push({
-            marketplace: m.name,
-            name: entry.name,
-            description: entry.description,
-            verified: entry.verified,
-          })
-        }
-      }
-    }
+    const matches = searchMarketplacePlugins(marketplaces, kw)
     if (matches.length === 0) {
       addCommandMessage(
         text,

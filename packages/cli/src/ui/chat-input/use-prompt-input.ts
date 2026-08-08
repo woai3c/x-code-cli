@@ -56,7 +56,7 @@ const MAX_BATCH_MS = 50
 // (8) every keystroke went through the debounce and felt laggy.
 const PASTE_SIZE_THRESHOLD = 32
 
-export type PromptKey =
+type PromptKey =
   | 'return'
   | 'newline'
   | 'backspace'

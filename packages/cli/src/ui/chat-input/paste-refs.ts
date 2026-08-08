@@ -5,7 +5,7 @@
 // in its place. On Enter, the placeholder is expanded back to the full content
 // before being handed to the agent. Modeled on Claude Code's PromptInput.
 
-export interface PastedEntry {
+interface PastedEntry {
   id: number
   content: string
   lineCount: number

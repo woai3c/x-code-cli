@@ -37,10 +37,4 @@ export const toolRegistry = {
   killShell,
 }
 
-export { BackgroundShellRegistry } from './background-shell.js'
-export type { BackgroundShell } from './background-shell.js'
-export { createGetGoalTool } from './get-goal.js'
-export { createUpdateGoalTool } from './update-goal.js'
-
-export { MAX_TOOL_RESULT_LINES, MAX_TOOL_RESULT_BYTES, truncateToolResult } from './truncate.js'
-export type { TruncateOptions } from './truncate.js'
+export { MAX_TOOL_RESULT_BYTES, truncateToolResult } from './truncate.js'

@@ -46,7 +46,7 @@ export interface CacheMissSummary {
   estimates: CacheMissEstimate[]
 }
 
-export const CACHE_MISS_NOISE_FLOOR = 1024
+const CACHE_MISS_NOISE_FLOOR = 1024
 
 export function markExpectedCacheMiss(state: LoopState, reason: CacheMissReason): void {
   state.expectCacheMiss = true

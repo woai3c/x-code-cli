@@ -26,7 +26,7 @@ const SLUG_MAX_LEN = 40
  *  CJK-only tasks produce an empty slug, which is intentional and
  *  caught by callers' timestamp-only fallback). Length capped at
  *  SLUG_MAX_LEN cells so `ls` columns stay readable. */
-export function slugify(text: string): string {
+function slugify(text: string): string {
   return text
     .toLowerCase()
     .trim()

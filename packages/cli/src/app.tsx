@@ -12,28 +12,13 @@ import type { AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/cor
 
 import { App } from './ui/app/App.js'
 import { printHeader } from './ui/app/AppHeader.js'
+import { registerSessionInfoGetter } from './ui/app/session-exit.js'
 
 /** Global cleanup ref — set by App component via onCleanupReady prop */
 let registeredCleanup: (() => Promise<void>) | null = null
 
 export function getCleanupFn(): (() => Promise<void>) | null {
   return registeredCleanup
-}
-
-/** Lightweight snapshot of the live session — set by App via
- *  onSessionInfoReady. Used by the post-Ink exit hint in index.ts to
- *  print `xc --resume <id>` without having to introspect React state
- *  after unmount. The getter returns null when no session is active
- *  yet (user launched but never submitted) — index.ts skips the hint
- *  in that case. */
-export interface SessionExitInfo {
-  sessionId: string
-  taskSlug: string
-  messageCount: number
-}
-let registeredSessionInfoGetter: (() => SessionExitInfo | null) | null = null
-export function getSessionExitInfo(): SessionExitInfo | null {
-  return registeredSessionInfoGetter ? registeredSessionInfoGetter() : null
 }
 
 export interface StartAppOptions {
@@ -66,7 +51,7 @@ export function startApp(
         registeredCleanup = fn
       }}
       onSessionInfoReady={(getter) => {
-        registeredSessionInfoGetter = getter
+        registerSessionInfoGetter(getter)
       }}
     />,
     { exitOnCtrlC: false },

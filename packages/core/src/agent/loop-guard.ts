@@ -34,7 +34,7 @@ export const SOFT_LOOP_THRESHOLD = 3
 export const HARD_LOOP_THRESHOLD = 5
 
 /** Size of the rolling window we scan for duplicates. */
-export const LOOP_WINDOW_SIZE = 8
+const LOOP_WINDOW_SIZE = 8
 
 /** Stable JSON stringify: sorts object keys deterministically so semantically
  *  identical inputs hash to the same value regardless of key order. */
