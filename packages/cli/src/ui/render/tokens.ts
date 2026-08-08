@@ -39,6 +39,8 @@ const c = chalk
 export type ChromeToken =
   | 'primary'
   | 'primaryDim'
+  | 'model'
+  | 'usage'
   | 'textStrong'
   | 'textDim'
   | 'textMuted'
@@ -63,6 +65,12 @@ const TOKENS: Record<ChromeToken, TokenDef> = {
   // previews, selection pointer, focused borders, permission previews.
   primary: { dark: '#89b4fa', light: '#2f6fdd', ansi: 'blueBright' },
   primaryDim: { dark: '#5c7cb8', light: '#7a9cd8', ansi: 'blue' },
+  // Footer statusline hues, mirroring Codex CLI's default catppuccin-mocha
+  // statusline (model-with-reasoning + current-dir): model label renders
+  // in pastel yellow (entity.name.type scope), the adjacent info in
+  // pastel green (string scope). Full-brightness pastels — no dimming.
+  model: { dark: '#f9e2af', light: '#df8e1d', ansi: 'yellow' },
+  usage: { dark: '#a6e3a1', light: '#40a02b', ansi: 'green' },
   // Explicit "brighter than terminal default" for rare emphasis; plain
   // body text stays on the terminal's own default foreground.
   textStrong: { dark: '#f8f8f2', light: '#1f2328', ansi: 'white' },

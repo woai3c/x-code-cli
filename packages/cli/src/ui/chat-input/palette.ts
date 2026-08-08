@@ -19,6 +19,11 @@ export let S_BORDER_FOCUS = cellFg('borderFocus')
 /** Brand primary — live tool `(preview)`, completion/selection labels. */
 export let S_PRIMARY = cellFg('primary')
 export let S_PRIMARY_BOLD = cellFg('primary', { bold: true })
+/** Footer statusline colors (Codex CLI-style): model label in pastel
+ *  yellow, adjacent info in pastel green — bright, non-dimmed, so the
+ *  footer reads as live status rather than meta text. */
+export let S_MODEL = cellFg('model')
+export let S_USAGE = cellFg('usage')
 /** Workhorse meta/hints gray — footer model label, menu descriptions,
  *  permission option labels. An explicit textDim hex rather than the
  *  ANSI dim attribute: `\x1b[2m` on the terminal default fg renders as
@@ -57,6 +62,8 @@ export function rebuildPalette(): void {
   S_BORDER_FOCUS = cellFg('borderFocus')
   S_PRIMARY = cellFg('primary')
   S_PRIMARY_BOLD = cellFg('primary', { bold: true })
+  S_MODEL = cellFg('model')
+  S_USAGE = cellFg('usage')
   S_DIM = cellFg('textDim')
   S_SPINNER = cellFg('primary')
   S_SUCCESS = cellFg('success', { bold: true })

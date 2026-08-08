@@ -68,6 +68,7 @@ import {
   S_ERROR,
   S_ERROR_BOLD,
   S_GRAY_90,
+  S_MODEL,
   S_NONE,
   S_PRIMARY,
   S_PRIMARY_BOLD,
@@ -76,6 +77,7 @@ import {
   S_SUCCESS,
   S_SUCCESS_DOT,
   S_SUCCESS_DOT_DIM,
+  S_USAGE,
   S_WARNING,
   S_WARNING_BOLD,
 } from './palette.js'
@@ -1842,7 +1844,10 @@ export function ChatInput({
     // Right side — the active model label is always shown (makes the
     //              footer row permanent); context-window occupancy
     //              (`6.6k / 200k · 3%`) appends after it whenever a usage
-    //              snapshot is available.
+    //              snapshot is available. Styled after Codex CLI's default
+    //              statusline: model label (with reasoning-tier suffix) in
+    //              pastel yellow, usage in pastel green — full-brightness
+    //              pastels so the row reads as live status.
     let leftCells: Cell[] | null = null
     if (notice) {
       const cells: Cell[] = []
@@ -1865,14 +1870,16 @@ export function ChatInput({
       leftCells = cells
     }
 
-    let rightText: string | null = modelLabel ?? null
+    const rightCells: Cell[] = []
+    if (modelLabel) rightCells.push(...textToCells(modelLabel, S_MODEL))
     if (contextUsage && contextUsage.used > 0 && contextUsage.window > 0) {
       const pct = Math.round((contextUsage.used / contextUsage.window) * 100)
       const usage = `${formatTokenCount(contextUsage.used)} / ${formatTokenCount(contextUsage.window)} · ${pct}%`
-      rightText = rightText ? `${rightText} · ${usage}` : usage
+      if (modelLabel) rightCells.push(...textToCells(' · ', S_DIM))
+      rightCells.push(...textToCells(usage, S_USAGE))
     }
 
-    if (leftCells || rightText) {
+    if (leftCells || rightCells.length > 0) {
       // Footer row built as a NARROW cell sequence — left + ` · ` + right —
       // never padded out to termWidth-1.
       //
@@ -1894,13 +1901,13 @@ export function ChatInput({
       const cells: Cell[] = []
       const leftWidth = leftCells ? leftCells.reduce((sum, c) => sum + c.width, 0) : 0
       if (leftCells) cells.push(...leftCells)
-      if (rightText) {
+      if (rightCells.length > 0) {
         if (leftWidth > 0) {
           cells.push(...textToCells('  ·  ', S_DIM))
         } else {
           cells.push({ char: ' ', style: S_NONE, width: 1 })
         }
-        cells.push(...textToCells(rightText, S_DIM))
+        cells.push(...rightCells)
       }
       // Truncate defensively: the model label made this row longer than it
       // used to be, and a hard physical wrap would desync the cell-diff

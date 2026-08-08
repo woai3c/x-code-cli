@@ -132,6 +132,14 @@ export function App({
   // skillCommands array would stay stale.
   const [skillRegistryVersion, setSkillRegistryVersion] = useState(0)
 
+  // Reasoning-effort tier label for the current model (e.g. "High", "Max"),
+  // shown in the footer next to the model name. Kept in state instead of
+  // recomputed on every render because resolveReasoningTierLabel does a sync
+  // config-file read; refreshed on /model switches and tier picks.
+  const [reasoningTierLabel, setReasoningTierLabel] = useState<string | null>(() =>
+    resolveReasoningTierLabel(state.modelId),
+  )
+
   // Derived from options.skillRegistry. Recomputed when the registry
   // version bumps (via /skill refresh) so tab completion + /help reflect
   // the new skill set without restart.
@@ -764,6 +772,19 @@ export function App({
     return modelId
   }
 
+  /** Resolve the reasoning-effort tier label for a model (e.g. "High", "Max")
+   *  from UserConfig.modelReasoningEffort, or null when the model has no tier
+   *  configured or doesn't honor tiers. Mirrors the agent loop's effort
+   *  resolution (getReasoningLevel) so the footer never shows a tier the
+   *  loop would ignore. */
+  function resolveReasoningTierLabel(modelId: string): string | null {
+    if (!supportsReasoningTier(modelId)) return null
+    const effort = loadUserConfig().modelReasoningEffort?.[modelId]
+    if (!effort) return null
+    const tier = PROVIDER_REASONING_TIERS[providerOf(modelId)]
+    return tier?.options.find((o) => o.value === effort)?.label ?? effort
+  }
+
   /**
    * Commit a model switch: rebuild the provider registry (so the new
    * provider's env-var API key is picked up), swap the live language-model
@@ -774,6 +795,7 @@ export function App({
       const registry = createModelRegistry()
       const newModel = registry.languageModel(newModelId as `${string}:${string}`)
       switchModel(newModelId, newModel)
+      setReasoningTierLabel(resolveReasoningTierLabel(newModelId))
       saveUserConfig({ model: newModelId })
       addCommandMessage(commandText, `Set model to ${renderModelLabel(newModelId)}`)
     } catch (err) {
@@ -1552,8 +1574,14 @@ export function App({
       }
       // Footer right side: active model label, always shown. Re-renders
       // automatically on /model switch since switchModel updates
-      // state.modelId.
-      modelLabel={renderModelLabel(state.modelId)}
+      // state.modelId. When the model has a reasoning-effort tier configured
+      // (via the /model tier picker), it appends next to the name — e.g.
+      // "deepseek-v4-flash · High".
+      modelLabel={
+        reasoningTierLabel
+          ? `${renderModelLabel(state.modelId)} · ${reasoningTierLabel}`
+          : renderModelLabel(state.modelId)
+      }
       activeToolCalls={state.activeToolCalls}
       todos={state.todos}
       queuedMessages={state.queuedMessages}
