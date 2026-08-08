@@ -218,7 +218,7 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/theme [name]`        | Switch UI theme                                                      |
 | `/plan [on\|off]`      | Enable / disable plan mode                                           |
 | `/goal [objective]`    | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
-| `/usage`               | Show current-session token usage (with per-step breakdown)           |
+| `/usage`               | Token usage: context split, per-step detail, attribution, cache hits |
 | `/usage-history`       | List past session usage                                              |
 | `/clear`               | Clear the current conversation                                       |
 | `/compact`             | Manually compress context                                            |

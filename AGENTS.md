@@ -30,7 +30,9 @@ packages/
 
 **Rendering**: Ink's dynamic region is permanently empty. Every visible UI element is drawn by `ChatInput.tsx` writing directly to `process.stdout` via cell-level diff. `package.json` aliases `ink` to `@jrichman/ink@6.6.9` — never import from `@jrichman/ink` directly.
 
-**Agent loop** (`core/src/agent/loop.ts:agentLoop`): one call = one user message, spinning `runTurn` rounds until stop/tool-calls/abort. `LoopState` is reused across submits within a CLI session. `systemPromptCache` must remain byte-stable for the entire session — any per-turn interpolation into the system prompt silently disables prompt caching for OpenAI-compatible providers.
+**Agent loop** (`core/src/agent/loop.ts:agentLoop`): one call = one user message, spinning `runTurn` rounds until stop/tool-calls/abort. `LoopState` is reused across submits within a CLI session. `systemPromptCache` must remain byte-stable between invalidation events (model switch, `/skill` or `/mcp` refresh, permission-mode flip) — any per-turn interpolation into the system prompt silently disables prompt caching for OpenAI-compatible providers.
+
+**Deferred tools** (`core/src/agent/tool-search/`): MCP tools and non-core built-ins are listed by name under `## Deferred Tools` in the system prompt and loaded on demand via `toolSearch`; `buildDeferredCatalog` falls back to full injection for weak models and small catalogs so the prompt stays byte-stable. Sub-agents get no catalog and keep the inline `## MCP Tools` block.
 
 **Sub-agents** (`core/src/agent/sub-agents/`): `task` tool delegates to isolated agentLoop with fresh LoopState. Registry is built at CLI startup and frozen. Adding/editing agent files requires a CLI restart because the agent list is embedded in the byte-stable `systemPromptCache`. Sub-agents always deny `task` (no recursion). In plan mode, write tools are denied via tool filter.
 

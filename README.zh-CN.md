@@ -218,7 +218,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/theme [name]`       | 切换 UI 主题                                                                        |
 | `/plan [on\|off]`     | 启用 / 禁用 Plan 模式                                                               |
 | `/goal [目标]`        | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)）                             |
-| `/usage`              | 查看本次会话 Token 用量（含分步明细）                                               |
+| `/usage`              | 查看 Token 用量：上下文构成分解、分步明细、归因与缓存命中                           |
 | `/usage-history`      | 列出历史会话用量                                                                    |
 | `/clear`              | 清空当前会话                                                                        |
 | `/compact`            | 手动压缩上下文                                                                      |
