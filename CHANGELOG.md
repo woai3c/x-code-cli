@@ -1,3 +1,14 @@
+## v0.4.2 (2026-08-08)
+
+### Features
+
+- show reasoning tier in footer with Codex-style colors (e3e7edb)
+- show context usage breakdown in /usage (8c1f4cd)
+
+### Bug Fixes
+
+- point web-search scenario at stable Wikipedia URL (091109b)
+
 ## v0.4.1 (2026-08-07)
 
 ### Features
