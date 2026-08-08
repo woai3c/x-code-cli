@@ -230,15 +230,7 @@ export async function checkAndCompressContext(
       `Dropped ${light.dropped} looped tool-call message(s) to reclaim context${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
     if (!stillOver) {
-      await markBoundaryAndReflush(state)
-      state.lastInputTokens = 0
-      markExpectedCacheMiss(state, 'compaction')
-      emitCompactionHook(hookCtx, {
-        name: 'PostCompact',
-        trigger: 'proactive',
-        messageCount: state.messages.length,
-        summary: '',
-      })
+      await finishLightweightCompression(state, hookCtx)
       return
     }
   }
@@ -251,42 +243,13 @@ export async function checkAndCompressContext(
       `Truncated ${trunc.truncatedCount} old tool result(s), saved ~${Math.round(trunc.charsSaved / 3)} tokens${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
     if (!stillOver) {
-      await markBoundaryAndReflush(state)
-      state.lastInputTokens = 0
-      markExpectedCacheMiss(state, 'compaction')
-      emitCompactionHook(hookCtx, {
-        name: 'PostCompact',
-        trigger: 'proactive',
-        messageCount: state.messages.length,
-        summary: '',
-      })
+      await finishLightweightCompression(state, hookCtx)
       return
     }
   }
 
   callbacks.onCompressionProgress?.('Summarizing conversation...')
-  const tokensBefore = estimateTokenCount(state.messages)
-
-  // Extract previous summary from the first message if it was produced
-  // by an earlier compaction (incremental update mode).
-  const previousSummary = extractPreviousSummary(state.messages)
-
-  // Build file-tracking metadata from state.filesModified + readFileCache
-  const filesTracked = buildFilesTracked(state)
-
-  const compressed = await compressMessagesWithUsage(
-    state.messages,
-    model,
-    previousSummary,
-    filesTracked,
-    hookCtx?.abortSignal,
-  )
-  state.messages = compressed.messages
-  await recordCompressionUsage(state, compressed, model, callbacks, hookCtx)
-  state.lastInputTokens = 0
-  markExpectedCacheMiss(state, 'compaction')
-  const tokensAfter = estimateTokenCount(state.messages)
-  await markBoundaryAndReflush(state, compressed.summary)
+  const { compressed, tokensBefore, tokensAfter } = await summarizeLoopState(state, model, callbacks, hookCtx)
   const beforeK = Math.round(tokensBefore / 1000)
   const afterK = Math.round(tokensAfter / 1000)
   callbacks.onContextCompressed(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
@@ -317,24 +280,7 @@ export async function handleContextTooLong(
     tokenEstimate: estimateTokenCount(state.messages),
   })
   callbacks.onCompressionProgress?.('Summarizing conversation...')
-  const tokensBefore = estimateTokenCount(state.messages)
-
-  const previousSummary = extractPreviousSummary(state.messages)
-  const filesTracked = buildFilesTracked(state)
-
-  const compressed = await compressMessagesWithUsage(
-    state.messages,
-    model,
-    previousSummary,
-    filesTracked,
-    hookCtx?.abortSignal,
-  )
-  state.messages = compressed.messages
-  await recordCompressionUsage(state, compressed, model, callbacks, hookCtx)
-  state.lastInputTokens = 0
-  markExpectedCacheMiss(state, 'compaction')
-  const tokensAfter = estimateTokenCount(state.messages)
-  await markBoundaryAndReflush(state, compressed.summary)
+  const { compressed, tokensBefore, tokensAfter } = await summarizeLoopState(state, model, callbacks, hookCtx)
 
   // Anti-spin guard. If summarizing barely freed context, the overflow
   // lives in the kept recent messages — bail so the user can /clear.
@@ -359,10 +305,44 @@ export async function handleContextTooLong(
 
 const SUMMARY_PREFIX = '[Previous conversation summary]\n'
 
+async function finishLightweightCompression(state: LoopState, hookCtx?: CompactionHookContext): Promise<void> {
+  await markBoundaryAndReflush(state)
+  state.lastInputTokens = 0
+  markExpectedCacheMiss(state, 'compaction')
+  emitCompactionHook(hookCtx, {
+    name: 'PostCompact',
+    trigger: 'proactive',
+    messageCount: state.messages.length,
+    summary: '',
+  })
+}
+
+async function summarizeLoopState(
+  state: LoopState,
+  model: LanguageModel,
+  callbacks: AgentCallbacks,
+  hookCtx?: CompactionHookContext,
+): Promise<{ compressed: CompressionResult; tokensBefore: number; tokensAfter: number }> {
+  const tokensBefore = estimateTokenCount(state.messages)
+  const compressed = await compressMessagesWithUsage(
+    state.messages,
+    model,
+    extractPreviousSummary(state.messages),
+    buildFilesTracked(state),
+    hookCtx?.abortSignal,
+  )
+  state.messages = compressed.messages
+  await recordCompressionUsage(state, compressed, callbacks, hookCtx)
+  state.lastInputTokens = 0
+  markExpectedCacheMiss(state, 'compaction')
+  const tokensAfter = estimateTokenCount(state.messages)
+  await markBoundaryAndReflush(state, compressed.summary)
+  return { compressed, tokensBefore, tokensAfter }
+}
+
 async function recordCompressionUsage(
   state: LoopState,
   result: CompressionResult,
-  model: LanguageModel,
   callbacks: AgentCallbacks,
   hookCtx?: CompactionHookContext,
 ): Promise<void> {

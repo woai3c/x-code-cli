@@ -81,7 +81,6 @@ export class MemoryService {
   private topics: MemoryTopic[] = []
   private invalidTopics: Array<{ path: string; error: string }> = []
   private coreProfile = ''
-  private cwd = process.cwd()
   private initialized = false
   private initializationError: string | undefined
   private noticeHandler: ((notice: MemoryWriteNotice) => void) | undefined
@@ -124,9 +123,8 @@ export class MemoryService {
     this.activeModelId = modelId
   }
 
-  async initialize(cwd: string): Promise<void> {
+  async initialize(_cwd: string): Promise<void> {
     if (this.initialized) return
-    this.cwd = path.resolve(cwd)
     try {
       await this.jobStore.initialize()
       const loaded = await this.store.initialize()
@@ -614,7 +612,7 @@ export class MemoryService {
     } else {
       missingChange = true
     }
-    if (missingChange) {
+    const collectChangedAttachmentIds = () => {
       for (const attachment of state.memoryRecallAttachments) {
         for (const topic of attachment.topics) {
           if (this.index.topics.get(topic.topicId)?.hash !== topic.topicHash) topicIds.add(topic.topicId)
@@ -623,6 +621,9 @@ export class MemoryService {
           }
         }
       }
+    }
+    if (missingChange) {
+      collectChangedAttachmentIds()
       pinnedChanged = state.memoryRecallAttachments.some((attachment) =>
         attachment.topics.some((topic) => this.index.topics.get(topic.topicId)?.metadata.pinned),
       )
@@ -632,14 +633,7 @@ export class MemoryService {
       if (state.systemPromptCache !== null) pinnedChanged = true
     }
     if (manualEdit) {
-      for (const attachment of state.memoryRecallAttachments) {
-        for (const topic of attachment.topics) {
-          if (this.index.topics.get(topic.topicId)?.hash !== topic.topicHash) topicIds.add(topic.topicId)
-          for (const [factId, factHash] of Object.entries(topic.factHashes)) {
-            if (this.index.facts.get(factId)?.factHash !== factHash) factIds.add(factId)
-          }
-        }
-      }
+      collectChangedAttachmentIds()
     }
     if (factIds.size || topicIds.size) {
       const tombstone = { generation: toGeneration, factIds: [...factIds], topicIds: [...topicIds] }

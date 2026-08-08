@@ -6,11 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from 'ink'
 
 import {
-  MODEL_ALIASES,
   PROVIDER_BASE_URLS,
   PROVIDER_MODELS,
   PROVIDER_REASONING_TIERS,
-  calibrateContextBreakdown,
   createModelRegistry,
   estimateTokenCount,
   expandCommandBody,
@@ -26,22 +24,10 @@ import {
   supportsReasoningTier,
   wrapActivatedSkill,
 } from '@x-code-cli/core'
-import type {
-  AgentOptions,
-  CacheMissSummary,
-  ContextBreakdown,
-  DiffStats,
-  GoalState,
-  LanguageModel,
-  LoadedSession,
-  SkillDefinition,
-  StepStats,
-  TokenUsage,
-  UsageBreakdown,
-} from '@x-code-cli/core'
+import type { AgentOptions, CacheMissSummary, DiffStats, LanguageModel, LoadedSession } from '@x-code-cli/core'
+import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-code-cli/core'
 
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
-import { VERSION } from '../../version.js'
 import { createBrowserCommandHandler } from '../commands/browser.js'
 import { createDoctorCommandHandler } from '../commands/doctor.js'
 import { parseGoalCreateArgs, tokenizeArgs } from '../commands/goal.js'
@@ -51,12 +37,23 @@ import { createSkillCommandHandler } from '../commands/skill.js'
 import { useAgent } from '../hooks/use-agent.js'
 import { buildThemePreview } from '../render-diff.js'
 import { setSyntaxTheme } from '../syntax-highlight.js'
-import { GLYPH_BULLET, GLYPH_RESULT_BRACKET } from '../terminal-glyphs.js'
+import { GLYPH_BULLET } from '../terminal-glyphs.js'
 import { DEFAULT_THEME, THEMES, type ThemeName, getTheme, getThemeColors, parseThemeName, setTheme } from '../theme.js'
 import { formatCompactionResult, formatTokenCount, parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { ChatInput } from './ChatInput.js'
+import { SLASH_COMMANDS, buildHelpText } from './app/command-catalog.js'
+import { INIT_PROMPT, REVIEW_PROMPT } from './app/command-prompts.js'
+import {
+  canResumeGoalStatus,
+  compactionHintForResume,
+  formatGoalStatus,
+  formatRelativeTime,
+} from './app/session-format.js'
+import { formatUsageReport } from './app/usage-report.js'
 import { rebuildPalette } from './chat-input/palette.js'
+
+export { SLASH_COMMANDS } from './app/command-catalog.js'
 
 interface AppProps {
   model: LanguageModel
@@ -78,446 +75,6 @@ interface AppProps {
    *  the `xc --resume <id>` command. */
   onSessionInfoReady?: (getter: () => { sessionId: string; taskSlug: string; messageCount: number } | null) => void
 }
-
-/** Slash commands — built-in static set used for help text and tab completion.
- *  Skill commands are appended dynamically at runtime from the skill registry. */
-export const SLASH_COMMANDS = [
-  { name: '/help', description: 'Show this help message' },
-  {
-    name: '/model',
-    description: 'Pick a model (no-arg = interactive) — choice is saved',
-    argumentHint: '[model-id]',
-  },
-  {
-    name: '/thinking',
-    description: 'Toggle extended thinking on/off (no-arg = show status) — saved',
-    argumentHint: '[on|off]',
-  },
-  {
-    name: '/theme',
-    description: 'Pick UI theme (no-arg = interactive picker) — drives diff colors + syntax palette',
-    argumentHint: '[name]',
-  },
-  {
-    name: '/plan',
-    description: 'Toggle plan mode on/off (no-arg = show status) — saved',
-    argumentHint: '[on|off]',
-  },
-  { name: '/clear', description: 'Clear conversation history' },
-  { name: '/compact', description: 'Manually compress context' },
-  {
-    name: '/goal',
-    description: 'Run a durable, verifiable goal loop',
-    argumentHint: '<objective>|status|pause|resume|cancel|clear|steer|verify',
-    subcommands: [
-      { name: 'status', description: 'Show current goal state' },
-      { name: 'pause', description: 'Pause the active goal loop' },
-      { name: 'resume', description: 'Resume a paused or blocked goal loop' },
-      { name: 'cancel', description: 'Cancel the current goal' },
-      { name: 'clear', description: 'Clear current goal state' },
-      { name: 'edit', description: 'Edit objective or max-turns for the current goal' },
-      { name: 'steer', description: 'Add steering input for the next goal turn' },
-      { name: 'verify', description: 'Wake the goal runner to verify/continue' },
-    ],
-  },
-  { name: '/resume', description: 'Pick a past session in this project to resume', argumentHint: '[id]' },
-  {
-    name: '/rewind',
-    description: 'Roll back files + conversation to a previous user message (no-arg = picker)',
-    argumentHint: '[checkpoint-id]',
-  },
-  { name: '/init', description: 'Initialize project knowledge' },
-  { name: '/review', description: 'Review a pull request (no-arg = list open PRs)', argumentHint: '[PR]' },
-  { name: '/usage', description: 'Show current-session token usage (input/output/cache)' },
-  { name: '/usage-history', description: 'List past sessions in this project' },
-  {
-    name: '/memory',
-    description: 'Inspect and manage global long-term memory',
-    subcommands: [
-      { name: 'status', description: 'Show schema, generation, queue, worker, and invalid topics' },
-      { name: 'search', description: 'Search memory locally; add --semantic for AI topic selection' },
-      { name: 'explain', description: 'Explain the most recent recall decision' },
-      { name: 'reload', description: 'Reload manually edited topics and rebuild MEMORY.md' },
-    ],
-  },
-  {
-    name: '/mcp',
-    description: 'Manage MCP servers',
-    // Subcommand menu fires on `/mcp ` or `/mcp <prefix>`. Order matches
-    // handleMcp's switch in this file so the menu reflects every branch.
-    subcommands: [
-      { name: 'list', description: 'List configured MCP servers' },
-      { name: 'tools', description: 'List tools from connected servers (optionally filter by server)' },
-      { name: 'add', description: 'Add a new MCP server (stdio or http) to user / project config' },
-      { name: 'add-json', description: 'Add an MCP server from a raw JSON config object' },
-      { name: 'remove', description: 'Remove an MCP server from config' },
-      { name: 'auth', description: 'Authenticate an HTTP MCP server via OAuth' },
-      { name: 'logout', description: 'Clear stored OAuth tokens for a server' },
-      { name: 'refresh', description: 'Reload mcpServers from disk and reconnect' },
-    ],
-  },
-  {
-    name: '/skill',
-    description: 'Manage skills',
-    subcommands: [
-      { name: 'install', description: 'Fetch and install a skill from a URL' },
-      { name: 'list', description: 'List installed skills (with on/off state)' },
-      { name: 'refresh', description: 'Re-scan skills dirs and apply changes without restart' },
-      { name: 'disable', description: 'Disable a skill (kept on disk; run /skill refresh to apply now)' },
-      { name: 'enable', description: 'Re-enable a previously disabled skill' },
-      { name: 'uninstall', description: 'Delete a skill directory from disk' },
-    ],
-  },
-  {
-    name: '/plugin',
-    description: 'Manage plugins (bundled skills / agents / mcp / hooks)',
-    // Subcommands mirror handlePlugin's switch. `marketplace` is itself a
-    // sub-group with its own subcommands (add / remove / list / refresh / info).
-    subcommands: [
-      { name: 'list', description: 'List installed plugins (with enable state + source)' },
-      { name: 'info', description: "Show a plugin's manifest, contributions, and hooks" },
-      {
-        name: 'install',
-        description: 'Install a plugin from <name@marketplace>, git, github:owner/repo, or local path',
-      },
-      { name: 'uninstall', description: 'Remove a plugin (cache + settings entry; data dir preserved)' },
-      {
-        name: 'enable',
-        description: 'Enable a plugin (writes settings — restart for full effect; --scope=user|project)',
-      },
-      { name: 'disable', description: 'Disable a plugin without uninstalling (--scope=user|project)' },
-      { name: 'search', description: 'Search subscribed marketplaces by keyword' },
-      { name: 'update', description: 'Reinstall a plugin from its recorded source' },
-      { name: 'refresh', description: 'Live-reload plugins + skills/agents/commands/hooks/MCP servers' },
-      { name: 'doctor', description: 'Show plugin load errors and integration warnings' },
-      { name: 'marketplace', description: 'Manage marketplace subscriptions (add | remove | list | refresh | info)' },
-    ],
-  },
-  {
-    name: '/browser',
-    description: 'Toggle the browser sub-agent on/off (no-arg = status) — opt-in, saved',
-    subcommands: [
-      { name: 'on', description: 'Enable the browser agent (live web automation via @playwright/mcp)' },
-      { name: 'off', description: 'Disable the browser agent and close any running browser' },
-    ],
-  },
-  { name: '/doctor', description: 'Diagnose environment, API keys, MCP servers, plugins, and agents' },
-  { name: '/exit', description: 'Exit (flushes session)' },
-] as const
-
-/** Plain-English names for the usage-by-source buckets shown in the
- *  /usage attribution section. Keys mirror core's UsageSource. */
-const SOURCE_LABELS = {
-  main: 'Main agent',
-  'sub-agent': 'Sub-agents',
-  compaction: 'Compression',
-  vision: 'Vision fallback',
-} as const
-
-/** Render TokenUsage as a markdown block for /usage. cacheReadTokens is a
- *  subset of inputTokens, so the hit ratio is cacheRead / inputTokens — that
- *  matches what users care about ("of the prompt I sent, how much was cached"). */
-function formatUsageReport(
-  usage: TokenUsage,
-  modelId: string,
-  source: 'live' | 'snapshot' | 'history',
-  sessionName?: string,
-  stepStats?: StepStats[],
-  breakdown?: UsageBreakdown | null,
-  cacheMissSummary?: CacheMissSummary | null,
-  contextEstimate?: ContextBreakdown | null,
-): string {
-  const fmt = (n: number) => n.toLocaleString('en-US')
-  const hitRatio = usage.inputTokens > 0 ? `${((usage.cacheReadTokens / usage.inputTokens) * 100).toFixed(1)}%` : 'n/a'
-  const headerMap = {
-    live: '**Usage** (current session)',
-    snapshot: '**Usage** (last session — no turns yet)',
-    history: '**Usage** (history)',
-  }
-  const header = headerMap[source]
-  const lines = [header, '']
-  if (sessionName) lines.push(`- Session:         ${sessionName}`)
-  lines.push(`- Active model:    ${modelId}`)
-
-  // Cursor-style context breakdown: local per-category estimates scaled so
-  // they sum exactly to the last request's real reported count. Only
-  // meaningful for the live session (history snapshots can't rebuild the
-  // system prompt they used) and only after the first turn produced a count.
-  // The header carries the total, so there is no second "Total" row to
-  // confuse with the cumulative totals below.
-  if (contextEstimate && source === 'live' && usage.currentContextTokens > 0) {
-    const calibrated = calibrateContextBreakdown(contextEstimate, usage.currentContextTokens)
-    if (calibrated.length > 0) {
-      const window = getContextWindow(modelId)
-      const pct = Math.round((usage.currentContextTokens / window) * 100)
-      const labelW = Math.max(...calibrated.map((c) => c.label.length))
-      lines.push(
-        '',
-        `**Context usage** — ~${formatTokenCount(usage.currentContextTokens)} / ${formatTokenCount(window)} · ${pct}% (latest request, same number as the footer):`,
-      )
-      for (const category of calibrated) {
-        lines.push(`- ${category.label.padEnd(labelW)}  ${formatTokenCount(category.tokens).padStart(9)}`)
-      }
-    }
-  }
-
-  lines.push('', '**Session totals** (cumulative):')
-  lines.push(
-    `- Input:           ${fmt(usage.inputTokens)}`,
-    `- Output:          ${fmt(usage.outputTokens)}`,
-    `- Cache read:      ${fmt(usage.cacheReadTokens)}  (${hitRatio} of input)`,
-    `- Uncached input:  ${fmt(Math.max(0, usage.inputTokens - usage.cacheReadTokens))}`,
-    `- Cache creation:  ${fmt(usage.cacheCreationTokens)}`,
-    `- Total:           ${fmt(usage.totalTokens)}`,
-  )
-
-  // Source and model are two views over the SAME requests — each sums to
-  // Total, but they must never be added together. Hidden entirely in the
-  // default case (all main-agent traffic on one model); only shown when
-  // something non-obvious happened (sub-agents, compaction, vision, or a
-  // model switch mid-session).
-  if (breakdown) {
-    const sources = Object.entries(breakdown.bySource).filter(
-      ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,
-    )
-    const models = Object.entries(breakdown.byModel).filter(
-      ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,
-    )
-    if (sources.length > 1 || models.length > 1) {
-      lines.push('', '**Attribution** (the same totals, two ways — do not add them together):')
-      if (sources.length > 1) {
-        const parts = sources.map(([name, value]) => {
-          const label = SOURCE_LABELS[name as keyof typeof SOURCE_LABELS] ?? name
-          const tokens = fmt(value.inputTokens + value.outputTokens)
-          const share =
-            usage.totalTokens > 0
-              ? ` (${Math.round(((value.inputTokens + value.outputTokens) / usage.totalTokens) * 100)}%)`
-              : ''
-          return `${label} ${tokens}${share}`
-        })
-        lines.push(`- Who: ${parts.join(' · ')}`)
-      }
-      if (models.length > 1) {
-        const parts = models.map(([name, value]) => `${name} ${fmt(value.inputTokens + value.outputTokens)}`)
-        lines.push(`- Which model: ${parts.join(' · ')}`)
-      }
-    }
-  }
-  if (cacheMissSummary && (cacheMissSummary.expectedCount > 0 || cacheMissSummary.unexpectedCount > 0)) {
-    lines.push(
-      '',
-      '**Estimated re-billed input**:',
-      `- Expected: ${fmt(cacheMissSummary.expectedTokens)} (${cacheMissSummary.expectedCount} miss${cacheMissSummary.expectedCount === 1 ? '' : 'es'})`,
-      `- Unexpected: ${fmt(cacheMissSummary.unexpectedTokens)} (${cacheMissSummary.unexpectedCount} miss${cacheMissSummary.unexpectedCount === 1 ? '' : 'es'})`,
-    )
-    const probableTtlCount = cacheMissSummary.probableTtlCount ?? 0
-    if (probableTtlCount > 0) {
-      lines.push(
-        `- Probable TTL expiry: ${fmt(cacheMissSummary.probableTtlTokens ?? 0)} (${probableTtlCount} miss${probableTtlCount === 1 ? '' : 'es'}, included in Expected)`,
-      )
-    }
-  }
-  lines.push(
-    '',
-    '_Context usage covers only the most recent request; session totals accumulate every request. The per-row split is estimated; only the totals are provider-reported. Cache fields are provider-reported; asynchronous post-turn memory jobs are not included._',
-  )
-  if (stepStats && stepStats.length > 0) {
-    lines.push('', '**Steps:**', '')
-    const idxWidth = String(stepStats.length).length
-    for (let i = 0; i < stepStats.length; i++) {
-      const s = stepStats[i]!
-      const prompt = s.prompt || '(empty)'
-      const label = `[${String(i + 1).padStart(idxWidth)}]`
-      const pad = ' '.repeat(label.length + 1)
-      lines.push(
-        `${label} ${prompt}`,
-        `${pad}${GLYPH_RESULT_BRACKET}  Input: ${fmt(s.inputTokens)}  Output: ${fmt(s.outputTokens)}  Turns: ${s.turnCount}  Tools: ${s.toolCallCount}`,
-      )
-    }
-  }
-  return lines.join('\n')
-}
-
-/** Build a "context X% used — consider /compact" hint when a resumed
- *  session's last-known input-token count (or character estimate, whichever
- *  is larger) is past 60% of the model's context window. Returns null
- *  below the threshold. We use the loaded `tokenUsage.inputTokens` first
- *  (the real number the provider reported on the last turn) and fall
- *  back to a character-based estimate when no usage line was recorded
- *  (e.g. interrupted before the first turn finished). The threshold is
- *  intentionally lower than the auto-compaction trigger (80%) so the
- *  user has a chance to /compact manually before the next turn either
- *  succeeds noisily or fires the auto path. */
-function compactionHintForResume(tokens: number | null, estimatedTokens: number, modelId: string): string | null {
-  const window = getContextWindow(modelId)
-  const used = Math.max(tokens ?? 0, estimatedTokens)
-  if (used === 0) return null
-  const pct = (used / window) * 100
-  if (pct < 60) return null
-  return `\n\n_Context is at **${pct.toFixed(0)}%** of the ${window.toLocaleString('en-US')}-token window — consider \`/compact\` before continuing, or it'll auto-compress on the next turn._`
-}
-
-/** "5 minutes ago" / "2 hours ago" / "3 days ago" format, capped at days
- *  before falling back to a date. The picker shows this next to each
- *  session preview — relative time is more skimmable than ISO timestamps
- *  when you're scanning for "the one I worked on last week". */
-function formatRelativeTime(epochMs: number): string {
-  const diff = Date.now() - epochMs
-  const sec = Math.floor(diff / 1000)
-  if (sec < 60) return `${sec}s ago`
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min}m ago`
-  const hrs = Math.floor(min / 60)
-  if (hrs < 48) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 14) return `${days}d ago`
-  return new Date(epochMs).toISOString().slice(0, 10)
-}
-
-function canResumeGoalStatus(goal: GoalState): boolean {
-  return (
-    goal.status === 'active' || goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'max_turns'
-  )
-}
-
-function formatGoalTokenBudget(goal: GoalState, usage?: TokenUsage): string {
-  if (!goal.tokenBudget) return 'unlimited'
-  const used = usage ? Math.max(0, usage.totalTokens - goal.baselineTokens) : undefined
-  const remaining = used === undefined ? undefined : Math.max(0, goal.tokenBudget - used)
-  const total = goal.tokenBudget.toLocaleString('en-US')
-  return remaining === undefined ? total : `${remaining.toLocaleString('en-US')} remaining / ${total}`
-}
-
-function formatGoalStatus(goal: GoalState, usage?: TokenUsage): string {
-  const latest = goal.verificationResults.at(-1)
-  const verifiers = goal.verifiers.length
-    ? [
-        ...goal.verifiers.map((v, i) => {
-          if (v.kind === 'shell') return `${i + 1}. shell: \`${v.command}\``
-          if (v.kind === 'subagent') return `${i + 1}. subagent: ${v.agent}`
-          return `${i + 1}. file: ${v.path}`
-        }),
-        `${goal.verifiers.length + 1}. automatic semantic verifier`,
-      ].join('\n')
-    : 'automatic semantic verifier'
-  return [
-    '**Goal Status**',
-    '',
-    `- Objective: ${goal.objective}`,
-    `- Status: ${goal.status}`,
-    goal.status === 'active'
-      ? '- Background execution: running; `/goal status` does not pause it. Use `/goal pause` to stop after viewing status.'
-      : '',
-    `- Turns: ${goal.turnCount}/${goal.maxTurns ?? 'unlimited'}`,
-    `- Token budget: ${formatGoalTokenBudget(goal, usage)}`,
-    `- Pending transition: ${goal.pendingTransition?.kind ?? 'none'}`,
-    `- Completion verification: ${goal.pendingTransition?.kind === 'complete_requested' ? 'running' : 'idle'}`,
-    `- Latest verifier: ${latest ? `${latest.ok ? 'passed' : 'failed'} - ${latest.summary}` : 'none'}`,
-    `- Repeated blocker: ${goal.repeatedBlockerCount}`,
-    `- Repeated verification failure: ${goal.repeatedVerificationFailureCount}`,
-    '',
-    '**Verifiers**',
-    verifiers,
-    goal.finalSummary ? `\n**Final Summary**\n${goal.finalSummary}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-// formatUsageHistory was replaced by the interactive handleUsageHistory
-// picker inside the component — see handleUsageHistory().
-
-function buildHelpText(
-  skillCommands: readonly { name: string; description: string }[],
-  fileCommands: readonly { name: string; description?: string }[],
-): string {
-  const allCommands = [
-    ...SLASH_COMMANDS,
-    ...skillCommands.map((s) => ({ name: `/${s.name}`, description: s.description })),
-    // User / project / plugin markdown commands. Description is optional
-    // for these (frontmatter-less command files are still valid).
-    ...fileCommands.map((c) => ({ name: `/${c.name}`, description: c.description ?? '' })),
-  ]
-  return (
-    `X-Code CLI v${VERSION}\n\n` +
-    allCommands.map((c) => `  ${c.name.padEnd(16)} ${c.description}`).join('\n') +
-    `\n\nModel aliases: ${Object.keys(MODEL_ALIASES).join(', ')}` +
-    `\nKeyboard: Esc to interrupt the current turn · ${process.platform === 'darwin' ? '⌃C' : 'Ctrl+C'} (twice) to exit`
-  )
-}
-
-// Prompt body for `/init`. Submitted as the user message so the agent runs
-// its full toolchain (Read/Glob/Grep/Edit/Write) over the codebase and
-// authors AGENTS.md from real evidence rather than a static template.
-//
-// Style choices vs Claude Code's OLD_INIT:
-//   - Targets AGENTS.md (our convention) rather than CLAUDE.md.
-//   - Mentions AGENTS.local.md as the personal layer so the model doesn't
-//     dump per-user preferences (sandbox URLs, role, tone) into the
-//     team-shared file.
-//   - Carries the NEW_INIT minimalism rule ("delete every line that, if
-//     removed, would NOT cause the agent to make a mistake") — cheap to
-//     port and the single biggest win against bloated AGENTS.md output.
-//   - Asks the model to Edit-merge an existing AGENTS.md instead of
-//     overwriting, so user-authored content survives a re-run of /init.
-const INIT_PROMPT = `Please analyze this codebase and create an AGENTS.md file at the project root. AGENTS.md is loaded into every X-Code CLI (\`xc\`) session, so future agents will read it as their primary project context.
-
-What to include:
-1. Common commands the agent should prefer: how to build, lint, run tests, run a single test. Only include what's non-obvious from manifest files.
-2. High-level architecture that requires reading multiple files to understand — module boundaries, key data flows, the "big picture" a new contributor needs.
-3. Important conventions that DIFFER from language defaults (e.g. "prefer type over interface", "errors live in errors.ts, never inline").
-4. Non-obvious gotchas, required env vars, repo etiquette (branch naming, commit style).
-
-Usage notes:
-- If AGENTS.md already exists, read it first and use the Edit tool to merge improvements rather than overwriting — preserve the user's hand-written content.
-- Apply the minimalism test to every line: "If I removed this line, would the agent make a mistake?" If no, cut it. AGENTS.md is read every turn — bloat costs tokens forever.
-- If a README.md exists, mine it for project overview / commands / setup steps. If \`.cursor/rules/\`, \`.cursorrules\`, \`.github/copilot-instructions.md\`, \`.windsurfrules\`, or \`.clinerules\` exist, fold the important parts in.
-- Do not list every file or component — those are discoverable via Glob/Grep. Focus on what's NOT discoverable.
-- Do not invent sections like "Common Development Tasks", "Tips for Development", or "Support and Documentation" — only write what's expressly grounded in files you've read.
-- Do not include generic engineering advice ("write clean code", "add tests"), standard language conventions, or obvious commands ("npm test", "cargo test").
-- Personal preferences (the user's role, sandbox URLs, communication style) belong in AGENTS.local.md — gitignored, loaded alongside AGENTS.md. Mention this only if the user has clearly personal context to record; otherwise leave AGENTS.local.md alone.
-
-Prefix the file with:
-
-\`\`\`
-# AGENTS.md
-
-This file is loaded into the agent's context at the start of every session. Keep it concise — the agent reads it every turn.
-\`\`\`
-
-When you finish, summarize what you wrote (or what you changed if updating an existing file) in a few bullets so the user can review.`
-
-// Prompt body for `/review`. Mirrors Claude Code's local /review: a static
-// template that points the agent at `gh` and asks for a structured review.
-// `args` is the raw arg string after the command (PR number, or empty).
-//
-// The no-arg branch is intentionally locked down: empty `gh pr list` output =
-// no open PRs, full stop. We've seen the model otherwise spend 8+ tool calls
-// checking `gh auth`, branches, uncommitted diffs, etc. before pivoting to
-// review whatever it found — wasteful and unrequested. The "use `gh`
-// directly — no wrappers" line is there because models occasionally
-// hallucinate generic wrappers (rtk, gh-aux, …) on the first call.
-const REVIEW_PROMPT = (args: string) => `You are an expert code reviewer. Use \`gh\` directly — no wrappers.
-
-If no PR number is provided in the args:
-1. Run \`gh pr list\` to show open PRs.
-2. If the output is empty, reply with exactly: "No open PRs in this repository — re-run \`/review <number>\` to review a specific PR." and stop.
-3. Otherwise, list the open PRs and ask the user which to review. Stop and wait.
-4. Do NOT investigate further — no \`gh auth\`, no branch / diff / status checks, no reviewing uncommitted changes. The user will re-invoke /review.
-
-If a PR number is provided:
-1. Run \`gh pr view <number>\` to get PR details.
-2. Run \`gh pr diff <number>\` to get the diff.
-3. Write a concise but thorough review with clear sections and bullet points covering:
-   - Overview of what the PR does
-   - Code correctness
-   - Project conventions
-   - Performance implications
-   - Test coverage
-   - Security considerations
-   - Specific suggestions and risks
-
-PR number: ${args}`
 
 export function App({
   model,

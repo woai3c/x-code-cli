@@ -27,6 +27,8 @@ import {
 } from '@x-code-cli/core'
 import type { AgentOptions, PluginScope, PluginSource } from '@x-code-cli/core'
 
+import { parseScopeFlag } from './scope-flag.js'
+
 export interface PluginCommandDeps {
   options: AgentOptions
   addCommandMessage: (text: string, content: string) => void
@@ -51,19 +53,8 @@ export function formatPluginSource(s: PluginSource | undefined): string {
  *  shape as parseSkillScopeFlag). Default scope = 'user' so terse
  *  invocations stay terse. */
 function parsePluginScopeFlag(arg: string): { id: string; scope: PluginScope } {
-  const tokens = arg.split(/\s+/).filter(Boolean)
-  let scope: PluginScope = 'user'
-  const remaining: string[] = []
-  for (const tok of tokens) {
-    const m = tok.match(/^(?:--scope|-s)(?:=(.+))?$/)
-    if (m) {
-      const value = m[1]?.toLowerCase()
-      if (value === 'user' || value === 'project') scope = value
-      continue
-    }
-    remaining.push(tok)
-  }
-  return { id: remaining.join(' '), scope }
+  const { value, scope } = parseScopeFlag(arg, 'user')
+  return { id: value, scope }
 }
 
 export function createPluginCommandHandler(deps: PluginCommandDeps) {

@@ -19,10 +19,6 @@ export let S_BORDER_FOCUS = cellFg('borderFocus')
 /** Brand primary — live tool `(preview)`, completion/selection labels. */
 export let S_PRIMARY = cellFg('primary')
 export let S_PRIMARY_BOLD = cellFg('primary', { bold: true })
-/** Unfocused option rows (permission dialog) — the gray "inactive" rung. */
-export let S_TEXT_DIM = cellFg('textDim')
-/** Weakest gray rung — prompt glyph, placeholders. */
-export let S_TEXT_MUTED = cellFg('textMuted')
 /** Workhorse meta/hints gray — footer model label, menu descriptions,
  *  permission option labels. An explicit textDim hex rather than the
  *  ANSI dim attribute: `\x1b[2m` on the terminal default fg renders as
@@ -61,8 +57,6 @@ export function rebuildPalette(): void {
   S_BORDER_FOCUS = cellFg('borderFocus')
   S_PRIMARY = cellFg('primary')
   S_PRIMARY_BOLD = cellFg('primary', { bold: true })
-  S_TEXT_DIM = cellFg('textDim')
-  S_TEXT_MUTED = cellFg('textMuted')
   S_DIM = cellFg('textDim')
   S_SPINNER = cellFg('primary')
   S_SUCCESS = cellFg('success', { bold: true })

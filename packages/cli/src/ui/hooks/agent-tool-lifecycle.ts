@@ -39,6 +39,32 @@ function createToolProgressCallback(setState: ToolLifecycleDependencies['setStat
   }
 }
 
+function createCompletedToolMessage(
+  pending: PendingTool | undefined,
+  result: string,
+  isError: boolean | undefined,
+  durationMs: number,
+  now: () => number,
+  editPayload?: EditDiffPayload,
+): DisplayMessage {
+  const toolCall: DisplayToolCall = {
+    id: `tc-${now()}`,
+    toolName: pending?.toolName ?? 'unknown',
+    input: pending?.input ?? {},
+    output: result,
+    status: isError ? 'error' : 'completed',
+    durationMs,
+    ...(editPayload ? { editPayload } : {}),
+  }
+  return {
+    id: `tool-${now()}`,
+    role: 'assistant',
+    content: '',
+    toolCalls: [toolCall],
+    timestamp: now(),
+  }
+}
+
 export function createToolLifecycleCallbacks({
   setState,
   flushBuffer,
@@ -79,22 +105,7 @@ export function createToolLifecycleCallbacks({
 
       const durationMs = pending ? now() - pending.startedAt : 0
       setState((previous) => {
-        const toolCall: DisplayToolCall = {
-          id: `tc-${now()}`,
-          toolName: pending?.toolName ?? 'unknown',
-          input: pending?.input ?? {},
-          output: result,
-          status: isError ? 'error' : 'completed',
-          durationMs,
-          ...(editPayload ? { editPayload } : {}),
-        }
-        const message: DisplayMessage = {
-          id: `tool-${now()}`,
-          role: 'assistant',
-          content: '',
-          toolCalls: [toolCall],
-          timestamp: now(),
-        }
+        const message = createCompletedToolMessage(pending, result, isError, durationMs, now, editPayload)
         return {
           ...previous,
           activeToolCalls: previous.activeToolCalls.filter((tool) => tool.id !== toolCallId),
@@ -157,27 +168,11 @@ export function createGoalToolLifecycleCallbacks({
       const durationMs = pending ? now() - pending.startedAt : 0
 
       setState((previous) => {
-        const toolCall: DisplayToolCall = {
-          id: `tc-${now()}`,
-          toolName: pending?.toolName ?? 'unknown',
-          input: pending?.input ?? {},
-          output: result,
-          status: isError ? 'error' : 'completed',
-          durationMs,
-        }
+        const message = createCompletedToolMessage(pending, result, isError, durationMs, now)
         return {
           ...previous,
           activeToolCalls: previous.activeToolCalls.filter((tool) => tool.id !== toolCallId),
-          messages: [
-            ...previous.messages,
-            {
-              id: `tool-${now()}`,
-              role: 'assistant',
-              content: '',
-              toolCalls: [toolCall],
-              timestamp: now(),
-            },
-          ],
+          messages: [...previous.messages, message],
         }
       })
     },

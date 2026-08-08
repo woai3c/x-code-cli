@@ -29,14 +29,10 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } fro
 import { useStdout } from 'ink'
 
 import { debugLog, suggestRuleLabel } from '@x-code-cli/core'
-import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
 
 import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank } from '../file-completion.js'
-import type { ActiveToolCall } from '../hooks/use-agent.js'
 import { useFileCompletion } from '../hooks/use-file-completion.js'
 import { usePromptInput } from '../hooks/use-prompt-input.js'
-import { HISTORY_MAX, appendInputHistory, loadInputHistory } from '../input-history.js'
-import type { InputHistoryEntry } from '../input-history.js'
 import { type PastedContents, expandPasteRefs, formatPasteRef, stripTrailingRef } from '../paste-refs.js'
 import { renderInlineMarkdown } from '../render-markdown.js'
 import {
@@ -62,6 +58,12 @@ import {
 import { charWidth, sliceByWidth, visualWidth } from '../text-width.js'
 import { formatTokenCount, getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
 import { type Cell, ansiTextToCells, cellsEqual, renderRowToAnsi, textToCells } from './chat-input/cells.js'
+import {
+  buildVisualLines,
+  computePostContentScrollRows,
+  locateVisualCursor,
+  moveCursorVisual,
+} from './chat-input/geometry.js'
 import {
   BSU,
   ESU_HIDE,
@@ -93,7 +95,8 @@ import {
   truncatePathFromStart,
   wrapCellsToRows,
 } from './chat-input/text-helpers.js'
-import type { MenuItem, PermissionRequest, SelectRequest, SlashCommand, SpinnerState } from './chat-input/types.js'
+import type { ChatInputProps, MenuItem } from './chat-input/types.js'
+import { useInputHistory } from './chat-input/use-input-history.js'
 
 const PASTE_REF_MIN_LINES = 3
 const PASTE_REF_MIN_CHARS = 400
@@ -104,194 +107,12 @@ const PROMPT_WIDTH = 2
 const MAX_AT_RESULTS = 50
 const MAX_VISIBLE_MENU_ITEMS = 8
 
-interface ChatInputProps {
-  /** All scrollback messages. New entries are committed to the terminal
-   *  scrollback (above our cell frame) via direct stdout writes. We own the
-   *  entire bottom region — Ink must NOT also write scrollback, or its
-   *  log-update will fight us for cursor position. */
-  messages: readonly DisplayMessage[]
-  /** Rows the startup banner (printHeader) occupies. Used to seed the
-   *  "blank rows above frame" tracker so the first dialog grow doesn't
-   *  needlessly pre-scroll rows the banner left blank. */
-  initialContentRows?: number
-  onSubmit: (text: string) => void
-  /** Fired on Ctrl+C. Wired to the App's double-press handler — first press
-   *  cancels the in-flight turn (if any) and arms the exit hint, second
-   *  press within the arm window exits the process. */
-  onInterrupt: () => void
-  /** Fired on Esc when a turn is in flight (`isLoading`). Mirrors Claude
-   *  Code's `chat:cancel`: cancels the AI request + running tool, but
-   *  never exits the process. No-op when no modal is up. */
-  onEscapeCancel?: () => void
-  /** True while an AI request / tool is running. Drives the Esc-cancel
-   *  routing and the `esc to interrupt` spinner hint. */
-  isLoading?: boolean
-  /** Transient one-line notice shown below the input box, in the same
-   *  footer slot as the plan-mode / accept-edits indicators (e.g. "Press
-   *  Ctrl+C again to exit"). Cleared by the parent after a short timeout. */
-  notice?: string | null
-  /** Ignore keyboard input (and hide the input cursor). */
-  disabled?: boolean
-  /** Fully hide the region (e.g. while a SelectOptions dialog is showing
-   *  and Ink still owns the bottom region). */
-  hidden?: boolean
-  /** If non-null, render a spinner line above the input. */
-  spinner?: SpinnerState | null
-  /** In-flight tool calls. When non-empty, rendered in place of the generic
-   *  "Thinking..." spinner: each call shows its own bullet + progress line
-   *  (`● Tool(preview)` / `⎿ ⠋ progressText`). Progress text streams in via
-   *  `onToolProgress`. Commits to scrollback via the regular tool-result
-   *  DisplayMessage path once the tool finishes. */
-  activeToolCalls?: readonly ActiveToolCall[]
-  /** Live checklist from the model's `todoWrite` tool. Rendered as a
-   *  compact panel above the spinner (☐ pending, ◼ in_progress, ✔
-   *  completed). Empty array hides the panel — zero visual cost when
-   *  the model isn't using TodoWrite. */
-  todos?: readonly TodoItem[]
-  /** Plain-text messages submitted while a turn is in flight, waiting for
-   *  injection at the agent loop's next tool boundary. Rendered as a dim
-   *  pending list above the spinner; ↑ on an empty input pops the tail
-   *  back into the input box for editing (LIFO, Codex Alt+Up style). */
-  queuedMessages?: readonly { id: string; text: string }[]
-  /** Remove one queued message after ↑ popped it back into the input. */
-  onPopQueued?: (id: string) => void
-  /** One-shot request to replace the input contents (Esc abort restoring
-   *  un-injected queued messages as a draft). Applied when `nonce`
-   *  changes, never on identity alone. */
-  draftRestore?: { text: string; nonce: number } | null
-  /** Optional error string shown as a dedicated row above the spinner. */
-  errorMessage?: string | null
-  /** If non-null, render a Permission dialog inside our cell buffer AND
-   *  route keyboard (Up/Down/Enter/y/n) to resolve it. Rendering it
-   *  ourselves instead of letting Ink draw it is the ONLY way to avoid
-   *  zombie frames: Ink's log-update uses the terminal's single DEC
-   *  cursor-save register (`\x1b7`), which clobbers any position we try
-   *  to anchor on — so after every Permission cycle we couldn't reliably
-   *  erase the previous frame. With Permission inside our frame, Ink's
-   *  dynamic region stays permanently empty and there's no contention. */
-  permission?: PermissionRequest | null
-  /** If non-null, render a select-options dialog inside our cell buffer AND
-   *  route Up/Down/Enter to resolve it. Kept in-frame for the same reason
-   *  as `permission`: Ink's dynamic region leaves blank rows in scrollback
-   *  when a tall dialog unmounts, because terminal auto-scroll on growth
-   *  isn't reversible on shrink. */
-  selectRequest?: SelectRequest | null
-  commands?: readonly SlashCommand[]
-  /** Current approval mode, drives the indicator row beneath the input
-   *  (`⏸ plan mode` / `⚡ accept edits`). Defaults to 'default' — no
-   *  indicator rendered. */
-  permissionMode?: 'default' | 'acceptEdits' | 'plan'
-  /** Context-window occupancy for the right side of the footer row.
-   *  Renders as `6.6k / 200k · 3%` — gives the user a quick "how full is
-   *  the window" reading without staring at a single arrow-token number.
-   *  Mirrors the Gemini-CLI / opencode pattern (token info lives in the
-   *  footer, not next to the spinner). Pass null to hide entirely (e.g.
-   *  before any API response has landed). */
-  contextUsage?: { used: number; window: number } | null
-  /** Friendly label of the active model (e.g. `Kimi K3`). Always rendered
-   *  on the right side of the footer row; context usage appends after it
-   *  when available. Being always-set makes the footer row permanent
-   *  (1-row footprint even in a fresh session). */
-  modelLabel?: string
-}
-
-// ── Component ───────────────────────────────────────────────────────────
-
-export function computePostContentScrollRows(
-  startRow: number,
-  contentRows: number,
-  frameTop: number,
-  terminalRows: number,
-): number {
-  const naturalScroll = Math.max(0, startRow + contentRows - 1 - terminalRows)
-  const effectiveContentEnd = Math.min(terminalRows, startRow + contentRows - 1 - naturalScroll)
-  return Math.max(0, effectiveContentEnd - frameTop + 1)
-}
-
-// ── Input soft-wrap geometry ───────────────────────────────────────────
-// Single source of truth for how raw input text maps onto visual rows:
-// the render effect paints with these helpers and Up/Down cursor movement
-// navigates in the same coordinate system. Two independent computations
-// would eventually drift on wide-char handling and the wrap-boundary
-// cursor-ownership rule.
-
-type VisualLine = { text: string; rawLineIdx: number; startCol: number }
-
-/** Soft-wrap each raw line at `vpWidth` columns into visual lines. */
-export function buildVisualLines(rawLines: string[], vpWidth: number): VisualLine[] {
-  const visualLines: VisualLine[] = []
-  for (let r = 0; r < rawLines.length; r++) {
-    const line = rawLines[r]
-    if (line.length === 0) {
-      visualLines.push({ text: '', rawLineIdx: r, startCol: 0 })
-      continue
-    }
-    let pos = 0
-    while (pos < line.length) {
-      const chunk = sliceByWidth(line.slice(pos), vpWidth)
-      const advance = chunk.length > 0 ? chunk.length : line.length - pos // wide-char-overflow safety
-      visualLines.push({ text: chunk, rawLineIdx: r, startCol: pos })
-      pos += advance
-    }
-  }
-  return visualLines
-}
-
-/** Map a raw cursor offset to (visualLine, col-within-visual-line). When
- *  the cursor sits at the end of a wrapped line that continues on the next
- *  visual line, ownership goes to the NEXT line's leading position, for
- *  UX parity with shell prompts. */
-export function locateVisualCursor(
-  visualLines: VisualLine[],
-  rawLines: string[],
-  cursor: number,
-): { line: number; col: number } {
-  let rawCursorLine = 0,
-    cursorColInRaw = cursor
-  let charsSoFar = 0
-  for (let i = 0; i < rawLines.length; i++) {
-    if (cursor >= charsSoFar && cursor <= charsSoFar + rawLines[i].length) {
-      rawCursorLine = i
-      cursorColInRaw = cursor - charsSoFar
-      break
-    }
-    charsSoFar += rawLines[i].length + 1
-  }
-  for (let v = 0; v < visualLines.length; v++) {
-    const vl = visualLines[v]
-    if (vl.rawLineIdx !== rawCursorLine) continue
-    const endCol = vl.startCol + vl.text.length
-    const isLastChunkOfRawLine = v + 1 >= visualLines.length || visualLines[v + 1].rawLineIdx !== rawCursorLine
-    if (
-      cursorColInRaw >= vl.startCol &&
-      (cursorColInRaw < endCol || (cursorColInRaw === endCol && isLastChunkOfRawLine))
-    ) {
-      return { line: v, col: cursorColInRaw - vl.startCol }
-    }
-  }
-  return { line: 0, col: 0 }
-}
-
-/** Move the cursor `delta` VISUAL lines up/down within `text`, preserving
- *  the display column. Returns the new raw cursor offset, or `null` when
- *  the cursor is already on the first/last visual line — the null is what
- *  lets Up/Down handlers fall through to the history-navigation path. */
-export function moveCursorVisual(text: string, cursor: number, delta: number, vpWidth: number): number | null {
-  const rawLines = text.length === 0 ? [''] : text.split('\n')
-  const visualLines = buildVisualLines(rawLines, vpWidth)
-  const { line, col } = locateVisualCursor(visualLines, rawLines, cursor)
-  const targetLine = Math.max(0, Math.min(visualLines.length - 1, line + delta))
-  if (targetLine === line) return null
-  const target = visualLines[targetLine]
-  // Preserve the DISPLAY column, not the char index: sliceByWidth stops
-  // before a wide char that would straddle the boundary, which doubles as
-  // the clamp when the target line is narrower than the desired column.
-  const desiredWidth = visualWidth(visualLines[line].text.slice(0, col))
-  const targetCol = sliceByWidth(target.text, desiredWidth).length
-  let newPos = 0
-  for (let i = 0; i < target.rawLineIdx; i++) newPos += rawLines[i].length + 1
-  return newPos + target.startCol + targetCol
-}
+export {
+  buildVisualLines,
+  computePostContentScrollRows,
+  locateVisualCursor,
+  moveCursorVisual,
+} from './chat-input/geometry.js'
 
 export function ChatInput({
   messages,
@@ -765,122 +586,17 @@ export function ChatInput({
     return true
   }
 
-  // ── Input history (Up/Down) ─────────────────────────────────────────────
-  //
-  // Persisted to `.x-code/history.jsonl` (project-local, append-only) and
-  // mirrored into `historyRef` for synchronous Up/Down access. On mount we
-  // load the most recent HISTORY_MAX entries from disk; on every successful
-  // submit we both push to the ref AND fire-and-forget append to disk. Up at
-  // the logical first line walks BACK through entries (newest first); Down at
-  // the logical last line walks forward and, past index 0, restores the
-  // draft captured on the first Up press. Mirrors Claude Code's
-  // useArrowKeyHistory + history.jsonl machinery — see `../input-history.ts`
-  // for the rationale on per-project vs. Claude Code's global-with-project-
-  // field design.
-  //
-  // Why store the pre-expansion text + pastedContents instead of the expanded
-  // string: the expanded string has the entire pasted block inlined, so
-  // restoring it would balloon the input box with the full paste content.
-  // Storing the `[#N +M lines]` reference keeps the visual compactness the
-  // user originally had at submit time.
-  const historyRef = useRef<InputHistoryEntry[]>([])
-  /** 0 = not navigating (draft on screen). 1 = most-recent submitted entry,
-   *  2 = the one before that, etc. Refs (not state) because navigation must
-   *  read its own monotonic counter synchronously — React state updates lag
-   *  by a render and rapid Up/Down presses see stale values. */
-  const historyIndexRef = useRef(0)
-  /** Snapshot of the user's in-progress input the moment they FIRST pressed
-   *  Up. Restored when Down brings them back to index 0 so a stray Up doesn't
-   *  destroy half-typed work. */
-  const historyDraftRef = useRef<{ text: string; cursor: number; pasted: PastedContents } | null>(null)
-
-  // Seed from disk once on mount. `process.cwd()` is captured here rather
-  // than at every appendInputHistory call so an interactive `cd` inside the
-  // agent doesn't end up reading from one project and writing to another.
-  // No setState — `historyRef` is a ref, the load just populates it for
-  // the next Up press. Failures are silent (loadInputHistory swallows).
-  const initialCwdRef = useRef(process.cwd())
-  useEffect(() => {
-    let cancelled = false
-    void loadInputHistory(initialCwdRef.current).then((entries) => {
-      if (cancelled) return
-      historyRef.current = entries
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const resetHistoryNav = () => {
-    historyIndexRef.current = 0
-    historyDraftRef.current = null
-  }
-
-  const pushHistory = (raw: string, pasted: PastedContents) => {
-    if (!raw.trim()) return
-    // Bash-style ignoredups: skip if identical to the most recent entry. The
-    // user pressing Up + Enter to re-run the previous command shouldn't fill
-    // history with the same line — and we don't want to duplicate it on disk
-    // either, so the dedupe gate guards BOTH the in-memory ref and the
-    // appendFile call below.
-    const last = historyRef.current[historyRef.current.length - 1]
-    if (last && last.text === raw) return
-    const entry: InputHistoryEntry = { text: raw, pasted: { ...pasted }, ts: Date.now() }
-    historyRef.current.push(entry)
-    if (historyRef.current.length > HISTORY_MAX) historyRef.current.shift()
-    // Fire-and-forget. Errors are swallowed inside appendInputHistory — a
-    // disk hiccup must not block the agent loop or surface to the user.
-    // Pin to startup cwd so a tool-driven `cd` mid-session doesn't split
-    // writes across two `.x-code/history.jsonl` files.
-    void appendInputHistory(entry, initialCwdRef.current)
-  }
-
-  /** Replace the current input with `entry`. `cursorAt` mirrors Claude Code's
-   *  `cursorToStart` flag: Up navigation lands at index 0 so the next Up press
-   *  immediately advances (cursor can't go further up); Down navigation lands
-   *  at the end so the next Down press immediately advances forward. */
-  const restoreHistoryEntry = (entry: { text: string; pasted: PastedContents }, cursorAt: 'start' | 'end') => {
-    dispatch({ type: 'SET_TEXT', text: entry.text, cursor: cursorAt === 'start' ? 0 : entry.text.length })
-    setPastedContents({ ...entry.pasted })
-    setCompletionIndex(0)
-    setAtCompletionIndex(0)
-  }
-
-  const navigateHistoryUp = () => {
-    if (historyRef.current.length === 0) return
-    if (historyIndexRef.current >= historyRef.current.length) return
-    if (historyIndexRef.current === 0) {
-      historyDraftRef.current = {
-        text,
-        cursor: cursorRef.current,
-        pasted: { ...pastedContents },
-      }
-    }
-    historyIndexRef.current += 1
-    const entry = historyRef.current[historyRef.current.length - historyIndexRef.current]
-    if (entry) restoreHistoryEntry(entry, 'start')
-  }
-
-  const navigateHistoryDown = () => {
-    if (historyIndexRef.current <= 0) return
-    historyIndexRef.current -= 1
-    if (historyIndexRef.current === 0) {
-      const draft = historyDraftRef.current
-      historyDraftRef.current = null
-      if (draft) {
-        dispatch({ type: 'SET_TEXT', text: draft.text, cursor: draft.cursor })
-        setPastedContents({ ...draft.pasted })
-      } else {
-        dispatch({ type: 'RESET' })
-        setPastedContents({})
-      }
-      setCompletionIndex(0)
-      setAtCompletionIndex(0)
-    } else {
-      const entry = historyRef.current[historyRef.current.length - historyIndexRef.current]
-      if (entry) restoreHistoryEntry(entry, 'end')
-    }
-  }
+  const { isNavigatingHistory, navigateHistoryDown, navigateHistoryUp, pushHistory, resetHistoryNav } = useInputHistory(
+    {
+      text,
+      cursorRef,
+      pastedContents,
+      dispatch,
+      setPastedContents,
+      setCompletionIndex,
+      setAtCompletionIndex,
+    },
+  )
 
   usePromptInput({
     enabled: !disabled && !hidden,
@@ -1215,7 +931,7 @@ export function ChatInput({
         // trapped with no way to keep scrolling back. With 2+ matches the
         // menu's cycling is meaningful, so it wins even mid-history; with
         // 0/1 matches we fall through to cursor + history nav.
-        const inHistoryNav = historyIndexRef.current > 0
+        const inHistoryNav = isNavigatingHistory()
         if (activeMenu === 'at' && atMatches.length > 0 && (!inHistoryNav || atMatches.length > 1)) {
           setAtCompletionIndex((p) => (p - 1 + atMatches.length) % atMatches.length)
           return
@@ -1242,7 +958,7 @@ export function ChatInput({
         return
       }
       if (key === 'down') {
-        const inHistoryNav = historyIndexRef.current > 0
+        const inHistoryNav = isNavigatingHistory()
         if (activeMenu === 'at' && atMatches.length > 0 && (!inHistoryNav || atMatches.length > 1)) {
           setAtCompletionIndex((p) => (p + 1) % atMatches.length)
           return

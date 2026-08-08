@@ -956,6 +956,40 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     await appendHeader(ls, modelIdRef.current, firstPrompt)
   }, [])
 
+  const executeGoalLoop = useCallback(
+    async (ls: LoopState, goalId: string, signal: AbortSignal): Promise<void> => {
+      await runGoalLoop({
+        state: ls,
+        model: modelRef.current,
+        options: {
+          ...options,
+          modelId: modelIdRef.current,
+          thinking: thinkingRef.current,
+          permissionMode: permissionModeRef.current,
+          abortSignal: signal,
+        },
+        callbacks: createGoalCallbacks(),
+        goalId,
+        signal,
+        runAgentTurn: async (content, turnOptions) => {
+          const result = await submit(content, {
+            silent: true,
+            toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
+            maxTurns: turnOptions?.finalSummary ? 1 : undefined,
+            signal,
+            skipIdleDrain: true,
+          })
+          if (!result) throw new Error('Goal agent turn did not complete')
+          return {
+            ...result,
+            text: extractLastAssistantText(result.state.messages),
+          }
+        },
+      })
+    },
+    [createGoalCallbacks, options, submit],
+  )
+
   const runGoal = useCallback(
     async (command: RunGoalCommand): Promise<void> => {
       const ls = ensureLoopState()
@@ -972,34 +1006,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
       await goalCoordinatorRef.current.run(goal.id, async (signal) => {
         try {
-          await runGoalLoop({
-            state: ls,
-            model: modelRef.current,
-            options: {
-              ...options,
-              modelId: modelIdRef.current,
-              thinking: thinkingRef.current,
-              permissionMode: permissionModeRef.current,
-              abortSignal: signal,
-            },
-            callbacks: createGoalCallbacks(),
-            goalId: goal.id,
-            signal,
-            runAgentTurn: async (content, turnOptions) => {
-              const result = await submit(content, {
-                silent: true,
-                toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
-                maxTurns: turnOptions?.finalSummary ? 1 : undefined,
-                signal,
-                skipIdleDrain: true,
-              })
-              if (!result) throw new Error('Goal agent turn did not complete')
-              return {
-                ...result,
-                text: extractLastAssistantText(result.state.messages),
-              }
-            },
-          })
+          await executeGoalLoop(ls, goal.id, signal)
         } finally {
           if (loopStateRef.current) {
             void appendGoalState(loopStateRef.current)
@@ -1014,7 +1021,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         }
       })
     },
-    [createGoalCallbacks, ensureLoopState, options, prepareGoalSession, submit],
+    [ensureLoopState, executeGoalLoop, prepareGoalSession],
   )
 
   const drainPendingInteractions = useCallback(() => {
@@ -1028,18 +1035,25 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (pendingQuestion) pendingQuestion.resolve(pendingQuestion.abortAnswer)
   }, [])
 
+  const stopGoalRun = useCallback(
+    async (ls: LoopState, goal: GoalState): Promise<void> => {
+      abortControllerRef.current?.abort()
+      drainPendingInteractions()
+      await goalCoordinatorRef.current.interrupt(goal.id)
+      await appendGoalState(ls)
+      setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: false }))
+    },
+    [drainPendingInteractions],
+  )
+
   const pauseGoal = useCallback(async (): Promise<GoalState | null> => {
     const ls = loopStateRef.current
     if (!ls?.goal) return null
     if (ls.goal.status !== 'active') return null
     const goal = pauseCoreGoal(ls)
-    abortControllerRef.current?.abort()
-    drainPendingInteractions()
-    await goalCoordinatorRef.current.interrupt(goal.id)
-    await appendGoalState(ls)
-    setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: false }))
+    await stopGoalRun(ls, goal)
     return goal
-  }, [drainPendingInteractions])
+  }, [stopGoalRun])
 
   const resumeGoal = useCallback(async (): Promise<GoalState | null> => {
     const ls = loopStateRef.current
@@ -1054,31 +1068,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
     goalCoordinatorRef.current.wake(goal.id, async (signal) => {
       try {
-        await runGoalLoop({
-          state: ls,
-          model: modelRef.current,
-          options: {
-            ...options,
-            modelId: modelIdRef.current,
-            thinking: thinkingRef.current,
-            permissionMode: permissionModeRef.current,
-            abortSignal: signal,
-          },
-          callbacks: createGoalCallbacks(),
-          goalId: goal.id,
-          signal,
-          runAgentTurn: async (content, turnOptions) => {
-            const result = await submit(content, {
-              silent: true,
-              toolFilter: turnOptions?.finalSummary ? { allow: [] } : undefined,
-              maxTurns: turnOptions?.finalSummary ? 1 : undefined,
-              signal,
-              skipIdleDrain: true,
-            })
-            if (!result) throw new Error('Goal agent turn did not complete')
-            return { ...result, text: extractLastAssistantText(result.state.messages) }
-          },
-        })
+        await executeGoalLoop(ls, goal.id, signal)
       } finally {
         setState((prev) => ({
           ...prev,
@@ -1088,19 +1078,15 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       }
     })
     return goal
-  }, [createGoalCallbacks, options, submit])
+  }, [executeGoalLoop])
 
   const cancelGoal = useCallback(async (): Promise<GoalState | null> => {
     const ls = loopStateRef.current
     if (!ls?.goal) return null
     const goal = cancelCoreGoal(ls)
-    abortControllerRef.current?.abort()
-    drainPendingInteractions()
-    await goalCoordinatorRef.current.interrupt(goal.id)
-    await appendGoalState(ls)
-    setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: false }))
+    await stopGoalRun(ls, goal)
     return goal
-  }, [drainPendingInteractions])
+  }, [stopGoalRun])
 
   const clearGoal = useCallback(async (): Promise<void> => {
     const ls = loopStateRef.current

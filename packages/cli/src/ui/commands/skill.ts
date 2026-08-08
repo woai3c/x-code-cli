@@ -19,6 +19,8 @@ import {
 } from '@x-code-cli/core'
 import type { AgentOptions, SkillDefinition, SkillSettingsScope } from '@x-code-cli/core'
 
+import { parseScopeFlag } from './scope-flag.js'
+
 export interface SkillCommandDeps {
   options: AgentOptions
   addCommandMessage: (text: string, content: string) => void
@@ -40,19 +42,8 @@ function extractSkillName(content: string): string | null {
  *  skill's source. Unknown scope strings are ignored (scope stays
  *  undefined) — keeps the parser permissive. */
 function parseSkillScopeFlag(arg: string): { name: string; scope?: SkillSettingsScope } {
-  const tokens = arg.split(/\s+/).filter(Boolean)
-  let scope: SkillSettingsScope | undefined
-  const remaining: string[] = []
-  for (const tok of tokens) {
-    const m = tok.match(/^(?:--scope|-s)(?:=(.+))?$/)
-    if (m) {
-      const value = m[1]?.toLowerCase()
-      if (value === 'user' || value === 'project') scope = value
-      continue
-    }
-    remaining.push(tok)
-  }
-  return { name: remaining.join(' '), scope }
+  const { value, scope } = parseScopeFlag(arg)
+  return { name: value, scope }
 }
 
 export function createSkillCommandHandler(deps: SkillCommandDeps) {

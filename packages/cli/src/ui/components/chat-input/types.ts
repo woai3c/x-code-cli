@@ -1,4 +1,32 @@
 // ChatInput public + internal data types.
+import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
+
+import type { ActiveToolCall } from '../../hooks/use-agent.js'
+
+export interface ChatInputProps {
+  messages: readonly DisplayMessage[]
+  initialContentRows?: number
+  onSubmit: (text: string) => void
+  onInterrupt: () => void
+  onEscapeCancel?: () => void
+  isLoading?: boolean
+  notice?: string | null
+  disabled?: boolean
+  hidden?: boolean
+  spinner?: SpinnerState | null
+  activeToolCalls?: readonly ActiveToolCall[]
+  todos?: readonly TodoItem[]
+  queuedMessages?: readonly { id: string; text: string }[]
+  onPopQueued?: (id: string) => void
+  draftRestore?: { text: string; nonce: number } | null
+  errorMessage?: string | null
+  permission?: PermissionRequest | null
+  selectRequest?: SelectRequest | null
+  commands?: readonly SlashCommand[]
+  permissionMode?: 'default' | 'acceptEdits' | 'plan'
+  contextUsage?: { used: number; window: number } | null
+  modelLabel?: string
+}
 
 /** One row in the slash-completion menu. Top-level command rows and
  *  subcommand rows are both rendered through this shape — display columns

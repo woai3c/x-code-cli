@@ -501,7 +501,7 @@ function findSlotCandidates(factId: string, topicId: string, topics: Iterable<Me
   return candidates
 }
 
-function incomingWins(existing: MemoryFact, topic: MemoryTopic, evidence: MemoryOperation['evidence']): boolean {
+function incomingWins(existing: MemoryFact, evidence: MemoryOperation['evidence']): boolean {
   const incoming = latestEvidence(evidence)
   if (!incoming) return false
   const incomingTime = Date.parse(incoming.occurredAt)
@@ -848,7 +848,7 @@ export class MemoryStore {
           })
           continue
         }
-        if (existing && !incomingWins(existing.fact, existing.topic, operation.evidence)) {
+        if (existing && !incomingWins(existing.fact, operation.evidence)) {
           notices.push({
             action: 'failed',
             topicId: operation.topicId,
