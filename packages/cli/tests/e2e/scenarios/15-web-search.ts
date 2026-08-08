@@ -7,17 +7,17 @@ const scenario: Scenario = {
   requiresReason: 'set TAVILY_API_KEY or BRAVE_API_KEY to enable',
   async run(ctx) {
     const r = await ctx.runCli(
-      'Use the webSearch tool to find the official Anthropic documentation URL for prompt caching, ' +
+      'Use the webSearch tool to find the Wikipedia article URL for prompt engineering, ' +
         'then quote the URL in your final answer.',
       { args: ['--max-turns', '6'] },
     )
     ctx.expect.exitCode(r, 0)
-    ctx.expect.toolCalled(r, 'webSearch', { query: /(prompt[- ]?caching|cache|anthropic)/i })
-    // Accept either the exact docs subdomain or the broader anthropic.com —
-    // search results are non-deterministic and models sometimes describe the
-    // URL without including the exact subdomain prefix.
-    ctx.expect.assistantMentions(r, /anthropic\.com/i)
-    ctx.expect.assistantMentions(r, /prompt[- ]?cach/i)
+    ctx.expect.toolCalled(r, 'webSearch', { query: /(prompt[- ]?engin|wikipedia)/i })
+    // Wikipedia article URLs are stable — no vendor domain churn like docs sites
+    // (e.g. Anthropic moved docs.anthropic.com → platform.claude.com), so the
+    // assertion can pin the exact domain.
+    ctx.expect.assistantMentions(r, /wikipedia\.org/i)
+    ctx.expect.assistantMentions(r, /prompt[- ]?engin/i)
     ctx.expect.noToolErrors(r)
   },
 }
