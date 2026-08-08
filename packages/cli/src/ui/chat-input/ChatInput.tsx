@@ -139,6 +139,19 @@ export function ChatInput({
     textRef.current = text
     cursorRef.current = cursor
   }, [cursor, text])
+
+  // Insert text at the cursor, mirroring the transition into
+  // textRef/cursorRef synchronously. Those refs are otherwise refreshed
+  // only by the layout effect AFTER React commits, so a burst of inserts
+  // within one commit window (a paste split into rapid onPaste/onText
+  // calls on non-bracketed Windows terminals) would all read the stale
+  // cursor and splice later chunks in at position 0 — scrambling order.
+  const insertAtCursor = (chunk: string): void => {
+    const pos = cursorRef.current
+    dispatch({ type: 'INSERT', pos, chunk })
+    textRef.current = textRef.current.slice(0, pos) + chunk + textRef.current.slice(pos)
+    cursorRef.current = pos + chunk.length
+  }
   const [pastedContents, setPastedContents] = useState<PastedContents>({})
   // One-shot draft restore (Esc abort with un-injected queued messages).
   // Keyed on `nonce` so consecutive restores with identical text still
@@ -607,14 +620,14 @@ export function ChatInput({
           return
         }
         if (dialogSlashDraft) {
-          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
+          insertAtCursor(chunk)
           setCompletionIndex(0)
         }
         return
       }
       if (selectRequest) {
         if (dialogSlashDraft) {
-          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
+          insertAtCursor(chunk)
           setCompletionIndex(0)
           return
         }
@@ -630,21 +643,21 @@ export function ChatInput({
         }
         return
       }
-      dispatch({ type: 'INSERT', pos: cursorRef.current, chunk })
+      insertAtCursor(chunk)
       setCompletionIndex(0)
     },
     onPaste: (content) => {
       const dialogSlashPaste = content.trimStart().startsWith('/')
       if (permission) {
         if (dialogSlashPaste) {
-          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: content })
+          insertAtCursor(content)
           setCompletionIndex(0)
         }
         return
       }
       if (selectRequest) {
         if (dialogSlashPaste) {
-          dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: content })
+          insertAtCursor(content)
           setCompletionIndex(0)
           return
         }
@@ -663,14 +676,12 @@ export function ChatInput({
       }
       const lineCount = content.split(/\r\n|\r|\n/).length
       const isLarge = lineCount >= PASTE_REF_MIN_LINES || content.length >= PASTE_REF_MIN_CHARS
-      const pos = cursorRef.current
       if (isLarge) {
         const id = nextPasteIdRef.current++
         setPastedContents((prev) => ({ ...prev, [id]: { id, content, lineCount } }))
-        const ref = formatPasteRef(id, lineCount)
-        dispatch({ type: 'INSERT', pos, chunk: ref })
+        insertAtCursor(formatPasteRef(id, lineCount))
       } else {
-        dispatch({ type: 'INSERT', pos, chunk: content })
+        insertAtCursor(content)
       }
       setCompletionIndex(0)
     },
@@ -819,7 +830,7 @@ export function ChatInput({
         // a literal newline at the cursor without submitting. Bypasses the
         // @-menu and slash-completion intercepts on purpose: the user has
         // explicitly asked for a line break.
-        dispatch({ type: 'INSERT', pos: cursorRef.current, chunk: '\n' })
+        insertAtCursor('\n')
         setCompletionIndex(0)
         return
       }

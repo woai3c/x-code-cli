@@ -12,18 +12,21 @@
 //   2. **Debounce fallback** (for Windows Terminal / PowerShell / tmux /
 //      ConEmu / VS Code integrated terminal — any environment where
 //      bracketed paste is NOT honored)
-//      When no paste markers are seen, printable text is accumulated into
-//      a buffer and a short (PASTE_DEBOUNCE_MS) timer is (re)set on every
-//      stdin event. Human typing has >100 ms between keystrokes so each
-//      character flushes on its own timer, but a paste burst arrives in
-//      sub-millisecond bursts — the buffer fills in one tick and flushes
-//      as a single atomic chunk, which then gets routed to `onPaste` by
-//      the size heuristic below. This is the same approach Claude Code
-//      takes in its `usePasteHandler` hook.
+//      When no paste markers are seen, paste-suspect chunks (>=
+//      PASTE_SIZE_THRESHOLD chars, containing a newline, or arriving
+//      while a burst is in progress) accumulate in a buffer whose
+//      PASTE_DEBOUNCE_MS timer resets on every event, so one paste
+//      flushes as a single atomic chunk once the stream pauses. Single
+//      keystrokes bypass the buffer and dispatch immediately — human
+//      typing never pays the debounce cost. This is the same approach
+//      Claude Code takes in its `usePasteHandler` hook.
 //
-// Special keys (Enter, backspace, arrows, tab, escape, Ctrl+C) always
-// force-flush any pending text before they dispatch, so the pasted content
-// is committed BEFORE the key that acts on it.
+// Special keys (arrows, escape, Ctrl+C, …) always force-flush any
+// pending text before they dispatch, so the pasted content is committed
+// BEFORE the key that acts on it. Enter / tab arriving mid-burst are
+// absorbed into the buffer instead (backspace trims it) — on
+// non-bracketed Windows terminals a bare '\r' is just the paste's next
+// line break, and treating it as Return would submit half the paste.
 import { useEffect, useRef } from 'react'
 
 import { useStdin } from 'ink'
@@ -33,19 +36,15 @@ const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
 const PASTE_START = '\x1b[200~'
 const PASTE_END = '\x1b[201~'
 
-// Time window for batching rapid stdin bursts. 30 ms is well below human
-// typing cadence (~100–200 ms between keys) but far above the sub-ms gaps
-// between characters of a paste, so it cleanly separates the two.
-const PASTE_DEBOUNCE_MS = 30
-
-// Maximum time a keystroke is allowed to sit in the debounce buffer before
-// it MUST be flushed — even if more events keep arriving. Without this
-// cap, holding a key (OS repeat at ~33 ms / 30 Hz) reset the debounce
-// timer on every repeat event, so nothing ever flushed until the user
-// released the key — the user felt a freeze / one-shot catch-up on
-// release. 50 ms is below human "instant" perception threshold but high
-// enough that a sub-ms paste burst still coalesces.
-const MAX_BATCH_MS = 50
+// Time window for batching rapid stdin bursts. Human typing never
+// enters this buffer (single-keystroke chunks dispatch immediately),
+// so a generous window costs nothing; pasted text simply appears up to
+// 100 ms later. The window must be wide because Windows terminals
+// without bracketed paste trickle one paste as many small stdin events,
+// and a busy event loop (render + cell-diff after each dispatch) can
+// push inter-chunk gaps well past 30 ms — a narrower window flushed
+// mid-paste and split one paste into scrambled fragments.
+const PASTE_DEBOUNCE_MS = 100
 
 // Any stdin chunk >= this size (or containing a newline) is suspected
 // to be a paste and goes through the debounce buffer so consecutive
@@ -113,11 +112,6 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
   // Debounce buffer + timer for the fallback path.
   const pendingTextRef = useRef<string>('')
   const pendingTimerRef = useRef<NodeJS.Timeout | null>(null)
-  /** Wall-clock time (ms since epoch) when the currently-buffered burst
-   *  started. 0 means no burst in progress. Used to cap the debounce
-   *  delay at MAX_BATCH_MS so sustained key-repeat events flush
-   *  periodically instead of indefinitely resetting the timer. */
-  const pendingBurstStartRef = useRef<number>(0)
 
   // Ctrl+C must work even when the input is disabled (e.g. during loading).
   // We always listen on stdin for \x03 and route it to onInterrupt.
@@ -159,7 +153,6 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         clearTimeout(pendingTimerRef.current)
         pendingTimerRef.current = null
       }
-      pendingBurstStartRef.current = 0
       const raw = pendingTextRef.current
       if (!raw) return
       pendingTextRef.current = ''
@@ -173,24 +166,21 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       }
     }
 
-    // Compute the next timer delay — debounce from the most recent event,
-    // but capped so the buffer can't sit for more than MAX_BATCH_MS after
-    // its first character (otherwise a held key perpetually resets the
-    // debounce and never flushes until release).
+    // Debounce from the most recent event: every queued chunk resets the
+    // timer, and the buffer flushes once the stream pauses. There is
+    // intentionally NO max-batch cap here — only paste-suspect chunks
+    // (>= PASTE_SIZE_THRESHOLD chars, containing a newline, or arriving
+    // mid-burst) enter this buffer; held-key repeat produces single-char
+    // events that bypass it (see processNormalInput). A hard cap was
+    // force-flushing mid-paste on Windows, where ConPTY delivers a
+    // multi-KB paste as many stdin events spanning >50 ms, splitting one
+    // paste into scrambled fragments.
     const armFlushTimer = (): void => {
-      if (pendingBurstStartRef.current === 0) {
-        pendingBurstStartRef.current = Date.now()
-      }
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current)
-      const elapsed = Date.now() - pendingBurstStartRef.current
-      const remaining = Math.max(0, MAX_BATCH_MS - elapsed)
-      const delay = Math.min(PASTE_DEBOUNCE_MS, remaining)
-      pendingTimerRef.current = setTimeout(flushPending, delay)
+      pendingTimerRef.current = setTimeout(flushPending, PASTE_DEBOUNCE_MS)
     }
 
     // Queue text into the debounce buffer and (re)start the flush timer.
-    // Only used for chunks large enough to look like a paste; normal
-    // typing bypasses the buffer entirely (see processNormalInput).
     const queueText = (data: string): void => {
       pendingTextRef.current += data
       armFlushTimer()
@@ -209,7 +199,21 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     const processNormalInput = (data: string): void => {
       if (data.length === 0) return
 
-      if (data === '\r' || data === '\n') return dispatchKey('return')
+      // Once paste-suspect text sits in the debounce buffer, a paste
+      // burst is in progress: everything that follows until the stream
+      // pauses belongs to the same burst. Windows terminals without
+      // bracketed paste (ConPTY) trickle one paste as many small stdin
+      // events — short trailing lines, bare '\r' bytes, tab characters —
+      // that individually fall below PASTE_SIZE_THRESHOLD. Letting them
+      // take the immediate paths below force-flushed the buffer
+      // mid-paste, splitting one paste into scrambled fragments (a bare
+      // '\r' would even submit early via dispatchKey('return')).
+      const burstInProgress = pendingTextRef.current.length > 0
+
+      if (data === '\r' || data === '\n') {
+        if (burstInProgress) return queueText(data)
+        return dispatchKey('return')
+      }
       if (data === '\x7f' || data === '\b') {
         // If the debounce buffer has pending text, absorb the backspace by
         // trimming the buffer instead of flushing + dispatching.
@@ -224,7 +228,10 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         dispatchKey('backspace')
         return
       }
-      if (data === '\t') return dispatchKey('tab')
+      if (data === '\t') {
+        if (burstInProgress) return queueText(data)
+        return dispatchKey('tab')
+      }
 
       // Alt/Option+Enter → insert a literal newline. Most terminals that
       // distinguish Alt-modified keys send the prefix-ESC form: `\x1b\r`
@@ -274,19 +281,19 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       if (data.startsWith('\x1b')) return
 
       // Printable text. Two paths:
-      //  - Large or multi-line chunks go through the debounce buffer so
-      //    a paste split across several stdin events (non-bracketed
-      //    terminals sometimes fragment) merges into one onPaste call.
-      //  - Small single-keystroke chunks dispatch IMMEDIATELY. Holding
-      //    down a key fires stdin events at ~30 Hz and debouncing each
-      //    one made the input feel frozen / stutter. Claude Code does
-      //    the same (their usePasteHandler bypasses the paste buffer
-      //    for input.length < PASTE_THRESHOLD).
-      if (data.length >= PASTE_SIZE_THRESHOLD || data.includes('\n')) {
+      //  - Paste-suspect chunks (large, multi-line, or arriving while a
+      //    burst is in progress) go through the debounce buffer so a
+      //    paste split across several stdin events merges into one
+      //    onPaste call.
+      //  - Small single-keystroke chunks with no burst in progress
+      //    dispatch IMMEDIATELY. Holding down a key fires stdin events
+      //    at ~30 Hz and debouncing each one made the input feel
+      //    frozen / stutter. Claude Code does the same (their
+      //    usePasteHandler bypasses the paste buffer for
+      //    input.length < PASTE_THRESHOLD).
+      if (burstInProgress || data.length >= PASTE_SIZE_THRESHOLD || data.includes('\n')) {
         queueText(data)
       } else {
-        // Preserve ordering: drain any already-buffered text first.
-        flushPending()
         handlersRef.current.onText(data)
       }
     }
