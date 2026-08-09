@@ -57,6 +57,17 @@ export async function handleTodoWrite(
     dropped > 0
       ? ` ${dropped} entr${dropped === 1 ? 'y was' : 'ies were'} dropped because they had neither content nor activeForm — please include both fields next time so the user sees clean labels.`
       : ''
+  // Echo the resulting list state back to the model (Claude Code returns
+  // old/new todos for the same reason): a visible state summary turns the
+  // call from fire-and-forget bookkeeping into a feedback loop the model
+  // can check against its mental model of the checklist.
+  const counts = normalized.reduce(
+    (acc, t) => {
+      acc[t.status]++
+      return acc
+    },
+    { pending: 0, in_progress: 0, completed: 0 },
+  )
   const VERIFY_RE = /\b(verif|test|check|lint|build|typecheck|tsc)\b/i
   const needsVerifyNudge =
     allDone &&
@@ -65,14 +76,16 @@ export async function handleTodoWrite(
   const verifyNote = needsVerifyNudge
     ? ' Before wrapping up, verify your work — run tests, lint, or type-check as appropriate for this project.'
     : ''
+  const explanation = typeof input.explanation === 'string' ? input.explanation.trim() : ''
+  const explanationNote = explanation ? ` Note: ${explanation}` : ''
   pushToolResult(
     state,
     callbacks,
     toolCallId,
     'todoWrite',
     allDone
-      ? `All todos completed. Checklist cleared.${verifyNote}${droppedNote}`
-      : `Todo list updated. Continue using todoWrite to track your progress — mark each task completed IMMEDIATELY when done (do not batch), and ensure exactly one item is in_progress at all times.${droppedNote}`,
+      ? `All todos completed (${normalized.length} items). Checklist cleared.${explanationNote}${verifyNote}${droppedNote}`
+      : `Todo list updated (${counts.in_progress} in_progress, ${counts.pending} pending, ${counts.completed} completed).${explanationNote} Continue using todoWrite to track your progress — mark each task completed IMMEDIATELY when done (do not batch), and ensure exactly one item is in_progress at all times.${droppedNote}`,
   )
 }
 

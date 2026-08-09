@@ -93,6 +93,20 @@ describe('handleTodoWrite', () => {
     expect(captured[0].output).toContain('All todos completed')
   })
 
+  it('echoes an optional explanation back into the tool result', async () => {
+    const state = createLoopState()
+    const callbacks = makeCallbacks()
+    const todos: TodoItem[] = [{ content: 'Step A', activeForm: 'Doing A', status: 'in_progress' }]
+    await handleTodoWrite(
+      { todos, explanation: 'Finished auth refactor, moving to tests' },
+      'tc1',
+      state,
+      callbacks,
+      recordPushToolResult,
+    )
+    expect(captured[0].output).toContain('Note: Finished auth refactor, moving to tests')
+  })
+
   it('drops entries with neither content nor activeForm and reports the count', async () => {
     const state = createLoopState()
     const callbacks = makeCallbacks()
