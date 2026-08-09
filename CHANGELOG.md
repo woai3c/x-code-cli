@@ -1,3 +1,10 @@
+## v0.4.3 (2026-08-09)
+
+### Bug Fixes
+
+- improve CLI performance and reliability (b230117)
+- stop splitting Windows pastes into scrambled fragments (4f05bd3)
+
 ## v0.4.2 (2026-08-08)
 
 ### Features
