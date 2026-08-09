@@ -16,6 +16,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -b && tsc -p packages/core/tests/tsconfig.json && tsc -p packages/cli/tests/tsconfig.json && tsc -p packages/cli/tests/e2e/tsconfig.json",
     "check:package": "pnpm build && node scripts/check-package-size.mjs",
+    "bench:swe": "node scripts/bench/swe-bench.mjs",
+    "bench:swe:score": "node scripts/bench/score.mjs",
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "release": "node scripts/release.mjs",
     "prepare": "husky"
