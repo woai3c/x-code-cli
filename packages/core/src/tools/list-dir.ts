@@ -13,10 +13,12 @@ export const listDir = tool({
   inputSchema: z.object({
     dirPath: z.string().describe('Absolute path to the directory'),
   }),
-  execute: async ({ dirPath }, { toolCallId }) => {
+  execute: async ({ dirPath }, { toolCallId, abortSignal }) => {
     try {
+      abortSignal?.throwIfAborted()
       reportProgress(toolCallId, `Listing ${dirPath}`)
       const entries = await fs.readdir(dirPath, { withFileTypes: true })
+      abortSignal?.throwIfAborted()
       const lines = entries.map((e) => {
         const suffix = e.isDirectory() ? '/' : ''
         return `${e.name}${suffix}`

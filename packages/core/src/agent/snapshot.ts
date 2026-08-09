@@ -25,11 +25,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { XCODE_DIR, fileExists, generateTimestampId } from '../utils.js'
+import { atomicWriteFile } from '../utils/atomic-file.js'
 import type { LoopState } from './loop-state.js'
 
 const FILE_HISTORY_SUBDIR = 'file-history'
 const BLOBS_SUBDIR = 'blobs'
 const CHECKPOINTS_SUBDIR = 'checkpoints'
+const ORIGINS_FILENAME = 'origins.json'
 
 /** Files larger than this are recorded with `skip: true` in the manifest
  *  and left untouched on restore. Keeps a stray build artifact (megabytes
@@ -40,6 +42,7 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024
 /** Ring-buffer cap. Older checkpoints are evicted; orphaned blobs are GC'd
  *  on the next restore or eviction. 100 matches Claude Code's bound. */
 const MAX_CHECKPOINTS = 100
+const SNAPSHOT_CONCURRENCY = 8
 
 /** Public, in-memory representation of a checkpoint. Mirrored to jsonl as
  *  a `meta:checkpoint` line so /rewind survives /resume. */
@@ -76,6 +79,13 @@ interface Manifest {
   files: Record<string, ManifestFileEntry>
 }
 
+interface OriginManifest {
+  version: 1
+  /** State immediately before the agent first mutated each path. A path is
+   *  captured once per session, before the write reaches the filesystem. */
+  files: Record<string, ManifestFileEntry>
+}
+
 function historyDir(sessionId: string, cwd: string): string {
   return path.join(cwd, XCODE_DIR, FILE_HISTORY_SUBDIR, sessionId)
 }
@@ -86,6 +96,10 @@ function blobsDir(sessionId: string, cwd: string): string {
 
 function checkpointsDir(sessionId: string, cwd: string): string {
   return path.join(historyDir(sessionId, cwd), CHECKPOINTS_SUBDIR)
+}
+
+function originsPath(sessionId: string, cwd: string): string {
+  return path.join(historyDir(sessionId, cwd), ORIGINS_FILENAME)
 }
 
 function manifestPath(sessionId: string, ckptId: string, cwd: string): string {
@@ -118,6 +132,81 @@ async function writeBlobIfMissing(sessionId: string, hash: string, content: Buff
   await fs.writeFile(p, content)
 }
 
+function isManifestFileEntry(value: unknown): value is ManifestFileEntry {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entry = value as Record<string, unknown>
+  const flags = [typeof entry.hash === 'string', entry.absent === true, entry.skip === true].filter(Boolean).length
+  return flags === 1
+}
+
+async function readOrigins(sessionId: string, cwd: string): Promise<OriginManifest> {
+  let raw: string
+  try {
+    raw = await fs.readFile(originsPath(sessionId, cwd), 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, files: {} }
+    throw err
+  }
+
+  const parsed = JSON.parse(raw) as Partial<OriginManifest>
+  if (parsed.version !== 1 || !parsed.files || typeof parsed.files !== 'object' || Array.isArray(parsed.files)) {
+    throw new Error('Invalid checkpoint origin manifest')
+  }
+  for (const entry of Object.values(parsed.files)) {
+    if (!isManifestFileEntry(entry)) throw new Error('Invalid checkpoint origin entry')
+  }
+  return parsed as OriginManifest
+}
+
+async function writeOrigins(sessionId: string, origins: OriginManifest, cwd: string): Promise<void> {
+  await atomicWriteFile(originsPath(sessionId, cwd), JSON.stringify(origins, null, 2))
+}
+
+/** Capture a path immediately before its first agent mutation in this
+ *  session. Checkpoint manifests only contain files known at checkpoint
+ *  creation time, so this origin record disambiguates a pre-existing file
+ *  from a file genuinely created after an older checkpoint.
+ *
+ *  The write is durable before the caller mutates the file. A corrupt origin
+ *  store throws and blocks the mutation rather than silently losing rewind
+ *  provenance. Paths already tracked by the session need no origin lookup. */
+export async function captureFileBeforeMutation(
+  state: LoopState,
+  filePath: string,
+  cwd: string = process.cwd(),
+  signal?: AbortSignal,
+): Promise<void> {
+  const absPath = path.resolve(cwd, filePath)
+  if (state.checkpoints.length === 0 || state.filesModified.has(absPath)) return
+  signal?.throwIfAborted()
+
+  const origins = await readOrigins(state.sessionId, cwd)
+  if (origins.files[absPath]) return
+
+  const outcome = await statSafe(absPath)
+  signal?.throwIfAborted()
+  let entry: ManifestFileEntry
+  if (outcome.kind === 'absent') {
+    entry = { absent: true }
+  } else if (outcome.kind === 'unreadable' || !outcome.stat.isFile() || outcome.stat.size > MAX_FILE_BYTES) {
+    entry = { skip: true }
+  } else {
+    try {
+      const content = signal ? await fs.readFile(absPath, { signal }) : await fs.readFile(absPath)
+      signal?.throwIfAborted()
+      const hash = createHash('sha256').update(content).digest('hex')
+      await writeBlobIfMissing(state.sessionId, hash, content, cwd)
+      entry = { hash }
+    } catch (err) {
+      if (signal?.aborted) throw err
+      entry = { skip: true }
+    }
+  }
+
+  origins.files[absPath] = entry
+  await writeOrigins(state.sessionId, origins, cwd)
+}
+
 /** Capture the current on-disk state of every file in `state.filesModified`
  *  into a new content-addressed checkpoint and append the entry to
  *  `state.checkpoints`. Returns the entry on success, null on FS failure
@@ -131,41 +220,69 @@ export async function createCheckpoint(
   state: LoopState,
   userPromptPreview: string,
   cwd: string = process.cwd(),
+  signal?: AbortSignal,
 ): Promise<CheckpointEntry | null> {
+  if (signal?.aborted) return null
   const ckptId = generateTimestampId()
   const ts = new Date().toISOString()
   const messageCount = state.messages.length
   const files: Record<string, ManifestFileEntry> = {}
 
-  for (const absPath of state.filesModified) {
-    const outcome = await statSafe(absPath)
-    if (outcome.kind === 'absent') {
-      files[absPath] = { absent: true }
-      continue
-    }
-    if (outcome.kind === 'unreadable') {
-      // Couldn't stat for reasons OTHER than "file doesn't exist" — most
-      // likely a permission issue. Mark skip so restore won't try to delete
-      // a file the user (or another process) actively cares about.
-      files[absPath] = { skip: true }
-      continue
-    }
-    const stat = outcome.stat
-    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
-      // Symlinks / dirs / oversized blobs — record as skip so restore knows
-      // to leave them alone (vs misclassifying as absent and deleting).
-      files[absPath] = { skip: true }
-      continue
-    }
-    try {
-      const buf = await fs.readFile(absPath)
-      const hash = createHash('sha256').update(buf).digest('hex')
-      await writeBlobIfMissing(state.sessionId, hash, buf, cwd)
-      files[absPath] = { hash }
-    } catch {
-      files[absPath] = { skip: true }
+  for (const cachedPath of state.checkpointFileCache.keys()) {
+    if (!state.filesModified.has(cachedPath)) state.checkpointFileCache.delete(cachedPath)
+  }
+
+  const paths = [...state.filesModified]
+  let cursor = 0
+  const worker = async () => {
+    while (!signal?.aborted) {
+      const absPath = paths[cursor++]
+      if (absPath === undefined) return
+      const outcome = await statSafe(absPath)
+      if (signal?.aborted) return
+      if (outcome.kind === 'absent') {
+        state.checkpointFileCache.delete(absPath)
+        files[absPath] = { absent: true }
+        continue
+      }
+      if (outcome.kind === 'unreadable') {
+        // Couldn't stat for reasons OTHER than "file doesn't exist" — most
+        // likely a permission issue. Mark skip so restore won't try to delete
+        // a file the user (or another process) actively cares about.
+        state.checkpointFileCache.delete(absPath)
+        files[absPath] = { skip: true }
+        continue
+      }
+      const stat = outcome.stat
+      if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+        // Symlinks / dirs / oversized blobs — record as skip so restore knows
+        // to leave them alone (vs misclassifying as absent and deleting).
+        state.checkpointFileCache.delete(absPath)
+        files[absPath] = { skip: true }
+        continue
+      }
+
+      const cached = state.checkpointFileCache.get(absPath)
+      if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+        files[absPath] = { hash: cached.hash }
+        continue
+      }
+
+      try {
+        const buf = signal ? await fs.readFile(absPath, { signal }) : await fs.readFile(absPath)
+        const hash = createHash('sha256').update(buf).digest('hex')
+        await writeBlobIfMissing(state.sessionId, hash, buf, cwd)
+        state.checkpointFileCache.set(absPath, { size: stat.size, mtimeMs: stat.mtimeMs, hash })
+        files[absPath] = { hash }
+      } catch {
+        if (signal?.aborted) return
+        state.checkpointFileCache.delete(absPath)
+        files[absPath] = { skip: true }
+      }
     }
   }
+  await Promise.all(Array.from({ length: Math.min(SNAPSHOT_CONCURRENCY, paths.length) }, () => worker()))
+  if (signal?.aborted) return null
 
   const manifest: Manifest = {
     ckptId,
@@ -211,7 +328,9 @@ export async function createCheckpoint(
  *    - in manifest with `hash` → write blob content back
  *    - in manifest with `absent` → unlink (if present)
  *    - in manifest with `skip`   → leave alone (couldn't capture)
- *    - NOT in manifest           → unlink (was created after the checkpoint)
+ *    - NOT in manifest           → consult the first-mutation origin sidecar
+ *      (`hash` restores a pre-existing file; `absent` deletes a new file)
+ *    - missing from both stores  → leave alone (legacy/unknown provenance)
  *  Files outside this union are untouched — we only undo what the agent
  *  has historically touched.
  *
@@ -242,12 +361,20 @@ export async function restoreCheckpoint(
     return false
   }
 
+  let origins: OriginManifest
+  try {
+    origins = await readOrigins(state.sessionId, cwd)
+  } catch {
+    return false
+  }
+
   const allFiles = new Set<string>([...state.filesModified, ...Object.keys(manifest.files)])
   for (const absPath of allFiles) {
-    const entry = manifest.files[absPath]
+    const entry = manifest.files[absPath] ?? origins.files[absPath]
     if (!entry) {
-      // Created in a turn AFTER this checkpoint — delete to roll back.
-      await fs.unlink(absPath).catch(() => undefined)
+      // Old sessions have no origin sidecar, so a missing entry is
+      // ambiguous. Preserve the live file: failing to remove a legacy-created
+      // file is safer than deleting a pre-existing user file.
       continue
     }
     if (entry.skip) continue
@@ -268,6 +395,25 @@ export async function restoreCheckpoint(
     }
   }
 
+  // Rewinding to before a path's first mutation starts a new branch. Drop
+  // that future origin so a later manual/user-created file at the same path
+  // is captured from its new real state rather than inheriting stale
+  // `absent`/hash provenance from the abandoned branch.
+  let originsChanged = false
+  for (const absPath of Object.keys(origins.files)) {
+    if (!manifest.files[absPath]) {
+      delete origins.files[absPath]
+      originsChanged = true
+    }
+  }
+  if (originsChanged) {
+    try {
+      await writeOrigins(state.sessionId, origins, cwd)
+    } catch {
+      return false
+    }
+  }
+
   // Rebuild filesModified from the manifest so subsequent checkpoints cover
   // the right set. Includes absent/skip entries: those files have been
   // touched by the agent historically and should remain in scope.
@@ -275,6 +421,7 @@ export async function restoreCheckpoint(
   for (const absPath of Object.keys(manifest.files)) {
     state.filesModified.add(absPath)
   }
+  state.checkpointFileCache.clear()
 
   // Drop checkpoints AFTER the restored one (keep the target — the user is
   // now "at" that point and can re-rewind to it).
@@ -326,6 +473,13 @@ export async function getDiffStatsForCheckpoint(
     return null
   }
 
+  let origins: OriginManifest
+  try {
+    origins = await readOrigins(state.sessionId, cwd)
+  } catch {
+    return null
+  }
+
   const filesChanged: string[] = []
   let insertions = 0
   let deletions = 0
@@ -336,19 +490,14 @@ export async function getDiffStatsForCheckpoint(
   const allFiles = new Set<string>([...state.filesModified, ...Object.keys(manifest.files)])
   for (const absPath of allFiles) {
     try {
-      const entry = manifest.files[absPath]
+      const entry = manifest.files[absPath] ?? origins.files[absPath]
 
       if (entry?.skip) continue
 
       const currentContent = await readFileUtf8OrNull(absPath)
 
       if (!entry) {
-        // File created after this checkpoint — rewind would delete it.
-        if (currentContent !== null) {
-          const lineCount = currentContent.split('\n').length
-          filesChanged.push(absPath)
-          deletions += lineCount
-        }
+        // Unknown legacy provenance — restore leaves the file untouched.
         continue
       }
 
@@ -413,6 +562,16 @@ async function garbageCollectBlobs(state: LoopState, cwd: string): Promise<void>
       // Manifest gone or unreadable — skip; its blobs become candidates for
       // collection along with the rest.
     }
+  }
+  try {
+    const origins = await readOrigins(state.sessionId, cwd)
+    for (const entry of Object.values(origins.files)) {
+      if (entry.hash) referenced.add(entry.hash)
+    }
+  } catch {
+    // A corrupt/unreadable origin store may still reference blobs. Fail
+    // closed and keep every blob rather than deleting the only rewind copy.
+    return
   }
   let names: string[]
   try {

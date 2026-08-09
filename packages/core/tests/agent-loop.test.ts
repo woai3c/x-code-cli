@@ -90,6 +90,35 @@ describe('agent loop', () => {
     }
   })
 
+  it('marks string error results from auto-executed tools as UI failures', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'tool-call', toolCallId: 'web-1', toolName: 'webFetch', input: { url: 'https://example.com' } }
+          yield {
+            type: 'tool-result',
+            toolCallId: 'web-1',
+            toolName: 'webFetch',
+            output: 'Error fetching URL: fetch failed',
+          }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'failed' }] }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    await agentLoop(
+      'fetch example.com',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 3, printMode: false },
+      mockCallbacks,
+    )
+
+    expect(mockCallbacks.onToolResult).toHaveBeenCalledWith('web-1', 'Error fetching URL: fetch failed', true)
+  })
+
   it('enqueues exactly one durable memory job after a clean root stop and never for a sub-agent', async () => {
     const response = () => ({
       stream: {

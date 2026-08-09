@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { createProviderTurnUsage, estimateCacheMiss, scanCacheMisses } from '../src/agent/cache-stats.js'
+import {
+  appendCacheMissEstimate,
+  createCacheMissSummary,
+  createProviderTurnUsage,
+  estimateCacheMiss,
+  scanCacheMisses,
+} from '../src/agent/cache-stats.js'
 import { normalizeLanguageModelUsage } from '../src/agent/usage.js'
 
 function turn(options: {
@@ -122,5 +128,21 @@ describe('cache miss estimation', () => {
       unexpectedTokens: 6_000,
       unexpectedCount: 1,
     })
+  })
+
+  it('produces the same result when updated one provider turn at a time', () => {
+    const turns = [
+      turn({ input: 5_000, cacheRead: 4_000 }),
+      turn({ input: 6_000, cacheRead: 0, reasons: ['compaction'] }),
+      turn({ input: 7_000, cacheRead: 0 }),
+      turn({ input: 8_000, cacheRead: 8_000 }),
+    ]
+    const incremental = createCacheMissSummary()
+
+    for (let i = 0; i < turns.length; i++) {
+      appendCacheMissEstimate(incremental, turns[i - 1], turns[i]!)
+    }
+
+    expect(incremental).toEqual(scanCacheMisses(turns))
   })
 })

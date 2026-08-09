@@ -1,7 +1,10 @@
 import esbuild from 'esbuild'
 
+import { rm } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { fileURLToPath } from 'node:url'
+
+const OUT_DIR = fileURLToPath(new URL('./dist/', import.meta.url))
 
 // ESM polyfills — provide __dirname, __filename, and require() for CJS compat
 const ESM_POLYFILLS = `
@@ -81,15 +84,23 @@ const signalExitFixPlugin = {
   },
 }
 
+await rm(OUT_DIR, { recursive: true, force: true })
+
 await esbuild.build({
-  entryPoints: ['src/index.ts'],
+  entryPoints: { cli: fileURLToPath(new URL('./src/index.ts', import.meta.url)) },
   bundle: true,
   platform: 'node',
   format: 'esm',
-  target: 'node20',
-  outfile: 'dist/cli.js',
+  target: 'node22',
+  outdir: OUT_DIR,
+  entryNames: '[name]',
+  chunkNames: 'chunks/[name]-[hash]',
+  splitting: true,
   jsx: 'automatic',
-  sourcemap: true,
+  minifySyntax: true,
+  minifyWhitespace: true,
+  sourcemap: process.env.X_CODE_SOURCEMAP === '1',
+  sourcesContent: false,
   plugins: [stubPlugin, entitiesFixPlugin, signalExitFixPlugin],
   define: {
     'process.env.NODE_ENV': '"production"',
@@ -101,6 +112,8 @@ await esbuild.build({
     // Node.js built-ins (both prefixed and unprefixed for CJS compat)
     ...builtinModules,
     ...builtinModules.map((m) => `node:${m}`),
+    // Runtime HTTP dispatcher used for DNS pinning and fake-IP compatibility.
+    'undici',
     // Native addons that can't be bundled
     '@vscode/ripgrep',
     '@fugood/whisper.node',

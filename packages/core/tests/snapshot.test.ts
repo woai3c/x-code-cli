@@ -19,10 +19,11 @@
 //      across /resume.
 //   6. Compact-boundary semantics: pre-boundary checkpoints disappear on
 //      load (their messageCount anchors are invalid after compaction).
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
+import fs from 'node:fs/promises'
+import { mkdir, open, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -36,7 +37,12 @@ import {
   loadSession,
   markBoundaryAndReflush,
 } from '../src/agent/session-store.js'
-import { createCheckpoint, restoreCheckpoint } from '../src/agent/snapshot.js'
+import {
+  captureFileBeforeMutation,
+  createCheckpoint,
+  getDiffStatsForCheckpoint,
+  restoreCheckpoint,
+} from '../src/agent/snapshot.js'
 import { XCODE_DIR } from '../src/utils.js'
 
 // ── Setup ───────────────────────────────────────────────────────────────
@@ -137,6 +143,38 @@ describe('snapshot: content-addressed dedup', () => {
 
     expect(await lsHistory(state.sessionId, 'blobs')).toHaveLength(2)
   })
+
+  it('does not read unchanged file contents again', async () => {
+    const state = createLoopState()
+    const first = await writeWorkfile('a.ts', 'first')
+    const second = await writeWorkfile('b.ts', 'before')
+    state.filesModified.add(first)
+    state.filesModified.add(second)
+    const readSpy = vi.spyOn(fs, 'readFile')
+
+    await createCheckpoint(state, 'm1', tempDir)
+    const readsAfterFirstCheckpoint = readSpy.mock.calls.length
+    await createCheckpoint(state, 'm2', tempDir)
+
+    expect(readSpy.mock.calls).toHaveLength(readsAfterFirstCheckpoint)
+
+    await writeFile(second, 'after!', 'utf-8')
+    const future = new Date(Date.now() + 2_000)
+    await utimes(second, future, future)
+    await createCheckpoint(state, 'm3', tempDir)
+
+    expect(readSpy.mock.calls).toHaveLength(readsAfterFirstCheckpoint + 1)
+    readSpy.mockRestore()
+  })
+
+  it('stops before writing a checkpoint when already aborted', async () => {
+    const state = createLoopState()
+    const controller = new AbortController()
+    controller.abort()
+
+    expect(await createCheckpoint(state, 'cancelled', tempDir, controller.signal)).toBeNull()
+    expect(state.checkpoints).toHaveLength(0)
+  })
 })
 
 describe('snapshot: after-checkpoint deletion', () => {
@@ -147,13 +185,157 @@ describe('snapshot: after-checkpoint deletion', () => {
     const ckpt1 = await createCheckpoint(state, 'm1', tempDir)
     expect(ckpt1).not.toBeNull()
 
-    // Later, the agent "creates" newfile.ts and tracks it.
-    const newfile = await writeWorkfile('newfile.ts', 'created later')
+    // The mutation pipeline records that this path was truly absent before
+    // the first write, then tracks the successful creation.
+    const newfile = path.join(tempDir, 'newfile.ts')
+    await captureFileBeforeMutation(state, newfile, tempDir)
+    await writeWorkfile('newfile.ts', 'created later')
     state.filesModified.add(newfile)
 
     const ok = await restoreCheckpoint(state, ckpt1!.ckptId, tempDir)
     expect(ok).toBe(true)
     expect(existsSync(newfile)).toBe(false)
+  })
+
+  it('preserves an unknown legacy file instead of guessing that it was newly created', async () => {
+    const state = createLoopState()
+    const ckpt = await createCheckpoint(state, 'legacy', tempDir)
+    const file = await writeWorkfile('legacy.ts', 'unknown provenance')
+    state.filesModified.add(file)
+
+    expect(await restoreCheckpoint(state, ckpt!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(file, 'utf-8')).toBe('unknown provenance')
+  })
+})
+
+describe('snapshot: first-mutation origins', () => {
+  it('restores a pre-existing file first touched after an empty checkpoint', async () => {
+    const state = createLoopState()
+    const file = await writeWorkfile('existing.ts', 'original')
+    const ckpt = await createCheckpoint(state, 'edit existing', tempDir)
+
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed')
+    state.filesModified.add(file)
+
+    expect(await restoreCheckpoint(state, ckpt!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(file, 'utf-8')).toBe('original')
+  })
+
+  it('restores the origin when rewinding across multiple earlier checkpoints', async () => {
+    const state = createLoopState()
+    const file = await writeWorkfile('existing.ts', 'original')
+    const first = await createCheckpoint(state, 'first', tempDir)
+    await createCheckpoint(state, 'second', tempDir)
+
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed')
+    state.filesModified.add(file)
+
+    expect(await restoreCheckpoint(state, first!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(file, 'utf-8')).toBe('original')
+  })
+
+  it('persists origins for multiple files first touched in different turns', async () => {
+    const state = createLoopState()
+    const firstFile = await writeWorkfile('first.txt', 'original first')
+    const secondFile = await writeWorkfile('second.txt', 'original second')
+    const ckpt = await createCheckpoint(state, 'first', tempDir)
+
+    await captureFileBeforeMutation(state, firstFile, tempDir)
+    await writeFile(firstFile, 'changed first')
+    state.filesModified.add(firstFile)
+    await captureFileBeforeMutation(state, secondFile, tempDir)
+    await writeFile(secondFile, 'changed second')
+    state.filesModified.add(secondFile)
+
+    expect(await restoreCheckpoint(state, ckpt!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(firstFile, 'utf-8')).toBe('original first')
+    expect(await readFile(secondFile, 'utf-8')).toBe('original second')
+  })
+
+  it('captures a path only once so later edits cannot overwrite its origin', async () => {
+    const state = createLoopState()
+    const file = await writeWorkfile('existing.ts', 'original')
+    const ckpt = await createCheckpoint(state, 'first', tempDir)
+
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed once')
+    state.filesModified.add(file)
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed twice')
+
+    expect(await restoreCheckpoint(state, ckpt!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(file, 'utf-8')).toBe('original')
+  })
+
+  it('uses origin semantics in the rewind diff preview', async () => {
+    const state = createLoopState()
+    const file = await writeWorkfile('existing.ts', 'original\n')
+    const ckpt = await createCheckpoint(state, 'edit existing', tempDir)
+
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed\n')
+    state.filesModified.add(file)
+
+    const stats = await getDiffStatsForCheckpoint(state, ckpt!.ckptId, tempDir)
+    expect(stats?.filesChanged).toEqual([file])
+    expect(stats?.insertions).toBeGreaterThan(0)
+    expect(stats?.deletions).toBeGreaterThan(0)
+  })
+
+  it('keeps origin blobs alive during garbage collection', async () => {
+    const state = createLoopState()
+    const file = await writeWorkfile('existing.ts', 'original')
+    const first = await createCheckpoint(state, 'first', tempDir)
+
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed')
+    state.filesModified.add(file)
+    const second = await createCheckpoint(state, 'second', tempDir)
+    expect(await lsHistory(state.sessionId, 'blobs')).toHaveLength(2)
+
+    await restoreCheckpoint(state, second!.ckptId, tempDir)
+    expect(await lsHistory(state.sessionId, 'blobs')).toHaveLength(2)
+    await restoreCheckpoint(state, first!.ckptId, tempDir)
+    expect(await readFile(file, 'utf-8')).toBe('original')
+  })
+
+  it('loads the origin sidecar after session state is recreated', async () => {
+    const state = createLoopState()
+    const file = await writeWorkfile('existing.ts', 'original')
+    const ckpt = await createCheckpoint(state, 'first', tempDir)
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed')
+
+    const resumed = createLoopState()
+    resumed.sessionId = state.sessionId
+    resumed.checkpoints = state.checkpoints.slice()
+    resumed.filesModified.add(file)
+
+    expect(await restoreCheckpoint(resumed, ckpt!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(file, 'utf-8')).toBe('original')
+  })
+
+  it('recaptures a path on a new branch after rewinding before its first touch', async () => {
+    const state = createLoopState()
+    const file = path.join(tempDir, 'branch.txt')
+    const originalCheckpoint = await createCheckpoint(state, 'create file', tempDir)
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'created by abandoned branch')
+    state.filesModified.add(file)
+
+    await restoreCheckpoint(state, originalCheckpoint!.ckptId, tempDir)
+    expect(existsSync(file)).toBe(false)
+
+    await writeFile(file, 'created manually')
+    const branchCheckpoint = await createCheckpoint(state, 'edit manual file', tempDir)
+    await captureFileBeforeMutation(state, file, tempDir)
+    await writeFile(file, 'changed by new branch')
+    state.filesModified.add(file)
+
+    expect(await restoreCheckpoint(state, branchCheckpoint!.ckptId, tempDir)).toBe(true)
+    expect(await readFile(file, 'utf-8')).toBe('created manually')
   })
 })
 

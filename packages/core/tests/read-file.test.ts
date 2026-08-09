@@ -47,7 +47,7 @@ describe('readFile tool', () => {
 
     const result = (await exec({ filePath })) as string
     expect(result).toContain('showing first 2000')
-    expect(result).toContain('2500')
+    expect(result).toContain('file contains more content')
     expect(result).not.toContain('2001\t')
 
     await fs.rm(tmpDir, { recursive: true })
@@ -87,6 +87,30 @@ describe('readFile tool', () => {
     expect(Buffer.byteLength(result, 'utf-8')).toBeLessThan(300 * 1024)
 
     await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('bounds memory and output for a single very long line', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-'))
+    const filePath = path.join(tmpDir, 'minified.js')
+    await fs.writeFile(filePath, 'x'.repeat(2 * 1024 * 1024))
+
+    const result = (await exec({ filePath })) as string
+    expect(result).toContain('output capped at 256 KB')
+    expect(result).toContain('line itself exceeds the cap')
+    expect(Buffer.byteLength(result, 'utf-8')).toBeLessThan(257 * 1024)
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('honors an already-aborted read', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const result = (await readFile.execute!({ filePath: '/tmp/never-read.txt' }, {
+      toolCallId: 'test',
+      messages: [],
+      abortSignal: controller.signal,
+    } as any)) as string
+    expect(result).toMatch(/abort/i)
   })
 
   it('returns error for non-existent file', async () => {

@@ -6,7 +6,8 @@ import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
 import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
 import { generateTimestampId } from '../utils.js'
-import type { CacheMissReason, ProviderTurnUsage } from './cache-stats.js'
+import { createCacheMissSummary } from './cache-stats.js'
+import type { CacheMissReason, CacheMissSummary, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState } from './goal/types.js'
 import type { CheckpointEntry } from './snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
@@ -29,6 +30,12 @@ export interface StepStats {
   toolCallCount: number
   /** ISO timestamp when the step started */
   startedAt: string
+}
+
+export interface CheckpointFileCacheEntry {
+  size: number
+  mtimeMs: number
+  hash: string
 }
 
 export interface LoopState {
@@ -97,6 +104,9 @@ export interface LoopState {
    *  "everything-after-last-boundary wins" rule naturally drops pre-
    *  compaction entries on resume. */
   checkpoints: CheckpointEntry[]
+  /** Last successfully hashed metadata for files covered by `/rewind`.
+   *  Unchanged files reuse their content hash in the next checkpoint. */
+  checkpointFileCache: Map<string, CheckpointFileCacheEntry>
   /** Number of messages already persisted to the session jsonl file.
    *  The agent loop calls `flushPendingMessages` at turn boundaries,
    *  which appends `state.messages.slice(persistedMessageCount)` and
@@ -126,6 +136,9 @@ export interface LoopState {
   expectedCacheMissReasons: Set<CacheMissReason>
   /** Main-request samples only; auxiliary usage snapshots never enter this list. */
   providerTurns: ProviderTurnUsage[]
+  /** Incrementally maintained diagnostic summary. Updating it only compares
+   *  the newest provider turn with its immediate predecessor. */
+  cacheMissSummary: CacheMissSummary
 
   // ── Sub-agent support (set once in agentLoop, read by tool-execution) ──
 
@@ -223,12 +236,14 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     taskSlug: '',
     todos: [],
     checkpoints: [],
+    checkpointFileCache: new Map(),
     persistedMessageCount: 0,
     pendingFlush: null,
     prevTurnCacheRead: 0,
     expectCacheMiss: false,
     expectedCacheMissReasons: new Set(),
     providerTurns: [],
+    cacheMissSummary: createCacheMissSummary(),
     readFileCache: new Map(),
     bgShells: new BackgroundShellRegistry(),
     goal: null,

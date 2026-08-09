@@ -362,7 +362,6 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
  *  totals — no need to keep older snapshots around any more efficiently. */
 export async function appendUsage(state: LoopState, modelId: string, turn?: ProviderTurnUsage): Promise<void> {
   const filePath = getSessionFilePath(state)
-  const cacheMissSummary = scanCacheMisses(state.providerTurns)
   // Full loads reconstruct individual estimates from persisted turns. Keeping
   // only cumulative totals here avoids duplicating the entire turn history in
   // every usage snapshot while preserving cheap tail reads for the picker.
@@ -372,7 +371,7 @@ export async function appendUsage(state: LoopState, modelId: string, turn?: Prov
     usage: { ...state.tokenUsage },
     breakdown: cloneUsageBreakdown(state.usageBreakdown),
     turn,
-    cacheMissSummary: { ...cacheMissSummary, estimates: [] },
+    cacheMissSummary: { ...state.cacheMissSummary, estimates: [] },
     modelId,
     ts: new Date().toISOString(),
   }
@@ -916,6 +915,9 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.tokenUsage = { ...loaded.tokenUsage }
   state.usageBreakdown = loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown()
   state.providerTurns = loaded.providerTurns?.slice() ?? []
+  state.cacheMissSummary = loaded.cacheMissSummary
+    ? { ...loaded.cacheMissSummary, estimates: scanCacheMisses(state.providerTurns).estimates }
+    : scanCacheMisses(state.providerTurns)
   state.lastInputTokens = loaded.tokenUsage.inputTokens
   state.persistedMessageCount = loaded.messages.length
   state.checkpoints = loaded.checkpoints.slice()

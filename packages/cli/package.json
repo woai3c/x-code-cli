@@ -19,9 +19,23 @@
   },
   "scripts": {
     "build": "node esbuild.config.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "prepack": "pnpm build"
   },
   "dependencies": {
+    "@vscode/ripgrep": "^1.17.0",
+    "undici": "^7.28.0"
+  },
+  "peerDependencies": {
+    "@fugood/whisper.node": "^1.1.1"
+  },
+  "peerDependenciesMeta": {
+    "@fugood/whisper.node": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@fugood/whisper.node": "^1.1.1",
     "@x-code-cli/core": "workspace:*",
     "chalk": "^5.4.0",
     "ink": "npm:@jrichman/ink@6.6.9",

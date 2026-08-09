@@ -44,11 +44,29 @@ jobs:
           cp README.md packages/cli/README.md
           cp README.zh-CN.md packages/cli/README.zh-CN.md
 
-      - name: Publish to npm
+      - name: Check CLI package
+        run: pnpm check:package
+
+      - name: Pack packages
         run: |
           mkdir release-packages
           (cd packages/core && pnpm pack --pack-destination ../../release-packages)
           (cd packages/cli && pnpm pack --pack-destination ../../release-packages)
+
+      - name: Smoke test CLI package
+        shell: bash
+        run: |
+          cli_tgz="$(find "$GITHUB_WORKSPACE/release-packages" -name 'x-code-cli-cli-*.tgz' -print -quit)"
+          test -n "$cli_tgz"
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          npm install --prefix "$smoke_dir" "$cli_tgz"
+          "$smoke_dir/node_modules/.bin/xc" --version
+          "$smoke_dir/node_modules/.bin/x-code" --help >/dev/null
+          (cd "$smoke_dir" && node -e "require.resolve('undici')")
+
+      - name: Publish to npm
+        run: |
           for tgz in "$GITHUB_WORKSPACE"/release-packages/*.tgz; do
             npx --yes --package npm@11 npm publish "$tgz" --provenance --access public
           done

@@ -38,7 +38,7 @@ export const glob = tool({
     pattern: z.string().describe('Glob pattern (e.g. "**/*.ts", "src/**/*.tsx")'),
     cwd: z.string().optional().describe('Directory to search in (defaults to working directory)'),
   }),
-  execute: async ({ pattern, cwd }, { toolCallId }) => {
+  execute: async ({ pattern, cwd }, { toolCallId, abortSignal }) => {
     try {
       const searchDir = cwd ?? process.cwd()
       reportProgress(toolCallId, `Matching ${pattern}`)
@@ -71,6 +71,7 @@ export const glob = tool({
         cwd: searchDir,
         maxBuffer: RG_MAX_BUFFER,
         timeout: 30000,
+        signal: abortSignal,
       })
       const out = stdout.trim()
       if (!out) return 'No files found matching the pattern.'

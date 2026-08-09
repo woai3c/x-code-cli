@@ -23,7 +23,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createProviderTurnUsage } from '../src/agent/cache-stats.js'
+import { appendProviderTurnUsage, createProviderTurnUsage } from '../src/agent/cache-stats.js'
 import { admitGoalInput, promoteNextGoalInput } from '../src/agent/goal/input.js'
 import { createGoal } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
@@ -126,7 +126,7 @@ describe('session-store: round-trip', () => {
         expectedMissReasons: index === 1 ? ['compaction'] : [],
         timestamp: `2026-08-07T00:0${index}:00.000Z`,
       })
-      state.providerTurns.push(turn)
+      appendProviderTurnUsage(state, turn)
       await appendUsage(state, 'openai:test', turn)
     }
 

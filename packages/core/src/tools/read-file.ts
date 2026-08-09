@@ -11,6 +11,7 @@
 // binary result goes out as content parts and the provider-compat layer
 // either keeps it in the tool result, reattaches it as a user image, or
 // replaces it with OCR for a text-only model.
+import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -65,79 +66,126 @@ async function readTextResult(
   filePath: string,
   offset?: number,
   limit?: number,
+  abortSignal?: AbortSignal,
 ): Promise<{ text: string; complete: boolean }> {
-  const content = await fs.readFile(filePath, 'utf-8')
-  const lines = content.split('\n')
-  const totalLines = lines.length
-
   const userSpecifiedRange = offset != null || limit != null
-
-  // Decide which slice the caller asked for; head-truncation is its own
-  // mode so the trailing hint can say "showing first N" vs "byte cap hit".
-  let start: number
-  let end: number
-  let isHeadTruncation = false
-  if (userSpecifiedRange) {
-    start = (offset ?? 1) - 1
-    end = limit ? start + limit : lines.length
-  } else if (totalLines > LARGE_FILE_LINE_THRESHOLD) {
-    start = 0
-    end = LARGE_FILE_LINE_THRESHOLD
-    isHeadTruncation = true
-  } else {
-    start = 0
-    end = lines.length
-  }
-  const sliced = lines.slice(start, end)
-
-  // Build the numbered-line output line-by-line, stopping as soon as adding
-  // the next line would push past MAX_READ_BYTES. Per-line byte counting
-  // is necessary for CJK / wide-char content where line.length lies about
-  // the on-the-wire size.
+  const startLine = offset ?? 1
+  const maxLines = limit ?? (userSpecifiedRange ? Number.MAX_SAFE_INTEGER : LARGE_FILE_LINE_THRESHOLD)
   const formatted: string[] = []
-  let bytes = 0
-  for (let i = 0; i < sliced.length; i++) {
-    const numbered = `${start + i + 1}\t${sliced[i]}`
-    const addedBytes = Buffer.byteLength(numbered, 'utf-8') + (formatted.length > 0 ? 1 : 0)
-    if (bytes + addedBytes > MAX_READ_BYTES && formatted.length > 0) break
-    formatted.push(numbered)
-    bytes += addedBytes
+  const stream = createReadStream(filePath, { signal: abortSignal })
+  let outputBytes = 0
+  let lineNumber = 1
+  let lineParts: Buffer[] = []
+  let lineBytes = 0
+  let stopped = false
+  let hasMoreLines = false
+  let byteCapped = false
+  let partialLine = false
+
+  const collectSegment = (segment: Buffer): void => {
+    if (lineNumber < startLine || formatted.length >= maxLines) return
+    const separatorBytes = formatted.length > 0 ? 1 : 0
+    const prefixBytes = Buffer.byteLength(`${lineNumber}\t`, 'utf-8')
+    const remaining = MAX_READ_BYTES - outputBytes - separatorBytes - prefixBytes - lineBytes
+    if (segment.byteLength <= remaining) {
+      if (segment.byteLength > 0) lineParts.push(segment)
+      lineBytes += segment.byteLength
+      return
+    }
+    if (formatted.length > 0) {
+      lineParts = []
+      lineBytes = 0
+      byteCapped = true
+      stopped = true
+      return
+    }
+    if (remaining > 0) {
+      lineParts.push(segment.subarray(0, remaining))
+      lineBytes += remaining
+    }
+    byteCapped = true
+    partialLine = true
+    stopped = true
   }
+
+  const finishLine = (): void => {
+    if (lineNumber >= startLine) {
+      if (formatted.length >= maxLines) {
+        hasMoreLines = true
+        stopped = true
+        return
+      }
+      const text = Buffer.concat(lineParts, lineBytes).toString('utf-8')
+      const numbered = `${lineNumber}\t${text}`
+      const addedBytes = Buffer.byteLength(numbered, 'utf-8') + (formatted.length > 0 ? 1 : 0)
+      formatted.push(numbered)
+      outputBytes += addedBytes
+    }
+    lineParts = []
+    lineBytes = 0
+    lineNumber++
+  }
+
+  try {
+    for await (const value of stream) {
+      const chunk = value as Buffer
+      let cursor = 0
+      while (cursor < chunk.length && !stopped) {
+        const newline = chunk.indexOf(0x0a, cursor)
+        const end = newline === -1 ? chunk.length : newline
+        collectSegment(chunk.subarray(cursor, end))
+        if (stopped) break
+        if (newline === -1) break
+        finishLine()
+        cursor = newline + 1
+      }
+      if (stopped) break
+    }
+    if (!stopped) finishLine()
+  } finally {
+    stream.destroy()
+  }
+
+  if (partialLine) {
+    let text = Buffer.concat(lineParts, lineBytes).toString('utf-8')
+    const separatorBytes = formatted.length > 0 ? 1 : 0
+    while (Buffer.byteLength(`${lineNumber}\t${text}`, 'utf-8') + separatorBytes > MAX_READ_BYTES) {
+      text = text.slice(0, -1)
+    }
+    formatted.push(`${lineNumber}\t${text}`)
+  }
+
   const includedLines = formatted.length
   const body = formatted.join('\n')
 
-  // Trailing hint — same shape as Claude Code's MaxFileReadTokenExceededError
-  // message: tells the model exactly which next call will work, so it can
-  // self-recover instead of giving up or repeating the same call.
-  if (isHeadTruncation) {
-    const note = includedLines < sliced.length ? ` (further capped at ${MAX_READ_BYTES / 1024} KB)` : ''
+  if (!userSpecifiedRange && (hasMoreLines || byteCapped)) {
+    const note = byteCapped
+      ? `; output capped at ${MAX_READ_BYTES / 1024} KB${partialLine ? ' because the current line itself exceeds the cap' : ''}`
+      : ''
     return {
       text:
         body +
-        `\n\n[readFile: showing first ${includedLines}/${totalLines} lines${note}. ` +
+        `\n\n[readFile: showing first ${includedLines} lines${note}; the file contains more content. ` +
         `Call readFile again with offset/limit to view other ranges, or use grep to find specific symbols. ` +
         `For whole-file analysis of very large files, consider delegating to a sub-agent via the task tool — ` +
         `each sub-agent reads in isolated context and returns only a summary.]`,
-      // Head-truncated: the whole file is NOT in context, so the caller must
-      // not cache this read (a re-read would otherwise return a misleading
-      // "already in the conversation above" stub).
       complete: false,
     }
   }
-  if (includedLines < sliced.length) {
-    const nextOffset = start + includedLines + 1
+  if (byteCapped) {
+    const nextOffset = lineNumber + (partialLine ? 1 : 0)
+    const continuation = partialLine
+      ? `The last line itself exceeded the cap; use grep to inspect it instead of skipping its remainder.`
+      : `Call readFile again with offset=${nextOffset} for the next chunk, or narrow the range.`
     return {
       text:
         body +
         `\n\n[readFile: output capped at ${MAX_READ_BYTES / 1024} KB; ` +
-        `returned ${includedLines}/${sliced.length} requested lines (lines ${start + 1}-${start + includedLines}). ` +
-        `Call readFile again with offset=${nextOffset} for the next chunk, or narrow the range.]`,
+        `returned ${includedLines} requested lines starting at line ${startLine}. ${continuation}]`,
       complete: false,
     }
   }
-  // Whole requested slice returned untruncated. It's "complete" (the entire
-  // file is now in context) only for a whole-file read — an explicit range
-  // leaves the rest of the file unseen, so it must not seed the de-dup cache.
+
   return { text: body, complete: !userSpecifiedRange }
 }
 
@@ -231,8 +279,11 @@ function renderNotebookOutput(o: NotebookOutput): string {
   }
 }
 
-async function readNotebookResult(filePath: string): Promise<{ text: string; complete: boolean }> {
-  const raw = await fs.readFile(filePath, 'utf-8')
+async function readNotebookResult(
+  filePath: string,
+  abortSignal?: AbortSignal,
+): Promise<{ text: string; complete: boolean }> {
+  const raw = await fs.readFile(filePath, { encoding: 'utf-8', signal: abortSignal })
   let parsed: { cells?: NotebookCell[] }
   try {
     parsed = JSON.parse(raw) as { cells?: NotebookCell[] }
@@ -289,11 +340,12 @@ Usage:
 - If a file path is provided by the user, assume it is valid.`,
     inputSchema: z.object({
       filePath: z.string().describe('Absolute path to the file'),
-      offset: z.number().optional().describe('Start line (1-based, text files only)'),
-      limit: z.number().optional().describe('Max lines to read (text files only)'),
+      offset: z.number().int().min(1).optional().describe('Start line (1-based, text files only)'),
+      limit: z.number().int().min(1).optional().describe('Max lines to read (text files only)'),
     }),
-    execute: async ({ filePath, offset, limit }, { toolCallId }) => {
+    execute: async ({ filePath, offset, limit }, { toolCallId, abortSignal }) => {
       try {
+        abortSignal?.throwIfAborted()
         reportProgress(toolCallId, `Reading ${filePath}`)
         const isRangeRead = offset != null || limit != null
 
@@ -303,15 +355,17 @@ Usage:
         if (filePath.toLowerCase().endsWith('.ipynb')) {
           const verdict = await checkReadCache(cache, filePath, false)
           if (verdict && verdict.hit) return verdict.stub
-          const { text, complete } = await readNotebookResult(filePath)
+          const { text, complete } = await readNotebookResult(filePath, abortSignal)
           if (verdict && !verdict.hit && complete) cache?.set(filePath, verdict.entry)
           return text
         }
 
         const kind = await classifyFile(filePath).catch(() => 'text' as const)
+        abortSignal?.throwIfAborted()
 
         if (kind === 'audio') {
           const result = await transcribeAudio(filePath, {
+            abortSignal,
             onNotice: (msg) => reportProgress(toolCallId, msg),
           })
           if (typeof result === 'string') return result
@@ -327,7 +381,7 @@ Usage:
         }
 
         if (kind === 'image') {
-          const buffer = await fs.readFile(filePath)
+          const buffer = await fs.readFile(filePath, { signal: abortSignal })
           const mime = mediaTypeFor(filePath)
           // Same byte budget as user-attached images (ATTACH_BYTE_BUDGET).
           const compressed = await compressImage(buffer, mime, { byteBudget: ATTACH_BYTE_BUDGET })
@@ -358,7 +412,7 @@ Usage:
               `(e.g. pdftotext with page ranges).]`
             )
           }
-          const buffer = await fs.readFile(filePath)
+          const buffer = await fs.readFile(filePath, { signal: abortSignal })
           return {
             type: 'content',
             value: [
@@ -375,6 +429,7 @@ Usage:
 
         if (kind === 'office') {
           const text = await extractOfficeText(filePath)
+          abortSignal?.throwIfAborted()
           const textBytes = Buffer.byteLength(text, 'utf-8')
           if (textBytes > MAX_READ_BYTES) {
             return (
@@ -389,7 +444,7 @@ Usage:
         // Text / unknown → read as text.
         const verdict = await checkReadCache(cache, filePath, isRangeRead)
         if (verdict && verdict.hit) return verdict.stub
-        const { text, complete } = await readTextResult(filePath, offset, limit)
+        const { text, complete } = await readTextResult(filePath, offset, limit, abortSignal)
         if (verdict && !verdict.hit && complete) cache?.set(filePath, verdict.entry)
         return text
       } catch (err) {

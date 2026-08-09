@@ -8,7 +8,7 @@ import { reportProgress } from './progress.js'
 import { getShellProvider } from './shell-provider.js'
 
 const YEAR = new Date().getFullYear()
-const BRAVE_TIMEOUT_MS = 15_000
+const SEARCH_TIMEOUT_MS = 15_000
 
 interface SearchResult {
   title: string
@@ -16,14 +16,35 @@ interface SearchResult {
   content: string
 }
 
-async function searchWithTavily(query: string, maxResults: number): Promise<SearchResult[]> {
-  const { tavily } = await import('@tavily/core')
-  const client = tavily({ apiKey: process.env.TAVILY_API_KEY! })
-  const response = await client.search(query, { maxResults })
-  return response.results.map((r: SearchResult) => ({ title: r.title, url: r.url, content: r.content }))
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+  return signal ? AbortSignal.any([signal, timeout]) : timeout
 }
 
-async function searchWithBrave(query: string, maxResults: number): Promise<SearchResult[]> {
+async function searchWithTavily(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  // Use Tavily's small REST surface directly. The SDK pulls axios plus the
+  // full js-tiktoken tables into the CLI bundle even though basic search
+  // needs neither; direct fetch also lets Esc cancel the request immediately.
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.TAVILY_API_KEY!}`,
+      'Content-Type': 'application/json',
+      'X-Client-Source': 'x-code-cli',
+    },
+    body: JSON.stringify({ query, max_results: maxResults }),
+    signal: withTimeout(signal),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Tavily API returned HTTP ${res.status} ${res.statusText}`)
+  }
+
+  const data = (await res.json()) as { results?: SearchResult[] }
+  return (data.results ?? []).map((r) => ({ title: r.title, url: r.url, content: r.content }))
+}
+
+async function searchWithBrave(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
   const url = new URL('https://api.search.brave.com/res/v1/web/search')
   url.searchParams.set('q', query)
   url.searchParams.set('count', String(Math.min(maxResults, 20)))
@@ -33,7 +54,7 @@ async function searchWithBrave(query: string, maxResults: number): Promise<Searc
       'X-Subscription-Token': process.env.BRAVE_API_KEY!,
       Accept: 'application/json',
     },
-    signal: AbortSignal.timeout(BRAVE_TIMEOUT_MS),
+    signal: withTimeout(signal),
   })
 
   if (!res.ok) {
@@ -99,9 +120,9 @@ export const webSearch = tool({
     `(e.g. prefer "React 19 release notes ${YEAR}" over "React latest release notes").`,
   inputSchema: z.object({
     query: z.string().describe('The search query'),
-    maxResults: z.number().optional().describe('Max results (default: 5)'),
+    maxResults: z.number().int().min(1).max(20).optional().describe('Max results (default: 5, max: 20)'),
   }),
-  execute: async ({ query, maxResults }, { toolCallId }) => {
+  execute: async ({ query, maxResults }, { toolCallId, abortSignal }) => {
     const n = maxResults ?? 5
     const hasTavily = !!process.env.TAVILY_API_KEY
     const hasBrave = !!process.env.BRAVE_API_KEY
@@ -110,7 +131,9 @@ export const webSearch = tool({
 
     reportProgress(toolCallId, `Searching: ${query}`)
     try {
-      const results = hasTavily ? await searchWithTavily(query, n) : await searchWithBrave(query, n)
+      const results = hasTavily
+        ? await searchWithTavily(query, n, abortSignal)
+        : await searchWithBrave(query, n, abortSignal)
       return formatResults(results)
     } catch (err) {
       return formatToolError(`searching (${hasTavily ? 'Tavily' : 'Brave'})`, err)

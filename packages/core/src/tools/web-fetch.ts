@@ -2,7 +2,12 @@
 import * as cheerio from 'cheerio'
 // @ts-expect-error turndown has no types
 import TurndownService from 'turndown'
+import { Agent, fetch as undiciFetch } from 'undici'
 
+import { lookup as dnsLookup } from 'node:dns'
+import { BlockList, isIP } from 'node:net'
+
+import { fetchWithValidatedRedirects } from '@ai-sdk/provider-utils'
 import { tool } from 'ai'
 
 import { z } from 'zod'
@@ -40,24 +45,147 @@ const YEAR = new Date().getFullYear()
 // `localhost`, bare hostnames), no embedded credentials, no non-HTTP schemes,
 // and no IPs in private/link-local/loopback ranges.
 
-const PRIVATE_IP_PATTERNS = [
-  /^127\./, // loopback
-  /^10\./, // 10.0.0.0/8
-  /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
-  /^192\.168\./, // 192.168.0.0/16
-  /^169\.254\./, // link-local (AWS/GCP metadata)
-  /^0\./, // 0.0.0.0/8
-  /^::1$/, // IPv6 loopback
-  /^fd[0-9a-f]{2}:/i, // IPv6 ULA
-  /^fe80:/i, // IPv6 link-local
-]
+const DISALLOWED_ADDRESSES = new BlockList()
+
+for (const [network, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+] as const) {
+  DISALLOWED_ADDRESSES.addSubnet(network, prefix, 'ipv4')
+}
+
+for (const [network, prefix] of [
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['fec0::', 10],
+  ['ff00::', 8],
+  ['2001:db8::', 32],
+  ['3fff::', 20],
+] as const) {
+  DISALLOWED_ADDRESSES.addSubnet(network, prefix, 'ipv6')
+}
+
+DISALLOWED_ADDRESSES.addAddress('::', 'ipv6')
+DISALLOWED_ADDRESSES.addAddress('::1', 'ipv6')
+
+function isFakeIpAddress(address: string, family: number): boolean {
+  if (family !== 4) return false
+  const [first, second] = address.split('.').map(Number)
+  return first === 198 && (second === 18 || second === 19)
+}
+
+function isDisallowedAddress(address: string, family: number): boolean {
+  if (family === 4) return isIP(address) !== 4 || DISALLOWED_ADDRESSES.check(address, 'ipv4')
+  if (family === 6) return isIP(address) !== 6 || DISALLOWED_ADDRESSES.check(address, 'ipv6')
+  return true
+}
 
 function isPrivateHost(hostname: string): boolean {
   const lower = hostname.toLowerCase()
   if (lower === 'localhost' || lower.endsWith('.local') || lower.endsWith('.internal')) return true
   // IP-literal in URL — strip surrounding brackets for IPv6
   const bare = lower.startsWith('[') ? lower.slice(1, -1) : lower
-  return PRIVATE_IP_PATTERNS.some((re) => re.test(bare))
+  const family = isIP(bare)
+  return family !== 0 && isDisallowedAddress(bare, family)
+}
+
+/** @internal Exported for DNS-guard tests. */
+export function validateResolvedAddress(
+  hostname: string,
+  address: string,
+  family: number,
+  allowHttpsFakeIp = false,
+): void {
+  // Clash/Mihomo fake-IP mode deliberately maps public hostnames into
+  // 198.18.0.0/15 and routes those sockets through its TUN interface. Permit
+  // that synthetic address only for an HTTPS hostname. IP-literal URLs are
+  // still rejected by validateFetchUrl, and every redirect is revalidated.
+  if (allowHttpsFakeIp && isIP(hostname) === 0 && isFakeIpAddress(address, family)) return
+
+  if (isDisallowedAddress(address, family)) {
+    throw new Error(`Hostname ${hostname} resolved to disallowed IP address ${address}`)
+  }
+}
+
+type LookupAddress = { address: string; family: number }
+type LookupOptions = {
+  all?: boolean
+  family?: number
+  hints?: number
+  order?: 'ipv4first' | 'ipv6first' | 'verbatim'
+  verbatim?: boolean
+}
+type LookupAllCallback = (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void
+type LookupOneCallback = (error: NodeJS.ErrnoException | null, address: string, family: number) => void
+type Lookup = (hostname: string, options: LookupOptions & { all: true }, callback: LookupAllCallback) => void
+
+function createValidatedLookup(allowHttpsFakeIp: boolean) {
+  const lookupAll = dnsLookup as unknown as Lookup
+  return (hostname: string, options: LookupOptions, callback: LookupAllCallback | LookupOneCallback): void => {
+    lookupAll(hostname, { ...options, all: true }, (error, addresses) => {
+      if (error) {
+        const rejectLookup = callback as (error: NodeJS.ErrnoException) => void
+        rejectLookup(error)
+        return
+      }
+
+      try {
+        const [firstAddress] = addresses
+        if (!firstAddress) throw new Error(`Hostname ${hostname} did not resolve to an address`)
+        for (const { address, family } of addresses) {
+          validateResolvedAddress(hostname, address, family, allowHttpsFakeIp)
+        }
+
+        if (options.all === true) (callback as LookupAllCallback)(null, addresses)
+        else (callback as LookupOneCallback)(null, firstAddress.address, firstAddress.family)
+      } catch (error) {
+        const rejectLookup = callback as (error: Error) => void
+        rejectLookup(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  }
+}
+
+const strictAgent = new Agent({ connect: { lookup: createValidatedLookup(false) as never } })
+const httpsFakeIpAgent = new Agent({ connect: { lookup: createValidatedLookup(true) as never } })
+
+const fakeIpCompatibleFetch: typeof fetch = async (input, init) => {
+  const url = input instanceof Request ? new URL(input.url) : new URL(String(input))
+  const dispatcher = url.protocol === 'https:' ? httpsFakeIpAgent : strictAgent
+  return undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    {
+      ...init,
+      dispatcher,
+    } as Parameters<typeof undiciFetch>[1],
+  ) as unknown as Promise<Response>
+}
+
+function isFakeIpDnsRejection(error: unknown): boolean {
+  let current = error
+  for (let depth = 0; current && depth < 6; depth++) {
+    if (current instanceof Error) {
+      if (/resolved to disallowed IP address 198\.(?:18|19)\./i.test(current.message)) return true
+      current = current.cause
+    } else {
+      break
+    }
+  }
+  return false
 }
 
 /** @internal Exported for testing only. */
@@ -88,16 +216,37 @@ const turndown = new TurndownService({
   codeBlockStyle: 'fenced',
 }) as { turndown: (html: string) => string }
 
-async function doFetch(url: string, userAgent: string): Promise<Response> {
-  return fetch(url, {
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS)
+  return signal ? AbortSignal.any([signal, timeout]) : timeout
+}
+
+/** @internal Exported for redirect-validation tests. */
+export async function doFetch(
+  url: string,
+  userAgent: string,
+  abortSignal?: AbortSignal,
+  customFetch?: typeof fetch,
+): Promise<Response> {
+  const request = {
+    url,
     headers: {
       'User-Agent': userAgent,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
       'Accept-Language': 'en-US,en;q=0.9',
     },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  })
+    abortSignal: withTimeout(abortSignal),
+    maxRedirects: 10,
+  }
+
+  if (customFetch) return fetchWithValidatedRedirects({ ...request, fetch: customFetch })
+
+  try {
+    return await fetchWithValidatedRedirects(request)
+  } catch (error) {
+    if (!isFakeIpDnsRejection(error)) throw error
+    return fetchWithValidatedRedirects({ ...request, fetch: fakeIpCompatibleFetch })
+  }
 }
 
 /** Stream-read response body with a hard byte cap. Prevents OOM on chunked
@@ -147,7 +296,7 @@ export const webFetch = tool({
     url: z.string().url().describe('The URL to fetch'),
     prompt: z.string().optional().describe('What information to extract from the page'),
   }),
-  execute: async ({ url, prompt }, { toolCallId }) => {
+  execute: async ({ url, prompt }, { toolCallId, abortSignal }) => {
     try {
       const urlError = validateFetchUrl(url)
       if (urlError) return `Error: ${urlError}`
@@ -159,13 +308,13 @@ export const webFetch = tool({
       }
 
       reportProgress(toolCallId, `Fetching ${url}`)
-      let response = await doFetch(url, BROWSER_UA)
+      let response = await doFetch(url, BROWSER_UA, abortSignal)
 
       // Cloudflare bot-challenge fallback: on 403 + cf-mitigated header, retry with
       // an honest CLI UA. Many CF rules whitelist identified crawlers while blocking
       // anything that fails the browser TLS fingerprint check.
       if (response.status === 403 && response.headers.get('cf-mitigated') !== null) {
-        response = await doFetch(url, FALLBACK_UA)
+        response = await doFetch(url, FALLBACK_UA, abortSignal)
       }
 
       if (!response.ok) {

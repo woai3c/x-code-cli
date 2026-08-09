@@ -226,9 +226,15 @@ export function getToolResultSummary(toolName: string, output: string | undefine
   // (e.g. "Wrote file", "Applied changes"). When the tool errored —
   // permission denial, hook deny, exception — those cheery messages
   // are misleading; the bullet is rendered red but the text still
-  // reads success. Surface a short error label instead and let the
-  // markdown body underneath carry the actual error text.
-  if (status === 'error') return 'Failed'
+  // reads success. Surface the bounded error text instead so the user sees
+  // the real cause without opening a debug log.
+  if (status === 'error' || /^Error(?:\s|:)/i.test(output.trimStart())) {
+    const lines = output
+      .trim()
+      .split('\n')
+      .filter((line) => line.trim())
+    return lines.length <= 3 ? lines.join('\n') : lines.slice(0, 3).join('\n') + `\n... +${lines.length - 3} lines`
+  }
 
   const n = normalizeToolName(toolName)
 

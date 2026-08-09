@@ -33,7 +33,7 @@ import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { debugLog, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
-import { consumeExpectedCacheMissReasons, createProviderTurnUsage, estimateCacheMiss } from './cache-stats.js'
+import { appendProviderTurnUsage, consumeExpectedCacheMissReasons, createProviderTurnUsage } from './cache-stats.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
@@ -249,7 +249,8 @@ async function streamChunksToUI(
       debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
       if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
       if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
-      callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw))
+      const isError = /^Error(?:\s|:)/i.test(raw.trimStart())
+      callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw), isError)
     } else if (chunk.type === 'tool-error') {
       // The SDK rejected a tool call mid-stream. Two cases:
       //  1. A deferred tool called before loading — already suppressed above,
@@ -333,9 +334,7 @@ async function collectTurnResponse(
       normalized,
       expectedMissReasons,
     })
-    const previousTurn = state.providerTurns.at(-1)
-    state.providerTurns.push(turnUsage)
-    const cacheMiss = previousTurn ? estimateCacheMiss(previousTurn, turnUsage) : undefined
+    const cacheMiss = appendProviderTurnUsage(state, turnUsage)
     if (cacheMiss && !cacheMiss.expected) {
       debugLog(
         'cache-break',
@@ -418,7 +417,7 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
     state.deferredCatalog = undefined
   }
   if (deferralActive) {
-    const catalog = buildDeferredCatalog(options, contextWindow, tools)
+    const catalog = state.deferredCatalog ?? buildDeferredCatalog(options, contextWindow, tools)
     state.deferredCatalog = catalog
 
     if (catalog.length > 0) {
@@ -768,7 +767,10 @@ export async function agentLoop(
   // the resume prompt, the pending work is embedded directly in their first
   // user message. Auto-injecting it into every system prompt made the model
   // treat trivial greetings as "continue exploring", so we no longer do that.
-  let fullKnowledgeContext: string | null = null
+  // Reuse the exact context that backs the byte-stable system prompt. When
+  // an invalidation deliberately clears the prompt cache, reload knowledge
+  // so memory/profile edits are reflected in the rebuilt prefix.
+  let fullKnowledgeContext: string | null = state.systemPromptCache ? (state.knowledgeContext ?? null) : null
   const initialRecallQuery = memoryService
     ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, process.cwd())
     : null
@@ -863,7 +865,7 @@ export async function agentLoop(
     // evict the checkpoint we just created. Skipped for sub-agents.
     if (turn === 1 && options.subAgentRegistry) {
       const promptPreview = userContentToText(effectiveUserMessage).slice(0, 200)
-      const ckpt = await createCheckpoint(state, promptPreview)
+      const ckpt = await createCheckpoint(state, promptPreview, process.cwd(), options.abortSignal)
       if (ckpt) void appendCheckpoint(state, ckpt)
     }
 

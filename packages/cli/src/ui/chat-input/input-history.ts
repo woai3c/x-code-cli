@@ -9,18 +9,14 @@
 // lockfile dance their global file needs, and (b) it makes history feel like
 // the rest of `.x-code/` — gitignored, scoped, throwaway-with-the-project.
 //
-// On load we read the WHOLE file and keep only the last HISTORY_MAX lines.
-// The file naturally stays small (one short line per submit, project-scoped),
-// so a streaming reverse-reader like Claude Code's `readLinesReverse` would
-// be over-engineered here. Switch to streaming only if a real user grows
-// their per-project file past a few MB.
+// Startup reads only the tail of the file. Appends periodically compact an
+// oversized history through a temp-file + atomic rename so startup cost stays
+// bounded without risking the original file on an interrupted rewrite.
 //
-// Writes are fire-and-forget `fs.appendFile`. POSIX guarantees an append of
-// up to PIPE_BUF (4096 bytes) is atomic, and Windows' append-mode handle
-// (`O_APPEND` → FILE_APPEND_DATA) is similarly atomic per write call — well
-// within budget for a single-line history entry. We deliberately skip a
-// lockfile: per-project file + rare concurrent xc instances + per-write
-// atomic append = the lockfile would cost more than it buys.
+// Writes are fire-and-forget from the UI and serialized per file inside this
+// process so compaction cannot race a later append. We deliberately skip a
+// cross-process lockfile: histories are project-local and each append remains
+// one append-mode write.
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -33,12 +29,16 @@ import type { PastedContents } from './paste-refs.js'
 import type { InputAction } from './reducer.js'
 
 const HISTORY_FILE = '.x-code/history.jsonl'
+const HISTORY_READ_BYTES = 1024 * 1024
+const HISTORY_COMPACT_BYTES = 2 * 1024 * 1024
+const HISTORY_COMPACT_MAX = 500
+const HISTORY_READ_CHUNK = 64 * 1024
 
-/** Mirrors Claude Code's `MAX_HISTORY_ITEMS`. Read-side only — the file on
- *  disk grows unbounded, but the user only ever sees the most recent 100
- *  entries when pressing Up. Files containing more lines are sliced down
- *  in memory, never trimmed on disk. */
+/** Mirrors Claude Code's `MAX_HISTORY_ITEMS`. The user only sees the most
+ *  recent 100 entries when pressing Up; disk compaction retains a wider
+ *  500-entry window. */
 const HISTORY_MAX = 100
+const historyWriteQueues = new Map<string, Promise<void>>()
 
 export interface InputHistoryEntry {
   /** Pre-paste-expansion text (the placeholder form with `[Pasted text #N]`
@@ -56,10 +56,75 @@ function historyPath(cwd: string): string {
 /** Read up to HISTORY_MAX most-recent entries. Returned oldest-first so the
  *  caller can `push` new submits onto the tail and walk backwards via
  *  `arr[arr.length - 1 - i]` — same shape `historyRef` uses in-memory. */
-async function loadInputHistory(cwd: string = process.cwd()): Promise<InputHistoryEntry[]> {
+async function readHistoryTail(file: string, maxBytes: number): Promise<string> {
+  const handle = await fs.open(file, 'r')
+  try {
+    const stat = await handle.stat()
+    const length = Math.min(stat.size, maxBytes)
+    const start = stat.size - length
+    const buffer = Buffer.allocUnsafe(length)
+    const { bytesRead } = await handle.read(buffer, 0, length, start)
+    let raw = buffer.subarray(0, bytesRead).toString('utf-8')
+    if (start > 0) {
+      const firstNewline = raw.indexOf('\n')
+      raw = firstNewline === -1 ? '' : raw.slice(firstNewline + 1)
+    }
+    return raw
+  } finally {
+    await handle.close()
+  }
+}
+
+async function readLastRawLines(file: string, maxLines: number): Promise<string[]> {
+  const handle = await fs.open(file, 'r')
+  try {
+    const stat = await handle.stat()
+    let position = stat.size
+    let newlineCount = 0
+    const chunks: Buffer[] = []
+
+    while (position > 0 && newlineCount <= maxLines) {
+      const length = Math.min(HISTORY_READ_CHUNK, position)
+      position -= length
+      const buffer = Buffer.allocUnsafe(length)
+      const { bytesRead } = await handle.read(buffer, 0, length, position)
+      const chunk = buffer.subarray(0, bytesRead)
+      chunks.unshift(chunk)
+      for (const byte of chunk) {
+        if (byte === 0x0a) newlineCount++
+      }
+    }
+
+    let raw = Buffer.concat(chunks).toString('utf-8')
+    if (position > 0) {
+      const firstNewline = raw.indexOf('\n')
+      raw = firstNewline === -1 ? '' : raw.slice(firstNewline + 1)
+    }
+    return raw
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .slice(-maxLines)
+  } finally {
+    await handle.close()
+  }
+}
+
+async function compactInputHistory(file: string): Promise<void> {
+  const lines = await readLastRawLines(file, HISTORY_COMPACT_MAX)
+  const tempFile = `${file}.${process.pid}-${Date.now()}.tmp`
+  try {
+    await fs.writeFile(tempFile, lines.length > 0 ? `${lines.join('\n')}\n` : '', 'utf-8')
+    await fs.rename(tempFile, file)
+  } catch (error) {
+    await fs.unlink(tempFile).catch(() => undefined)
+    throw error
+  }
+}
+
+export async function loadInputHistory(cwd: string = process.cwd()): Promise<InputHistoryEntry[]> {
   let raw: string
   try {
-    raw = await fs.readFile(historyPath(cwd), 'utf-8')
+    raw = await readHistoryTail(historyPath(cwd), HISTORY_READ_BYTES)
   } catch {
     // ENOENT on first run — empty history. Any other error is silently
     // treated the same way: history is non-critical, never block startup.
@@ -91,14 +156,24 @@ async function loadInputHistory(cwd: string = process.cwd()): Promise<InputHisto
  *  but the call site can ignore it. Errors are swallowed because input
  *  history is a UX nicety, not load-bearing — losing one entry to a disk
  *  hiccup is preferable to surfacing an error to the user mid-prompt. */
-async function appendInputHistory(entry: InputHistoryEntry, cwd: string = process.cwd()): Promise<void> {
+async function appendInputHistoryNow(entry: InputHistoryEntry, file: string): Promise<void> {
+  await ensureProjectStorageDir(path.dirname(file))
+  await fs.appendFile(file, `${JSON.stringify(entry)}\n`, { encoding: 'utf-8' })
+  const stat = await fs.stat(file)
+  if (stat.size > HISTORY_COMPACT_BYTES) await compactInputHistory(file)
+}
+
+export async function appendInputHistory(entry: InputHistoryEntry, cwd: string = process.cwd()): Promise<void> {
   const file = historyPath(cwd)
-  const line = JSON.stringify(entry) + '\n'
+  const previous = historyWriteQueues.get(file) ?? Promise.resolve()
+  const queued = previous.catch(() => undefined).then(() => appendInputHistoryNow(entry, file))
+  historyWriteQueues.set(file, queued)
   try {
-    await ensureProjectStorageDir(path.dirname(file))
-    await fs.appendFile(file, line, { encoding: 'utf-8' })
+    await queued
   } catch {
     /* best-effort */
+  } finally {
+    if (historyWriteQueues.get(file) === queued) historyWriteQueues.delete(file)
   }
 }
 

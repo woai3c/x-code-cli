@@ -17,6 +17,14 @@ describe('compaction usage reports', () => {
 })
 
 describe('CLI tool result summaries', () => {
+  it('shows a webFetch error instead of claiming that the page was fetched', () => {
+    const error =
+      'Error fetching URL: fetch failed (cause: Hostname example.com resolved to disallowed IP address 198.18.1.86)'
+
+    expect(getToolResultSummary('webFetch', error, 'completed')).toBe(error)
+    expect(getToolResultSummary('webFetch', error, 'error')).toBe(error)
+  })
+
   it('preserves complete shell table output instead of truncating away the bottom border', () => {
     const table = [
       '┌──────┬────────┐',

@@ -25,6 +25,7 @@ import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMes
 import type { ToolImage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
 import { appendUsage } from './session-store.js'
+import { captureFileBeforeMutation } from './snapshot.js'
 import { runSubAgent } from './sub-agents/runner.js'
 import { runToolSearch } from './tool-search/resolve.js'
 import { accumulateUsage, normalizeLanguageModelUsage } from './usage.js'
@@ -142,6 +143,7 @@ async function executeWriteTool(
   toolCallId: string,
   callbacks: AgentCallbacks,
   signal: AbortSignal | undefined,
+  beforeWrite: (filePath: string) => Promise<void>,
 ): Promise<string> {
   if (toolName === 'writeFile') {
     const filePath = input.filePath as string
@@ -157,6 +159,7 @@ async function executeWriteTool(
     } catch {
       oldContent = null
     }
+    await beforeWrite(filePath)
     await fs.writeFile(filePath, content, { encoding: 'utf-8', signal })
     const isNew = oldContent === null
     const parts = content.split('\n')
@@ -180,6 +183,7 @@ async function executeWriteTool(
     if (Array.isArray(edits)) {
       const newContent = applyBatchEdits(content, edits)
       if (signal?.aborted) throw signal.reason ?? new Error('Edit interrupted by user')
+      await beforeWrite(filePath)
       await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
 
       const payload = computeEditDiff(filePath, content, newContent)
@@ -206,6 +210,7 @@ async function executeWriteTool(
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
     if (signal?.aborted) throw signal.reason ?? new Error('Edit interrupted by user')
+    await beforeWrite(filePath)
     await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
 
     const payload = computeEditDiff(filePath, content, newContent)
@@ -759,15 +764,20 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
-      const output = await executeWriteTool(toolName, input, toolCallId, callbacks, options.abortSignal)
+      let trackedPath: string | null = null
+      const beforeWrite = async (filePath: string) => {
+        const absPath = path.resolve(filePath)
+        await captureFileBeforeMutation(state, absPath, process.cwd(), options.abortSignal)
+        state.filesModified.add(absPath)
+        state.checkpointFileCache.delete(absPath)
+        trackedPath = absPath
+      }
+      const output = await executeWriteTool(toolName, input, toolCallId, callbacks, options.abortSignal, beforeWrite)
       // executeWriteTool returns "Error: ..." strings for in-band failures
       // (missing match, non-unique match) rather than throwing — surface
       // those as errored results so the scrollback line flips to red.
       const isError = isToolErrorString(output)
-      if (!isError) {
-        state.filesModified.add(input.filePath as string)
-        state.turnFilesModified.add(input.filePath as string)
-      }
+      if (!isError && trackedPath) state.turnFilesModified.add(trackedPath)
       return { output, isError }
     }
     if (toolName === 'shell') {
@@ -794,13 +804,15 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
           ? sedInfo.filePath
           : path.join(process.cwd(), sedInfo.filePath)
         try {
-          const original = await fs.readFile(absPath, 'utf-8')
+          const original = await fs.readFile(absPath, { encoding: 'utf-8', signal: options.abortSignal })
           const newContent = applySedSubstitution(original, sedInfo)
           if (original !== newContent) {
-            await fs.writeFile(absPath, newContent, 'utf-8')
+            await captureFileBeforeMutation(state, absPath, process.cwd(), options.abortSignal)
+            state.filesModified.add(absPath)
+            state.checkpointFileCache.delete(absPath)
+            await fs.writeFile(absPath, newContent, { encoding: 'utf-8', signal: options.abortSignal })
+            state.turnFilesModified.add(absPath)
           }
-          state.filesModified.add(absPath)
-          state.turnFilesModified.add(absPath)
           return { output: '', isError: false }
         } catch {
           // File unreadable or unwritable — fall through to real sed

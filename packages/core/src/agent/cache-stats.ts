@@ -48,6 +48,18 @@ export interface CacheMissSummary {
 
 const CACHE_MISS_NOISE_FLOOR = 1024
 
+export function createCacheMissSummary(): CacheMissSummary {
+  return {
+    expectedTokens: 0,
+    expectedCount: 0,
+    unexpectedTokens: 0,
+    unexpectedCount: 0,
+    probableTtlTokens: 0,
+    probableTtlCount: 0,
+    estimates: [],
+  }
+}
+
 export function markExpectedCacheMiss(state: LoopState, reason: CacheMissReason): void {
   state.expectCacheMiss = true
   state.expectedCacheMissReasons.add(reason)
@@ -136,36 +148,41 @@ export function estimateCacheMiss(
   }
 }
 
-export function scanCacheMisses(turns: readonly ProviderTurnUsage[]): CacheMissSummary {
-  const estimates: CacheMissEstimate[] = []
-  for (let i = 1; i < turns.length; i++) {
-    const estimate = estimateCacheMiss(turns[i - 1]!, turns[i]!)
-    if (estimate) estimates.push(estimate)
+/** Add one adjacent provider-turn pair to a cumulative summary. Mutates the
+ *  supplied summary so the hot path stays O(1) as a session grows. */
+export function appendCacheMissEstimate(
+  summary: CacheMissSummary,
+  previous: ProviderTurnUsage | undefined,
+  current: ProviderTurnUsage,
+): CacheMissEstimate | undefined {
+  if (!previous) return undefined
+  const estimate = estimateCacheMiss(previous, current)
+  if (!estimate) return undefined
+  if (estimate.expected) {
+    summary.expectedTokens += estimate.missedTokens
+    summary.expectedCount++
+  } else {
+    summary.unexpectedTokens += estimate.missedTokens
+    summary.unexpectedCount++
   }
-  return estimates.reduce<CacheMissSummary>(
-    (summary, estimate) => {
-      if (estimate.expected) {
-        summary.expectedTokens += estimate.missedTokens
-        summary.expectedCount++
-      } else {
-        summary.unexpectedTokens += estimate.missedTokens
-        summary.unexpectedCount++
-      }
-      if (estimate.probableTtlExpiry) {
-        summary.probableTtlTokens += estimate.missedTokens
-        summary.probableTtlCount++
-      }
-      summary.estimates.push(estimate)
-      return summary
-    },
-    {
-      expectedTokens: 0,
-      expectedCount: 0,
-      unexpectedTokens: 0,
-      unexpectedCount: 0,
-      probableTtlTokens: 0,
-      probableTtlCount: 0,
-      estimates: [],
-    },
-  )
+  if (estimate.probableTtlExpiry) {
+    summary.probableTtlTokens += estimate.missedTokens
+    summary.probableTtlCount++
+  }
+  summary.estimates.push(estimate)
+  return estimate
+}
+
+export function appendProviderTurnUsage(state: LoopState, current: ProviderTurnUsage): CacheMissEstimate | undefined {
+  const previous = state.providerTurns.at(-1)
+  state.providerTurns.push(current)
+  return appendCacheMissEstimate(state.cacheMissSummary, previous, current)
+}
+
+export function scanCacheMisses(turns: readonly ProviderTurnUsage[]): CacheMissSummary {
+  const summary = createCacheMissSummary()
+  for (let i = 1; i < turns.length; i++) {
+    appendCacheMissEstimate(summary, turns[i - 1], turns[i]!)
+  }
+  return summary
 }

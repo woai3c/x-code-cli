@@ -9,6 +9,7 @@ import type { ModelMessage } from 'ai'
 
 import { recordToolCall } from '../src/agent/loop-guard.js'
 import { createLoopState } from '../src/agent/loop-state.js'
+import { createCheckpoint, restoreCheckpoint } from '../src/agent/snapshot.js'
 import { partitionToolCalls, processToolCalls } from '../src/agent/tool-execution.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../src/types/index.js'
 
@@ -364,6 +365,39 @@ describe('processToolCalls edit validation', () => {
     expect(callbacks.onFileEdit).not.toHaveBeenCalled()
     expect(callbacks.onToolResult).toHaveBeenCalledWith(toolCallId, expect.stringContaining('was not found'), true)
     expect(state.filesModified.size).toBe(0)
+  })
+})
+
+describe('processToolCalls rewind origin capture', () => {
+  it('restores an existing file first modified by writeFile after the checkpoint', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-write-rewind-'))
+    temporaryDirectories.push(dir)
+    const filePath = path.join(dir, 'existing.txt')
+    await fs.writeFile(filePath, 'original', 'utf8')
+    const state = createLoopState()
+    const checkpoint = await createCheckpoint(state, 'rewrite existing', dir)
+    const toolCallId = 'tc-write-rewind'
+    const input = { filePath, content: 'changed' }
+    state.messages.push(
+      { role: 'user', content: 'rewrite the file' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName: 'writeFile', input }],
+      } as ModelMessage,
+    )
+
+    const originalCwd = process.cwd()
+    process.chdir(dir)
+    try {
+      await processToolCalls([{ toolName: 'writeFile', toolCallId, input }], state, options, makeCallbacks(), stubModel)
+    } finally {
+      process.chdir(originalCwd)
+    }
+
+    expect(await fs.readFile(filePath, 'utf8')).toBe('changed')
+    expect(state.filesModified).toEqual(new Set([filePath]))
+    expect(await restoreCheckpoint(state, checkpoint!.ckptId, dir)).toBe(true)
+    expect(await fs.readFile(filePath, 'utf8')).toBe('original')
   })
 })
 

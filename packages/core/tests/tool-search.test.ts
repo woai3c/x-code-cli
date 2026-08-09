@@ -275,6 +275,22 @@ describe('buildDeferredCatalog', () => {
     expect(tools).not.toHaveProperty('mcp__db__query_rows')
   })
 
+  it('reuses the deferred catalog until the tool surface is invalidated', () => {
+    const mcpRegistry = { list: () => mcpTools }
+    const state = createLoopState()
+
+    buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+    const firstCatalog = state.deferredCatalog
+    buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+
+    expect(firstCatalog).toBeDefined()
+    expect(state.deferredCatalog).toBe(firstCatalog)
+
+    state.deferredCatalog = undefined
+    buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+    expect(state.deferredCatalog).not.toBe(firstCatalog)
+  })
+
   it('includes searchHint from annotations in searchText', () => {
     const toolsWithHint = [
       {

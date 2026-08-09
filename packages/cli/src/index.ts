@@ -68,7 +68,7 @@ restoreInvocationCwd()
 
 const chalk = new Chalk({ level: process.stderr.isTTY && !process.env.NO_COLOR ? 3 : 0 })
 
-const MIN_NODE_VERSION = [20, 19, 0]
+const MIN_NODE_VERSION = [22, 0, 0]
 
 function checkNodeVersion(): void {
   const [major, minor, patch] = process.versions.node.split('.').map((v) => parseInt(v, 10))
@@ -91,8 +91,9 @@ function checkNodeVersion(): void {
 // Single Ctrl+C path:
 //   waitUntilExit() → gracefulShutdown() → resetTerminal → process.exit(0)
 //
-// Session save runs as fire-and-forget (not awaited) so it doesn't block
-// exit. Token-usage summary is NOT printed on exit — none of the other
+// Cleanup gets a short bounded drain window so session writes and child
+// process shutdown can finish without making exit hang indefinitely.
+// Token-usage summary is NOT printed on exit — none of the other
 // four CLIs we compared (claude-code, codex, gemini-cli, opencode) do,
 // and the delayed stdout flush made it appear after the shell prompt,
 // confusing users.
@@ -105,10 +106,9 @@ let shutdownInProgress = false
 let mcpRegistryForShutdown: McpRegistry | null = null
 let memoryServiceForShutdown: MemoryService | null = null
 /** Plugin hook bus captured at startup so gracefulShutdown can fire
- *  `SessionEnd` to plugin hooks before the process exits. Fire-and-
- *  forget — the 1s shutdown grace window is the only thing standing
- *  between a slow hook and an abrupt process kill. */
+ *  `SessionEnd` to plugin hooks before the process exits. */
 let hookBusForShutdown: HookBus | null = null
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500
 
 // Belt-and-suspenders terminal restore. Runs synchronously before exit so even
 // if Ink's unmount is partially broken (e.g. a useEffect cleanup threw, or the
@@ -132,36 +132,33 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   if (shutdownInProgress) return undefined as never
   shutdownInProgress = true
 
-  // Session persistence remains best-effort, but the durable memory worker
-  // gets its configured bounded drain window. This keeps exit responsive
-  // without killing a transaction halfway through its final commit.
-  //
-  // Consequence: if the process exits before saveSession's file write lands,
-  // that session isn't saved. Acceptable trade-off given users care far more
-  // about exit speed than about session summaries. A future improvement is
-  // incremental saves during the session (opencode's approach).
+  const finalizers: Promise<unknown>[] = []
   const cleanup = getCleanupFn()
-  if (cleanup) cleanup().catch(() => undefined)
-  if (memoryServiceForShutdown) {
-    await memoryServiceForShutdown.shutdown(memoryServiceForShutdown.getConfig().drainTimeoutMs).catch(() => undefined)
+  if (cleanup) {
+    finalizers.push(cleanup())
+  } else if (memoryServiceForShutdown) {
+    finalizers.push(memoryServiceForShutdown.shutdown(memoryServiceForShutdown.getConfig().drainTimeoutMs))
   }
 
-  // Fire-and-forget MCP shutdown. Stdio servers also clean themselves up
-  // when their stdin closes, so even if process.exit beats this promise
-  // the OS reaps the children — this just makes it explicit / faster.
   if (mcpRegistryForShutdown) {
-    mcpRegistryForShutdown.shutdown().catch(() => undefined)
+    finalizers.push(mcpRegistryForShutdown.shutdown())
   }
-  // The browser sub-agent's MCP server lives in a private registry outside
-  // mcpRegistryForShutdown — close it too so the spawned browser exits.
-  shutdownBrowserMcp().catch(() => undefined)
+  finalizers.push(shutdownBrowserMcp())
 
-  // Plugin SessionEnd hooks. Fire-and-forget — we don't await because
-  // a slow hook would block the user's shell prompt from returning,
-  // and the exit-time grace is a small window anyway. Hooks needing
-  // guaranteed delivery should also subscribe to TurnComplete.
   if (hookBusForShutdown?.has('SessionEnd')) {
-    hookBusForShutdown.emit({ name: 'SessionEnd', session: { cwd: process.cwd(), modelId: '' } }).catch(() => undefined)
+    finalizers.push(hookBusForShutdown.emit({ name: 'SessionEnd', session: { cwd: process.cwd(), modelId: '' } }))
+  }
+
+  let drainTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.allSettled(finalizers),
+      new Promise<void>((resolve) => {
+        drainTimer = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (drainTimer) clearTimeout(drainTimer)
   }
 
   resetTerminal()
@@ -618,24 +615,12 @@ function readStdin(): Promise<string> {
   })
 }
 
-// ── Rejection safety net ────────────────────────────────────────────────
-// Node 15+ terminates the process on unhandled rejection by default. The
-// AI SDK creates several promises (response, usage, finishReason, toolCalls,
-// the stream's internal flush) that can reject independently when a request
-// fails — we try to drain them in loop.ts, but timing races or a new SDK
-// path can still leak one. Without this handler, a provider-side error
-// (insufficient balance, bad max_tokens, upstream 5xx) would kill the
-// REPL mid-session. We swallow the rejection and let the loop's onError
-// path render a friendly message instead.
-process.on('unhandledRejection', (reason) => {
-  if (process.env.DEBUG_STDOUT) {
-    console.error('[unhandledRejection]', reason)
-  }
-})
-process.on('uncaughtException', (err) => {
-  if (process.env.DEBUG_STDOUT) {
-    console.error('[uncaughtException]', err)
-  }
+// ── Fatal exception terminal restore ───────────────────────────────────
+// Restore terminal state before Node reports a fatal uncaught error. A plain
+// uncaughtException handler suppresses Node's default exit and can leave the
+// process alive in an unknown state; the monitor observes without changing it.
+process.on('uncaughtExceptionMonitor', () => {
+  resetTerminal()
 })
 
 // ── SIGINT handler ──────────────────────────────────────────────────────

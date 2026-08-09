@@ -207,6 +207,10 @@ export interface RunGoalCommand {
   requiresUserConfirmation?: boolean
 }
 
+function cloneCacheMissSummary(summary: CacheMissSummary): CacheMissSummary {
+  return { ...summary, estimates: summary.estimates.slice() }
+}
+
 const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   messages: [],
   isLoading: false,
@@ -252,7 +256,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     usageBreakdown: initialSession?.usageBreakdown
       ? cloneUsageBreakdown(initialSession.usageBreakdown)
       : createUsageBreakdown(),
-    cacheMissSummary: initialSession?.cacheMissSummary ?? scanCacheMisses(initialSession?.providerTurns ?? []),
+    cacheMissSummary: cloneCacheMissSummary(
+      initialSession?.cacheMissSummary ?? scanCacheMisses(initialSession?.providerTurns ?? []),
+    ),
     stepStats: initialSession ? initialSession.stepStats.slice() : initialState.stepStats,
     goalStatus: initialSession?.goal ? { ...initialSession.goal } : null,
   })
@@ -612,7 +618,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               ? cloneUsageBreakdown(loopStateRef.current.usageBreakdown)
               : prev.usageBreakdown,
             cacheMissSummary: loopStateRef.current
-              ? scanCacheMisses(loopStateRef.current.providerTurns)
+              ? cloneCacheMissSummary(loopStateRef.current.cacheMissSummary)
               : prev.cacheMissSummary,
           }))
         },
@@ -1362,7 +1368,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         messages: [...prev.messages, ...converted],
         usage: { ...loaded.tokenUsage },
         usageBreakdown: loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown(),
-        cacheMissSummary: loaded.cacheMissSummary ?? scanCacheMisses(loaded.providerTurns ?? []),
+        cacheMissSummary: cloneCacheMissSummary(loaded.cacheMissSummary ?? scanCacheMisses(loaded.providerTurns ?? [])),
         stepStats: loaded.stepStats.slice(),
         goalStatus: loaded.goal ? { ...loaded.goal } : null,
       }))

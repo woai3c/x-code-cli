@@ -68,7 +68,7 @@ Usage:
       multiline,
       headLimit,
     },
-    { toolCallId },
+    { toolCallId, abortSignal },
   ) => {
     try {
       const rgPath = getRipgrepPath()
@@ -109,6 +109,7 @@ Usage:
       const { stdout } = await execFileAsync(rgPath, args, {
         maxBuffer: RG_MAX_BUFFER,
         timeout: 30000,
+        signal: abortSignal,
       })
       const out = stdout.trim()
       if (!out) return 'No matches found.'
