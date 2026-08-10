@@ -1,3 +1,13 @@
+## v0.4.4 (2026-08-10)
+
+### Features
+
+- add SWE-bench runner for benchmarking the xc CLI (a8e0ef3)
+
+### Bug Fixes
+
+- tighten todoWrite update discipline and add explanation field (5d9d520)
+
 ## v0.4.3 (2026-08-09)
 
 ### Bug Fixes
