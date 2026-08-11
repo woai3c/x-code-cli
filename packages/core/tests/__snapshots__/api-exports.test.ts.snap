@@ -242,6 +242,7 @@ exports[`@x-code-cli/core public API > export list matches snapshot 1`] = `
   "trustProject",
   "uninstallPlugin",
   "updateGoalStatus",
+  "userXcodeDir",
   "wrapActivatedSkill",
   "writeServerToConfig",
 ]

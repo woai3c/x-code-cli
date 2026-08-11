@@ -206,9 +206,11 @@ async function main() {
   // If no providers configured, show helpful message and exit
   if (availableProviders.length === 0) {
     printNoApiKeyMessage()
-    // Exit 0: this is a user-configuration hint, not a crash.
-    // Non-zero would make `pnpm dev` pile on ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL / ELIFECYCLE noise.
-    process.exit(0)
+    // Interactive startup keeps this as a configuration hint so `pnpm dev`
+    // does not add package-manager noise. Print mode is automation-facing:
+    // returning success there would make scripts mistake "nothing ran" for a
+    // completed agent task.
+    process.exit(argv.print ? 1 : 0)
   }
 
   // Resolve model

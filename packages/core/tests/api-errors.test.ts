@@ -17,6 +17,9 @@ describe('extractHttpStatus', () => {
   it('extracts leading NNN', () => {
     expect(extractHttpStatus('503 Service Unavailable')).toBe(503)
   })
+  it('extracts HTTP NNN from an SDK retry wrapper', () => {
+    expect(extractHttpStatus('Failed after 4 attempts. Last error: AI_APICallError: scripted HTTP 503')).toBe(503)
+  })
 })
 
 describe('isContextTooLongError', () => {
@@ -73,6 +76,13 @@ describe('classifyApiError', () => {
     const result = classifyApiError(new Error('Request failed with status code 401'))
     expect(result.message).toContain('authentication failed')
     expect(result.retryable).toBe(false)
+  })
+
+  it('uses the SDK statusCode when the provider message omits the HTTP status', () => {
+    const error = Object.assign(new Error('invalid test credential'), { statusCode: 401 })
+    const result = classifyApiError(error)
+    expect(result.message).toContain('authentication failed')
+    expect(result.message).not.toContain('invalid test credential')
   })
 
   it('classifies 402 insufficient balance', () => {
@@ -139,7 +149,16 @@ describe('classifyApiError', () => {
 
   it('classifies network timeouts as retryable', () => {
     const result = classifyApiError(new Error('ETIMEDOUT'))
-    expect(result.message).toContain('Network error')
+    expect(result.message).toContain('Network connection failed')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('normalizes SDK transport wrappers without leaking internal error types', () => {
+    const result = classifyApiError(
+      new Error('Failed after 4 attempts. Last error: AI_APICallError: Cannot connect to API: other side closed'),
+    )
+    expect(result.message).toBe('Network connection failed or was interrupted. Check your connection and try again.')
+    expect(result.message).not.toContain('AI_APICallError')
     expect(result.retryable).toBe(true)
   })
 

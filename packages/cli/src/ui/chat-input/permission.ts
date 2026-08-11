@@ -7,6 +7,7 @@ import { getPermissionLevel } from '@x-code-cli/core'
 import { GLYPH_ELLIPSIS } from '../render/terminal-glyphs.js'
 import { type Cell, textToCells } from './cells.js'
 import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS, S_WARNING } from './palette.js'
+import { truncatePathFromStart } from './text-helpers.js'
 
 export function permissionTitle(toolName: string, mcp?: { serverName: string; rawName: string }): string {
   if (mcp) return `X-Code wants to use MCP tool: ${mcp.serverName}/${mcp.rawName}`
@@ -114,7 +115,7 @@ export function permissionContentCells(
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     const suffix = ' (new file)'
-    const truncated = truncateToWidth(fp, 2 + suffix.length + 2)
+    const truncated = truncatePathFromStart(fp, Math.max(10, termWidth - (2 + suffix.length + 2)))
     cells.push(...textToCells(truncated, S_PRIMARY))
     cells.push(...textToCells(suffix, S_DIM))
     return cells
@@ -124,7 +125,7 @@ export function permissionContentCells(
     const cells: Cell[] = []
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells(truncateToWidth(fp, 2 + 2), S_PRIMARY))
+    cells.push(...textToCells(truncatePathFromStart(fp, Math.max(10, termWidth - 4)), S_PRIMARY))
     return cells
   }
   if (toolName === 'enterPlanMode') {

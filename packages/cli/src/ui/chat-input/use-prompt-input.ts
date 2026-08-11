@@ -85,7 +85,7 @@ export interface PromptInputHandlers {
 }
 
 export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }: PromptInputHandlers): void {
-  const { stdin, setRawMode } = useStdin()
+  const { stdin, setRawMode, internal_eventEmitter } = useStdin()
 
   // Stash handlers in a ref so the effect doesn't re-subscribe on every
   // render — each render produces a fresh callback closure, but we want a
@@ -126,9 +126,9 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
           handlersRef.current.onInterrupt()
         }
       }
-      stdin.on('data', handleCtrlC)
+      internal_eventEmitter.on('input', handleCtrlC)
       return () => {
-        stdin.off('data', handleCtrlC)
+        internal_eventEmitter.off('input', handleCtrlC)
         setRawMode(false)
       }
     }
@@ -363,7 +363,10 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       }
     }
 
-    stdin.on('data', handleData)
+    // Ink owns stdin's `readable` listener and drains the stream itself.
+    // Listening for `data` in parallel races that drain and can lose input;
+    // its input emitter is the single post-read delivery path used by useInput.
+    internal_eventEmitter.on('input', handleData)
     return () => {
       flushPending()
       // Clear paste safety timeout
@@ -373,11 +376,11 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       }
       pasteState.inPaste = false
       pasteState.buffer = ''
-      stdin.off('data', handleData)
+      internal_eventEmitter.off('input', handleData)
       if (useBracketedPaste) {
         process.stdout.write(DISABLE_BRACKETED_PASTE)
       }
       setRawMode(false)
     }
-  }, [enabled, stdin, setRawMode])
+  }, [enabled, stdin, setRawMode, internal_eventEmitter])
 }

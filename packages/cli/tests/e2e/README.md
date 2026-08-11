@@ -8,13 +8,10 @@ artifacts ended up on disk.
 ## Quick start
 
 ```bash
-# 1. Make sure the CLI is built
-pnpm build
-
-# 2. Set at least one API key in .env (or your shell env)
+# 1. Set at least one API key in .env (or your shell env)
 echo 'DEEPSEEK_API_KEY=sk-...' >> .env
 
-# 3. Run
+# 2. Run (the command builds the CLI first)
 pnpm test:e2e
 ```
 
@@ -37,7 +34,7 @@ pnpm test:e2e --max-turns 8        # cap agent loop turns
 
 ## Cost
 
-`deepseek-v4-flash` runs the whole suite (23 scenarios, ~50-100K tokens each)
+`deepseek-v4-flash` runs the whole suite (25 scenarios, ~50-100K tokens each)
 for roughly **$0.10–0.18 per full run**. Each scenario takes 5–30 seconds.
 Full suite: 4–8 minutes typically.
 

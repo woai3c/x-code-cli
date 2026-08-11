@@ -35,7 +35,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm build
+      - name: Run deterministic release gate
+        run: pnpm run ci
 
       - name: Copy README and LICENSE into packages
         run: |

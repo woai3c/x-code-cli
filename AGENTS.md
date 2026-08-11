@@ -24,9 +24,9 @@ pnpm build              # tsc -b (core) then esbuild (cli → dist/cli.js)
 pnpm dev                # build core, then run CLI from source via tsx (no watch)
 pnpm typecheck          # tsc -b — strict, run before any PR
 pnpm lint               # eslint --fix; ignores **/tests/** and *.js
-pnpm test               # vitest run, all packages
+pnpm test               # build + Unit/Fault/Package/PTY tests
 pnpm test <pattern>     # single file: pnpm test packages/core/tests/agent-loop.test.ts
-pnpm ci                 # typecheck + lint + test + build
+pnpm run ci             # typecheck + lint/format checks + pnpm test
 ```
 
 After editing **core** sources you must `pnpm build` (or `tsc -b --watch` in `packages/core`). The CLI imports `packages/core/dist/`, not the TS source.

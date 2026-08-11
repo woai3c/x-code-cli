@@ -51,7 +51,14 @@ import {
   GLYPH_TODO_PENDING,
   SPINNER_FRAMES,
 } from '../render/terminal-glyphs.js'
-import { charWidth, sliceByWidth, visualWidth } from '../render/text-width.js'
+import {
+  charWidth,
+  graphemeAt,
+  nextGraphemeBoundary,
+  previousGraphemeBoundary,
+  sliceByWidth,
+  visualWidth,
+} from '../render/text-width.js'
 import { formatTokenCount, getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
 import { type Cell, ansiTextToCells, cellsEqual, renderRowToAnsi, textToCells } from './cells.js'
 import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank, useFileCompletion } from './file-completion.js'
@@ -882,21 +889,23 @@ export function ChatInput({
           const deleteCount = before.length - stripped.without.length
           dispatch({ type: 'BACKSPACE_REF', pos, deleteCount })
         } else {
-          dispatch({ type: 'BACKSPACE_REF', pos, deleteCount: 1 })
+          dispatch({ type: 'BACKSPACE_REF', pos, deleteCount: pos - previousGraphemeBoundary(text, pos) })
         }
         setCompletionIndex(0)
         return
       }
       if (key === 'delete') {
-        dispatch({ type: 'DELETE', pos: cursorRef.current })
+        const pos = cursorRef.current
+        const end = nextGraphemeBoundary(text, pos)
+        dispatch({ type: 'SET_TEXT', text: text.slice(0, pos) + text.slice(end), cursor: pos })
         return
       }
       if (key === 'left') {
-        dispatch({ type: 'SET_CURSOR', cursor: Math.max(0, cursorRef.current - 1) })
+        dispatch({ type: 'SET_CURSOR', cursor: previousGraphemeBoundary(text, cursorRef.current) })
         return
       }
       if (key === 'right') {
-        dispatch({ type: 'SET_CURSOR', cursor: Math.min(text.length, cursorRef.current + 1) })
+        dispatch({ type: 'SET_CURSOR', cursor: nextGraphemeBoundary(text, cursorRef.current) })
         return
       }
       if (key === 'home') {
@@ -1598,8 +1607,8 @@ export function ChatInput({
             const t = freeform.text
             const c = freeform.cursor
             const before = t.slice(0, c)
-            const cursorChar = c < t.length ? t[c] : ' '
-            const after = c < t.length ? t.slice(c + 1) : ''
+            const cursorChar = c < t.length ? (graphemeAt(t, c) ?? ' ') : ' '
+            const after = c < t.length ? t.slice(c + cursorChar.length) : ''
             cells.push(...textToCells(before, S_NONE))
             cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
             cells.push(...textToCells(after, S_NONE))
@@ -1647,8 +1656,8 @@ export function ChatInput({
             const t = freeform.text
             const c = freeform.cursor
             const before = t.slice(0, c)
-            const cursorChar = c < t.length ? t[c] : ' '
-            const after = c < t.length ? t.slice(c + 1) : ''
+            const cursorChar = c < t.length ? (graphemeAt(t, c) ?? ' ') : ' '
+            const after = c < t.length ? t.slice(c + cursorChar.length) : ''
             cells.push(...textToCells(before, S_NONE))
             cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
             cells.push(...textToCells(after, S_NONE))
@@ -1806,8 +1815,8 @@ export function ChatInput({
         cells.push(...textToCells(truncated, S_RESET))
       } else {
         const before = line.slice(0, cursorCol)
-        const cursorChar = cursorCol < line.length ? line[cursorCol] : ' '
-        const after = cursorCol < line.length ? line.slice(cursorCol + 1) : ''
+        const cursorChar = cursorCol < line.length ? (graphemeAt(line, cursorCol) ?? ' ') : ' '
+        const after = cursorCol < line.length ? line.slice(cursorCol + cursorChar.length) : ''
         const lw = visualWidth(line)
 
         if (lw <= vpWidth) {
@@ -1822,7 +1831,7 @@ export function ChatInput({
           if (skipCols + vpWidth > totalWidth) skipCols = Math.max(0, totalWidth - vpWidth)
           const startIdx = skipByWidth(line, skipCols)
           const vb = line.slice(startIdx, cursorCol)
-          const afterStart = cursorCol < line.length ? cursorCol + 1 : line.length
+          const afterStart = cursorCol < line.length ? cursorCol + cursorChar.length : line.length
           const remaining = vpWidth - visualWidth(vb) - charWidth(cursorChar)
           const va = sliceByWidth(line.slice(afterStart), Math.max(0, remaining))
           cells.push(...textToCells(vb, S_RESET))

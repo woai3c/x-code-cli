@@ -146,6 +146,7 @@ vite.config.ts.timestamp-*
 
 # e2e suite runtime state (last-run.json + stashed failure jsonl).
 packages/cli/tests/e2e/.state/
+packages/cli/tests/pty/.artifacts/
 
 # Copied into packages at publish time by CI — not source
 tmp

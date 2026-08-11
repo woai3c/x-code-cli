@@ -13,8 +13,22 @@ const CONTEXT_TOO_LONG_PATTERNS = [
 
 /** Extract HTTP status from "status code 400", "(400)", or "400 ..." */
 export function extractHttpStatus(msg: string): number {
-  const match = msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ?? msg.match(/\((\d{3})\)/) ?? msg.match(/^(\d{3})\s/)
+  const match =
+    msg.match(/\bstatus(?:\s+code)?\s+(\d{3})\b/i) ??
+    msg.match(/\bHTTP\s+(\d{3})\b/i) ??
+    msg.match(/\((\d{3})\)/) ??
+    msg.match(/^(\d{3})\s/)
   return match ? Number(match[1]) : 0
+}
+
+function extractErrorStatus(err: unknown, depth = 0): number {
+  if (!err || typeof err !== 'object' || depth > 3) return 0
+  const record = err as Record<string, unknown>
+  for (const key of ['statusCode', 'status']) {
+    const value = record[key]
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) return value
+  }
+  return extractErrorStatus(record.lastError, depth + 1) || extractErrorStatus(record.cause, depth + 1)
 }
 
 /** True when an error message indicates the request exceeded the context window.
@@ -156,7 +170,17 @@ function isRateLimitedError(msg: string, status: number): boolean {
 }
 
 function isNetworkError(msg: string): boolean {
-  return msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')
+  const lower = msg.toLowerCase()
+  return (
+    lower.includes('timeout') ||
+    lower.includes('etimedout') ||
+    lower.includes('econnreset') ||
+    lower.includes('econnrefused') ||
+    lower.includes('cannot connect') ||
+    lower.includes('fetch failed') ||
+    lower.includes('other side closed') ||
+    lower === 'terminated'
+  )
 }
 
 function isTypeValidationError(err: unknown, msg: string): boolean {
@@ -212,7 +236,7 @@ function extractErrorMessage(err: unknown): string {
 /** Classify API error and return a user-friendly recovery message. */
 export function classifyApiError(err: unknown): ClassifiedError {
   const msg = extractErrorMessage(err)
-  const status = extractHttpStatus(msg)
+  const status = extractErrorStatus(err) || extractHttpStatus(msg)
 
   if (isContextTooLongError(err)) {
     return {
@@ -290,7 +314,7 @@ export function classifyApiError(err: unknown): ClassifiedError {
   }
   if (isNetworkError(msg)) {
     return {
-      message: `Network error: ${msg}. Retrying...`,
+      message: 'Network connection failed or was interrupted. Check your connection and try again.',
       retryable: true,
     }
   }

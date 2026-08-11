@@ -4,7 +4,7 @@
 // the grid and only emits SGR/text bytes for cells whose `(char, style)`
 // pair changed since the previous frame. `width` lets the diff loop
 // skip the trailing half of a CJK pair without re-emitting the glyph.
-import { charWidth } from '../render/text-width.js'
+import { charWidth, graphemes } from '../render/text-width.js'
 import { S_NONE } from './palette.js'
 
 export interface Cell {
@@ -35,7 +35,7 @@ export function renderRowToAnsi(cells: Cell[]): string {
 
 export function textToCells(text: string, style: string): Cell[] {
   const cells: Cell[] = []
-  for (const ch of text) cells.push({ char: ch, style, width: charWidth(ch) })
+  for (const ch of graphemes(text)) cells.push({ char: ch, style, width: charWidth(ch) })
   return cells
 }
 

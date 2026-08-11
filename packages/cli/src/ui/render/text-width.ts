@@ -43,13 +43,53 @@ function isWide(cp: number): boolean {
   )
 }
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+const emojiRe = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u
+const markRe = /^\p{Mark}+$/u
+
+export function graphemes(str: string): string[] {
+  return [...graphemeSegmenter.segment(str)].map((part) => part.segment)
+}
+
+export function graphemeAt(str: string, index: number): string | null {
+  for (const part of graphemeSegmenter.segment(str)) {
+    if (part.index === index) return part.segment
+    if (part.index > index) break
+    if (index < part.index + part.segment.length) return part.segment
+  }
+  return null
+}
+
+export function previousGraphemeBoundary(str: string, index: number): number {
+  let previous = 0
+  for (const part of graphemeSegmenter.segment(str)) {
+    if (part.index >= index) break
+    previous = part.index
+  }
+  return previous
+}
+
+export function nextGraphemeBoundary(str: string, index: number): number {
+  for (const part of graphemeSegmenter.segment(str)) {
+    const end = part.index + part.segment.length
+    if (part.index >= index || end > index) return end
+  }
+  return str.length
+}
+
 export function charWidth(ch: string): number {
-  return isWide(ch.codePointAt(0)!) ? 2 : 1
+  if (!ch) return 0
+  if (emojiRe.test(ch)) return 2
+  for (const codePoint of ch) {
+    if (markRe.test(codePoint)) continue
+    return isWide(codePoint.codePointAt(0)!) ? 2 : 1
+  }
+  return 0
 }
 
 export function visualWidth(str: string): number {
   let w = 0
-  for (const ch of str) w += charWidth(ch)
+  for (const ch of graphemes(str)) w += charWidth(ch)
   return w
 }
 
@@ -59,7 +99,7 @@ export function visualWidth(str: string): number {
 export function sliceByWidth(str: string, maxCols: number): string {
   let w = 0
   let i = 0
-  for (const ch of str) {
+  for (const ch of graphemes(str)) {
     const cw = charWidth(ch)
     if (w + cw > maxCols) break
     w += cw

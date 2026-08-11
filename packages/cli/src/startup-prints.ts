@@ -6,7 +6,7 @@ import { Chalk } from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS, USER_XCODE_DIR } from '@x-code-cli/core'
+import { PROVIDER_DETECTION_ORDER, PROVIDER_KEY_URLS, userXcodeDir } from '@x-code-cli/core'
 
 import { detectShell, formatPersistCommand } from './shell.js'
 import type { ShellType } from './shell.js'
@@ -86,9 +86,12 @@ export function printResumeHint(): void {
 
 // ── Startup update check ────────────────────────────────────────────────
 
-const UPDATE_CHECK_CACHE = path.join(USER_XCODE_DIR, 'cache', 'update-check.json')
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 const NPM_REGISTRY_URL = 'https://registry.npmjs.org/@x-code-cli/cli/latest'
+
+function updateCheckCachePath(): string {
+  return path.join(userXcodeDir(), 'cache', 'update-check.json')
+}
 
 function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number)
@@ -107,10 +110,11 @@ export async function checkForUpdate(): Promise<void> {
   if (!process.stderr.isTTY) return
   const current = VERSION
   if (!current || current === '0.0.0-dev') return
+  const cachePath = updateCheckCachePath()
 
   // Check disk cache first
   try {
-    const raw = fs.readFileSync(UPDATE_CHECK_CACHE, 'utf-8')
+    const raw = fs.readFileSync(cachePath, 'utf-8')
     const cache = JSON.parse(raw) as { checkedAt: number; latest: string }
     if (Date.now() - cache.checkedAt < ONE_DAY_MS) {
       if (compareVersions(cache.latest, current) > 0) {
@@ -136,8 +140,8 @@ export async function checkForUpdate(): Promise<void> {
     if (!latest) return
 
     // Write cache
-    fs.mkdirSync(path.dirname(UPDATE_CHECK_CACHE), { recursive: true })
-    fs.writeFileSync(UPDATE_CHECK_CACHE, JSON.stringify({ checkedAt: Date.now(), latest }), 'utf-8')
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true })
+    fs.writeFileSync(cachePath, JSON.stringify({ checkedAt: Date.now(), latest }), 'utf-8')
 
     if (compareVersions(latest!, current) > 0) {
       printUpdateHint(current, latest!)
