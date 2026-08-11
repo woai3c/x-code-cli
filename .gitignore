@@ -152,6 +152,3 @@ tmp
 
 # X-Code CLI project-local state (sessions, history, plans, memory, and local settings)
 .x-code
-
-# SWE-bench runner artifacts (repo clones, dataset cache, predictions, logs)
-bench/results/
