@@ -6,9 +6,11 @@ import path from 'node:path'
 
 import {
   DEFAULT_MEMORY_CONFIG,
+  DEFAULT_STREAM_CONFIG,
   getAvailableProviders,
   resolveMemoryConfig,
   resolveModelId,
+  resolveStreamConfig,
 } from '../src/config/index.js'
 
 /** Every provider env var the config module reads. Mirrors `ENV_MAP` in
@@ -158,5 +160,30 @@ describe('memory config', () => {
     expect(
       resolveMemoryConfig({ memory: { maxOutputTokens: 4000, maxTotalOutputTokens: 1000 } }).maxTotalOutputTokens,
     ).toBe(4000)
+  })
+})
+
+describe('stream config', () => {
+  it('uses reconnect and idle-timeout defaults', () => {
+    expect(resolveStreamConfig({})).toEqual(DEFAULT_STREAM_CONFIG)
+  })
+
+  it('accepts bounded overrides and allows disabling the watchdog', () => {
+    expect(resolveStreamConfig({ stream: { maxRetries: 2, idleTimeoutMs: 1500 } })).toEqual({
+      maxRetries: 2,
+      idleTimeoutMs: 1500,
+    })
+    expect(resolveStreamConfig({ stream: { maxRetries: 0, idleTimeoutMs: 0 } })).toEqual({
+      maxRetries: 0,
+      idleTimeoutMs: 0,
+    })
+  })
+
+  it('rejects malformed or unsafe overrides', () => {
+    expect(
+      resolveStreamConfig({
+        stream: { maxRetries: 101, idleTimeoutMs: 50 },
+      }),
+    ).toEqual(DEFAULT_STREAM_CONFIG)
   })
 })

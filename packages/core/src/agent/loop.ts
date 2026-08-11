@@ -8,7 +8,7 @@ import path from 'node:path'
 import { streamText } from 'ai'
 import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
-import { loadUserConfig } from '../config/index.js'
+import { DEFAULT_STREAM_CONFIG, loadUserConfig } from '../config/index.js'
 import { aggregateUserPromptSubmit } from '../hooks/bus.js'
 import type { HookEvent } from '../hooks/types.js'
 import { buildKnowledgeContext } from '../knowledge/loader.js'
@@ -48,6 +48,16 @@ import {
 } from './provider-compat.js'
 import { appendCheckpoint, appendHeader, appendStepStats, appendUsage, flushPendingMessages } from './session-store.js'
 import { createCheckpoint } from './snapshot.js'
+import {
+  StreamReplayFilter,
+  appendStreamRecoveryContext,
+  createStreamAttemptControl,
+  isRetryableStreamTransportError,
+  prependRecoveredText,
+  streamRetryDelayMs,
+  waitForStreamRetry,
+} from './stream-retry.js'
+import type { StreamAttemptControl, StreamRetryReason } from './stream-retry.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import {
@@ -175,6 +185,13 @@ export interface AgentLoopResult {
   turnCount: number
 }
 
+interface StreamAttemptTracker {
+  visibleText: string
+  toolActivity: boolean
+  receivedData: boolean
+  suppressedReplay: boolean
+}
+
 /** Consume streamText output, dispatching chunks to the UI via callbacks.
  *  Reasoning-delta chunks (thinking-mode models — DeepSeek-reasoner, o1,
  *  etc.) are deliberately ignored: that's the model's internal chain of
@@ -185,6 +202,10 @@ async function streamChunksToUI(
   callbacks: AgentCallbacks,
   state: LoopState,
   options: AgentOptions,
+  tracker: StreamAttemptTracker,
+  attemptControl: StreamAttemptControl,
+  recoveryText: string,
+  retrying: boolean,
 ): Promise<void> {
   // Deferred tools (webSearch / MCP / etc.) are name-only until the model loads
   // them via toolSearch. If the model calls one BEFORE loading it, the tool
@@ -193,7 +214,19 @@ async function streamChunksToUI(
   const deferredNames = new Set((state.deferredCatalog ?? []).map((e) => e.name))
   const suppressedDeferredCallIds = new Set<string>()
   const suppressedMemoryAccessCallIds = new Set<string>()
+  const textFilter = new StreamReplayFilter(recoveryText, (text) => {
+    tracker.visibleText += text
+    callbacks.onTextDelta(text)
+  })
+  const markToolActivity = () => {
+    tracker.toolActivity = true
+    // A completed tool event makes replay unsafe. Stop the provider-idle
+    // watchdog as well, so a long-running tool is never mistaken for a
+    // disconnected response; the external user-cancel signal remains active.
+    attemptControl.dispose()
+  }
   for await (const chunk of result.stream) {
+    attemptControl.touch()
     if (chunk.type === 'error') {
       // AI SDK doesn't throw from stream iteration on request failure —
       // it enqueues this chunk and closes the stream.
@@ -204,11 +237,16 @@ async function streamChunksToUI(
       // the outer try/catch can pass it to classifyApiError.
       throw chunk.error instanceof Error ? chunk.error : new Error(String(chunk.error))
     }
+    if (!tracker.receivedData) {
+      tracker.receivedData = true
+      if (retrying) callbacks.onStreamRetry?.(null)
+    }
     if (chunk.type === 'text-delta') {
       const text = chunk.text ?? ''
       debugLog('stream.text-delta', text)
-      callbacks.onTextDelta(text)
+      textFilter.push(text)
     } else if (chunk.type === 'tool-call') {
+      markToolActivity()
       debugLog('stream.tool-call', `${chunk.toolName ?? ''} ${JSON.stringify(chunk.input ?? {})}`)
       const toolCallId = chunk.toolCallId ?? ''
       const toolName = chunk.toolName ?? ''
@@ -244,6 +282,7 @@ async function streamChunksToUI(
       }
       callbacks.onToolCall(toolCallId, toolName, (chunk.input ?? {}) as Record<string, unknown>)
     } else if (chunk.type === 'tool-result') {
+      markToolActivity()
       // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
       const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
       debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} ${raw}`)
@@ -252,6 +291,7 @@ async function streamChunksToUI(
       const isError = /^Error(?:\s|:)/i.test(raw.trimStart())
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw), isError)
     } else if (chunk.type === 'tool-error') {
+      markToolActivity()
       // The SDK rejected a tool call mid-stream. Two cases:
       //  1. A deferred tool called before loading — already suppressed above,
       //     so there's no UI row to clear; stay silent.
@@ -279,6 +319,8 @@ async function streamChunksToUI(
     // reasoning-delta / reasoning-start / reasoning-end: intentionally dropped from UI
     // but logged above under stream.other-chunk so we can see them in debug mode.
   }
+  textFilter.finish()
+  tracker.suppressedReplay = textFilter.suppressedReplay()
 }
 
 /** Pull the response + usage off a completed stream and fold into state. */
@@ -288,8 +330,11 @@ async function collectTurnResponse(
   modelId: string,
   callbacks: AgentCallbacks,
   turnMessages: ModelMessage[],
+  recoveredText: string,
+  suppressedReplay: boolean,
 ): Promise<string> {
   const response = await result.response
+  if (!suppressedReplay) prependRecoveredText(response.messages, recoveredText)
   // CRITICAL: auto-executed tools (readFile / grep / glob / listDir / webFetch
   // / webSearch) return their results through `response.messages` without
   // passing through the manual `pushToolResult` path. Without a sanitizer
@@ -359,11 +404,46 @@ type TurnOutcome =
   | { kind: 'done'; finishReason: string; result: StreamResult }
   /** Fatal error (already reported to callbacks); caller should break the loop. */
   | { kind: 'error' }
+  /** Retryable provider-stream failure. The wrapper owns backoff/UI status. */
+  | {
+      kind: 'stream-error'
+      error: unknown
+      partialText: string
+      toolActivity: boolean
+      reason: StreamRetryReason
+    }
   /** Context overflowed and was compressed; caller should retry this turn. */
   | { kind: 'retry' }
   /** User aborted the request (Esc / Ctrl+C). NOT reported to onError —
    *  the UI shows a `[Request interrupted by user]` notice instead. */
   | { kind: 'aborted' }
+
+type FinalTurnOutcome = Exclude<TurnOutcome, { kind: 'stream-error' }>
+
+function classifyTurnFailure(
+  error: unknown,
+  options: AgentOptions,
+  callbacks: AgentCallbacks,
+  tracker: StreamAttemptTracker,
+  attemptControl: StreamAttemptControl,
+): TurnOutcome {
+  if (options.abortSignal?.aborted) return { kind: 'aborted' }
+
+  const idleTimedOut = attemptControl.didIdleTimeout()
+  if (idleTimedOut || isRetryableStreamTransportError(error)) {
+    return {
+      kind: 'stream-error',
+      error: idleTimedOut ? new Error('Network stream timed out while waiting for response data') : error,
+      partialText: tracker.visibleText,
+      toolActivity: tracker.toolActivity,
+      reason: idleTimedOut ? 'idle-timeout' : 'network',
+    }
+  }
+
+  if (isAbortError(error, options.abortSignal)) return { kind: 'aborted' }
+  callbacks.onError(new Error(classifyApiError(error).message))
+  return { kind: 'error' }
+}
 
 /** Build the BASE tool set for this loop. "Base" = everything directly loaded
  *  on every turn; the per-turn `composeTurnTools` call then splices in any
@@ -478,7 +558,7 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
 }
 
 /** Run one agent turn: stream to UI, collect response. Resilient to errors. */
-async function runTurn(
+async function runTurnAttempt(
   state: LoopState,
   model: LanguageModel,
   options: AgentOptions,
@@ -487,6 +567,10 @@ async function runTurn(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   effectiveTools: Record<string, any>,
   turnMessages: ModelMessage[],
+  attemptControl: StreamAttemptControl,
+  tracker: StreamAttemptTracker,
+  recoveryText: string,
+  retrying: boolean,
   /** Current turn number — diagnostic only, threaded in so the debug log
    *  can tag each finish with which iteration of the outer loop it was. */
   turn: number,
@@ -513,7 +597,7 @@ async function runTurn(
   // tool images in one following user message. This also handles images from
   // auto-executed tools such as readFile, which bypass manual tool dispatch.
   const requestMessages = reattachToolResultImagesForProvider(
-    applyMemoryRecallAttachments(state.messages, state),
+    appendStreamRecoveryContext(applyMemoryRecallAttachments(state.messages, state), recoveryText),
     options.modelId,
   )
 
@@ -563,7 +647,7 @@ async function runTurn(
       messages: cached.messages,
       tools: cached.tools ?? effectiveTools,
       maxRetries: 3,
-      abortSignal: options.abortSignal,
+      abortSignal: attemptControl.signal,
       headers: cached.headers,
       // Explicit ceiling so provider defaults don't silently truncate long
       // replies. Most providers clamp a too-high value, but some reject it
@@ -592,9 +676,7 @@ async function runTurn(
       },
     }) as unknown as StreamResult
   } catch (err) {
-    if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
-    callbacks.onError(new Error(classifyApiError(err).message))
-    return { kind: 'error' }
+    return classifyTurnFailure(err, options, callbacks, tracker, attemptControl)
   }
 
   // Pre-attach .catch(noop) handlers to every sibling promise the SDK exposes
@@ -607,12 +689,16 @@ async function runTurn(
   drainStreamResult(result)
 
   try {
-    await streamChunksToUI(result, callbacks, state, options)
+    await streamChunksToUI(result, callbacks, state, options, tracker, attemptControl, recoveryText, retrying)
   } catch (err) {
     // Silently drain all pending AI SDK promises so unhandled-rejection
     // warnings (NoOutputGeneratedError) don't leak to stderr.
     drainStreamResult(result)
 
+    if (options.abortSignal?.aborted) return { kind: 'aborted' }
+    if (attemptControl.didIdleTimeout()) {
+      return classifyTurnFailure(err, options, callbacks, tracker, attemptControl)
+    }
     if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
     if (isImageDataError(err)) {
       // The provider rejected an image in history. Left in place it would
@@ -637,12 +723,19 @@ async function runTurn(
       if (options.abortSignal?.aborted) return { kind: 'aborted' }
       if (compressed) return { kind: 'retry' }
     }
-    callbacks.onError(new Error(classifyApiError(err).message))
-    return { kind: 'error' }
+    return classifyTurnFailure(err, options, callbacks, tracker, attemptControl)
   }
 
   try {
-    const finishReason = await collectTurnResponse(result, state, options.modelId, callbacks, turnMessages)
+    const finishReason = await collectTurnResponse(
+      result,
+      state,
+      options.modelId,
+      callbacks,
+      turnMessages,
+      recoveryText,
+      tracker.suppressedReplay,
+    )
     debugLog(
       'turn.finish',
       `reason=${finishReason} turn=${turn} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
@@ -650,9 +743,104 @@ async function runTurn(
     return { kind: 'done', finishReason, result }
   } catch (err) {
     drainStreamResult(result)
-    if (isAbortError(err, options.abortSignal)) return { kind: 'aborted' }
+    if (options.abortSignal?.aborted || (!attemptControl.didIdleTimeout() && isAbortError(err, options.abortSignal))) {
+      return { kind: 'aborted' }
+    }
+    // The stream itself already completed and collectTurnResponse may have
+    // committed assistant/tool messages before usage metadata failed. Replaying
+    // here could duplicate both visible output and side effects.
     callbacks.onError(new Error(classifyApiError(err).message))
     return { kind: 'error' }
+  }
+}
+
+/** Run one logical model turn across recoverable transport attempts. Failed
+ *  attempts do not consume the agent's turn budget and request-only recovery
+ *  context keeps partial text out of canonical history until completion. */
+async function runTurn(
+  state: LoopState,
+  model: LanguageModel,
+  options: AgentOptions,
+  systemPrompt: string,
+  callbacks: AgentCallbacks,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  effectiveTools: Record<string, any>,
+  turnMessages: ModelMessage[],
+  turn: number,
+): Promise<FinalTurnOutcome> {
+  const configuredRetries = options.streamMaxRetries ?? DEFAULT_STREAM_CONFIG.maxRetries
+  const maxRetries = Number.isSafeInteger(configuredRetries)
+    ? Math.min(100, Math.max(0, configuredRetries))
+    : DEFAULT_STREAM_CONFIG.maxRetries
+  const configuredIdleTimeout = options.streamIdleTimeoutMs ?? DEFAULT_STREAM_CONFIG.idleTimeoutMs
+  const idleTimeoutMs =
+    Number.isSafeInteger(configuredIdleTimeout) && configuredIdleTimeout >= 0
+      ? configuredIdleTimeout
+      : DEFAULT_STREAM_CONFIG.idleTimeoutMs
+  let retryCount = 0
+  let recoveredText = ''
+
+  while (true) {
+    const attemptControl = createStreamAttemptControl(options.abortSignal, idleTimeoutMs)
+    const tracker: StreamAttemptTracker = {
+      visibleText: '',
+      toolActivity: false,
+      receivedData: false,
+      suppressedReplay: false,
+    }
+    let outcome: TurnOutcome
+    try {
+      outcome = await runTurnAttempt(
+        state,
+        model,
+        options,
+        systemPrompt,
+        callbacks,
+        effectiveTools,
+        turnMessages,
+        attemptControl,
+        tracker,
+        recoveredText,
+        retryCount > 0,
+        turn,
+      )
+    } finally {
+      attemptControl.dispose()
+    }
+
+    if (outcome.kind !== 'stream-error') {
+      if (retryCount > 0 && !tracker.receivedData) callbacks.onStreamRetry?.(null)
+      return outcome
+    }
+
+    const nextRecoveredText = recoveredText + outcome.partialText
+    if (outcome.toolActivity || retryCount >= maxRetries) {
+      callbacks.onStreamRetry?.(null)
+      debugLog(
+        'stream.reconnect-stop',
+        outcome.toolActivity ? 'tool activity makes replay unsafe' : `retry budget exhausted (${maxRetries})`,
+      )
+      callbacks.onError(new Error(classifyApiError(outcome.error).message))
+      return { kind: 'error' }
+    }
+
+    retryCount++
+    const delayMs = streamRetryDelayMs(retryCount)
+    recoveredText = nextRecoveredText
+    debugLog(
+      'stream.reconnect',
+      `attempt=${retryCount}/${maxRetries} delayMs=${delayMs} reason=${outcome.reason} recoveredChars=${recoveredText.length}`,
+    )
+    callbacks.onStreamRetry?.({
+      attempt: retryCount,
+      maxAttempts: maxRetries,
+      delayMs,
+      reason: outcome.reason,
+    })
+    if (!(await waitForStreamRetry(delayMs, options.abortSignal))) {
+      callbacks.onStreamRetry?.(null)
+      return { kind: 'aborted' }
+    }
   }
 }
 

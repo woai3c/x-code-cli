@@ -144,6 +144,20 @@ export interface MemoryConfig {
   recall: MemoryRecallConfig
 }
 
+export interface StreamConfig {
+  /** Number of application-level reconnect attempts after the provider stream
+   *  drops. Separate from the AI SDK's request-establishment retries. */
+  maxRetries: number
+  /** Maximum silence between stream chunks. A value of 0 disables the
+   *  watchdog; the default also covers sockets made stale by system sleep. */
+  idleTimeoutMs: number
+}
+
+export const DEFAULT_STREAM_CONFIG: Readonly<StreamConfig> = {
+  maxRetries: 5,
+  idleTimeoutMs: 300_000,
+}
+
 export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
   model: 'inherit',
   reasoning: 'auto',
@@ -233,6 +247,29 @@ export function resolveMemoryConfig(config: UserConfig = loadUserConfig()): Memo
   }
 }
 
+export function resolveStreamConfig(config: UserConfig = loadUserConfig()): StreamConfig {
+  const stream =
+    config.stream && typeof config.stream === 'object' && !Array.isArray(config.stream)
+      ? (config.stream as Record<string, unknown>)
+      : {}
+  const maxRetries =
+    typeof stream.maxRetries === 'number' &&
+    Number.isSafeInteger(stream.maxRetries) &&
+    stream.maxRetries >= 0 &&
+    stream.maxRetries <= 100
+      ? stream.maxRetries
+      : DEFAULT_STREAM_CONFIG.maxRetries
+  const idleTimeoutMs =
+    stream.idleTimeoutMs === 0 ||
+    (typeof stream.idleTimeoutMs === 'number' &&
+      Number.isSafeInteger(stream.idleTimeoutMs) &&
+      stream.idleTimeoutMs >= 100 &&
+      stream.idleTimeoutMs <= 3_600_000)
+      ? stream.idleTimeoutMs
+      : DEFAULT_STREAM_CONFIG.idleTimeoutMs
+  return { maxRetries, idleTimeoutMs }
+}
+
 export interface UserConfig {
   model?: string
   thinking?: boolean
@@ -262,6 +299,9 @@ export interface UserConfig {
    *  picker. Key = provider key (e.g. "moonshotai"), value = full base URL
    *  (e.g. "https://api.moonshot.cn/v1"). */
   baseUrls?: Record<string, string>
+  /** Provider-stream recovery. Defaults to five reconnect attempts and a
+   *  five-minute inactivity watchdog. */
+  stream?: Partial<StreamConfig>
   memory?: Partial<Omit<MemoryConfig, 'recall'>> & { recall?: Partial<MemoryRecallConfig> }
 }
 

@@ -11,6 +11,7 @@ export type {
   DisplayToolCall,
   AgentCallbacks,
   AgentOptions,
+  StreamRetryEvent,
   SessionSummary,
   ModelMessage,
   LanguageModel,
@@ -29,14 +30,16 @@ export type { ProviderModel } from './types/index.js'
 // Config
 export {
   DEFAULT_MEMORY_CONFIG,
+  DEFAULT_STREAM_CONFIG,
   resolveMemoryConfig,
+  resolveStreamConfig,
   resolveModelId,
   getAvailableProviders,
   getEnvVarName,
   loadUserConfig,
   saveUserConfig,
 } from './config/index.js'
-export type { MemoryConfig, MemoryReasoningMode, MemoryRecallConfig, UserConfig } from './config/index.js'
+export type { MemoryConfig, MemoryReasoningMode, MemoryRecallConfig, StreamConfig, UserConfig } from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'

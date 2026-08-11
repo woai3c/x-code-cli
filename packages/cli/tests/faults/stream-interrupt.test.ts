@@ -74,47 +74,87 @@ function orphanToolCallIds(entries: unknown[]): string[] {
 }
 
 describe('stream interruption recovery', () => {
-  it('handles disconnects before HTTP headers without an uncaught rejection', async () => {
+  it('reconnects after the request-level retry budget is exhausted', async () => {
     const { provider, workspace } = await setup([
       { type: 'disconnect', afterBytes: 0 },
       { type: 'disconnect', afterBytes: 0 },
       { type: 'disconnect', afterBytes: 0 },
       { type: 'disconnect', afterBytes: 0 },
+      { type: 'completion', text: 'recovered-after-reconnect' },
     ])
     const result = await runPrintCli({ workspace, provider, timeoutMs: 25_000 })
 
-    expect(result.exitCode).toBe(1)
-    expect(provider.requests()).toHaveLength(4)
-    expect(result.stderr).toContain('Network connection failed or was interrupted')
+    expect(result.exitCode).toBe(0)
+    expect(provider.requests()).toHaveLength(5)
+    expect(result.stdout).toContain('recovered-after-reconnect')
+    expect(result.stderr).toContain('Reconnecting... 1/5')
     expect(result.stderr).not.toMatch(/unhandled|NoOutputGeneratedError|APICallError|RetryError/i)
     await expect(readSessionJsonl(workspace.cwd)).resolves.toBeInstanceOf(Array)
   })
 
-  it('reports an interrupted text SSE stream once and keeps the session JSONL valid', async () => {
+  it('continues an interrupted text stream and keeps recovery context request-only', async () => {
     const { provider, workspace } = await setup([
-      { type: 'partial-sse', chunks: [textSseEvent('partial-visible-text')], closeAfterChunk: 1 },
+      {
+        type: 'partial-sse',
+        chunks: [textSseEvent('partial-visible-text')],
+        closeAfterChunk: 1,
+        chunkDelayMs: 50,
+      },
+      { type: 'completion', text: '-continued' },
     ])
     const result = await runPrintCli({ workspace, provider })
     const entries = await readSessionJsonl(workspace.cwd)
 
-    expect(result.exitCode).toBe(1)
-    expect(provider.requests()).toHaveLength(1)
-    expect(result.stderr).toContain('Network connection failed or was interrupted')
+    expect(result.exitCode).toBe(0)
+    expect(provider.requests()).toHaveLength(2)
+    expect(result.stdout).toContain('partial-visible-text-continued')
+    expect(result.stderr).toContain('Reconnecting... 1/5')
     expect(result.stderr).not.toMatch(/unhandled|NoOutputGeneratedError|APICallError|RetryError/i)
     expect(entries.length).toBeGreaterThan(0)
     expect(orphanToolCallIds(entries)).toEqual([])
+
+    const retryMessages = provider.requests()[1]!.messages as Array<{ role?: string; content?: unknown }>
+    expect(retryMessages.at(-2)).toMatchObject({ role: 'assistant', content: 'partial-visible-text' })
+    expect(retryMessages.at(-1)?.role).toBe('user')
+    expect(String(retryMessages.at(-1)?.content)).toContain('Continue directly')
   })
 
-  it('does not execute a tool whose streamed JSON arguments are incomplete', async () => {
+  it('reconnects safely when streamed tool JSON never became a complete call', async () => {
     const { provider, workspace } = await setup([
       { type: 'partial-sse', chunks: [incompleteToolEvent()], closeAfterChunk: 1 },
+      { type: 'completion', text: 'recovered-after-incomplete-tool' },
     ])
     const result = await runPrintCli({ workspace, provider, args: ['--trust'] })
 
+    expect(result.exitCode).toBe(0)
+    expect(provider.requests()).toHaveLength(2)
+    expect(result.stdout).toContain('recovered-after-incomplete-tool')
     await expect(fs.access(path.join(workspace.cwd, 'should-not-exist.txt'))).rejects.toThrow()
     expect(result.stderr).not.toMatch(/unhandled|NoOutputGeneratedError|APICallError|RetryError/i)
     const entries = await readSessionJsonl(workspace.cwd)
     expect(orphanToolCallIds(entries)).toEqual([])
+  })
+
+  it('cancels reconnect backoff without issuing another request', async () => {
+    const { provider, workspace } = await setup([
+      { type: 'partial-sse', chunks: [textSseEvent('partial-before-cancel')], closeAfterChunk: 1 },
+      { type: 'completion', text: 'must-not-be-requested' },
+    ])
+    const processUnderTest = spawnCli({
+      cwd: workspace.cwd,
+      env: isolatedCliEnv(workspace, provider),
+      args: ['--print', '--no-plugins', '--no-hooks', '--max-turns', '4', 'hi'],
+      timeoutMs: 10_000,
+    })
+
+    await waitFor(() => processUnderTest.stderr().includes('Reconnecting... 1/5'), 'reconnect status')
+    processUnderTest.kill('SIGINT')
+    const result = await processUnderTest.wait()
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+
+    expect(result.exitCode === 0 || result.exitCode === 130 || result.signal === 'SIGINT').toBe(true)
+    expect(provider.requests()).toHaveLength(1)
+    expect(result.stderr).not.toContain('[error]')
   })
 
   it('threads abort to a tool that started after a complete tool call', async () => {

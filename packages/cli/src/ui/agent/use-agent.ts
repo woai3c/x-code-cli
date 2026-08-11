@@ -66,6 +66,7 @@ import type {
   LoopState,
   PermissionMode,
   StepStats,
+  StreamRetryEvent,
   TodoItem,
   TokenUsage,
   UsageBreakdown,
@@ -191,6 +192,8 @@ export interface AgentState {
    *  spinner label so the user sees which compression phase is active
    *  instead of a generic "Thinking…". Cleared when compression ends. */
   compressionLabel: string | null
+  /** Transient provider-stream recovery status shown in place of Thinking. */
+  reconnectLabel: string | null
   goalStatus: GoalState | null
   goalRunnerActive: boolean
   goalVerificationActive: boolean
@@ -234,6 +237,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   todos: [],
   bufferingReads: false,
   compressionLabel: null,
+  reconnectLabel: null,
   goalStatus: null,
   goalRunnerActive: false,
   goalVerificationActive: false,
@@ -414,6 +418,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     [appendTextDelta],
   )
 
+  const handleStreamRetry = useCallback((event: StreamRetryEvent | null) => {
+    setState((previous) => ({
+      ...previous,
+      reconnectLabel: event ? `Reconnecting... ${event.attempt}/${event.maxAttempts}` : null,
+    }))
+  }, [])
+
   // Keep the ref synchronized with state so abort() can decide between
   // `[Request interrupted by user]` and `... for tool use` without taking a
   // state dependency in its useCallback (which would re-bind the prop every
@@ -485,6 +496,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         isLoading: true,
         shellOutput: '',
         error: null,
+        reconnectLabel: null,
         messages: submitOptions?.silent
           ? prev.messages
           : [...prev.messages, { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }],
@@ -635,6 +647,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             kind: 'command-result',
           })
         },
+        onStreamRetry: handleStreamRetry,
         onError: (error) => {
           setState((prev) => ({ ...prev, error: error.message }))
         },
@@ -753,6 +766,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           activeToolCalls: [],
           bufferingReads: false,
           compressionLabel: null,
+          reconnectLabel: null,
           goalStatus: finalGoal,
           stepStats: loopStateRef.current?.stepStats.slice() ?? prev.stepStats,
         }))
@@ -814,6 +828,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           activeToolCalls: [],
           bufferingReads: false,
           compressionLabel: null,
+          reconnectLabel: null,
           error: wasAborted ? null : classifyApiError(err).message,
         }))
         return null
@@ -825,6 +840,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       flushBuffer,
       appendMessage,
       handleTextDelta,
+      handleStreamRetry,
       toolLifecycleCallbacks,
       consumeQueuedInputs,
       restoreQueueToDraft,
@@ -944,9 +960,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           kind: 'command-result',
         })
       },
+      onStreamRetry: handleStreamRetry,
       onError: (error) => setState((prev) => ({ ...prev, error: error.message })),
     }
-  }, [appendMessage, appendTextDelta, goalToolLifecycleCallbacks, options.mcpRegistry])
+  }, [appendMessage, appendTextDelta, goalToolLifecycleCallbacks, handleStreamRetry, options.mcpRegistry])
 
   const ensureLoopState = useCallback((): LoopState => {
     if (!loopStateRef.current) {
@@ -1359,6 +1376,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         activeToolCalls: [],
         shellOutput: '',
         error: null,
+        reconnectLabel: null,
         todos: [],
         // queuedMessagesRef was cleared above — keep the state mirror in
         // sync or stale pending rows keep rendering until the next queue
@@ -1444,6 +1462,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           activeToolCalls: [],
           shellOutput: '',
           error: null,
+          reconnectLabel: null,
           todos: [],
           messages: converted,
         }))
@@ -1477,6 +1496,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       ...prev,
       isLoading: true,
       compressionLabel: 'Summarizing conversation',
+      reconnectLabel: null,
       error: null,
     }))
     debugLog('compression.manual.start', `messages=${ls.messages.length} tokens=${before}`)
@@ -1559,7 +1579,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     } finally {
       if (abortControllerRef.current === controller) abortControllerRef.current = null
       if (manualCompressionControllerRef.current === controller) manualCompressionControllerRef.current = null
-      setState((prev) => ({ ...prev, isLoading: false, compressionLabel: null }))
+      setState((prev) => ({ ...prev, isLoading: false, compressionLabel: null, reconnectLabel: null }))
       // Plain text submitted while the spinner was visible enters the
       // mid-turn queue. `/compact` has no agent loop to consume it, so put it
       // back in the editable input instead of leaving a stranded queue row.

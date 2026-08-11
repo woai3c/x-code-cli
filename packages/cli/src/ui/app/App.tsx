@@ -1553,11 +1553,13 @@ export function App({
               // the label would flicker Reading-Thinking-Reading on
               // every tool. Updated by useAgent on tool-call /
               // text-delta / loop-end / abort.
-              label: state.compressionLabel
-                ? `Compressing — ${state.compressionLabel}`
-                : state.bufferingReads
-                  ? 'Reading'
-                  : 'Thinking',
+              label: state.reconnectLabel
+                ? state.reconnectLabel
+                : state.compressionLabel
+                  ? `Compressing — ${state.compressionLabel}`
+                  : state.bufferingReads
+                    ? 'Reading'
+                    : 'Thinking',
               mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
             }
           : null

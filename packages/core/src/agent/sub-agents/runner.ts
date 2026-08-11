@@ -314,6 +314,7 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     onShellOutput: callbacks.onShellOutput,
     onUsageUpdate: () => {},
     onContextCompressed: () => {},
+    onStreamRetry: callbacks.onStreamRetry,
     onError: (error) => {
       debugLog('sub-agent.error', `${agentName}: ${error.message}`)
     },

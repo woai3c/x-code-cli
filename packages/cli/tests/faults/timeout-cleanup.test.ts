@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
+import fs from 'node:fs/promises'
 import net from 'node:net'
+import path from 'node:path'
 
 import {
   createTestWorkspace,
@@ -76,6 +78,11 @@ describe('server failures and cleanup', () => {
   it('reports connection refusal without leaking SDK internals', async () => {
     const workspace = await createTestWorkspace('xc-connection-refused-')
     cleanups.push(workspace.cleanup)
+    await fs.writeFile(
+      path.join(workspace.xcodeHome, 'config.json'),
+      JSON.stringify({ stream: { maxRetries: 0 } }),
+      'utf-8',
+    )
     const baseUrl = await unusedBaseUrl()
     const result = await runPrintCli({ workspace, provider: { baseUrl }, timeoutMs: 25_000 })
 
@@ -103,5 +110,26 @@ describe('server failures and cleanup', () => {
     await waitFor(() => provider.requests()[0]?.cancelled === true, 'stalled request cancellation')
     await waitFor(() => provider.openConnections() === 0, 'stalled connection to close')
     await expect(readSessionJsonl(workspace.cwd)).resolves.toBeInstanceOf(Array)
+  })
+
+  it('treats an idle stream as disconnected and reconnects', async () => {
+    const { provider, workspace } = await setup([
+      { type: 'stall', afterHeaders: true },
+      { type: 'completion', text: 'recovered-after-idle-timeout' },
+    ])
+    await fs.writeFile(
+      path.join(workspace.xcodeHome, 'config.json'),
+      JSON.stringify({ stream: { maxRetries: 1, idleTimeoutMs: 100 } }),
+      'utf-8',
+    )
+
+    const result = await runPrintCli({ workspace, provider, timeoutMs: 10_000 })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('recovered-after-idle-timeout')
+    expect(result.stderr).toContain('Reconnecting... 1/1')
+    expect(provider.requests()).toHaveLength(2)
+    expect(provider.requests()[0]?.cancelled).toBe(true)
+    await waitFor(() => provider.openConnections() === 0, 'idle stream sockets to close')
   })
 })

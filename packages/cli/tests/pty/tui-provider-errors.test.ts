@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { waitFor } from '../fixtures/cli-test-helpers.js'
+import { textSseEvent } from '../fixtures/fake-provider-server.js'
 import { submitInput, typeInput, withTui } from './test-context.js'
 
 describe('TUI provider error recovery', () => {
@@ -66,6 +67,23 @@ describe('TUI provider error recovery', () => {
         expect(requests[1]!.receivedAt - requests[0]!.receivedAt).toBeGreaterThanOrEqual(40)
         expect(harness.raw()).not.toMatch(/RetryError|AI_APICallError/)
         await typeInput(harness, 'after-rate-limit')
+      },
+    )
+  })
+
+  it('shows Reconnecting while a dropped response stream recovers', async () => {
+    await withTui(
+      'provider-stream-reconnect',
+      [
+        { type: 'partial-sse', chunks: [textSseEvent('partial-before-reconnect')], closeAfterChunk: 1 },
+        { type: 'completion', text: '-recovered-in-place' },
+      ],
+      async ({ harness, provider }) => {
+        await submitInput(harness, 'hi')
+        await harness.waitForScreen((screen) => screen.includes('Reconnecting... 1/5'), 'visible reconnect status')
+        await harness.waitForText('-recovered-in-place')
+        expect(provider.mainRequests()).toHaveLength(2)
+        await harness.waitForScreen((screen) => !screen.includes('Reconnecting...'), 'reconnect status to clear')
       },
     )
   })

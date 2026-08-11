@@ -86,8 +86,197 @@ describe('agent loop', () => {
       onShellOutput: vi.fn(),
       onUsageUpdate: vi.fn(),
       onContextCompressed: vi.fn(),
+      onStreamRetry: vi.fn(),
       onError: vi.fn(),
     }
+  })
+
+  it('reconnects an interrupted text stream and persists one combined assistant response', async () => {
+    const interrupted = new Error('terminated')
+    vi.mocked(streamText)
+      .mockReturnValueOnce({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text-delta', text: 'partial-' }
+            yield { type: 'error', error: interrupted }
+          },
+        },
+        response: Promise.resolve({ messages: [] }),
+        usage: Promise.resolve(undefined),
+        finishReason: Promise.resolve('error'),
+        toolCalls: Promise.resolve([]),
+      } as any)
+      .mockReturnValueOnce({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text-delta', text: 'continued' }
+          },
+        },
+        response: Promise.resolve({ messages: [{ role: 'assistant', content: 'continued' }] }),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+        finishReason: Promise.resolve('stop'),
+        toolCalls: Promise.resolve([]),
+      } as any)
+
+    const { state, turnCount } = await agentLoop(
+      'recover this response',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 3,
+        printMode: false,
+        streamMaxRetries: 1,
+        streamIdleTimeoutMs: 0,
+      },
+      mockCallbacks,
+    )
+
+    expect(turnCount).toBe(1)
+    expect(streamText).toHaveBeenCalledTimes(2)
+    expect(mockCallbacks.onTextDelta).toHaveBeenNthCalledWith(1, 'partial-')
+    expect(mockCallbacks.onTextDelta).toHaveBeenNthCalledWith(2, 'continued')
+    expect(mockCallbacks.onStreamRetry).toHaveBeenCalledWith({
+      attempt: 1,
+      maxAttempts: 1,
+      delayMs: 1000,
+      reason: 'network',
+    })
+    expect(mockCallbacks.onStreamRetry).toHaveBeenLastCalledWith(null)
+    expect(mockCallbacks.onError).not.toHaveBeenCalled()
+
+    const retryMessages = vi.mocked(streamText).mock.calls[1]![0].messages as Array<{
+      role: string
+      content: unknown
+    }>
+    expect(retryMessages.at(-2)).toEqual({ role: 'assistant', content: 'partial-' })
+    expect(retryMessages.at(-1)?.role).toBe('user')
+    expect(String(retryMessages.at(-1)?.content)).toContain('Continue directly')
+    expect(state.messages.filter((message) => message.role === 'user')).toHaveLength(1)
+    expect(state.messages.at(-1)).toEqual({ role: 'assistant', content: 'partial-continued' })
+  })
+
+  it('suppresses an exact prefix replay after reconnect', async () => {
+    const interrupted = new Error('other side closed')
+    vi.mocked(streamText)
+      .mockReturnValueOnce({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text-delta', text: 'prefix-' }
+            yield { type: 'error', error: interrupted }
+          },
+        },
+        response: Promise.resolve({ messages: [] }),
+        usage: Promise.resolve(undefined),
+        finishReason: Promise.resolve('error'),
+        toolCalls: Promise.resolve([]),
+      } as any)
+      .mockReturnValueOnce({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'text-delta', text: 'prefix-' }
+            yield { type: 'text-delta', text: 'rest' }
+          },
+        },
+        response: Promise.resolve({ messages: [{ role: 'assistant', content: 'prefix-rest' }] }),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+        finishReason: Promise.resolve('stop'),
+        toolCalls: Promise.resolve([]),
+      } as any)
+
+    const { state } = await agentLoop(
+      'deduplicate replay',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 3,
+        printMode: false,
+        streamMaxRetries: 1,
+        streamIdleTimeoutMs: 0,
+      },
+      mockCallbacks,
+    )
+
+    expect(vi.mocked(mockCallbacks.onTextDelta).mock.calls.map(([text]) => text)).toEqual(['prefix-', 'rest'])
+    expect(state.messages.at(-1)).toEqual({ role: 'assistant', content: 'prefix-rest' })
+  })
+
+  it('does not reconnect after tool activity makes replay unsafe', async () => {
+    const interrupted = new Error('terminated')
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'tool-call', toolCallId: 'write-1', toolName: 'writeFile', input: { filePath: '/tmp/x' } }
+          yield { type: 'error', error: interrupted }
+        },
+      },
+      response: Promise.resolve({ messages: [] }),
+      usage: Promise.resolve(undefined),
+      finishReason: Promise.resolve('error'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    await agentLoop(
+      'do not replay tools',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 3,
+        printMode: false,
+        streamMaxRetries: 5,
+        streamIdleTimeoutMs: 0,
+      },
+      mockCallbacks,
+    )
+
+    expect(streamText).toHaveBeenCalledTimes(1)
+    expect(mockCallbacks.onStreamRetry).not.toHaveBeenCalledWith(expect.objectContaining({ attempt: 1 }))
+    expect(mockCallbacks.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('Network connection failed') }),
+    )
+  })
+
+  it('does not apply the provider idle timeout while tool activity is in progress', async () => {
+    vi.mocked(streamText).mockImplementation(
+      (options) =>
+        ({
+          stream: {
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'tool-call', toolCallId: 'slow-1', toolName: 'slowTool', input: {} }
+              await new Promise((resolve) => setTimeout(resolve, 250))
+              if (options.abortSignal?.aborted) {
+                yield { type: 'error', error: new Error('aborted while tool was running') }
+                return
+              }
+              yield { type: 'text-delta', text: 'done' }
+            },
+          },
+          response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+          usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+          finishReason: Promise.resolve('stop'),
+          toolCalls: Promise.resolve([]),
+        }) as any,
+    )
+
+    const { state } = await agentLoop(
+      'wait for the tool',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 3,
+        printMode: false,
+        streamMaxRetries: 1,
+        streamIdleTimeoutMs: 100,
+      },
+      mockCallbacks,
+    )
+
+    expect(streamText).toHaveBeenCalledTimes(1)
+    expect(mockCallbacks.onError).not.toHaveBeenCalled()
+    expect(state.messages.at(-1)).toEqual({ role: 'assistant', content: 'done' })
   })
 
   it('marks string error results from auto-executed tools as UI failures', async () => {
@@ -458,6 +647,7 @@ describe('agent loop', () => {
 
     expect(mockCallbacks.onTextDelta).toHaveBeenCalledWith('Hello')
     expect(mockCallbacks.onTextDelta).toHaveBeenCalledWith(' world')
+    expect(mockCallbacks.onStreamRetry).not.toHaveBeenCalled()
 
     expect(mockCallbacks.onUsageUpdate).toHaveBeenCalled()
     const usageArg = vi.mocked(mockCallbacks.onUsageUpdate).mock.calls[0][0] as TokenUsage
@@ -468,7 +658,10 @@ describe('agent loop', () => {
     expect(providerTurnCountsAtUsageUpdate).toEqual([1])
 
     expect(turnCount).toBe(1)
-    expect(state.messages.length).toBeGreaterThan(0)
+    expect(state.messages).toEqual([
+      { role: 'user', content: 'Say hello' },
+      { role: 'assistant', content: 'Hello world' },
+    ])
   })
 
   it('stops at finishReason stop (single turn)', async () => {

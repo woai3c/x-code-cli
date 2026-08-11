@@ -172,6 +172,9 @@ export interface AgentCallbacks {
   /** Fired at each phase boundary during context compression so the UI
    *  can show a spinner label that tracks progress. */
   onCompressionProgress?: (description: string) => void
+  /** Transient stream reconnect status. A null event means provider data has
+   *  resumed or the retry sequence ended. */
+  onStreamRetry?: (event: StreamRetryEvent | null) => void
   onError: (error: Error) => void
   /** Fired by the sub-agent runner to stream progress from child agent loops.
    *  The CLI UI uses these events to build the collapsed/expanded task block. */
@@ -179,6 +182,13 @@ export interface AgentCallbacks {
   /** Optional programmatic telemetry from the durable memory worker. The CLI
    *  intentionally leaves this unset so background persistence stays silent. */
   onMemoryWrite?: (notice: MemoryWriteNotice) => void
+}
+
+export interface StreamRetryEvent {
+  attempt: number
+  maxAttempts: number
+  delayMs: number
+  reason: 'network' | 'idle-timeout'
 }
 
 // ─── Agent options ───
@@ -205,6 +215,11 @@ export interface AgentOptions {
   permissionMode?: PermissionMode
   systemPromptExtra?: string
   abortSignal?: AbortSignal
+  /** Application-level retry budget for a dropped provider stream. */
+  streamMaxRetries?: number
+  /** Silence between stream chunks before the request is treated as stale.
+   *  Zero disables the watchdog. */
+  streamIdleTimeoutMs?: number
 
   // ── Sub-agent support ──
 

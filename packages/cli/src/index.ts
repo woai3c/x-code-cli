@@ -29,6 +29,7 @@ import {
   loadUserConfig,
   pickLatestSession,
   resolveModelId,
+  resolveStreamConfig,
   setPluginDebugMirror,
   shutdownBrowserMcp,
 } from '@x-code-cli/core'
@@ -363,11 +364,14 @@ async function main() {
   await mcpPermissionStore.preload()
 
   const userConfig = loadUserConfig()
+  const streamConfig = resolveStreamConfig(userConfig)
   const options: AgentOptions = {
     modelId,
     trustMode: argv.trust,
     printMode: argv.print,
     maxTurns: argv['max-turns'],
+    streamMaxRetries: streamConfig.maxRetries,
+    streamIdleTimeoutMs: streamConfig.idleTimeoutMs,
     // Read the persisted /thinking toggle from disk. Default false so a
     // launch on a config-less machine matches the pre-feature baseline
     // (provider-default thinking behavior, no surprise latency / cost

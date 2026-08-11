@@ -58,6 +58,9 @@ export async function runPrintMode(
     onShellOutput: () => {},
     onUsageUpdate: () => {},
     onContextCompressed: () => {},
+    onStreamRetry: (event) => {
+      if (event) process.stderr.write(`\nReconnecting... ${event.attempt}/${event.maxAttempts}\n`)
+    },
     onError: (err) => {
       sawError = true
       process.stderr.write(`\n[error] ${err.message}\n`)
