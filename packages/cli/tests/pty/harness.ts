@@ -17,6 +17,8 @@ const KEY_BYTES: Record<string, string> = {
   enter: '\r',
   escape: '\x1b',
   'ctrl-c': '\x03',
+  'ctrl-u': '\x15',
+  'ctrl-home': '\x1b[1;5H',
   up: '\x1b[A',
   down: '\x1b[B',
   right: '\x1b[C',

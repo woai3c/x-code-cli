@@ -49,6 +49,22 @@ describe('TUI input and lifecycle', () => {
     })
   })
 
+  it('clears drafts with Unix and Windows shell shortcuts', async () => {
+    await withTui('input-shell-clear', [], async ({ harness }) => {
+      await typeInput(harness, 'clear with ctrl-u')
+      harness.key('ctrl-u')
+      await harness.waitForScreen(() => inputLine(harness) === '❯', 'Ctrl+U input clear')
+
+      harness.paste('first line\nsecond line\nthird line')
+      await harness.waitForScreen((screen) => screen.includes('[Pasted text #1 +3 lines]'), 'paste placeholder')
+      harness.key('ctrl-home')
+      await harness.waitForScreen(
+        (screen) => inputLine(harness) === '❯' && !screen.includes('[Pasted text #1 +3 lines]'),
+        'Ctrl+Home input clear',
+      )
+    })
+  })
+
   it('keeps bracketed multiline paste order through submission', async () => {
     const pasted = 'first line\n第二🙂\nthird line'
     await withTui('input-paste', [{ type: 'completion', text: 'paste-ok' }], async ({ harness, provider }) => {

@@ -607,6 +607,17 @@ export function ChatInput({
     },
   )
 
+  const clearInput = () => {
+    dispatch({ type: 'RESET' })
+    textRef.current = ''
+    cursorRef.current = 0
+    setPastedContents({})
+    setCompletionIndex(0)
+    setAtCompletionIndex(0)
+    resetHistoryNav()
+    lastEscapeAtRef.current = 0
+  }
+
   usePromptInput({
     enabled: !disabled && !hidden,
     onInterrupt,
@@ -772,6 +783,10 @@ export function ChatInput({
             setFreeform(({ text }) => ({ text, cursor: text.length }))
             return
           }
+          if (key === 'clear') {
+            setFreeform({ text: '', cursor: 0 })
+            return
+          }
         }
         if (key === 'return') {
           const picked = selectRequest.options[selectIndex]
@@ -841,6 +856,10 @@ export function ChatInput({
         setCompletionIndex(0)
         return
       }
+      if (key === 'clear') {
+        clearInput()
+        return
+      }
       if (key === 'escape') {
         // @-menu open: Esc just dismisses the menu for the current
         // trigger. Once the user types/backspaces the trigger key
@@ -865,11 +884,7 @@ export function ChatInput({
         const now = Date.now()
         const DOUBLE_ESC_WINDOW_MS = 500
         if (now - lastEscapeAtRef.current <= DOUBLE_ESC_WINDOW_MS) {
-          dispatch({ type: 'RESET' })
-          setPastedContents({})
-          setCompletionIndex(0)
-          resetHistoryNav()
-          lastEscapeAtRef.current = 0
+          clearInput()
         } else {
           lastEscapeAtRef.current = now
         }

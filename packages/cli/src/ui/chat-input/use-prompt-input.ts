@@ -59,6 +59,7 @@ type PromptKey =
   | 'return'
   | 'newline'
   | 'backspace'
+  | 'clear'
   | 'delete'
   | 'tab'
   | 'escape'
@@ -232,6 +233,13 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
         if (burstInProgress) return queueText(data)
         return dispatchKey('tab')
       }
+
+      // Shell-native input clearing shortcuts. Ctrl+U is the familiar
+      // zsh/readline binding on macOS and Linux; PowerShell's default
+      // Windows edit mode uses Ctrl+Home. Treat both as one atomic clear
+      // so multiline drafts and compact paste references are removed too.
+      if (data === '\x15') return dispatchKey('clear')
+      if (data === '\x1b[1;5H' || data === '\x1b[1;5~') return dispatchKey('clear')
 
       // Alt/Option+Enter → insert a literal newline. Most terminals that
       // distinguish Alt-modified keys send the prefix-ESC form: `\x1b\r`
