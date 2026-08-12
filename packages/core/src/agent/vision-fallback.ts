@@ -122,9 +122,15 @@ export async function captionImageBuffer(
   buffer: Buffer,
   mediaType: string,
   modelId: string,
-  opts: { prompt?: string; abortSignal?: AbortSignal; onUsage?: (event: VisionUsageEvent) => void } = {},
+  opts: {
+    prompt?: string
+    maxOutputTokens?: number
+    abortSignal?: AbortSignal
+    onUsage?: (event: VisionUsageEvent) => void
+  } = {},
 ): Promise<string> {
-  const key = `${modelId}:${bufferFingerprint(buffer)}`
+  const prompt = opts.prompt ?? DEFAULT_CAPTION_PROMPT
+  const key = `${modelId}:${bufferFingerprint(buffer)}:${prompt}`
   const cached = captionCache.get(key)
   if (cached != null) {
     debugLog('vision-fallback.cache-hit', `${modelId} ${buffer.length}B`)
@@ -147,11 +153,12 @@ export async function captionImageBuffer(
   const result = await generateText({
     model,
     abortSignal: opts.abortSignal,
+    maxOutputTokens: opts.maxOutputTokens,
     messages: [
       {
         role: 'user',
         content: [
-          { type: 'text', text: opts.prompt ?? DEFAULT_CAPTION_PROMPT },
+          { type: 'text', text: prompt },
           { type: 'image', image: finalBuf, mediaType: finalMime },
         ],
       },

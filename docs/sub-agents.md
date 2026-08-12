@@ -36,32 +36,46 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 ---
 
-## 浏览器子 agent（可选，需启用）
+## 浏览器自动化
 
-`browser` 是第 6 个内置子 agent，但**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。优先基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）；在支持视觉的模型上还能截图处理 canvas、地图、图表等纯视觉内容，纯文本模型则通过视觉辅助模型读取截图并返回文字描述。
+`browser` 是第 6 个内置子 agent，但**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。优先基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）；在支持视觉的模型上还能截图处理 canvas、地图、图表等纯视觉内容。纯文本模型可以借用已配置的视觉 provider 获取文字描述。
 
-**启用**（二选一）：
+轻量视觉检查与它相互独立：主 agent 默认就能使用 `browserVisualCheck` 检查本地网页，不需要 `/browser on`。
 
-- 运行中：`/browser on`（热生效，无需重启；`/browser off` 关闭并退出浏览器）
+**启用交互式 Browser Use**（二选一）：
+
+- 运行中：`/browser on`（热生效，无需重启；`/browser off` 只关闭交互式 Browser Use）
 - 配置：`~/.x-code/config.json` 里 `"browser": { "enabled": true }`
 
-**前置条件**：本机装了 Node 与 Chrome；首次调用会用 `npx -y @playwright/mcp@latest` 拉起浏览器 MCP（几十秒）。可选配置：
+本地视觉检查默认开启，可用 `/browser check-on` / `/browser check-off` 独立切换，也可以配置 `"browser": { "visualCheck": false }`。关闭 Browser Use 时，如果视觉检查仍开启，共用的浏览器会继续保留。
+
+**前置条件**：本机装了 Node 与 Chrome；不需要安装 Chrome 插件。首次调用会通过已固定并验证版本的 `@playwright/mcp` 拉起独立浏览器（几十秒）。可选配置：
 
 ```json
 {
   "browser": {
     "enabled": true,
+    "visualCheck": true,
     "headless": false,
-    "browser": "chrome"
+    "browser": "chrome",
+    "viewport": "1280,800",
+    "vision": true
   }
 }
 ```
 
-> `headless` 默认 `false`（可见窗口，方便观察）；`browser` 默认 `chrome`（用系统 Chrome），也可填 `chromium` / `msedge` / `firefox` / `webkit`。
+> `headless` 默认 `false`（可见窗口，方便观察）；`browser` 默认 `chrome`（用系统 Chrome），也可填 `chromium` / `msedge` / `firefox` / `webkit`。`vision` 控制额外的坐标操作能力，截图本身不受它影响。
 
-启用后，**主 agent 会按需自动委派**——你正常描述需要浏览器的任务即可，不必显式说"用 browser"。
+`browser: "chrome"` 只表示选择本机 Chrome 可执行文件，并不是连接你日常打开的 Chrome profile。Playwright 会启动独立的托管 profile；同一 workspace 下它自己的 cookies / localStorage 可以跨运行保留，但不会读取普通 Chrome 窗口的 tabs 或 cookies，也不需要插件。同一 workspace 同时运行两个 `xc` 时，可能争用这一个持久化 profile。
 
-**隔离设计**：浏览器的那批工具（navigate / snapshot / click …）只注入给 `browser` 子 agent 的私有上下文，**不进主 loop 的工具表或系统提示**——既不污染主对话，也不破坏 OpenAI 兼容厂商的前缀缓存。浏览器会话级保活（多个浏览器任务复用同一个浏览器），退出 CLI 或 `/browser off` 时关闭；若你手动关掉浏览器，下次任务会自动重连。
+系统 prompt 会让模型在两条路径中选择：
+
+- 修改网页视觉效果后，默认可用的 `browserVisualCheck` 会在临时 tab 中打开本地 `localhost` 页面，只返回一张当前视口截图和简短的 console error 摘要。截图前后都会校验最终地址，外部重定向会被拒绝；随后关闭临时 tab 并恢复原 tab。导航产生的无障碍树不会进入模型上下文；模型看完后，图片会在下一轮替换成短占位文本，避免重复计费。
+- 需要点击、输入、登录或多步操作时，才需要先开启 `/browser on`，再委派给 `browser` 子 agent。
+
+这是模型决策，不是每次 build 后必触发的确定性 hook，因此模型可能跳过。需要强校验时可以显式要求「做一次视觉检查」。
+
+**隔离设计**：完整的浏览器工具（navigate / snapshot / click …）仍只注入给 `browser` 子 agent 的私有上下文；主 loop 只加载一个很小的 `browserVisualCheck` 窄接口。两条路径复用同一个有状态浏览器进程；退出 CLI，或两项功能都关闭时才退出。若你手动关掉浏览器，下次任务会自动重连。视觉检查截图会发送给当前视觉模型；当前模型不支持图片时，会发送给已配置的视觉描述模型，再把简短检查结果交给当前模型。
 
 ---
 
@@ -69,10 +83,10 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 把 `.md` 文件放到下面任一目录即可：
 
-| Scope | 路径                              |
-| ----- | --------------------------------- |
-| 用户  | `~/.x-code/agents/<name>.md`      |
-| 项目  | `<repo>/.x-code/agents/<name>.md` |
+| Scope | 路径                             |
+| ----- | -------------------------------- |
+| 用户  | `~/.x-code/agents/<name>.md`     |
+| 项目  | `<cwd>/.x-code/agents/<name>.md` |
 
 启动期自动扫描，运行中跑 `/plugin refresh` 也会重新加载（跟插件贡献的 sub-agent 一起）。项目级同名覆盖用户级；同名再覆盖内置。
 
@@ -97,7 +111,7 @@ shellRestrictions: [rm, mv] # 可选，shell 命令关键字黑名单（只在 s
 工具白名单已经由 frontmatter 的 `tools` 决定。
 ```
 
-frontmatter 字段都不存在 `required` 的运行时检查（除了 name 和 description）——其余缺省值合理。
+`name` 与 `description` 必填；上面列出的其他字段在出现时也会做类型校验。frontmatter 无效的文件会被跳过并输出 warning。
 
 ### 示例：bench-runner
 
@@ -143,7 +157,7 @@ shellRestrictions: [rm, sudo, npm publish]
 1. **禁递归**：子 agent 不能调 `task` 工具。运行时会拒绝。
 2. **共享 AbortSignal**：用户 Esc 会同时杀掉主 agent 和所有运行中的子 agent。
 3. **Plan 模式继承**：父 session 在 plan 模式下，**所有**子 agent 的写工具（`writeFile` / `edit` / `shell`）都会被禁用，`general-purpose` 也不例外。
-4. **独立上下文**：子 agent 看不到主 session 的 message history——它只看到自己的 system prompt + task 调用的 prompt 参数。
+4. **独立上下文**：子 agent 看不到主 session 的 message history；它会收到自己的定义 prompt、项目知识、相关召回记忆，以及 task 调用的 prompt 参数。
 5. **Token 共享**：所有子 agent 的 token 用量加进父 session 的总账。
 
 ---

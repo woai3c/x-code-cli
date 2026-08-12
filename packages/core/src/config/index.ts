@@ -88,13 +88,17 @@ export function resolveModelId(input?: string): string | null {
 // API keys are deliberately NOT stored here (env-var only, see header
 // comment).
 
-/** Browser-automation settings for the `browser` sub-agent. Default-off: the
- *  agent is only registered when `enabled` is true (see createSubAgentRegistry),
- *  so users who don't opt in see no change to the agent list or the byte-stable
- *  system prompt. The engine is the @playwright/mcp server, spawned on first
- *  browser-agent use. */
+/** Settings shared by the default-enabled one-shot visual check and the
+ *  interactive `browser` sub-agent. `enabled` controls only the sub-agent;
+ *  headless/channel/viewport settings apply to their shared lazily spawned
+ *  @playwright/mcp browser process. */
 export interface BrowserConfig {
+  /** Enable the interactive browser sub-agent. One-shot local visual checks do
+   *  not require this switch. */
   enabled?: boolean
+  /** Enable automatic one-shot visual checks for local web UIs. Default true;
+   *  independent from the interactive browser agent switch. */
+  visualCheck?: boolean
   /** Run headless (no visible window). Default: visible, so the user can watch
    *  the agent drive the browser. */
   headless?: boolean
@@ -106,13 +110,11 @@ export interface BrowserConfig {
    *  a smaller viewport means cheaper screenshots. Raise it only if a site needs
    *  a wider layout to render correctly. */
   viewport?: string
-  /** Visual (screenshot + coordinate-click) browsing. Adds `--caps vision` to
-   *  the @playwright/mcp launch so the agent can screenshot a page and act by
-   *  pixel coordinates — the only way to drive canvas / WebGL / chart content
-   *  the accessibility tree can't represent. Default (undefined) is AUTO: on
-   *  whenever a vision-capable model is reachable (the active model, or any
-   *  other configured provider the browser agent can borrow). Set `false` to
-   *  force tree-only; `true` to force it on. */
+  /** Additional coordinate-based browser controls. Unless explicitly false,
+   *  the managed server launches with a stable visual-capability superset so a
+   *  later model switch does not require restarting Chrome and losing tabs.
+   *  The browser agent only receives those controls when an active or borrowed
+   *  vision model can actually interpret screenshots. */
   vision?: boolean
   /** Override the launch command entirely (advanced: offline, pinned version,
    *  custom server). When set, `args` is passed verbatim. */
@@ -286,8 +288,8 @@ export interface UserConfig {
    *  type into the config module's surface. Loader uses
    *  `parseServersBlock` to validate before constructing clients. */
   mcpServers?: Record<string, unknown>
-  /** Browser sub-agent settings. Absent / `enabled !== true` ⇒ the browser
-   *  agent is not registered (the default). */
+  /** Managed-browser settings. `enabled === true` registers interactive
+   *  Browser Use; visual checks remain default-on unless explicitly false. */
   browser?: BrowserConfig
   /** Per-model reasoning effort levels chosen via the /model tier picker.
    *  Key = full model id (e.g. "openai:gpt-5.6-sol"), value = effort label

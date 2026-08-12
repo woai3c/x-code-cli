@@ -22,6 +22,7 @@ describe('system prompt budget and stability', () => {
     expect(prompt).toContain('Never run concurrent writers against the same files')
     expect(prompt).toContain('Never modify the managed memory store')
     expect(prompt).toContain('If a tool result starts with [Truncated:]')
+    expect(prompt).toContain('proactively call browserVisualCheck once')
   })
 
   it('lists enabled skills once and keeps identical options byte-stable', () => {

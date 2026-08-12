@@ -37,10 +37,10 @@ to see the tools each server exposes.
 
 ## Config file locations
 
-| Scope   | Path                         | When to use                                           |
-| ------- | ---------------------------- | ----------------------------------------------------- |
-| User    | `~/.x-code/config.json`      | Personal-use servers (filesystem, github, etc.)       |
-| Project | `<repo>/.x-code/config.json` | Repo-specific servers (internal company server, etc.) |
+| Scope   | Path                        | When to use                                      |
+| ------- | --------------------------- | ------------------------------------------------ |
+| User    | `~/.x-code/config.json`     | Personal-use servers (filesystem, github, etc.)  |
+| Project | `<cwd>/.x-code/config.json` | Servers for the directory where `xc` is launched |
 
 The two scopes merge: project entries override user-scope entries with the
 same name. **Project-level configs trigger a trust dialog the first time
@@ -62,7 +62,7 @@ project servers for that session. The trust decision persists at
   "mcpServers": {
     "filesystem": {
       "command": "npx", // required
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${env:WORK_DIR}"],
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${WORK_DIR}"],
       "env": {
         // optional: extra env vars
         "DEBUG": "1",
@@ -103,20 +103,22 @@ browser opens the authorization URL, the callback writes the token to
 
 ### Variable expansion
 
-`${VAR}` and `${env:VAR}` inside any string field are expanded against
-`process.env` at startup. Missing variables raise an error and mark the
-server `failed` (the other servers still load).
+`${VAR}` inside any string field is expanded against `process.env` at
+startup. `${VAR:-fallback}` supplies a literal fallback. A missing variable
+without a fallback raises an error and marks that server `failed` (the other
+servers still load). The hook-only `${env:VAR}` form is not MCP syntax and is
+left literal.
 
 ```jsonc
 {
   "github": {
-    "url": "${env:GITHUB_MCP_URL}",
-    "headers": { "Authorization": "Bearer ${env:GITHUB_TOKEN}" },
+    "url": "${GITHUB_MCP_URL}",
+    "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" },
   },
 }
 ```
 
-> **Tip**: any field carrying a secret should use `${env:...}`. Keep the
+> **Tip**: any field carrying a secret should use `${VAR}`. Keep the
 > secret in your shell rc file rather than committing it to a
 > source-controlled config.json.
 
@@ -154,9 +156,9 @@ example:
 - `filesystem__read_file`
 - `github__create_issue`
 
-When two servers expose the same tool name, the second gets a hash
-suffix (e.g. `read_file_a3f2`) to avoid collision; the loader logs which
-server got renamed.
+Model-facing names are sanitized and capped at 64 characters. If two resulting
+names still collide, the second gets a hash suffix (for example,
+`foo_bar__read_file_a3f2`).
 
 ---
 
@@ -187,7 +189,7 @@ After startup the agent gains `fs__read_file`, `fs__write_file`,
       "command": "node",
       "args": ["D:/tools/company-mcp/index.js"],
       "env": {
-        "API_KEY": "${env:COMPANY_API_KEY}",
+        "API_KEY": "${COMPANY_API_KEY}",
         "ENDPOINT": "https://internal.corp/api",
       },
       "cwd": "D:/tools/company-mcp",
@@ -202,7 +204,7 @@ After startup the agent gains `fs__read_file`, `fs__write_file`,
 {
   "mcpServers": {
     "linear": {
-      "url": "https://mcp.linear.app/sse",
+      "url": "https://mcp.linear.app/mcp",
     },
   },
 }
@@ -238,7 +240,7 @@ differences:
   on name collisions
 - **Listed in `/mcp list`** alongside user servers
 
-See [plugins.md](./plugins.md) § Contributions for the full picture.
+See [plugins.en.md](./plugins.en.md) § Contributions for the full picture.
 
 ---
 
@@ -260,6 +262,9 @@ Grep for `mcp.` to follow connects / calls / errors.
 
 ## Compatibility with Claude Code MCP config
 
-X-Code CLI's `mcpServers` schema matches Claude Code's exactly — copy
-the `mcpServers` block from your `~/.claude/config.json` straight into
-`~/.x-code/config.json`. One config, two CLIs.
+X-Code CLI supports the common Claude Code `mcpServers` fields documented
+above. Compatible entries can be copied into `~/.x-code/config.json`, but the
+schemas are not identical: X-Code accepts only `command` / `args` / `env` /
+`cwd` for stdio or `url` / `headers` for HTTP, plus `timeout` and `enabled`.
+Run `/mcp list` after copying a config to catch unsupported or malformed
+entries.

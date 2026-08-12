@@ -51,7 +51,7 @@ session.
 
 ---
 
-## Browser sub-agent (opt-in)
+## Browser automation
 
 `browser` is a sixth built-in sub-agent, but it is **not registered by
 default**. It drives a real browser (powered by
@@ -60,44 +60,73 @@ default**. It drives a real browser (powered by
 filling, multi-step flows. It works primarily from the **accessibility tree**
 (text-based, so it works across every provider, including non-multimodal
 models); on vision-capable models it can also screenshot the page for
-canvas / maps / charts and other visual-only content, while text-only models
-fall back to a vision model reading the screenshot and returning a text
-description.
+canvas / maps / charts and other visual-only content. A text-only model can
+use a configured vision-capable provider to receive a text description.
 
-**Enable** (either way):
+Lightweight visual checking is independent: the main agent can use
+`browserVisualCheck` for local web apps by default, without `/browser on`.
+
+**Enable interactive Browser Use** (either way):
 
 - At runtime: `/browser on` (hot — no restart; `/browser off` disables it and
-  closes the browser)
+  leaves the shared browser available when visual checks are still on)
 - Config: `"browser": { "enabled": true }` in `~/.x-code/config.json`
 
-**Prerequisites**: Node and a browser (Chrome) installed locally; the first use
-launches the browser MCP via `npx -y @playwright/mcp@latest` (tens of seconds).
-Optional config:
+Automatic local visual checks default to on. Toggle them independently with
+`/browser check-on` / `/browser check-off`, or set
+`"browser": { "visualCheck": false }`.
+
+**Prerequisites**: Node and Chrome installed locally; no Chrome extension is
+required. The first use launches a separate managed browser through a pinned,
+tested `@playwright/mcp` release (tens of seconds). Optional config:
 
 ```json
 {
   "browser": {
     "enabled": true,
+    "visualCheck": true,
     "headless": false,
-    "browser": "chrome"
+    "browser": "chrome",
+    "viewport": "1280,800",
+    "vision": true
   }
 }
 ```
 
 > `headless` defaults to `false` (a visible window, so you can watch); `browser`
 > defaults to `chrome` (your installed Google Chrome) and also accepts
-> `chromium` / `msedge` / `firefox` / `webkit`.
+> `chromium` / `msedge` / `firefox` / `webkit`. `vision` controls the extra
+> coordinate-based controls, while screenshots themselves remain available.
 
-Once enabled, the **main agent delegates automatically** — just describe a task
-that needs a browser; you don't have to say "use the browser".
+Choosing `chrome` selects the installed Chrome executable, not the profile of
+your everyday Chrome window. Playwright launches a separate managed profile;
+it can retain its own cookies and local storage between runs for the same
+workspace, but it does not attach to your existing tabs or normal Chrome
+cookies. No extension is required. Two concurrent `xc` instances in the same
+workspace can contend for that one persistent profile.
 
-**Isolation**: the browser tools (navigate / snapshot / click …) are injected
-only into the `browser` sub-agent's private context — they never enter the main
-loop's tool set or system prompt, so they neither pollute the main conversation
-nor break OpenAI-compatible providers' prefix cache. The browser is kept alive
-for the session (repeat browser tasks reuse it) and closed on CLI exit or
-`/browser off`; if you close the browser yourself, the next task reconnects
-automatically.
+The system prompt asks the model to choose between two paths:
+
+- After visual web changes, the default-enabled `browserVisualCheck` opens a
+  local `localhost` page in a temporary tab and returns one viewport screenshot
+  plus a compact console-error summary. It verifies the final URL before and
+  after capture, rejects external redirects, closes the temporary tab, and
+  restores the previous active tab. Navigation snapshots never enter model
+  context, and the image is replaced with a short placeholder after the model
+  has inspected it.
+- Clicking, typing, authentication, and other multi-step flows require
+  `/browser on` and use the interactive `browser` sub-agent.
+
+This is a model decision, not a deterministic post-build hook, so it can be
+skipped. You can explicitly ask for a visual check when verification matters.
+
+**Isolation**: the full browser tool set (navigate / snapshot / click …) remains
+private to the `browser` sub-agent. The main loop only exposes the narrow
+`browserVisualCheck` interface. Both paths reuse the same stateful
+browser process, which closes on CLI exit or when both features are off; if you
+close it yourself, the next task reconnects automatically. A visual check sends
+the captured local UI image to the active vision model, or to a configured
+vision-caption model when the active model is text-only.
 
 ---
 
@@ -105,10 +134,10 @@ automatically.
 
 Drop a `.md` file under either path:
 
-| Scope   | Path                              |
-| ------- | --------------------------------- |
-| User    | `~/.x-code/agents/<name>.md`      |
-| Project | `<repo>/.x-code/agents/<name>.md` |
+| Scope   | Path                             |
+| ------- | -------------------------------- |
+| User    | `~/.x-code/agents/<name>.md`     |
+| Project | `<cwd>/.x-code/agents/<name>.md` |
 
 Loaded at startup; `/plugin refresh` also re-scans them mid-session
 (custom sub-agents share the reload path with plugin-contributed ones).
@@ -137,8 +166,8 @@ If you want the sub-agent to know what tools it has, list them at the
 end — but it's not required; the whitelist is enforced regardless.
 ```
 
-No frontmatter field is checked at runtime besides `name` and
-`description`. Everything else has sensible defaults.
+`name` and `description` are required. Every optional field shown above is
+also type-checked when present; an invalid file is skipped with a warning.
 
 ### Example: bench-runner
 
@@ -189,9 +218,9 @@ auto-dispatches via task:
 3. **Plan mode inherited**: when the parent session is in plan mode,
    **all** sub-agents have their write tools (`writeFile` / `edit` /
    `shell`) denied — `general-purpose` included.
-4. **Isolated context**: a sub-agent doesn't see the parent's message
-   history — only its own system prompt + the `prompt` argument passed
-   to `task()`.
+4. **Isolated context**: a sub-agent doesn't see the parent's message history.
+   It receives its definition prompt, project knowledge, relevant recalled
+   memory, and the `prompt` argument passed to `task()`.
 5. **Shared token usage**: sub-agent token use rolls up into the
    parent's total.
 

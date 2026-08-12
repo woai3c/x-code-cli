@@ -56,7 +56,7 @@ Review the diff I provide using these criteria:
 ...
 ```
 
-The frontmatter accepts exactly two fields:
+The frontmatter requires two fields; unknown extra fields are ignored:
 
 - `name` (required) — should match the directory name; `/<name>` triggers it
 - `description` (required) — one-line summary; the agent reads it to decide
@@ -74,14 +74,14 @@ Walk through the checklist in references/checklist.md and apply each item.
 
 ## Where skills live
 
-| Scope   | Path                                    | When                                     |
-| ------- | --------------------------------------- | ---------------------------------------- |
-| User    | `~/.x-code/skills/<name>/SKILL.md`      | Personal workflows that apply everywhere |
-| Project | `<repo>/.x-code/skills/<name>/SKILL.md` | Workflows for one repo only              |
+| Scope   | Path                                   | When                                     |
+| ------- | -------------------------------------- | ---------------------------------------- |
+| User    | `~/.x-code/skills/<name>/SKILL.md`     | Personal workflows that apply everywhere |
+| Project | `<cwd>/.x-code/skills/<name>/SKILL.md` | Workflows for the launch directory       |
 
-A project-level skill overrides a user-scope skill of the same name. `.x-code/`
-at the repo root is gitignored — to share skills with a team, publish them
-as a plugin (see [plugins.en.md](./plugins.en.md)).
+A project-level skill overrides a plugin or user-scope skill of the same name.
+This repository gitignores its root `.x-code/`; to share skills with a team,
+publish them as a plugin (see [plugins.en.md](./plugins.en.md)).
 
 > **Windows paths**: `~/.x-code` maps to `%USERPROFILE%\.x-code` on Windows.
 > Not repeated below.
@@ -243,7 +243,3 @@ See [plugins.en.md](./plugins.en.md) and [plugin-authoring.en.md](./plugin-autho
 | Want to disable temporarily without removing  | `/skill disable <name>`                                                |
 | Agent keeps activating it incorrectly         | Tighten the `description` — avoid broad words like "code" or "project" |
 | Bundled file list got truncated (>50 entries) | Split into multiple skills                                             |
-
-```
-
-```

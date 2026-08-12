@@ -1,6 +1,6 @@
 # 插件 — 使用指南
 
-**插件**是可分发的功能包：把 skills / sub-agents / MCP 服务器 / hooks 打包成一个安装单元，第三方可以编写并分发，用户一行命令安装。
+**插件**是可分发的功能包：把 skills / sub-agents / slash commands / MCP 服务器 / hooks 打包成一个安装单元，第三方可以编写并分发，用户一行命令安装。
 
 英文版：[plugins.en.md](./plugins.en.md) · 相关：[hooks.md](./hooks.md) · [marketplace.md](./marketplace.md) · 自己写插件见 [plugin-authoring.md](./plugin-authoring.md)
 
@@ -94,7 +94,7 @@ xc plugin install --yes linear@anthropic-marketplace
 `/plugin install` **永远以 `--yes` 模式运行**——交互内打命令本身视为同意。具体说，它**不弹**：
 
 - **consent 预览**：装之前看不到 plugin 会贡献什么（commands / agents / MCP / hooks）
-- **userConfig prompt**：带 `userConfig` 字段的插件装上去后值是空的，hook 子进程拿到的 env 全是 `<unset>`
+- **userConfig prompt**：带 `userConfig` 字段的插件不会保存这些值。X-Code 不会创建字面量 `<unset>`；已有的进程或 server 环境仍可能提供同名变量
 
 **如果插件有 userConfig，或者你想看 consent 预览，请用命令行版**：
 
@@ -280,9 +280,11 @@ XC_PLUGIN_DEBUG=1 xc
 
 ---
 
-## 与 Claude Code / Codex 插件的兼容性
+## 与 Claude Code 插件的兼容性
 
-x-code 故意同时识别 `.claude-plugin/plugin.json` 和原生的 `.x-code-plugin/plugin.json`。Claude Code 写的插件原样安装在 x-code 里——skills、agents、MCP servers、hooks 全部按一样的方式接入。两个 Claude Code 独有字段（`output-styles`、`lspServers`）会被静默忽略。
+x-code 同时识别 `.claude-plugin/plugin.json` 和原生的 `.x-code-plugin/plugin.json`。使用本文 schema 时，常见 Claude Code 贡献——skills、agents、slash commands、MCP servers、hooks——可以接入，但不承诺完全兼容。未知顶层字段（如 `output-styles`、`lspServers`）会被忽略，MCP 变量写法也以 X-Code 规则为准。安装第三方插件后，用 `/plugin info`、`/plugin doctor` 与 `/mcp list` 验证。
+
+Codex 原生的 `.codex-plugin/plugin.json` 不在探测路径中。只提供 Codex manifest 的插件需要补充 X-Code 接受的 manifest 路径，并使用受支持的贡献 schema。
 
 Gemini extension（`gemini-extension.json`）**不支持**——安装时会报错并指向本文档。
 

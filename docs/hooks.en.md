@@ -5,8 +5,8 @@ lifecycle events. The CLI emits an event payload to the hook on
 **stdin** as one JSON line; the hook may reply on **stdout** with a
 one-line JSON `HookDecision` to influence what the agent does next.
 
-See also: [Authoring a plugin](plugin-authoring.md) ·
-[Plugins user guide](plugins.md)
+See also: [Authoring a plugin](plugin-authoring.en.md) ·
+[Plugins user guide](plugins.en.md)
 
 ---
 
@@ -28,7 +28,7 @@ runtime — just spawns a child, pipes JSON, reads the answer.
 | `SessionStart`     | At CLI launch (before the UI mounts) — fires once per session even if the user never submits a prompt | no                                | warm up state, prep env                           |
 | `UserPromptSubmit` | Just before the user's message hits the model                                                         | **allow / deny / inject context** | inject sprint info, redact secrets, gate by topic |
 | `PreToolUse`       | Before any tool is dispatched (writeFile, shell, MCP, sub-agent, …)                                   | **allow / deny / modify args**    | block dangerous paths, rewrite args, audit gate   |
-| `PostToolUse`      | After a tool produces a result                                                                        | **modify output**                 | rewrite tool result, append audit metadata        |
+| `PostToolUse`      | After a supported, completed tool dispatch produces a result                                          | **modify output**                 | rewrite tool result, append audit metadata        |
 | `PreCompact`       | Before context compression runs (proactive threshold or reactive "too long")                          | no                                | checkpoint / persist state before messages trim   |
 | `PostCompact`      | After compression finishes                                                                            | no                                | notify, log what was reclaimed                    |
 | `SubagentStart`    | When the `task` tool spawns a sub-agent                                                               | no                                | audit which sub-agents fire, record start time    |
@@ -39,6 +39,12 @@ runtime — just spawns a child, pipes JSON, reads the answer.
 `SessionEnd` is fire-and-forget — the CLI exits without waiting for
 hooks to complete. Don't put critical operations there; use
 `TurnComplete` if you need guaranteed delivery.
+
+`PostToolUse` does not yet cover every tool-result path. It currently fires
+for completed `writeFile` / `edit` / `shell`, `browserVisualCheck`, and MCP
+dispatches. It does not fire for SDK-auto-executed read/search tools, bypass
+handlers such as `askUser` / `task` / MCP resource reads, or synthetic results
+created by permission denial, interruption, or a thrown execution error.
 
 ---
 
@@ -181,7 +187,7 @@ unparseable as JSON is treated as `allow` plus a debug-log breadcrumb.
 // Default — agent proceeds normally
 { "decision": "allow" }
 
-// Optional context to attach (UserPromptSubmit / PostToolUse)
+// Optional context to attach (UserPromptSubmit only)
 { "decision": "allow", "context": "Current sprint: Sprint 42" }
 
 // Stop the agent from doing the thing
@@ -190,7 +196,6 @@ unparseable as JSON is treated as `allow` plus a debug-log breadcrumb.
 // Rewrite the tool args (PreToolUse) or output (PostToolUse)
 { "decision": "modify", "args": { "path": "/safer/path" } }
 { "decision": "modify", "output": "[redacted]" }
-{ "decision": "modify", "context": "Sprint 42 in progress" }
 ```
 
 What gets applied:
@@ -223,6 +228,10 @@ Set `"failurePolicy": "block"` on the entry to flip that for one hook —
 non-zero exit then becomes a `deny`. Use this only for gating hooks
 the user actively wants strict; the default-allow stance exists to
 ensure a broken hook never wedges the agent.
+
+Blocking has an effect only on `UserPromptSubmit` and `PreToolUse`.
+`PostToolUse` is already after execution, and fire-and-forget events ignore
+stdout decisions.
 
 The 30-second timeout cap is a hard ceiling, not a default. Default is
 5 seconds. Authors who need longer should split work into background

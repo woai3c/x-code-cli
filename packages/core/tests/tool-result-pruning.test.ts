@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { collapseStaleToolResults } from '../src/agent/tool-result-pruning.js'
+import { collapseConsumedToolResults, collapseStaleToolResults } from '../src/agent/tool-result-pruning.js'
 
 function toolMsg(toolName: string, output: { type: string; value: unknown }): ModelMessage {
   return { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't', toolName, output }] } as ModelMessage
@@ -79,5 +79,33 @@ describe('collapseStaleToolResults', () => {
     ]
     collapseStaleToolResults(messages, [])
     expect(out(messages[0]).value).toBe('A')
+  })
+})
+
+describe('collapseConsumedToolResults', () => {
+  it('keeps a screenshot intact until a following assistant message has consumed it', () => {
+    const pending = [
+      { role: 'assistant', content: 'calling visual check' } as ModelMessage,
+      toolMsg('browserVisualCheck', {
+        type: 'content',
+        value: [{ type: 'media', data: 'AAAA', mediaType: 'image/jpeg' }],
+      }),
+    ]
+    collapseConsumedToolResults(pending, ['browserVisualCheck'])
+    expect(out(pending[1]).type).toBe('content')
+
+    pending.push({ role: 'assistant', content: 'The layout looks correct.' } as ModelMessage)
+    collapseConsumedToolResults(pending, ['browserVisualCheck'])
+    expect(out(pending[1]).type).toBe('text')
+    expect(out(pending[1]).value).toContain('Consumed browserVisualCheck')
+  })
+
+  it('does not collapse unrelated image tools', () => {
+    const messages = [
+      toolMsg('readFile', textOut('file contents')),
+      { role: 'assistant', content: 'done' } as ModelMessage,
+    ]
+    collapseConsumedToolResults(messages, ['browserVisualCheck'])
+    expect(out(messages[0]).value).toBe('file contents')
   })
 })

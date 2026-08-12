@@ -413,12 +413,14 @@ export interface ConnectResult {
  *  the enumerated capabilities. `driveOAuth` (when set) opts into the
  *  full browser-based OAuth flow on UnauthorizedError; without it,
  *  UnauthorizedError surfaces as `status: needs_auth` and the user is
- *  expected to invoke /mcp auth explicitly. */
+ *  expected to invoke /mcp auth explicitly. An optional abort signal covers
+ *  cold subprocess startup as well as the initialize handshake. */
 export async function connectOneServer(
   name: string,
   rawConfig: McpServerConfig,
   oauthFactory: OAuthProviderFactory | undefined,
   driveOAuth?: AuthHooks,
+  abortSignal?: AbortSignal,
 ): Promise<ConnectResult> {
   // Honour `enabled: false` — register but skip the connection.
   if (rawConfig.enabled === false) {
@@ -458,7 +460,7 @@ export async function connectOneServer(
   const client = new McpClient(name, expanded, authProvider)
 
   try {
-    const info = driveOAuth ? await client.connectWithOAuth(driveOAuth) : await client.connect()
+    const info = driveOAuth ? await client.connectWithOAuth(driveOAuth) : await client.connect(abortSignal)
     return {
       server: {
         name,

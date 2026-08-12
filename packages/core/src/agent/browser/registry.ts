@@ -1,14 +1,13 @@
-// @x-code-cli/core — Browser sub-agent MCP bootstrap
+// @x-code-cli/core — Managed browser MCP bootstrap
 //
-// The `browser` sub-agent drives a real browser through the @playwright/mcp
-// server. We connect that server into a PRIVATE McpRegistry — never the global
-// one the main loop holds — so its browser tools stay out of the main system
-// prompt (which must remain byte-stable for prefix caching, see CLAUDE.md) and
-// out of every other agent. Only runSubAgent, when running the `browser` agent,
-// hands this registry in via subOptions.mcpRegistry.
+// The one-shot root visual check and the interactive `browser` sub-agent share
+// a real browser driven through @playwright/mcp. The server stays in a PRIVATE
+// McpRegistry — never the global one the main loop holds — so the full browser
+// tool set stays out of the main system prompt and every unrelated agent. The
+// root can only reach it through its narrow browserVisualCheck orchestrator.
 //
-// The server (and its browser) is spawned lazily on first browser-agent use and
-// cached for the session, so repeat invocations reuse the same browser. It is a
+// The server (and its browser) is spawned lazily on first browser task and
+// cached for the session, so repeat checks/interactions reuse it. It is a
 // stdio subprocess; the CLI's gracefulShutdown calls shutdownBrowserMcp so the
 // browser exits with the CLI.
 import os from 'node:os'
@@ -41,28 +40,32 @@ const EXCLUDED_BROWSER_TOOLS = new Set(['browser_run_code_unsafe'])
  *  prompt guidance curbs that, so the prompt fires rarely.) The truly dangerous
  *  `browser_run_code_unsafe` — raw Node/fs — is EXCLUDED entirely, not gated. */
 const SENSITIVE_BROWSER_TOOLS = new Set(['browser_evaluate'])
+export const PLAYWRIGHT_MCP_PACKAGE = '@playwright/mcp@0.0.79'
 
 /** Build the stdio config that launches the browser MCP. A `command` override
  *  wins (advanced: offline / pinned version / custom server). Otherwise default
- *  to `npx -y @playwright/mcp@latest --browser <channel> [--headless] [--caps vision]`.
+ *  to a tested, pinned @playwright/mcp release so an automatic visual check
+ *  cannot silently execute a different package version between sessions.
  *  On Windows, npx must run through cmd.exe — spawning the bare `npx` shim
  *  fails (it resolves to `npx.cmd`).
  *
- *  `vision` adds `--caps vision`, which is ADDITIVE: it layers the screenshot +
- *  coordinate-mouse tools (browser_take_screenshot is already core;
- *  browser_mouse_*_xy come from the cap) on top of the accessibility-tree
- *  tools — the tree stays the default, visual is the fallback for canvas/WebGL.
- *  A `command` override ignores `vision` (the caller owns the full argv). */
-export function buildBrowserServerConfig(cfg: BrowserConfig, vision = false): McpServerConfig {
+ *  Unless cfg.vision is false, `--caps vision` adds coordinate-mouse tools on
+ *  top of the accessibility tree (browser_take_screenshot itself is core). A
+ *  command override owns its complete argv and therefore ignores this setting. */
+export function buildBrowserServerConfig(cfg: BrowserConfig): McpServerConfig {
   // Generous first-connect timeout: a cold npx may download @playwright/mcp and
   // then launch a browser, well past the 30 s default.
   const timeout = 120_000
   if (cfg.command) {
     return { command: cfg.command, args: cfg.args ?? [], timeout }
   }
-  const args = ['-y', '@playwright/mcp@latest', '--browser', cfg.browser ?? 'chrome']
+  const args = ['-y', PLAYWRIGHT_MCP_PACKAGE, '--browser', cfg.browser ?? 'chrome']
   if (cfg.headless) args.push('--headless')
-  if (vision) args.push('--caps', 'vision')
+  // Keep the server capability stable across active-model changes. Coordinate
+  // tools stay private and are filtered out of a browser agent that has no way
+  // to interpret screenshots; launching the superset avoids restarting Chrome
+  // (and losing tabs) after a later switch to a vision-capable model.
+  if (cfg.vision !== false) args.push('--caps', 'vision')
   // Bound the viewport so a (non-fullPage) screenshot has a capped resolution.
   // Vision-model token cost scales with image DIMENSIONS, not bytes, so a small
   // viewport is the cheapest lever against runaway screenshot tokens. 1280x800
@@ -85,37 +88,130 @@ export interface BrowserMcp {
   registry: McpRegistry
   permissions: McpPermissionStore
   toolCount: number
+  /** True when the connected server actually exposed coordinate vision tools. */
+  vision: boolean
   error?: string
 }
 
 let cached: BrowserMcp | null = null
-let connecting: Promise<BrowserMcp> | null = null
+let generation = 0
 
-/** Connect to the browser MCP and return a private registry + permission store
- *  for the browser sub-agent. Caches a live connection for the session (so
- *  repeat tasks reuse one browser), but de-dups concurrent first-acquires and
- *  self-heals: if the browser/server connection drops (user closes Chrome,
- *  crash) the cache is invalidated so the next acquire reconnects. A failed
- *  connect is NOT cached, so a retry works after the user fixes setup. */
-export async function getBrowserMcp(vision = false): Promise<BrowserMcp> {
-  if (cached) return cached
-  if (connecting) return connecting
-  // The first connect fixes the server's capabilities for the session. That's
-  // fine: vision reachability is static (it depends on which provider keys are
-  // set, not on the per-call model), so every browser task this session agrees
-  // on the same `vision` value. Switching the active model later doesn't change
-  // whether `--caps vision` should have been passed.
-  connecting = connectBrowser(vision)
-  try {
-    return await connecting
-  } finally {
-    connecting = null
+interface BrowserConnectAttempt {
+  controller: AbortController
+  promise: Promise<BrowserMcp>
+  waiters: number
+}
+
+let connecting: BrowserConnectAttempt | null = null
+
+function browserFailure(error: string): BrowserMcp {
+  return {
+    ok: false,
+    registry: new McpRegistry({ servers: [], tools: [], resources: [] }),
+    permissions: new McpPermissionStore(),
+    toolCount: 0,
+    vision: false,
+    error,
   }
 }
 
-async function connectBrowser(vision: boolean): Promise<BrowserMcp> {
-  const config = buildBrowserServerConfig(loadUserConfig().browser ?? {}, vision)
-  const result = await connectOneServer('browser', config, undefined)
+function abortReason(signal: AbortSignal, fallback = 'Browser startup aborted'): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException(fallback, 'AbortError')
+}
+
+function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortReason(signal))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup()
+      reject(abortReason(signal))
+    }
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        cleanup()
+        resolve(value)
+      },
+      (err) => {
+        cleanup()
+        reject(err)
+      },
+    )
+  })
+}
+
+/** Connect to the browser MCP and return its private registry + permission
+ *  store for the visual check or browser sub-agent. Caches a live connection
+ *  for the session, but de-dups concurrent first-acquires and
+ *  self-heals: if the browser/server connection drops (user closes Chrome,
+ *  crash) the cache is invalidated so the next acquire reconnects. A failed
+ *  connect is NOT cached, so a retry works after the user fixes setup. */
+export async function getBrowserMcp(abortSignal?: AbortSignal): Promise<BrowserMcp> {
+  if (abortSignal?.aborted) throw abortReason(abortSignal)
+  if (cached) return cached
+
+  // A previous caller may have cancelled the only in-flight cold start. Wait
+  // for that subprocess to finish closing before launching its replacement;
+  // attaching a fresh caller to an already-aborted attempt would return a
+  // misleading failure and racing two Chrome profiles can hit a lock.
+  if (connecting?.controller.signal.aborted) {
+    const stale = connecting
+    await stale.promise
+    if (connecting === stale) connecting = null
+    if (abortSignal?.aborted) throw abortReason(abortSignal)
+    if (cached) return cached
+  }
+
+  let attempt = connecting
+  if (!attempt) {
+    const controller = new AbortController()
+    const attemptGeneration = generation
+    const created = {} as BrowserConnectAttempt
+    created.controller = controller
+    created.waiters = 0
+    created.promise = connectBrowser(controller.signal)
+      .then(async (value) => {
+        if (attemptGeneration !== generation || controller.signal.aborted) {
+          if (value.ok) await value.registry.shutdown().catch(() => undefined)
+          return browserFailure('Browser startup was cancelled')
+        }
+        if (value.ok) cached = value
+        return value
+      })
+      .catch((err) => browserFailure(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (connecting === created) connecting = null
+      })
+    connecting = created
+    attempt = created
+  }
+
+  attempt.waiters++
+  let callerAborted = false
+  try {
+    return await waitWithSignal(attempt.promise, abortSignal)
+  } catch (err) {
+    callerAborted = abortSignal?.aborted === true
+    throw err
+  } finally {
+    attempt.waiters--
+    if (
+      callerAborted &&
+      abortSignal &&
+      attempt.waiters === 0 &&
+      connecting === attempt &&
+      !attempt.controller.signal.aborted
+    ) {
+      attempt.controller.abort(abortReason(abortSignal))
+    }
+  }
+}
+
+async function connectBrowser(abortSignal: AbortSignal): Promise<BrowserMcp> {
+  const config = buildBrowserServerConfig(loadUserConfig().browser ?? {})
+  const result = await connectOneServer('browser', config, undefined, undefined, abortSignal)
 
   // Name-mangle the server's tools the same way the loader does on boot.
   // Dangerous tools are dropped here, by raw name, so they never enter the
@@ -143,13 +239,7 @@ async function connectBrowser(vision: boolean): Promise<BrowserMcp> {
     await result.server.client.close().catch(() => undefined)
     // Don't cache the failure: a retry after the user installs Chrome / fixes
     // npx should work without a CLI restart.
-    return {
-      ok: false,
-      registry: new McpRegistry({ servers: [], tools: [], resources: [] }),
-      permissions: new McpPermissionStore(),
-      toolCount: 0,
-      error: `${reason}${tail}`,
-    }
+    return browserFailure(`${reason}${tail}`)
   }
 
   const registry = new McpRegistry({
@@ -158,19 +248,22 @@ async function connectBrowser(vision: boolean): Promise<BrowserMcp> {
     resources: [...result.resources],
     configs: new Map([['browser', config]]),
   })
-  // Enabling the browser agent (/browser on, or config.browser.enabled) IS the
-  // consent for routine navigation — pre-approve every browser tool so
-  // navigate/click/snapshot/screenshot calls don't each hit a per-tool prompt.
-  // Genuinely sensitive tools (SENSITIVE_BROWSER_TOOLS — page-script evaluation)
-  // are left unapproved so they still prompt per call.
+  // Enabling the interactive browser agent is consent for routine navigation.
+  // These permissions are used only by that sub-agent; the root visual check
+  // calls a fixed, narrow sequence directly and cannot select arbitrary tools.
   const permissions = new McpPermissionStore()
   for (const t of tools) {
     if (SENSITIVE_BROWSER_TOOLS.has(t.rawName)) continue
     permissions.approveForSession(t.callableName)
   }
 
-  const value: BrowserMcp = { ok: true, registry, permissions, toolCount: tools.length }
-  cached = value
+  const value: BrowserMcp = {
+    ok: true,
+    registry,
+    permissions,
+    toolCount: tools.length,
+    vision: tools.some((tool) => tool.rawName.startsWith('browser_mouse_')),
+  }
   // Self-heal: when the server/browser connection drops (Chrome closed, crash),
   // drop the cache so the next acquire reconnects instead of reusing a dead client.
   result.server.client.onClose(() => {
@@ -182,7 +275,18 @@ async function connectBrowser(vision: boolean): Promise<BrowserMcp> {
 /** Close the browser MCP subprocess (and its browser). Wired into the CLI's
  *  gracefulShutdown; idempotent. */
 export async function shutdownBrowserMcp(): Promise<void> {
+  generation++
+  const attempt = connecting
   const current = cached
   cached = null
-  if (current?.ok) await current.registry.shutdown().catch(() => undefined)
+  if (attempt && !attempt.controller.signal.aborted) {
+    attempt.controller.abort(new DOMException('Browser shutdown requested', 'AbortError'))
+  }
+  await Promise.all([
+    current?.ok ? current.registry.shutdown().catch(() => undefined) : Promise.resolve(),
+    attempt?.promise.then(
+      () => undefined,
+      () => undefined,
+    ) ?? Promise.resolve(),
+  ])
 }

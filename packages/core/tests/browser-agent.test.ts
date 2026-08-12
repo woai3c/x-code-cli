@@ -8,7 +8,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { buildBrowserServerConfig } from '../src/agent/browser/registry.js'
+import { PLAYWRIGHT_MCP_PACKAGE, buildBrowserServerConfig } from '../src/agent/browser/registry.js'
 import { createBuiltInRegistry, createSubAgentRegistry } from '../src/agent/sub-agents/registry.js'
 
 describe('buildBrowserServerConfig', () => {
@@ -16,9 +16,12 @@ describe('buildBrowserServerConfig', () => {
     const c = buildBrowserServerConfig({}) as { command: string; args: string[] }
     // command differs by platform (cmd /c on win32); the playwright args don't.
     const joined = [c.command, ...c.args].join(' ')
-    expect(joined).toContain('@playwright/mcp')
+    expect(joined).toContain(PLAYWRIGHT_MCP_PACKAGE)
+    expect(joined).not.toContain('@latest')
     expect(joined).toContain('--browser chrome')
     expect(joined).not.toContain('--headless')
+    expect(joined).toContain('--caps vision')
+    expect(joined).not.toContain('--extension')
   })
 
   it('adds --headless and honours the browser channel', () => {
@@ -43,11 +46,11 @@ describe('buildBrowserServerConfig', () => {
     expect(override.args).not.toContain('--output-dir')
   })
 
-  it('appends --caps vision only when vision is requested', () => {
-    const off = buildBrowserServerConfig({}) as { command: string; args: string[] }
+  it('keeps vision capabilities stable by default and supports an explicit tree-only override', () => {
+    const off = buildBrowserServerConfig({ vision: false }) as { command: string; args: string[] }
     expect([off.command, ...off.args].join(' ')).not.toContain('--caps vision')
 
-    const on = buildBrowserServerConfig({}, true) as { command: string; args: string[] }
+    const on = buildBrowserServerConfig({}) as { command: string; args: string[] }
     // adjacent args, surviving the cmd /c wrapper on win32
     expect([on.command, ...on.args].join(' ')).toContain('--caps vision')
   })

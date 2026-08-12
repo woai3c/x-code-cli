@@ -13,13 +13,14 @@ import { tokenizeMemoryText } from '../../knowledge/memory/search-index.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog, isAbortError } from '../../utils.js'
-import { type BrowserMcp, getBrowserMcp } from '../browser/registry.js'
+import { type BrowserMcp, PLAYWRIGHT_MCP_PACKAGE, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
 import { agentLoop } from '../loop.js'
 import { appendUsage } from '../session-store.js'
 import { buildSubAgentSystemPrompt } from '../system-prompt.js'
 import { accumulateChildUsage } from '../usage.js'
+import { pickVisionProvider } from '../vision-fallback.js'
 import { BROWSER_TREE_ONLY_NOTE, BROWSER_VISION_ADDENDUM, BROWSER_VISION_CAPTION_ADDENDUM } from './built-in.js'
 import type { SubAgentRegistry } from './registry.js'
 import type { SubAgentDefinition } from './types.js'
@@ -161,31 +162,38 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     }
   }
 
+  const subModel = resolveSubModel(agentDef, parentOptions, parentModel)
+  const subModelId = agentDef.model ? (resolveModelId(agentDef.model) ?? parentOptions.modelId) : parentOptions.modelId
+
   // The `browser` agent gets a PRIVATE mcp registry (the @playwright/mcp
   // server) in place of the parent's, so its browser tools never enter the
   // main loop's tool surface or any other agent. Connect lazily; if the
   // browser can't start, bail with a helpful message BEFORE announcing a
   // start, rather than running a "browser" agent that has no browser.
   //
-  // Visual browsing (screenshot + coordinate clicks) needs a model that can
-  // SEE the screenshot. We enable it ONLY when the active MODEL is itself
-  // vision-capable (modelSupportsVision — per-model, not per-provider, so a
-  // text-only Qwen-Max on the image-capable alibaba provider still stays
-  // tree-only). A model that can't see images gets no `--caps vision` and is
-  // told not to screenshot, so a tree-only browser task keeps working with no
-  // dependency on any other provider.
-  //
-  // (We do NOT borrow a separate vision model to run the whole browser loop:
-  // that made the entire browser agent hard-depend on the borrowed provider
-  // being funded — a 402 there killed even tree-only tasks — and silently ran
-  // every browser task on a cheaper model. Serving text-only models means
-  // captioning just the screenshot, with an OCR fallback; tracked separately.)
+  // The server launches a stable capability superset, while this agent only
+  // receives visual guidance/tools when either its own model can see images or
+  // a configured caption model can interpret screenshots. That keeps model
+  // switches from restarting Chrome without making tree-only agents depend on
+  // an unavailable vision provider.
   let browserMcp: BrowserMcp | undefined
   let browserVision = false
   if (agentDef.name === 'browser') {
-    browserVision = loadUserConfig().browser?.vision !== false && modelSupportsVision(parentOptions.modelId)
-    debugLog('browser.vision', browserVision ? `enabled on active model ${parentOptions.modelId}` : 'tree-only')
-    browserMcp = await getBrowserMcp(browserVision)
+    try {
+      browserMcp = await getBrowserMcp(parentOptions.abortSignal)
+    } catch (err) {
+      if (isAbortError(err, parentOptions.abortSignal)) {
+        return {
+          resultText: '[Browser agent interrupted before startup]',
+          tokenUsage: zeroUsage(),
+          turnCount: 0,
+          toolCallCount: 0,
+          durationMs: Date.now() - startTime,
+          aborted: true,
+        }
+      }
+      throw err
+    }
     if (!browserMcp.ok) {
       return {
         resultText: browserUnavailableMessage(browserMcp.error),
@@ -196,6 +204,10 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
         aborted: false,
       }
     }
+    const configAllowsVision = loadUserConfig().browser?.vision !== false
+    const canInterpretScreenshot = modelSupportsVision(subModelId) || pickVisionProvider() !== null
+    browserVision = configAllowsVision && browserMcp.vision && canInterpretScreenshot
+    debugLog('browser.vision', browserVision ? `enabled for ${subModelId}` : 'tree-only')
   }
 
   // Notify UI
@@ -218,9 +230,6 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
     },
     parentOptions.abortSignal,
   )
-
-  const subModel = resolveSubModel(agentDef, parentOptions, parentModel)
-  const subModelId = agentDef.model ? (resolveModelId(agentDef.model) ?? parentOptions.modelId) : parentOptions.modelId
 
   // Browser prompt is model-aware. A text-only model can't screenshot at all
   // (explicit "don't screenshot" note). A vision model gets screenshot
@@ -253,6 +262,13 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
   subState.systemPromptCache = subSystemPrompt
 
   const toolFilter = buildToolFilter(agentDef, parentState.permissionMode)
+  if (browserMcp && !browserVision) {
+    for (const entry of browserMcp.registry.list()) {
+      if (entry.rawName === 'browser_take_screenshot' || entry.rawName.startsWith('browser_mouse_')) {
+        toolFilter.deny.push(entry.callableName)
+      }
+    }
+  }
 
   const subOptions: AgentOptions = {
     ...parentOptions,
@@ -505,6 +521,6 @@ function browserUnavailableMessage(error: string | undefined): string {
   return (
     `[browser agent unavailable: ${error ?? 'could not start the browser'}.\n` +
     'Set "browser": { "enabled": true } in ~/.x-code/config.json, ensure Node can run ' +
-    '`npx -y @playwright/mcp@latest`, and that Google Chrome (or the configured browser) is installed.]'
+    `\`npx -y ${PLAYWRIGHT_MCP_PACKAGE}\`, and that Google Chrome (or the configured browser) is installed.]`
   )
 }

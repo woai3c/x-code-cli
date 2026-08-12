@@ -19,7 +19,7 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 | `SessionStart`     | CLI 启动时（UI 挂载前）就 fire 一次。即使用户从不发 prompt 也会触发          | ❌                               | 预热状态、设置环境                        |
 | `UserPromptSubmit` | 用户消息发给模型前                                                           | ✅ allow / deny / inject context | 注入 sprint 信息、敏感词拦截、按主题分流  |
 | `PreToolUse`       | 任何工具派发前（writeFile、shell、MCP、sub-agent…）                          | ✅ allow / deny / modify args    | 拦截危险路径、重写参数、审计 gate         |
-| `PostToolUse`      | 工具产出结果后                                                               | ✅ modify output                 | 改写工具返回值、追加审计元数据            |
+| `PostToolUse`      | 支持的工具派发完成并产出结果后                                               | ✅ modify output                 | 改写工具返回值、追加审计元数据            |
 | `PreCompact`       | 上下文将要被压缩前（proactive 阈值触发，或 reactive "prompt too long" 触发） | ❌                               | 在 messages 被裁剪前持久化、做 checkpoint |
 | `PostCompact`      | 压缩完成后                                                                   | ❌                               | 通知、记录"刚刚压了多少"                  |
 | `SubagentStart`    | `task` 工具派生 sub-agent 跑前                                               | ❌                               | 审计哪些 sub-agent 被调用、记开始时间     |
@@ -28,6 +28,8 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 | `SessionEnd`       | CLI 退出时                                                                   | ❌                               | flush 日志、发"会话结束"提示              |
 
 `SessionEnd` 是 fire-and-forget——CLI 不等 hook 完成就退。重要操作放 `TurnComplete`。
+
+`PostToolUse` 目前还没有覆盖所有 tool result 路径。它会在 `writeFile` / `edit` / `shell`、`browserVisualCheck` 和 MCP 调用完成后触发；SDK 自动执行的读取/搜索工具、`askUser` / `task` / MCP resource 等 bypass handler，以及权限拒绝、中断或抛异常后生成的合成结果暂不触发。
 
 ---
 
@@ -152,7 +154,7 @@ Hook 用 stdout 回一行 JSON。stdout 为空 = 默认 `allow`（大部分 fire
 // 默认：agent 正常走
 { "decision": "allow" }
 
-// 附加 context（UserPromptSubmit / PostToolUse）
+// 附加 context（仅 UserPromptSubmit）
 { "decision": "allow", "context": "Current sprint: Sprint 42" }
 
 // 阻止 agent 做这件事
@@ -161,7 +163,6 @@ Hook 用 stdout 回一行 JSON。stdout 为空 = 默认 `allow`（大部分 fire
 // 改写参数（PreToolUse）/ 改写输出（PostToolUse）
 { "decision": "modify", "args": { "path": "/safer/path" } }
 { "decision": "modify", "output": "[redacted]" }
-{ "decision": "modify", "context": "Sprint 42 in progress" }
 ```
 
 实际生效情况：
@@ -186,6 +187,8 @@ Hook 用 stdout 回一行 JSON。stdout 为空 = 默认 `allow`（大部分 fire
 Hook 崩溃、超时或非零退出，默认按 `allow` 处理，warning 写到 `~/.x-code/logs/debug.log`（要先 `DEBUG_STDOUT=1` 或 `xc --plugin-debug` —— 后者只镜像 `plugins.` / `hooks.` / `marketplace.` 标签的行，更安静）。
 
 某个 hook 设 `"failurePolicy": "block"` 才会把非零退出当 `deny`。只给真的想做严格 gate 的 hook 用——默认 allow 是为了保证坏 hook 不会卡死 agent。
+
+真正能阻断行为的只有 `UserPromptSubmit` 与 `PreToolUse`；`PostToolUse` 执行时工具已经结束，fire-and-forget 事件则会忽略 stdout 决策。
 
 30s 是 timeout 的硬上限，不是默认值。默认 5s。需要长时间任务的话，hook 应该 spawn 后台进程然后立即返回。
 

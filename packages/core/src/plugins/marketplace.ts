@@ -346,12 +346,12 @@ async function writeKnownMarketplaces(km: KnownMarketplaces): Promise<void> {
   await fs.writeFile(file, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
 }
 
-/** Ensure the default marketplace subscriptions exist. Called from CLI
+/** Ensure the default marketplace subscription exists. Called from CLI
  *  startup so a fresh install lands with Anthropic's official
  *  marketplace pre-subscribed and `/plugin search` returns hits without
- *  the user having to manually add anything. Idempotent — never
- *  overwrites an existing entry, so a user who removed the
- *  subscription stays unsubscribed.
+ *  the user having to manually add anything. Idempotent for the named
+ *  entry: unrelated subscriptions are preserved, while a removed default
+ *  is restored on the next call.
  *
  *  Target is `anthropics/claude-plugins-official` (203 plugins) rather
  *  than the smaller bundled marketplace in `anthropics/claude-code`

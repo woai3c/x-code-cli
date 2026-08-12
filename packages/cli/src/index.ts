@@ -298,11 +298,10 @@ async function main() {
     setPluginDebugMirror(true)
   }
 
-  // First-run seed: writes the default `anthropic-marketplace`
-  // subscription to known_marketplaces.json if no subscription file
-  // exists yet. Idempotent — a user who explicitly removed the
-  // subscription won't get it back. Done before loadAllPlugins so the
-  // first run sees a populated marketplaces list.
+  // Ensure the default `anthropic-marketplace` subscription is present.
+  // Unrelated subscriptions are preserved; removing the default only lasts
+  // until the next startup. Done before loadAllPlugins so the first run sees
+  // a populated marketplaces list.
   if (argv.plugins !== false) {
     await ensureDefaultMarketplaces().catch((err) => debugLog('plugins.ensure-defaults-failed', String(err)))
   }
@@ -379,6 +378,7 @@ async function main() {
     // without restart via useAgent's setThinking.
     thinking: userConfig.thinking ?? false,
     toolProfile: userConfig.experimentalToolProfile === 'standard' ? 'standard' : 'full',
+    browserVisualCheckEnabled: userConfig.browser?.visualCheck !== false,
     // Plan mode is session-scoped (matches Claude Code) — only the
     // `--plan` CLI flag opts in at startup. Mid-session toggles via
     // /plan don't persist, so each new launch starts in 'default'

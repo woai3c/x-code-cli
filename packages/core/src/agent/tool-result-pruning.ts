@@ -8,16 +8,24 @@
 // compounding dominates the token bill (a tree-only task can still burn tens of
 // thousands of tokens just from accumulated snapshots).
 //
-// This collapses every-but-the-latest result of the named tools to a short
-// text placeholder, in place, before the request is built. Borrowed from
-// gemini-cli's `supersedeSnapshots` (onBeforeTurn) idea. Scoped via
-// AgentOptions.collapseStaleToolResults so it only runs for the browser agent.
+// This collapses superseded or already-consumed results to short text
+// placeholders in place before the request is built. Borrowed from gemini-cli's
+// `supersedeSnapshots` (onBeforeTurn) idea. Browser sub-agents keep the newest
+// full-page state; the root one-shot check is dropped as soon as a later
+// assistant message proves the image has already been inspected.
 import type { ModelMessage } from 'ai'
 
 type ToolResultPartLike = {
   type?: string
   toolName?: string
   output?: { type?: string; value?: unknown }
+}
+
+function collapsePart(part: ToolResultPartLike, suffix: string, reason: string): void {
+  const placeholder = `[${reason} ${suffix} result dropped to save context.]`
+  const out = part.output
+  if (out?.type === 'text' && out.value === placeholder) return
+  part.output = { type: 'text', value: placeholder }
 }
 
 /** Replace the output of all-but-the-latest tool-result for each tool whose
@@ -48,10 +56,30 @@ export function collapseStaleToolResults(messages: ModelMessage[], toolSuffixes:
       if (!suf) continue
       if (lastIdx.get(suf) === i) continue // keep the most recent result intact
 
-      const placeholder = `[Older ${suf} result dropped to save context — only the most recent is kept.]`
-      const out = part.output
-      if (out?.type === 'text' && out.value === placeholder) continue // already collapsed
-      part.output = { type: 'text', value: placeholder }
+      collapsePart(part, suf, 'Older')
+    }
+  })
+}
+
+/** Collapse matching tool results that a later assistant message has already
+ *  consumed. A result immediately awaiting the model has no later assistant
+ *  message and remains intact for exactly the request that needs to see it. */
+export function collapseConsumedToolResults(messages: ModelMessage[], toolSuffixes: readonly string[]): void {
+  if (toolSuffixes.length === 0) return
+
+  let latestAssistantIndex = -1
+  messages.forEach((message, index) => {
+    if (message.role === 'assistant') latestAssistantIndex = index
+  })
+  if (latestAssistantIndex < 0) return
+
+  messages.forEach((message, index) => {
+    if (index >= latestAssistantIndex || message.role !== 'tool' || !Array.isArray(message.content)) return
+    for (const part of message.content as ToolResultPartLike[]) {
+      if (part.type !== 'tool-result') continue
+      const name = part.toolName ?? ''
+      const suffix = toolSuffixes.find((candidate) => name.endsWith(candidate))
+      if (suffix) collapsePart(part, suffix, 'Consumed')
     }
   })
 }

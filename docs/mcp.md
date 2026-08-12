@@ -32,10 +32,10 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 
 ## 配置文件位置
 
-| Scope | 路径                         | 何时用                                     |
-| ----- | ---------------------------- | ------------------------------------------ |
-| 用户  | `~/.x-code/config.json`      | 个人通用 MCP 服务（filesystem、github 等） |
-| 项目  | `<repo>/.x-code/config.json` | 仅此项目的 MCP 服务（公司内部 server 等）  |
+| Scope | 路径                        | 何时用                                     |
+| ----- | --------------------------- | ------------------------------------------ |
+| 用户  | `~/.x-code/config.json`     | 个人通用 MCP 服务（filesystem、github 等） |
+| 项目  | `<cwd>/.x-code/config.json` | `xc` 启动目录使用的 MCP 服务               |
 
 两个 scope 合并：项目级覆盖同名用户级。**项目级配置首次出现时弹"是否信任"对话框**（同 Claude Code 的安全模型），用户拒绝则跳过项目级。信任决定持久化到 `~/.x-code/trusted-projects.json`。
 
@@ -52,7 +52,7 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
   "mcpServers": {
     "filesystem": {
       "command": "npx", // 必需
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${env:WORK_DIR}"],
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${WORK_DIR}"],
       "env": {
         // 可选：额外环境变量
         "DEBUG": "1",
@@ -89,18 +89,18 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 
 ### 环境变量展开
 
-任何字段值里的 `${VAR}` 与 `${env:VAR}` 会被启动期展开成 `process.env.VAR`。变量不存在时报错并将该 server 标记为 `failed`（不影响其他 server）。
+任何字符串字段里的 `${VAR}` 会在启动时从 `process.env` 展开；`${VAR:-fallback}` 可以提供字面 fallback。没有 fallback 的变量不存在时，该 server 会标记为 `failed`（不影响其他 server）。`${env:VAR}` 只属于 Hook 变量语法，在 MCP 配置中不会展开。
 
 ```jsonc
 {
   "github": {
-    "url": "${env:GITHUB_MCP_URL}",
-    "headers": { "Authorization": "Bearer ${env:GITHUB_TOKEN}" },
+    "url": "${GITHUB_MCP_URL}",
+    "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" },
   },
 }
 ```
 
-> **提示**：含密钥的字段强烈推荐用 `${env:...}`，把密钥放进 shell 启动文件而非提交到 git 的 config.json。
+> **提示**：含密钥的字段强烈推荐用 `${VAR}`，把密钥放进 shell 启动文件而非提交到 git 的 config.json。
 
 ---
 
@@ -135,7 +135,7 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
 - `filesystem__read_file`
 - `github__create_issue`
 
-两个 server 都暴露同名工具时，第二个会自动追加哈希后缀避免冲突（如 `read_file_a3f2`），并写日志说明。
+模型侧工具名会先清理非法字符并限制为 64 字符；如果最终名称仍冲突，第二个会自动追加哈希后缀（如 `foo_bar__read_file_a3f2`）。
 
 ---
 
@@ -165,7 +165,7 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
       "command": "node",
       "args": ["D:/tools/company-mcp/index.js"],
       "env": {
-        "API_KEY": "${env:COMPANY_API_KEY}",
+        "API_KEY": "${COMPANY_API_KEY}",
         "ENDPOINT": "https://internal.corp/api",
       },
       "cwd": "D:/tools/company-mcp",
@@ -180,7 +180,7 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
 {
   "mcpServers": {
     "linear": {
-      "url": "https://mcp.linear.app/sse",
+      "url": "https://mcp.linear.app/mcp",
     },
   },
 }
@@ -232,4 +232,4 @@ Plugin 可以在 manifest 里声明 `mcpServers`（inline 或 path 形式），�
 
 ## 与 Claude Code MCP 配置的兼容性
 
-X-Code CLI 的 `mcpServers` schema 与 Claude Code 一致——你可以直接把 Claude Code 的 `~/.claude/config.json` 里的 `mcpServers` 段复制到 `~/.x-code/config.json`。一份配置两边都能跑。
+X-Code CLI 支持上文列出的常见 Claude Code `mcpServers` 字段。兼容条目可以复制到 `~/.x-code/config.json`，但两边 schema 并不完全相同：X-Code 的 stdio 配置只接受 `command` / `args` / `env` / `cwd`，HTTP 配置只接受 `url` / `headers`，两者另支持 `timeout` 与 `enabled`。复制后用 `/mcp list` 检查不支持或格式错误的条目。

@@ -1,11 +1,10 @@
-// @x-code-cli/cli — /browser slash command: toggle the browser sub-agent.
+// @x-code-cli/cli — /browser slash command: toggle the interactive browser agent.
 //
-// Browser automation is opt-in, like every comparable CLI (claude-code's
+// Interactive browser automation is opt-in, like every comparable CLI (claude-code's
 // --chrome / CLAUDE_CODE_ENABLE_CFC, gemini's settings override, codex's plugin
-// install). `/browser on` registers the browser agent in place and persists
-// config.browser.enabled; `/browser off` removes it and closes any running
-// browser. Both invalidate the system prompt cache because the task tool's
-// agent list — part of the byte-stable prefix — just changed.
+// install). `/browser on|off` controls the browser agent; `/browser check-on`
+// and `/browser check-off` control the independent one-shot local visual check.
+// The shared browser closes only when both consumers are off.
 import { loadUserConfig, saveUserConfig, shutdownBrowserMcp } from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
 
@@ -20,6 +19,7 @@ export function createBrowserCommandHandler(deps: BrowserCommandDeps) {
   const { options, addCommandMessage, addCommandResult, invalidateSystemPromptCache } = deps
 
   const isOn = (): boolean => options.subAgentRegistry?.names().includes('browser') ?? false
+  const isVisualCheckOn = (): boolean => options.browserVisualCheckEnabled !== false
 
   async function handleBrowser(text: string, arg: string): Promise<void> {
     const sub = arg.trim().toLowerCase()
@@ -27,15 +27,34 @@ export function createBrowserCommandHandler(deps: BrowserCommandDeps) {
     if (sub === '' || sub === 'status') {
       addCommandMessage(
         text,
-        isOn()
-          ? 'Browser agent is ON. Ask anything that needs a live browser — the model delegates to it automatically. Turn off with /browser off.'
-          : 'Browser agent is OFF. Enable with /browser on (needs Node + a browser; first use runs `npx @playwright/mcp`).',
+        `Interactive Browser Use is ${isOn() ? 'ON' : 'OFF'}; automatic local visual checks are ${isVisualCheckOn() ? 'ON' : 'OFF'}.`,
       )
       return
     }
 
-    if (sub !== 'on' && sub !== 'off') {
-      addCommandMessage(text, 'Usage: /browser [on|off]')
+    if (sub !== 'on' && sub !== 'off' && sub !== 'check-on' && sub !== 'check-off') {
+      addCommandMessage(text, 'Usage: /browser [on|off|check-on|check-off]')
+      return
+    }
+
+    if (sub === 'check-on' || sub === 'check-off') {
+      const enable = sub === 'check-on'
+      if (enable === isVisualCheckOn()) {
+        addCommandMessage(text, `Automatic local visual checks are already ${enable ? 'ON' : 'OFF'}.`)
+        return
+      }
+
+      saveUserConfig({ browser: { ...loadUserConfig().browser, visualCheck: enable } })
+      options.browserVisualCheckEnabled = enable
+      invalidateSystemPromptCache()
+
+      if (!enable && !isOn()) await shutdownBrowserMcp().catch(() => undefined)
+      addCommandMessage(text, `Automatic local visual checks ${enable ? 'ON' : 'OFF'} — saved.`)
+      addCommandResult(
+        enable
+          ? 'The root agent can now capture one temporary-tab screenshot of localhost after significant visual changes. Browser Use remains independently controlled by /browser on.'
+          : `The root visual-check tool is disabled.${isOn() ? ' The managed browser remains open for interactive Browser Use.' : ' Closed the managed browser (if running).'}`,
+      )
       return
     }
 
@@ -46,7 +65,7 @@ export function createBrowserCommandHandler(deps: BrowserCommandDeps) {
 
     const enable = sub === 'on'
     if (enable === isOn()) {
-      addCommandMessage(text, `Browser agent is already ${enable ? 'ON' : 'OFF'}.`)
+      addCommandMessage(text, `Interactive browser agent is already ${enable ? 'ON' : 'OFF'}.`)
       return
     }
 
@@ -61,17 +80,16 @@ export function createBrowserCommandHandler(deps: BrowserCommandDeps) {
     invalidateSystemPromptCache()
 
     if (enable) {
-      addCommandMessage(text, 'Browser agent ON — saved.')
+      addCommandMessage(text, 'Interactive browser agent ON — saved.')
       addCommandResult(
-        'The model can now delegate live-browser tasks on its own. First use launches the browser via `npx @playwright/mcp` (needs Node + Chrome; ~tens of seconds the first time).\n' +
+        'The model can now delegate clicking, typing, login, and other multi-step browser tasks. It reuses the managed Chrome used by visual checks; no extension is required. First browser use launches it via `npx @playwright/mcp` (needs Node + Chrome; ~tens of seconds the first time).\n' +
           'The next message rebuilds the system prompt, so prompt-cache will miss once.',
       )
     } else {
-      // Close any running browser MCP subprocess so we don't leak a browser.
-      await shutdownBrowserMcp().catch(() => undefined)
-      addCommandMessage(text, 'Browser agent OFF — saved.')
+      if (!isVisualCheckOn()) await shutdownBrowserMcp().catch(() => undefined)
+      addCommandMessage(text, 'Interactive browser agent OFF — saved.')
       addCommandResult(
-        'Closed the browser (if running). The next message rebuilds the system prompt, so prompt-cache will miss once.',
+        `${isVisualCheckOn() ? 'The managed browser stays available for automatic local visual checks.' : 'Closed the managed browser (if running).'} The next message rebuilds the system prompt, so prompt-cache will miss once.`,
       )
     }
   }

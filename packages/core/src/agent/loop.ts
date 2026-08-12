@@ -22,6 +22,7 @@ import { applyCacheControl } from '../providers/cache-control.js'
 import { setZhipuReasoningEffort } from '../providers/registry.js'
 import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { createActivateSkillTool } from '../tools/activate-skill.js'
+import { BROWSER_VISUAL_CHECK_TOOL_NAME, browserVisualCheck } from '../tools/browser-visual-check.js'
 import { createGetGoalTool } from '../tools/get-goal.js'
 import { toolRegistry, truncateToolResult } from '../tools/index.js'
 import { createMemorySearchTool } from '../tools/memory-search.js'
@@ -67,7 +68,7 @@ import {
   formatSkillCapabilities,
 } from './system-prompt.js'
 import { isManagedMemoryAccess, processToolCalls } from './tool-execution.js'
-import { collapseStaleToolResults } from './tool-result-pruning.js'
+import { collapseConsumedToolResults, collapseStaleToolResults } from './tool-result-pruning.js'
 import { repairOrphanToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
 import { buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
 import { accumulateUsage, attributedModelId, normalizeLanguageModelUsage } from './usage.js'
@@ -476,6 +477,12 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
     tools.task = createTaskTool(options.subAgentRegistry)
   }
 
+  // The root agent gets default-on one-shot local screenshot QA independently
+  // from the opt-in interactive browser agent. Sub-agents never receive it.
+  if (!options.toolFilter && options.browserVisualCheckEnabled !== false) {
+    tools[BROWSER_VISUAL_CHECK_TOOL_NAME] = browserVisualCheck
+  }
+
   if (options.skillRegistry && options.skillRegistry.names().length > 0) {
     tools.activateSkill = createActivateSkillTool(options.skillRegistry)
   }
@@ -586,11 +593,17 @@ async function runTurnAttempt(
   // Idempotent — running every turn is cheap and bulletproof.
   repairOrphanToolCalls(state.messages)
 
-  // Collapse stale, fully-superseding tool results (browser snapshots /
-  // screenshots) to placeholders before the request is built, so only the
-  // latest of each is billed. No-op unless the agent opted in (browser only).
-  if (options.collapseStaleToolResults?.length) {
-    collapseStaleToolResults(state.messages, options.collapseStaleToolResults)
+  // Browser sub-agents keep only their latest snapshot/screenshot. The root
+  // visual-check image is even shorter-lived: once a later assistant message
+  // proves the model has inspected it, replace it before any subsequent call.
+  const collapsibleToolResults = options.toolFilter
+    ? options.collapseStaleToolResults
+    : [...new Set([...(options.collapseStaleToolResults ?? []), BROWSER_VISUAL_CHECK_TOOL_NAME])]
+  if (collapsibleToolResults?.length) {
+    collapseStaleToolResults(state.messages, collapsibleToolResults)
+  }
+  if (!options.toolFilter) {
+    collapseConsumedToolResults(state.messages, [BROWSER_VISUAL_CHECK_TOOL_NAME])
   }
 
   // Chat Completions providers keep the tool role text-only and receive raw

@@ -210,6 +210,9 @@ export interface AgentOptions {
   /** Experimental tool-surface policy. Defaults to full; standard is honored
    *  only for an explicit allowlist of validated strong models. */
   toolProfile?: 'full' | 'standard'
+  /** Whether the root agent may run one-shot local browser visual checks.
+   *  Defaults true and is independent from the interactive browser sub-agent. */
+  browserVisualCheckEnabled?: boolean
   /** Initial permission mode for the session. Defaults to 'default'.
    *  Set from `--plan` CLI flag or `loadUserConfig().permissionMode`. */
   permissionMode?: PermissionMode

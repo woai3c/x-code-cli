@@ -48,9 +48,11 @@ const WEAK_MODEL_PATTERNS = [
  *  shell, grep, glob, listDir) plus task / askUser / plan-mode controls stay
  *  directly loaded — they're used on nearly every task and hiding them behind a
  *  search round-trip would hurt far more than the few hundred tokens it saves.
- *  These five are genuinely occasional. Mirrors Claude Code, which marks
- *  WebSearch / WebFetch / TodoWrite (and background-shell-style helpers) as
- *  shouldDefer while keeping file / grep / exec direct. */
+ *  These are genuinely occasional. Mirrors Claude Code, which marks WebSearch
+ *  / WebFetch / TodoWrite (and background-shell-style helpers) as shouldDefer
+ *  while keeping file / grep / exec direct. The small browserVisualCheck
+ *  composite stays direct because deferring it would add a whole model round
+ *  to the common post-frontend-edit verification path. */
 export const DEFERRED_BUILTIN_TOOLS = ['webSearch', 'webFetch', 'todoWrite', 'shellOutput', 'killShell'] as const
 
 const STANDARD_DEFERRED_BUILTIN_TOOLS = ['task', 'webSearch', 'webFetch', 'shellOutput', 'killShell'] as const

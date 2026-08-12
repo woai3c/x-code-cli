@@ -2,7 +2,7 @@
 
 Marketplace 是一个**插件索引**——一个 JSON 文件（一个 URL），列出 `{ name, source }` 条目指向插件实际所在的 git repo 或本地路径。Marketplace 不托管插件代码，它是目录。
 
-x-code 不自己运营 marketplace。它只**订阅**别人的 marketplace。Marketplace.json schema 与 Claude Code 字节级兼容，所以订阅 Anthropic 官方 marketplace 开箱即用。
+x-code 不自己运营 marketplace，只**订阅**其他 marketplace。它支持常见的 Claude Code marketplace schema 与 source 形式，包括 Anthropic 官方目录。
 
 英文版：[marketplace.en.md](./marketplace.en.md) · 相关：[plugins.md](./plugins.md) · [plugin-authoring.md](./plugin-authoring.md)
 
@@ -10,13 +10,13 @@ x-code 不自己运营 marketplace。它只**订阅**别人的 marketplace。Mar
 
 ## 开箱默认有什么
 
-x-code 首次启动 CLI **或首次跑任何 `xc plugin …` 子命令时**自动写一条订阅：
+x-code 启动 CLI **或运行任何 `xc plugin …` 子命令时**，都会确保下面这条订阅存在：
 
-| 名字                    | 源                                          | 说明                                                        |
-| ----------------------- | ------------------------------------------- | ----------------------------------------------------------- |
-| `anthropic-marketplace` | `github:anthropics/claude-plugins-official` | Anthropic 官方 Claude Code marketplace（200+ 插件），保留名 |
+| 名字                    | 源                                          | 说明                                           |
+| ----------------------- | ------------------------------------------- | ---------------------------------------------- |
+| `anthropic-marketplace` | `github:anthropics/claude-plugins-official` | Anthropic 官方 Claude Code marketplace，保留名 |
 
-如果你用 `/plugin marketplace remove anthropic-marketplace` 删掉了，后续启动**不会自动重加**（详见 [幂等性](#幂等性)）。
+如果用 `/plugin marketplace remove anthropic-marketplace` 删除它，下次启动 CLI 或执行 `xc plugin …` 时会再次添加（详见 [幂等性](#幂等性)）。
 
 ---
 
@@ -82,7 +82,7 @@ under github:anthropics/* may use it. Got: github:bad/marketplace
 
 ## marketplace.json schema
 
-x-code 用 Anthropic 公开的 Claude Code marketplace schema——你写的文件可以被 Claude Code 直接用。文件位置约定：repo 的 **`.claude-plugin/marketplace.json`**。
+x-code 遵循常见的公开 Claude Code marketplace 结构。repo 内首选 **`.claude-plugin/marketplace.json`**，也接受根目录的 `marketplace.json` 作为 fallback。
 
 参考真实文件：`anthropics/claude-code` 与 `anthropics/claude-plugins-official`。
 
@@ -124,7 +124,7 @@ x-code 用 Anthropic 公开的 Claude Code marketplace schema——你写的文�
 
 ### 源（source）允许的形式
 
-x-code 接受 Anthropic Claude Code 的全部 wire 形式（见 anthropics/claude-code、anthropics/claude-plugins-official 真实 marketplace.json）：
+x-code 接受下表这些 source 形式，覆盖 Claude Code marketplace 常见写法：
 
 | 形式                                                                                                      | 说明                                                                                                                              |
 | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -197,32 +197,28 @@ CLI 用 `fetch()` 拉取。适合企业内部 marketplace——可按 VPN 服务
 
 ## 幂等性
 
-`ensureDefaultMarketplaces()`（首次启动 CLI 或首次跑 `xc plugin …` 子命令时写 `anthropic-marketplace` 默认订阅的函数）会先检查 `known_marketplaces.json`，任何条目存在就跳过。**文件一旦存在就不会被覆盖**——所以删掉默认订阅在重启间保留。
-
-之后想要回来：`xc plugin marketplace add anthropic-marketplace github:anthropics/claude-plugins-official`。
+`ensureDefaultMarketplaces()` 只检查有没有名为 `anthropic-marketplace` 的条目：已存在就不改；不存在就补上，同时保留其他订阅。因此单独删除默认条目只是临时的，下次启动 CLI 或执行 `xc plugin …` 时会恢复。目前在启用插件系统的情况下没有持久化 opt-out。
 
 ---
 
 ## 与 Claude Code 的兼容性
 
-Anthropic 官方 Claude Code marketplace 发布的 `marketplace.json` 用的就是上面描述的 schema。x-code 直接读，不需要翻译。任何第三方 Claude Code marketplace 也一样——x-code 订阅后能正常工作，只要里面列的插件用：
+Anthropic 官方 Claude Code marketplace 使用了上文的常见字段和 source 形式，x-code 可以直接读取。第三方目录或插件可能使用额外的 Claude Code 能力，安装后应通过 `/plugin info`、`/plugin doctor` 与 `/mcp list` 检查。插件 manifest 的探测顺序是：
 
-- `.claude-plugin/plugin.json`
 - `.x-code-plugin/plugin.json`
+- `.claude-plugin/plugin.json`
 - `plugin.json`
 
-之一作为 manifest（x-code 按这个优先级探测三个路径）。
-
-只用 Claude Code 独有 manifest 字段（`output-styles`、`lspServers`）的插件能正常装，那两个字段会被静默忽略。
+未知顶层 manifest 字段（包括 `output-styles`、`lspServers`）会被忽略，对应能力不会在 x-code 中激活。
 
 ---
 
 ## 故障排查
 
-| 症状                                | 处理                                                                    |
-| ----------------------------------- | ----------------------------------------------------------------------- |
-| `add` 报 "reserved"                 | 名字是 [保留名](#保留名) 且源不匹配。换别的名字                         |
-| `refresh` 失败 HTTP error           | URL 错了，或者 git repo 根目录没有 `marketplace.json`                   |
-| `info` 报 "no cached index"         | 先 `refresh`                                                            |
-| `search` 找不到已知插件             | 跑 `refresh`——索引可能 stale，或者该插件根本不在你订阅的 marketplace 里 |
-| 想从 Claude Code marketplace 迁过来 | 它默认就订阅了。`xc plugin install <name>@anthropic-marketplace` 即可   |
+| 症状                                | 处理                                                                                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| `add` 报 "reserved"                 | 名字是 [保留名](#保留名) 且源不匹配。换别的名字                                            |
+| `refresh` 失败 HTTP / index error   | 检查 URL，并确认 git repo 有 `.claude-plugin/marketplace.json` 或根目录 `marketplace.json` |
+| `info` 报 "no cached index"         | 先 `refresh`                                                                               |
+| `search` 找不到已知插件             | 跑 `refresh`——索引可能 stale，或者该插件根本不在你订阅的 marketplace 里                    |
+| 想从 Claude Code marketplace 迁过来 | 它默认就订阅了。`xc plugin install <name>@anthropic-marketplace` 即可                      |

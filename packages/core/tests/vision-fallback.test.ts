@@ -89,6 +89,10 @@ describe('pickVisionProvider', () => {
 })
 
 describe('caption usage', () => {
+  beforeEach(() => {
+    vi.mocked(generateText).mockReset()
+  })
+
   it('reports provider usage once and does not report again on a cache hit', async () => {
     const usage = {
       inputTokens: 12,
@@ -109,5 +113,19 @@ describe('caption usage', () => {
     expect(generateText).toHaveBeenCalledOnce()
     expect(onUsage).toHaveBeenCalledOnce()
     expect(onUsage).toHaveBeenCalledWith({ modelId: 'google:actual-vision', usage })
+  })
+
+  it('does not reuse a caption generated for a different prompt', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'caption',
+      usage: { inputTokens: 1, outputTokens: 1 },
+      response: { modelId: 'actual-vision' },
+    } as any)
+    const buffer = Buffer.from(`prompt-specific-image-${Date.now()}`)
+
+    await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { prompt: 'Describe layout.' })
+    await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { prompt: 'Report defects.' })
+
+    expect(generateText).toHaveBeenCalledTimes(2)
   })
 })

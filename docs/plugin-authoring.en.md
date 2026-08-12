@@ -3,8 +3,8 @@
 A plugin is a directory with a manifest at the root. This page is the
 schema reference plus the layout conventions x-code expects.
 
-See also: [Plugins user guide](plugins.md) · [Hooks](hooks.md) ·
-[Marketplace](marketplace.md)
+See also: [Plugins user guide](plugins.en.md) · [Hooks](hooks.en.md) ·
+[Marketplace](marketplace.en.md)
 
 ---
 
@@ -45,16 +45,16 @@ In order:
 3. `plugin.json` ← tolerated
 
 If only `gemini-extension.json` is present, install is rejected with a
-pointer to this page. (See [plugins.md § Compatibility](plugins.md).)
+pointer to this page. (See [plugins.en.md § Compatibility](plugins.en.md).)
 
 ---
 
 ## Manifest reference
 
-Every field is optional except `name` and `version`. Unknown top-level
-fields are silently dropped, so plugins authored for Claude Code with
-fields like `output-styles` or `lspServers` install cleanly — the
-unsupported parts just don't activate.
+Only `name` is required. If `version` is omitted, X-Code uses `0.0.0` for
+installation records and cache paths. Unknown top-level fields are silently
+dropped, so unsupported contributions such as `output-styles` or `lspServers`
+do not activate.
 
 ```jsonc
 {
@@ -66,7 +66,7 @@ unsupported parts just don't activate.
   "name": "linear", // [a-z0-9][a-z0-9-]* — used as
   // a filesystem-safe path component
   // on every OS
-  "version": "1.2.0", // semver string; not enforced
+  "version": "1.2.0", // optional; defaults to "0.0.0"; semver is not enforced
 
   "description": "Linear issue integration",
   "author": {
@@ -95,9 +95,8 @@ unsupported parts just don't activate.
   // OR the raw record inline. Inline form shown:
   "mcpServers": {
     "linear": {
-      "command": "node",
-      "args": ["${pluginDir}/server.js"],
-      "env": { "LINEAR_API_KEY": "${env:LINEAR_API_KEY}" },
+      "command": "npx",
+      "args": ["-y", "@example/linear-mcp"],
     },
   },
 
@@ -147,7 +146,7 @@ unsupported parts just don't activate.
 ### Field-level notes
 
 - **`name`** — lowercase letters, digits, dashes. Must start with a
-  letter or digit. The same rule applies in Claude Code / Codex.
+  letter or digit.
 - **`skills`** / **`agents`** / **`commands`** — paths to the
   respective directories. **Most Claude Code plugins omit these
   fields**; the loader auto-detects `skills/` / `agents/` / `commands/`
@@ -157,13 +156,17 @@ unsupported parts just don't activate.
   `$ARGUMENTS` and `${CLAUDE_PLUGIN_ROOT}` substitution. The same
   `/<name>` slash command can also be defined directly in
   `~/.x-code/commands/<name>.md` (user scope) or
-  `<repo>/.x-code/commands/<name>.md` (project scope) — precedence is
+  `<cwd>/.x-code/commands/<name>.md` (project scope) — precedence is
   **project > plugin > user** (see the "Custom slash commands"
   feature bullet in the README).
 - **`mcpServers`** — path or inline object. When unset, the loader
   auto-detects `.mcp.json` (Claude Code convention) or `mcp.json`.
-  Per-server schema matches `~/.x-code/config.json`; variables
-  (`${pluginDir}`, `${env:NAME}`, …) expand at server-launch time.
+  Per-server schema follows `~/.x-code/config.json`; environment references
+  use `${NAME}` or `${NAME:-fallback}`. Saved `userConfig` values are injected
+  directly into stdio server environments, so they should not be repeated as
+  `${NAME}` entries. X-Code does not inject a plugin-root variable into MCP
+  args; use an installed executable/package or a user-configured path for a
+  bundled server.
 - **`hooks`** — path or inline object. When unset, the loader
   auto-detects `hooks/hooks.json`. See [hooks.en.md](hooks.en.md) for
   the event list and decision JSON.
@@ -207,7 +210,8 @@ makes plugins easier to read.
 2. `xc plugin install ./my-plugin` — copies into
    `~/.x-code/plugins/cache/local/<name>/<version>/` and records the
    install.
-3. Restart `xc` to pick up your contributions.
+3. In an open session, run `/plugin refresh` to pick up contributions; starting
+   a new `xc` session also loads them.
 4. Iterate. Re-running `xc plugin install ./my-plugin` over the same
    plugin overwrites the cache (same-version reinstall is supported);
    bump the manifest version to install as a separate version.
@@ -238,7 +242,7 @@ crashing the CLI — your tests should cover that path too.
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name` rejected with regex error            | Use lowercase letters, digits, dashes only. No underscores, no uppercase.                                                                                                                                                                                               |
 | Hook never fires                            | Run `/plugin refresh` after install (in-session hot reload, no restart needed) — or restart `xc`. Verify via `xc --plugin-debug` and look for `hooks.exec-ran` entries in `~/.x-code/logs/debug.log`.                                                                   |
-| `${pluginDir}` not expanded                 | Only expanded inside hook commands and slash command templates. For MCP server args / env, the MCP loader does its own `${VAR}` expansion (env vars only — see `packages/core/src/mcp/expand-env.ts`).                                                                  |
+| Plugin path variable not expanded           | Hooks use `${pluginDir}` / `${pluginDataDir}`; slash command templates use `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`. MCP args and env only expand `${VAR}` / `${VAR:-fallback}` from process env and have no plugin-root variable.                             |
 | `${pluginDataDir}` write fails              | Auto-created at `~/.x-code/plugins/data/<sanitised-plugin-id>/`, preserved across versions. First substitution does `mkdir -p`; permission errors surface in the shell. **Don't** write persistent data to `${pluginDir}` — it gets wiped on every reinstall / upgrade. |
 | Plugin loads but contributions don't appear | Run `/plugin info <id>` to confirm the manifest was parsed and the contribution paths exist on disk.                                                                                                                                                                    |
-| Want to release publicly                    | Publish to a marketplace.json that lists your plugin's git URL; tell users to `xc plugin marketplace add <name> <source>`. See [marketplace.md](marketplace.md).                                                                                                        |
+| Want to release publicly                    | Publish to a marketplace.json that lists your plugin's git URL; tell users to `xc plugin marketplace add <name> <source>`. See [marketplace.en.md](marketplace.en.md).                                                                                                  |

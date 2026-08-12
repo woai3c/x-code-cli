@@ -54,7 +54,7 @@ description: 按公司清单审查改动（被 agent 拿来判断是否激活时
 ...
 ```
 
-frontmatter 只接受两个字段：
+frontmatter 必须包含下面两个字段；其他未知字段会被忽略：
 
 - `name`（必需）：与目录名一致；激活命令就是 `/<name>`
 - `description`（必需）：一句话描述，agent 会读它来决定是否在合适场景主动激活
@@ -69,12 +69,12 @@ frontmatter 只接受两个字段：
 
 ## Skills 存放位置
 
-| Scope | 路径                                    | 何时用               |
-| ----- | --------------------------------------- | -------------------- |
-| 用户  | `~/.x-code/skills/<name>/SKILL.md`      | 个人通用工作流       |
-| 项目  | `<repo>/.x-code/skills/<name>/SKILL.md` | 仅此项目使用的工作流 |
+| Scope | 路径                                   | 何时用            |
+| ----- | -------------------------------------- | ----------------- |
+| 用户  | `~/.x-code/skills/<name>/SKILL.md`     | 个人通用工作流    |
+| 项目  | `<cwd>/.x-code/skills/<name>/SKILL.md` | `xc` 启动目录使用 |
 
-项目级同名 skill 会覆盖用户级同名。`.x-code/` 在仓库根是 gitignored 的，团队共享 skill 需要换约定或者发布成 plugin（见 [plugins.md](./plugins.md)）。
+项目级同名 skill 会覆盖 plugin 和用户级同名 skill。本仓库根目录的 `.x-code/` 已被 gitignore；团队共享 skill 建议发布成 plugin（见 [plugins.md](./plugins.md)）。
 
 > **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`，下文不再重复。
 
@@ -228,7 +228,3 @@ Plugin 可以把 skills 打包发布：plugin 的 manifest 声明 `"skills": "./
 | 想临时禁用而不删除         | `/skill disable <name>`                                 |
 | Agent 总是错误自动激活     | 把 `description` 写得更具体——避开宽泛词如"代码"、"项目" |
 | Bundled 文件太大（>50）    | 列表会被截断；考虑拆成多个 skill                        |
-
-```
-
-```

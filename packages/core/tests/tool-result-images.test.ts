@@ -75,6 +75,23 @@ describe('deliverToolImages', () => {
     expect(vi.mocked(captionImageBuffer).mock.calls[0]?.[2]).toBe('google:gemini-2.5-flash')
   })
 
+  it('supports a concise task-specific caption prompt and output limit', async () => {
+    vi.mocked(pickVisionProvider).mockReturnValue({
+      provider: 'google',
+      modelId: 'google:gemini-2.5-flash',
+      label: 'Gemini 2.5 Flash',
+    })
+    await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG, {
+      captionPrompt: 'Report only visible UI defects.',
+      maxOutputTokens: 400,
+    })
+
+    expect(vi.mocked(captionImageBuffer).mock.calls[0]?.[3]).toMatchObject({
+      prompt: 'Report only visible UI defects.',
+      maxOutputTokens: 400,
+    })
+  })
+
   it('persists borrowed-vision usage before returning the tool result', async () => {
     vi.mocked(pickVisionProvider).mockReturnValue({
       provider: 'google',

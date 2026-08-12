@@ -107,7 +107,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 <details>
 <summary><b>网页搜索 Key（可选）</b></summary>
 
-启用 `web_search` 工具需任选一项配置，两家均提供免费额度：
+启用 `webSearch` 工具需任选一项配置，两家均提供免费额度：
 
 | 环境变量         | 提供方                                        | 免费额度                  | 注册门槛         |
 | ---------------- | --------------------------------------------- | ------------------------- | ---------------- |
@@ -156,7 +156,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 ### 上下文管理
 
 - **知识库系统** — 分层加载 `AGENTS.md`（兼容 `CLAUDE.md`），子包可覆盖根级约定
-- **自动记忆** — 每轮对话后自动保存用户偏好、纠正反馈等长期事实，下次会话自动加载
+- **自动记忆** — 每次根 Agent 完整结束后提取长期事实，并在相关请求中按需召回
 - **会话恢复** — `--continue` 恢复最近会话，`--resume` 打开选择器或按 ID 直达
 - **上下文压缩** — 长对话自动压缩；loop-guard 检测循环调用；prompt cache 复用前缀
 - **三级权限模型** — 默认安全，写操作前请求确认；`--trust` 跳过
@@ -168,7 +168,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **Skills** — `SKILL.md` 描述可复用工作流模板，`/<skill-name>` 触发
 - **自定义斜杠命令** — markdown 文件放进 `~/.x-code/commands/` 或项目级目录，`/<name>` 直接使用
 - **Hooks** — 10 个生命周期事件回调，用 shell 命令拦截/改写 Agent 行为
-- **浏览器自动化** — `/browser on` 启用真实浏览器子 Agent（Playwright 驱动），默认关闭
+- **浏览器自动化** — 默认可对本地 UI 做一次性截图检查（`/browser check-off` 可关闭）；`/browser on` 另行开启交互式浏览器子 Agent
 
 ### 终端体验
 
@@ -230,7 +230,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/skill <sub>`        | 管理 Skills                                                                         |
 | `/mcp <sub>`          | 管理 MCP 服务器                                                                     |
 | `/plugin <sub>`       | 管理插件与 marketplace                                                              |
-| `/browser [on\|off]`  | 开关浏览器子 Agent（默认关闭）                                                      |
+| `/browser <sub>`      | 配置交互式 Browser Use 与本地 UI 自动截图检查                                       |
 | `/doctor`             | 一键诊断运行环境                                                                    |
 | `/exit`               | 保存会话并退出                                                                      |
 
@@ -244,7 +244,7 @@ README 是入门视图，每个功能的完整用法在 [`docs/`](./docs/) 下�
 | [`docs/goal.md`](./docs/goal.md)                         | 持续目标循环（`/goal`）              |
 | [`docs/sub-agents.md`](./docs/sub-agents.md)             | 内置 / 自定义子 Agent（`task` 工具） |
 | [`docs/mcp.md`](./docs/mcp.md)                           | MCP 服务器配置                       |
-| [`docs/knowledge.md`](./docs/knowledge.md)               | 知识库（5 层加载）与自动记忆         |
+| [`docs/knowledge.md`](./docs/knowledge.md)               | 分层知识库与自动记忆                 |
 | [`docs/plugins.md`](./docs/plugins.md)                   | 插件安装 / 管理                      |
 | [`docs/marketplace.md`](./docs/marketplace.md)           | 插件市场订阅 / 自建                  |
 | [`docs/hooks.md`](./docs/hooks.md)                       | Agent 生命周期 Hook                  |

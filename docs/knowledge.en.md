@@ -12,7 +12,7 @@ Knowledge is merged in this order at startup. Later project files have higher pr
 1. ~/.x-code/AGENTS.md                  # hand-written user preferences
 2. ~/.x-code/memory/MEMORY.md           # derived global-memory Core profile
 3. <repo>/AGENTS.md chain               # cwd to git root, root → leaf
-4. <repo-root>/AGENTS.local.md          # private project preferences, usually gitignored
+4. <cwd>/AGENTS.local.md                # private preferences for the launch directory
 ```
 
 At each manual layer, `AGENTS.md` is preferred and `CLAUDE.md` is used as a read-only compatibility fallback. `/init` only creates or updates `AGENTS.md`.
@@ -29,9 +29,9 @@ Use this for stable rules that apply across repositories, such as language prefe
 
 Use this for shared architecture, commands, and constraints. In a monorepo, X-Code loads the full chain from the repository root to the current directory, allowing leaf files to override root rules.
 
-### `<repo-root>/AGENTS.local.md`
+### `<cwd>/AGENTS.local.md`
 
-Use this for private, machine-specific project preferences that should not be committed.
+Use this for private, machine-specific preferences in the directory where `xc` is launched. It is not searched up the repository chain.
 
 ## Memory v2
 
@@ -140,7 +140,6 @@ Users may back up or remove those files themselves if they no longer need them. 
 ```json
 {
   "memory": {
-    "enabled": true,
     "model": "inherit",
     "reasoning": "auto",
     "maxInputTokens": 12000,

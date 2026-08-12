@@ -6,26 +6,25 @@ or paths. Marketplaces don't host plugin code themselves; they're
 catalogs.
 
 `x-code` doesn't run its own marketplace. It **subscribes** to other
-people's marketplaces. The marketplace.json schema is byte-compatible
-with Claude Code's, so subscribing to Anthropic's official marketplace
-works out of the box.
+people's marketplaces and supports the common Claude Code marketplace
+schema and source forms, including Anthropic's official catalog.
 
-See also: [Plugins user guide](plugins.md) ·
-[Authoring a plugin](plugin-authoring.md)
+See also: [Plugins user guide](plugins.en.md) ·
+[Authoring a plugin](plugin-authoring.en.md)
 
 ---
 
 ## What ships by default
 
-The first time `xc` starts up **or you run any `xc plugin …` subcommand**, it writes a single subscription:
+When `xc` starts up **or you run any `xc plugin …` subcommand**, it ensures this subscription exists:
 
-| Name                    | Source                                      | Notes                                                                      |
-| ----------------------- | ------------------------------------------- | -------------------------------------------------------------------------- |
-| `anthropic-marketplace` | `github:anthropics/claude-plugins-official` | Anthropic's official Claude Code marketplace (200+ plugins), reserved name |
+| Name                    | Source                                      | Notes                                                       |
+| ----------------------- | ------------------------------------------- | ----------------------------------------------------------- |
+| `anthropic-marketplace` | `github:anthropics/claude-plugins-official` | Anthropic's official Claude Code marketplace, reserved name |
 
 If you remove that subscription with `/plugin marketplace remove
-anthropic-marketplace`, a later startup **will not re-add it
-automatically** (see [§ Idempotency](#idempotency) below).
+anthropic-marketplace`, the next CLI startup or `xc plugin …` command
+adds it again (see [§ Idempotency](#idempotency) below).
 
 ---
 
@@ -93,9 +92,9 @@ subscribe to any non-reserved name from any source.
 
 ## marketplace.json schema
 
-`xc` uses the public Claude Code marketplace schema — a file you
-publish for `xc` works for Claude Code unchanged. The canonical path
-inside a repo is **`.claude-plugin/marketplace.json`**.
+`xc` follows the common public Claude Code marketplace shape. The
+preferred path inside a repo is **`.claude-plugin/marketplace.json`**;
+`marketplace.json` at the repository root is accepted as a fallback.
 
 Reference real-world examples: `anthropics/claude-code` and
 `anthropics/claude-plugins-official`.
@@ -148,8 +147,8 @@ Reference real-world examples: `anthropics/claude-code` and
 
 ### Accepted `source` shapes
 
-`xc` accepts every wire form Claude Code marketplaces use (sampled
-from `anthropics/claude-code` and `anthropics/claude-plugins-official`):
+`xc` accepts the source forms listed below, covering the common forms used by
+Claude Code marketplaces:
 
 | Shape                                                                                                     | Notes                                                                                                                                                     |
 | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -240,43 +239,38 @@ The plugins themselves live wherever you point at.
 
 ## Idempotency
 
-`ensureDefaultMarketplaces()` (the function that writes the default
-`anthropic-marketplace` subscription on first CLI launch — or on the
-first `xc plugin …` subcommand invocation) checks
-`known_marketplaces.json` and skips if any entry is present. **Once
-the file exists, it's never overwritten** — so removing the default
-subscription sticks across restarts.
-
-If you later want it back: `xc plugin marketplace add
-anthropic-marketplace github:anthropics/claude-plugins-official`.
+`ensureDefaultMarketplaces()` checks specifically for an entry named
+`anthropic-marketplace`. If it is already present, nothing changes. If it is
+missing, the function adds it without altering unrelated subscriptions. As a
+result, removing only the default entry is temporary: the next CLI startup or
+`xc plugin …` command restores it. There is currently no persisted opt-out
+while the plugin system is enabled.
 
 ---
 
 ## Compatibility with Claude Code
 
-Anthropic's official Claude Code marketplace publishes a
-`marketplace.json` at the schema we describe above. `xc` reads it
-without translation. The same goes for any third-party Claude Code
-marketplace — subscribing to it from `xc` works as long as the
-listed plugins use one of:
+Anthropic's official Claude Code marketplace uses the common fields and source
+forms described above, so `xc` can read it directly. Third-party catalogs and
+plugins may use additional Claude Code features; verify them with `/plugin
+info`, `/plugin doctor`, and `/mcp list`. Plugin manifests are probed in this
+order:
 
-- `.claude-plugin/plugin.json`
 - `.x-code-plugin/plugin.json`
+- `.claude-plugin/plugin.json`
 - `plugin.json`
 
-at their root. (`xc` probes those three paths in that priority order.)
-
-Plugins that use Claude Code-only manifest fields (`output-styles`,
-`lspServers`) install fine; those specific fields are silently dropped.
+Unknown top-level manifest fields, including `output-styles` and `lspServers`,
+are ignored; their features do not activate in `xc`.
 
 ---
 
 ## Troubleshooting
 
-| Symptom                                        | Try                                                                                                        |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `add` rejected with "reserved"                 | The name's in [§ Reserved names](#reserved-names) and your source doesn't match. Use a different name.     |
-| `refresh` fails with HTTP error                | The source URL is wrong, or the git repo doesn't have `marketplace.json` at the root.                      |
-| `info` says "no cached index"                  | Run `refresh` first.                                                                                       |
-| `search` returns nothing for a known plugin    | Run `refresh` — the index may be stale, or the plugin may live in a marketplace you haven't subscribed to. |
-| Want to migrate from Claude Code's marketplace | It's already subscribed by default. Just `xc plugin install <name>@anthropic-marketplace`.                 |
+| Symptom                                        | Try                                                                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `add` rejected with "reserved"                 | The name's in [§ Reserved names](#reserved-names) and your source doesn't match. Use a different name.         |
+| `refresh` fails with HTTP or index error       | Check the source URL and ensure the git repo has `.claude-plugin/marketplace.json` or root `marketplace.json`. |
+| `info` says "no cached index"                  | Run `refresh` first.                                                                                           |
+| `search` returns nothing for a known plugin    | Run `refresh` — the index may be stale, or the plugin may live in a marketplace you haven't subscribed to.     |
+| Want to migrate from Claude Code's marketplace | It's already subscribed by default. Just `xc plugin install <name>@anthropic-marketplace`.                     |

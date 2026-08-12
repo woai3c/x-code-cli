@@ -196,8 +196,33 @@ describe('buildDeferredCatalog', () => {
     const catalog = buildDeferredCatalog(options, LARGE_CTX)
     const names = catalog.map((e) => e.name)
     for (const name of DEFERRED_BUILTIN_TOOLS) expect(names).toContain(name)
+    expect(names).not.toContain('browserVisualCheck')
     expect(names).toContain('listMcpResources')
     expect(names).toContain('readMcpResource')
+  })
+
+  it('loads the root visual-check tool directly, supports opt-out, and never exposes it to sub-agents', () => {
+    const rootState = createLoopState()
+    const rootTools = buildTools({ modelId: 'test:model' } as any, rootState, LARGE_CTX)
+    expect(rootState.deferredCatalog?.map((entry) => entry.name)).not.toContain('browserVisualCheck')
+    expect(rootTools).toHaveProperty('browserVisualCheck')
+
+    const disabledTools = buildTools(
+      { modelId: 'test:model', browserVisualCheckEnabled: false } as any,
+      createLoopState(),
+      LARGE_CTX,
+    )
+    expect(disabledTools).not.toHaveProperty('browserVisualCheck')
+
+    const childTools = buildTools(
+      {
+        modelId: 'test:model',
+        toolFilter: { deny: [] },
+      } as any,
+      createLoopState(),
+      LARGE_CTX,
+    )
+    expect(childTools).not.toHaveProperty('browserVisualCheck')
   })
 
   it('includes MCP tools and folds their schema property names into searchText', () => {

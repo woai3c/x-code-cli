@@ -113,10 +113,12 @@ export const SLASH_COMMANDS = [
   },
   {
     name: '/browser',
-    description: 'Toggle the browser sub-agent on/off (no-arg = status) — opt-in, saved',
+    description: 'Configure interactive Browser Use and automatic local visual checks',
     subcommands: [
-      { name: 'on', description: 'Enable the browser agent (live web automation via @playwright/mcp)' },
-      { name: 'off', description: 'Disable the browser agent and close any running browser' },
+      { name: 'on', description: 'Enable interactive Browser Use via the browser agent' },
+      { name: 'off', description: 'Disable interactive Browser Use' },
+      { name: 'check-on', description: 'Enable automatic one-shot localhost screenshots' },
+      { name: 'check-off', description: 'Disable automatic one-shot localhost screenshots' },
     ],
   },
   { name: '/doctor', description: 'Diagnose environment, API keys, MCP servers, plugins, and agents' },

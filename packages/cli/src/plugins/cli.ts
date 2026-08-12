@@ -44,8 +44,7 @@ export async function runPluginCli(args: string[]): Promise<number> {
   // the interactive CLI sees an empty subscription list — the product
   // promise of "first run has the Anthropic marketplace ready" needs
   // to hold on every first-contact surface, not just the TUI entry.
-  // Idempotent — a user who explicitly removed the default stays
-  // unsubscribed.
+  // Idempotent for the named entry; a removed default is restored here.
   await ensureDefaultMarketplaces().catch((err) => debugLog('plugins.ensure-defaults-failed', String(err)))
 
   try {

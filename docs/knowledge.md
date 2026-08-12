@@ -12,7 +12,7 @@ X-Code CLI 同时使用人工维护的项目知识和全局长期记忆。项目
 1. ~/.x-code/AGENTS.md                  # 用户级人工偏好
 2. ~/.x-code/memory/MEMORY.md           # 全局记忆的派生 Core profile
 3. <repo>/AGENTS.md chain               # cwd 到 git root，root → leaf
-4. <repo-root>/AGENTS.local.md          # 项目私人偏好，通常 gitignored
+4. <cwd>/AGENTS.local.md                # xc 启动目录下的私人偏好
 ```
 
 在每层中优先读取 `AGENTS.md`，不存在时回退到 `CLAUDE.md`。`/init` 只创建或更新 `AGENTS.md`。
@@ -29,9 +29,9 @@ Windows 上的 `~/.x-code` 对应 `%USERPROFILE%\.x-code`。设置 `X_CODE_HOME`
 
 保存团队共享的架构、命令和约束。monorepo 会从仓库根向当前目录加载整条 chain，子目录文件可以覆盖根规则。
 
-### `<repo-root>/AGENTS.local.md`
+### `<cwd>/AGENTS.local.md`
 
-保存只对当前用户有效、不应提交的本地项目偏好。
+保存 `xc` 启动目录下只对当前用户有效、不应提交的偏好。该文件不会沿仓库目录链向上查找。
 
 ## Memory v2
 
@@ -140,7 +140,6 @@ Memory v2 不迁移旧系统：
 ```json
 {
   "memory": {
-    "enabled": true,
     "model": "inherit",
     "reasoning": "auto",
     "maxInputTokens": 12000,

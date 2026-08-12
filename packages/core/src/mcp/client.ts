@@ -71,7 +71,7 @@ export class McpClient {
   /** Spawn / dial the server and complete the MCP initialize handshake.
    *  On success, populates internal tool + resource caches. On failure,
    *  cleans up the transport (no zombie subprocess) and re-throws. */
-  async connect(): Promise<ConnectInfo> {
+  async connect(abortSignal?: AbortSignal): Promise<ConnectInfo> {
     const timeout = this.config.timeout ?? DEFAULT_CONNECT_TIMEOUT_MS
 
     this.transport = this.buildTransport()
@@ -83,8 +83,9 @@ export class McpClient {
     // surface as an error otherwise — it'd just sit there.
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), timeout)
+    const signal = abortSignal ? AbortSignal.any([ctrl.signal, abortSignal]) : ctrl.signal
     try {
-      await this.client.connect(this.transport, { signal: ctrl.signal })
+      await this.client.connect(this.transport, { signal })
     } catch (err) {
       // UnauthorizedError is the expected throw during an OAuth flow:
       // the SDK has called redirectToAuthorization and now wants the

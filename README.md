@@ -107,7 +107,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 <details>
 <summary><b>Web search keys (optional)</b></summary>
 
-To enable the `web_search` tool, configure either of the following. Both offer a free tier:
+To enable the `webSearch` tool, configure either of the following. Both offer a free tier:
 
 | Variable         | Provider                                      | Free quota         | Signup         |
 | ---------------- | --------------------------------------------- | ------------------ | -------------- |
@@ -156,7 +156,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 ### Context Management
 
 - **Knowledge system** — layered `AGENTS.md` loading (compatible with `CLAUDE.md`), subpackages override root
-- **Auto-memory** — durable facts (preferences, corrections, project state) saved after each turn, loaded next session
+- **Auto-memory** — durable facts are extracted after each completed root-agent turn and recalled on demand
 - **Session resumption** — `--continue` resumes the last session, `--resume` opens a picker or jumps by ID
 - **Context compression** — long conversations auto-compress; loop-guard detects cycles; prompt cache reuses prefixes
 - **3-level permission model** — safe by default, prompts before writes; `--trust` bypasses
@@ -164,11 +164,11 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 ### Extension Ecosystem
 
 - **MCP integration** — stdio + HTTP (with OAuth), `/mcp` management, server tools merge into agent toolset
-- **Plugin system** — bundle skills / sub-agents / MCP / hooks; byte-compatible with Claude Code plugin format
+- **Plugin system** — bundle skills / sub-agents / commands / MCP / hooks; supports common Claude Code plugin conventions
 - **Skills** — reusable workflow templates as `SKILL.md`, triggered via `/<skill-name>`
 - **Custom slash commands** — drop markdown into `~/.x-code/commands/` or project scope, invoke with `/<name>`
 - **Hooks** — 10 lifecycle event callbacks to intercept or rewrite agent behavior via shell commands
-- **Browser automation** — `/browser on` enables a real-browser sub-agent (Playwright-powered), off by default
+- **Browser automation** — automatic one-shot local UI screenshots (`/browser check-off` disables them); `/browser on` additionally enables an interactive browser sub-agent
 
 ### Terminal Experience
 
@@ -230,7 +230,7 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/skill <sub>`         | Manage Skills                                                        |
 | `/mcp <sub>`           | Manage MCP servers                                                   |
 | `/plugin <sub>`        | Manage plugins and marketplaces                                      |
-| `/browser [on\|off]`   | Toggle the browser sub-agent (off by default)                        |
+| `/browser <sub>`       | Configure Browser Use and automatic local visual checks              |
 | `/doctor`              | Diagnose the runtime environment                                     |
 | `/exit`                | Save session and exit                                                |
 

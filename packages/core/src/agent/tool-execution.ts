@@ -9,6 +9,7 @@ import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import { checkPermission } from '../permissions/index.js'
 import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/capabilities.js'
+import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
 import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
@@ -17,6 +18,7 @@ import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
 import { debugLog, isAbortError } from '../utils.js'
 import { foldShellErrorNoise } from '../utils/shell-error.js'
+import { runBrowserVisualCheck } from './browser/visual-check.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
@@ -684,6 +686,45 @@ async function applyLoopGuard(ctx: HandlerCtx, deferred: ModelMessage[]): Promis
   return true
 }
 
+/** One model-visible call backed by a handful of private Playwright calls.
+ *  Only the final screenshot and bounded console diagnostics reach context. */
+async function handleBrowserVisualCheck(ctx: HandlerCtx): Promise<void> {
+  const { toolCallId, toolName, state, options, callbacks } = ctx
+  if (state.permissionMode === 'plan') {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      'Browser visual checks are disabled in plan mode. Call exitPlanMode first if you need to verify the UI.',
+      true,
+    )
+    return
+  }
+  if (options.browserVisualCheckEnabled === false) {
+    pushToolResult(state, callbacks, toolCallId, toolName, 'Automatic local visual checks are disabled.', true)
+    return
+  }
+
+  reportProgress(toolCallId, 'Capturing local UI screenshot')
+  try {
+    const result = await runBrowserVisualCheck(ctx.input, {
+      abortSignal: options.abortSignal,
+    })
+    const delivered = await deliverToolImages(ctx, result.text, result.images, {
+      captionPrompt: VISUAL_CHECK_CAPTION_PROMPT,
+      maxOutputTokens: 400,
+    })
+    await pushSuccessfulToolResult(ctx, truncateToolResult(delivered.text), false, delivered.images)
+  } catch (err) {
+    if (isAbortError(err, options.abortSignal)) {
+      pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
+      return
+    }
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorFromUnknown(err), true)
+  }
+}
+
 /** Permission gate for writeFile/edit/shell. Returns true if execution
  *  should continue, false if it was blocked / denied / aborted. */
 async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
@@ -929,6 +970,10 @@ async function handleToolCall(
   }
 
   if (await applyLoopGuard(ctx, deferred)) return
+  if (ctx.toolName === BROWSER_VISUAL_CHECK_TOOL_NAME) {
+    await handleBrowserVisualCheck(ctx)
+    return
+  }
   if (!(await checkWriteOrShellPermission(ctx))) return
 
   const result = await executeWriteOrShell(ctx)
@@ -957,6 +1002,17 @@ const SCREENSHOT_CAPTION_PROMPT =
   '(4) note colors and any visual state (selected, disabled, error). ' +
   'Be thorough and specific. Output plain text only — no markdown formatting.'
 
+const VISUAL_CHECK_CAPTION_PROMPT =
+  'Inspect this local web UI screenshot for visual QA. Report only actionable visible defects such as overlap, ' +
+  'clipping, overflow, broken alignment, unreadable contrast, missing assets, unexpected blank areas, or visible ' +
+  'error states. Give the affected region and a short description. If none are obvious, say so. Be concise and ' +
+  'output plain text only.'
+
+interface ToolImageDeliveryOptions {
+  captionPrompt?: string
+  maxOutputTokens?: number
+}
+
 /**
  * Decide how an MCP tool's returned image(s) reach the model.
  *
@@ -975,6 +1031,7 @@ export async function deliverToolImages(
   ctx: HandlerCtx,
   text: string,
   images: readonly ToolImage[] | undefined,
+  deliveryOptions: ToolImageDeliveryOptions = {},
 ): Promise<{ text: string; images?: readonly ToolImage[] }> {
   if (!images || images.length === 0) return { text, images }
 
@@ -1025,7 +1082,8 @@ export async function deliverToolImages(
       const buffer = Buffer.from(img.data, 'base64')
       const captionUsageEvents: VisionUsageEvent[] = []
       const caption = await captionImageBuffer(buffer, img.mediaType, captionModelId, {
-        prompt: SCREENSHOT_CAPTION_PROMPT,
+        prompt: deliveryOptions.captionPrompt ?? SCREENSHOT_CAPTION_PROMPT,
+        maxOutputTokens: deliveryOptions.maxOutputTokens,
         abortSignal: signal,
         onUsage: (event) => captionUsageEvents.push(event),
       })

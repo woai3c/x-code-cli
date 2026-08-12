@@ -4,8 +4,8 @@ A **plugin** is an installable package that contributes one or more of:
 skills, sub-agents, slash commands, MCP servers, or lifecycle hooks.
 Plugins are how third-party authors extend `xc` without forking the CLI.
 
-See also: [Authoring a plugin](plugin-authoring.md) ·
-[Hooks reference](hooks.md) · [Marketplace reference](marketplace.md)
+See also: [Authoring a plugin](plugin-authoring.en.md) ·
+[Hooks reference](hooks.en.md) · [Marketplace reference](marketplace.en.md)
 
 ---
 
@@ -119,8 +119,8 @@ show:
 - **the consent preview** — you can't see what the plugin will
   contribute (commands / agents / MCP / hooks) before it lands
 - **userConfig prompts** — plugins with `userConfig` fields install
-  with empty values, and the hook subprocess sees `env` entries set
-  to `<unset>`
+  without saving those values. X-Code does not create literal `<unset>`
+  entries; an existing process or server environment may still supply a key.
 
 **If the plugin has userConfig, or you want to review the consent
 preview, use the CLI form instead:**
@@ -347,14 +347,19 @@ would dump every debug tag, far noisier).
 
 ---
 
-## Compatibility with Claude Code / Codex plugins
+## Compatibility with Claude Code plugins
 
 `xc` deliberately reads `.claude-plugin/plugin.json` in addition to its
-native `.x-code-plugin/plugin.json` path. A plugin authored for Claude
-Code will install in `xc` without modification — its skills, agents,
-MCP servers, and hooks all wire up the same way. The two fields we
-don't support (`output-styles`, `lspServers`) are silently ignored;
-everything else loads.
+native `.x-code-plugin/plugin.json` path. It supports common Claude Code
+contributions: skills, agents, slash commands, MCP servers, and hooks, when
+they use the schemas documented here. Exact parity is not guaranteed: unknown
+top-level fields such as `output-styles` and `lspServers` are ignored, and MCP
+variable syntax follows X-Code's MCP rules. After installing a third-party
+plugin, verify it with `/plugin info`, `/plugin doctor`, and `/mcp list`.
+
+Codex's native `.codex-plugin/plugin.json` path is not probed. A Codex-only
+plugin must provide one of X-Code's accepted manifest paths and use the
+supported contribution schema.
 
 Gemini extensions (`gemini-extension.json`) are **not** supported.
 Trying to install one prints a friendly error pointing at this doc.

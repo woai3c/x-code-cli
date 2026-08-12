@@ -45,7 +45,7 @@ xc plugin install ./my-plugin
 
 ## Manifest 字段参考
 
-只有 `name` 和 `version` 必需。未知顶层字段静默 drop——所以 Claude Code 插件带 `output-styles` 或 `lspServers` 也能正常安装，那些字段不激活而已。
+只有 `name` 必需；不写 `version` 时，X-Code 会用 `0.0.0` 作为安装记录和缓存路径版本。未知顶层字段会静默 drop，`output-styles`、`lspServers` 等不受支持的贡献不会激活。
 
 ```jsonc
 {
@@ -56,7 +56,7 @@ xc plugin install ./my-plugin
   // ── 身份 ────────────────────────────────────────────────────
   "name": "linear", // [a-z0-9][a-z0-9-]* — 用作跨平台
   // 文件系统安全路径片段
-  "version": "1.2.0", // semver 字符串，不强制
+  "version": "1.2.0", // 可选，默认 "0.0.0"；不强制 semver
 
   "description": "Linear issue 集成",
   "author": {
@@ -84,9 +84,8 @@ xc plugin install ./my-plugin
   // 也可以直接 inline。以下是 inline 形式：
   "mcpServers": {
     "linear": {
-      "command": "node",
-      "args": ["${pluginDir}/server.js"],
-      "env": { "LINEAR_API_KEY": "${env:LINEAR_API_KEY}" },
+      "command": "npx",
+      "args": ["-y", "@example/linear-mcp"],
     },
   },
 
@@ -131,9 +130,9 @@ xc plugin install ./my-plugin
 
 ### 字段细节
 
-- **`name`** — 小写字母、数字、短横线。必须字母或数字开头。Claude Code / Codex 同规则。
-- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS` 与 `${CLAUDE_PLUGIN_ROOT}` 替换。同名命令同时也能从 `~/.x-code/commands/<name>.md`（用户级）和 `<repo>/.x-code/commands/<name>.md`（项目级）加载，优先级 **project > plugin > user**（参见 README 的「自定义斜杠命令」）。
-- **`mcpServers`** — 路径或 inline 对象。不声明时自动探测 `.mcp.json`（Claude Code 约定）或 `mcp.json`。每个 server 的 schema 同 `~/.x-code/config.json`，变量展开（`${pluginDir}`、`${env:NAME}` 等）在 server 启动时进行。
+- **`name`** — 小写字母、数字、短横线，必须字母或数字开头。
+- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS` 与 `${CLAUDE_PLUGIN_ROOT}` 替换。同名命令同时也能从 `~/.x-code/commands/<name>.md`（用户级）和 `<cwd>/.x-code/commands/<name>.md`（项目级）加载，优先级 **project > plugin > user**（参见 README 的「自定义斜杠命令」）。
+- **`mcpServers`** — 路径或 inline 对象。不声明时自动探测 `.mcp.json`（Claude Code 约定）或 `mcp.json`。每个 server 的 schema 遵循 `~/.x-code/config.json`；环境变量用 `${NAME}` 或 `${NAME:-fallback}`。已保存的 `userConfig` 值会直接注入 stdio server 环境，不要再把它写成 `${NAME}`。X-Code 不会给 MCP args 注入 plugin root 变量；需要运行随插件分发的 server 时，应使用已安装的可执行文件/npm 包，或让用户配置路径。
 - **`hooks`** — 路径或 inline 对象。不声明时自动探测 `hooks/hooks.json`。详见 [hooks.md](./hooks.md)。
 
 ---
@@ -170,7 +169,7 @@ my-plugin/
 
 1. 写 manifest 和贡献内容
 2. `xc plugin install ./my-plugin`——拷贝到 `~/.x-code/plugins/cache/local/<name>/<version>/` 并登记
-3. 重启 `xc` 让贡献生效
+3. 已打开的会话运行 `/plugin refresh` 让贡献生效；新启动的 `xc` 也会自动加载
 4. 改 + 再装。同版本重装会覆盖缓存（支持同版本重装）；要并存多个版本就 bump 一下 manifest version
 
 更紧的循环可以直接编辑 cache 目录里的文件——重启 xc 仍能看到改动。但不要把这个当开发流程：定期 reinstall 一下让你的源目录保持权威。
@@ -188,11 +187,11 @@ my-plugin/
 
 ## 常见坑
 
-| 坑                          | 处理                                                                                                                                                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name` 报 regex 错          | 只能用小写字母、数字、短横线。不能有下划线和大写                                                                                                                                                 |
-| Hook 不触发                 | 装完跑 `/plugin refresh`（in-session 热加载，无需重启），或重启 `xc`。验证：`xc --plugin-debug` 后看 `hooks.exec-ran` 日志条目                                                                   |
-| `${pluginDir}` 没展开       | 只在 hook command 和 slash command 模板里展开。MCP server 的 args / env 走 MCP 自己的 `${VAR}` 展开（仅 env 变量，见 `packages/core/src/mcp/expand-env.ts`）                                     |
-| `${pluginDataDir}` 写入失败 | 自动创建在 `~/.x-code/plugins/data/<sanitised-plugin-id>/`，跨版本保留。第一次替换时 `mkdir -p`，权限错误会让 shell 报错。**别**把可持久化数据写到 `${pluginDir}` —— 它会在重装/升级时整个被擦掉 |
-| 插件装上了贡献不出现        | `/plugin info <id>` 确认 manifest 解析成功，且贡献路径在磁盘上存在                                                                                                                               |
-| 想公开发布                  | 发一个 marketplace.json 列你的插件 git URL，告诉用户 `xc plugin marketplace add <name> <source>`。见 [marketplace.md](./marketplace.md)                                                          |
+| 坑                          | 处理                                                                                                                                                                                                      |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name` 报 regex 错          | 只能用小写字母、数字、短横线。不能有下划线和大写                                                                                                                                                          |
+| Hook 不触发                 | 装完跑 `/plugin refresh`（in-session 热加载，无需重启），或重启 `xc`。验证：`xc --plugin-debug` 后看 `hooks.exec-ran` 日志条目                                                                            |
+| Plugin 路径变量没展开       | Hook 用 `${pluginDir}` / `${pluginDataDir}`；slash command 模板用 `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`。MCP args / env 只从进程环境展开 `${VAR}` / `${VAR:-fallback}`，没有 plugin root 变量 |
+| `${pluginDataDir}` 写入失败 | 自动创建在 `~/.x-code/plugins/data/<sanitised-plugin-id>/`，跨版本保留。第一次替换时 `mkdir -p`，权限错误会让 shell 报错。**别**把可持久化数据写到 `${pluginDir}` —— 它会在重装/升级时整个被擦掉          |
+| 插件装上了贡献不出现        | `/plugin info <id>` 确认 manifest 解析成功，且贡献路径在磁盘上存在                                                                                                                                        |
+| 想公开发布                  | 发一个 marketplace.json 列你的插件 git URL，告诉用户 `xc plugin marketplace add <name> <source>`。见 [marketplace.md](./marketplace.md)                                                                   |
