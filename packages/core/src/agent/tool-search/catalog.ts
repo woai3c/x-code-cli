@@ -20,6 +20,7 @@
 // see buildTools in loop.ts.
 import { listMcpResources, readMcpResource } from '../../mcp/resources.js'
 import { bridgeMcpTool, truncateDescription } from '../../mcp/tool-bridge.js'
+import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../../tools/browser-visual-check.js'
 import { toolRegistry } from '../../tools/index.js'
 import type { AgentOptions, PermissionMode } from '../../types/index.js'
 
@@ -232,7 +233,11 @@ export function composeTurnTools(
   }
   if (permissionMode === undefined) return tools
   if (tools === base) tools = { ...base }
-  if (permissionMode === 'plan') delete tools.enterPlanMode
-  else delete tools.exitPlanMode
+  if (permissionMode === 'plan') {
+    delete tools.enterPlanMode
+    delete tools[BROWSER_VISUAL_CHECK_TOOL_NAME]
+  } else {
+    delete tools.exitPlanMode
+  }
   return tools
 }

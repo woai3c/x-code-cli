@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@vscode/ripgrep": "^1.17.0",
+    "fs-ext-extra-prebuilt": "2.2.11",
     "undici": "^7.28.0"
   },
   "peerDependencies": {

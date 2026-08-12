@@ -165,10 +165,16 @@ describe('composeTurnTools', () => {
   })
 
   it('exposes only the mode transition tool valid for the current turn', () => {
-    const modeBase = { readFile: { id: 'read' }, enterPlanMode: { id: 'enter' }, exitPlanMode: { id: 'exit' } }
+    const modeBase = {
+      readFile: { id: 'read' },
+      browserVisualCheck: { id: 'visual' },
+      enterPlanMode: { id: 'enter' },
+      exitPlanMode: { id: 'exit' },
+    }
 
     expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'default'))).toEqual([
       'readFile',
+      'browserVisualCheck',
       'enterPlanMode',
     ])
     expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'plan'))).toEqual(['readFile', 'exitPlanMode'])

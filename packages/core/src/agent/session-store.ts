@@ -24,6 +24,7 @@ import type { ModelMessage } from 'ai'
 import { resetMemoryRecallWindow } from '../knowledge/memory/recall-state.js'
 import type { MemoryRecallAttachment, MemoryRecallTombstone } from '../knowledge/memory/types.js'
 import { ensureProjectStorageDir } from '../project-storage.js'
+import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
 import type { PermissionMode, TokenUsage } from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
 import { scanCacheMisses } from './cache-stats.js'
@@ -36,6 +37,8 @@ import { cloneUsageBreakdown, createUsageBreakdown } from './usage.js'
 import type { UsageBreakdown } from './usage.js'
 
 const SESSIONS_SUBDIR = 'sessions'
+const OMITTED_VISUAL_CHECK_IMAGE = '[browserVisualCheck screenshot omitted from session storage]'
+const BINARY_TOOL_OUTPUT_TYPES = new Set(['file', 'file-data', 'image', 'image-data', 'media'])
 
 function sessionsDir(cwd: string = process.cwd()): string {
   return path.join(cwd, XCODE_DIR, SESSIONS_SUBDIR)
@@ -177,6 +180,45 @@ type Entry =
   | StepStatsEntry
   | MemoryRecallEntry
   | MemoryRecallDeleteEntry
+
+interface PersistedToolResultPart {
+  type?: string
+  toolName?: string
+  output?: {
+    type?: string
+    value?: unknown
+  }
+}
+
+/** Keep the live screenshot in memory for the model's next request, but never
+ *  copy its base64 payload into the project's resumable JSONL transcript. */
+function persistenceSafeMessage(message: ModelMessage): ModelMessage {
+  if (message.role !== 'tool' || !Array.isArray(message.content)) return message
+  let changed = false
+  const content = (message.content as PersistedToolResultPart[]).map((part) => {
+    if (
+      part?.type !== 'tool-result' ||
+      part.toolName !== BROWSER_VISUAL_CHECK_TOOL_NAME ||
+      part.output?.type !== 'content' ||
+      !Array.isArray(part.output.value)
+    ) {
+      return part
+    }
+    const retained = (part.output.value as Array<{ type?: string }>).filter(
+      (entry) => !entry?.type || !BINARY_TOOL_OUTPUT_TYPES.has(entry.type),
+    )
+    if (retained.length === part.output.value.length) return part
+    changed = true
+    return {
+      ...part,
+      output: {
+        ...part.output,
+        value: [...retained, { type: 'text', text: OMITTED_VISUAL_CHECK_IMAGE }],
+      },
+    }
+  })
+  return changed ? ({ ...message, content } as ModelMessage) : message
+}
 
 // ── Append helpers (fire-and-forget; never throw) ───────────────────────
 
@@ -320,7 +362,7 @@ export async function flushPendingMessages(state: LoopState): Promise<void> {
   for (let i = state.persistedMessageCount; i < state.messages.length; i++) {
     const message = state.messages[i]
     if (!message) continue
-    const entry: MsgEntry = { t: 'msg', message, ts }
+    const entry: MsgEntry = { t: 'msg', message: persistenceSafeMessage(message), ts }
     lines.push(JSON.stringify(entry))
   }
   // Preserve the pre-refactor early-bail: when the loop produces nothing
@@ -420,7 +462,7 @@ export async function markBoundaryAndReflush(state: LoopState, summary?: string)
   if (summary !== undefined) boundary.summary = summary
   const lines = [JSON.stringify(boundary)]
   for (const message of state.messages) {
-    const entry: MsgEntry = { t: 'msg', message, ts }
+    const entry: MsgEntry = { t: 'msg', message: persistenceSafeMessage(message), ts }
     lines.push(JSON.stringify(entry))
   }
   if (!(await appendRawLines(filePath, lines))) return
@@ -648,7 +690,10 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg') {
-      messages.push(entry.message)
+      // Also protect resumed sessions created by older releases. This does not
+      // rewrite their append-only files, but keeps legacy screenshots out of a
+      // new provider request after resume.
+      messages.push(persistenceSafeMessage(entry.message))
     }
   }
   if (!header) return null

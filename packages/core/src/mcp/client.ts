@@ -60,6 +60,11 @@ export class McpClient {
   /** Cached results from the last connect, served to the registry. */
   private cachedTools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> = []
   private cachedResources: McpResourceEntry[] = []
+  /** The SDK does not replay an onclose event to listeners registered after
+   *  the transport has already dropped. Keep our own lifecycle state so a
+   *  late observer cannot mistake a dead connection for a live one. */
+  private connectionState: 'idle' | 'open' | 'closed' = 'idle'
+  private closeHandlers = new Set<() => void | Promise<void>>()
 
   constructor(
     public readonly serverName: string,
@@ -76,6 +81,8 @@ export class McpClient {
 
     this.transport = this.buildTransport()
     this.client = new Client(CLIENT_INFO, { capabilities: {} })
+    this.connectionState = 'open'
+    this.client.onclose = () => this.notifyClosed()
 
     // SDK's connect() runs the initialize roundtrip and resolves once the
     // server has acknowledged. Race it against an explicit timer because
@@ -300,9 +307,15 @@ export class McpClient {
    *  exit, transport close). The browser registry uses this to invalidate a
    *  cached connection when the user closes the browser or the server dies,
    *  so the next acquire reconnects instead of reusing a dead client.
-   *  No-op if called before connect (the browser registry calls it after). */
-  onClose(handler: () => void): void {
-    if (this.client) this.client.onclose = handler
+   *  Returns false and invokes the handler immediately when the close event
+   *  happened before registration, allowing callers to refuse a stale cache. */
+  onClose(handler: () => void | Promise<void>): boolean {
+    if (this.connectionState === 'closed') {
+      this.invokeCloseHandler(handler)
+      return false
+    }
+    this.closeHandlers.add(handler)
+    return true
   }
 
   // ── internals ──────────────────────────────────────────────────────────
@@ -358,8 +371,27 @@ export class McpClient {
     } catch (err) {
       debugLog('mcp.close-error', `${this.serverName}: ${String(err)}`)
     } finally {
+      this.notifyClosed()
       this.client = null
       this.transport = null
+    }
+  }
+
+  private notifyClosed(): void {
+    if (this.connectionState === 'closed') return
+    this.connectionState = 'closed'
+    const handlers = [...this.closeHandlers]
+    this.closeHandlers.clear()
+    for (const handler of handlers) this.invokeCloseHandler(handler)
+  }
+
+  private invokeCloseHandler(handler: () => void | Promise<void>): void {
+    try {
+      void Promise.resolve(handler()).catch((err) => {
+        debugLog('mcp.close-handler-error', `${this.serverName}: ${String(err)}`)
+      })
+    } catch (err) {
+      debugLog('mcp.close-handler-error', `${this.serverName}: ${String(err)}`)
     }
   }
 

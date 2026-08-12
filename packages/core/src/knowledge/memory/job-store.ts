@@ -310,7 +310,7 @@ export class MemoryJobStore {
   }
 
   async tryAcquireExtractorLock(): Promise<ExtractorLease | null> {
-    return acquireFileLock(path.join(this.locksDir, 'extractor.lock'), { heartbeatMs: 5000 })
+    return acquireFileLock(path.join(this.locksDir, 'extractor.lock'))
   }
 
   async appendRun(record: MemoryRunRecord): Promise<void> {

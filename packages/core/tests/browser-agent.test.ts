@@ -36,9 +36,15 @@ describe('buildBrowserServerConfig', () => {
     expect(c).toMatchObject({ command: 'my-server', args: ['--port', '7'] })
   })
 
-  it('redirects saved output off the repo via --output-dir (npx path only)', () => {
+  it('redirects saved output off the repo via --output-dir (npx path only)', async () => {
     const def = buildBrowserServerConfig({}) as { command: string; args: string[] }
     expect(def.args).toContain('--output-dir')
+    const outputDirectory = def.args[def.args.indexOf('--output-dir') + 1]!
+    expect(path.dirname(outputDirectory)).toBe(os.tmpdir())
+    expect(path.basename(outputDirectory)).toMatch(/^x-code-browser-/)
+    if (process.platform !== 'win32') {
+      expect((await fs.stat(outputDirectory)).mode & 0o777).toBe(0o700)
+    }
 
     // A full command override owns its argv — we do not inject --output-dir.
     const override = buildBrowserServerConfig({ command: 'my-server', args: ['--port', '7'] })

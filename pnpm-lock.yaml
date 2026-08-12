@@ -74,6 +74,9 @@ importers:
       '@vscode/ripgrep':
         specifier: ^1.17.0
         version: 1.17.0
+      fs-ext-extra-prebuilt:
+        specifier: 2.2.11
+        version: 2.2.11
       undici:
         specifier: ^7.28.0
         version: 7.29.0
@@ -153,6 +156,9 @@ importers:
       file-type:
         specifier: ^22.0.1
         version: 22.0.1
+      fs-ext-extra-prebuilt:
+        specifier: 2.2.11
+        version: 2.2.11
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
@@ -1928,6 +1934,10 @@ packages:
     resolution: {integrity: sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A==}
     engines: {node: '>= 0.8'}
 
+  fs-ext-extra-prebuilt@2.2.11:
+    resolution: {integrity: sha512-uCD7z+RlNFvyYQ0rNK5FdhJVScuYrtNsY5PPFtpF1XcEAfHy06eYOu9vDNR4G1r/gq0BX9VyNU/2nhxy2tdQaA==}
+    engines: {node: '>= 8.0.0'}
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -2325,6 +2335,9 @@ packages:
 
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
+  nan@2.28.0:
+    resolution: {integrity: sha512-fTsDz99OTq2sVePhGdp4qQhggZFtKr64ZNVyVajRKtMOkJxYekplBh577PiJB12v/D3s2E5cGtOI45LWp6rnLQ==}
 
   nano-spawn@2.0.0:
     resolution: {integrity: sha512-tacvGzUY5o2D8CBh2rrwxyNojUsZNU2zjNTzKQrkgGJQTbGAfArVWXSKMBokBeeg6C7OLRGUEyoFlYbfeWQIqw==}
@@ -4940,6 +4953,10 @@ snapshots:
 
   fresh@2.0.0: {}
 
+  fs-ext-extra-prebuilt@2.2.11:
+    dependencies:
+      nan: 2.28.0
+
   fsevents@2.3.3:
     optional: true
 
@@ -5318,6 +5335,8 @@ snapshots:
       obliterator: 2.0.5
 
   ms@2.1.3: {}
+
+  nan@2.28.0: {}
 
   nano-spawn@2.0.0: {}
 

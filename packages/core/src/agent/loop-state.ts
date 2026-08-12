@@ -60,6 +60,10 @@ export interface LoopState {
    *  tool name + stable-stringified input. Used by the doom-loop guard to
    *  detect when the model is looping on the same failing call. */
   recentToolCalls: Array<{ toolName: string; hash: string }>
+  /** Visual-check attempts during the current submit since the most recent
+   *  successful file mutation. This gives screenshot QA a bounded circuit
+   *  breaker without preventing the normal edit → re-check workflow. */
+  visualCheckCallsSinceMutation: number
   /** Cached system prompt text — rebuilt once per session so the prefix
    *  stays byte-stable across turns, enabling automatic prefix-caching on
    *  OpenAI-compatible providers (DeepSeek, Moonshot, Alibaba, …).
@@ -225,6 +229,7 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     filesModified: new Set(),
     turnFilesModified: new Set(),
     recentToolCalls: [],
+    visualCheckCallsSinceMutation: 0,
     systemPromptCache: null,
     systemPromptBlocks: undefined,
     permissionMode: initialMode,

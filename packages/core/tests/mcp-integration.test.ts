@@ -44,6 +44,31 @@ describe('MCP integration (stdio)', () => {
     }
   }, 15_000)
 
+  it('reports a close that happened before a lifecycle listener registered', async () => {
+    const client = new McpClient('mock', { command: process.execPath, args: [MOCK_SERVER] })
+    let liveNotifications = 0
+    let lateNotifications = 0
+    try {
+      await client.connect()
+      expect(
+        client.onClose(() => {
+          liveNotifications++
+        }),
+      ).toBe(true)
+      await client.close()
+      expect(liveNotifications).toBe(1)
+
+      expect(
+        client.onClose(() => {
+          lateNotifications++
+        }),
+      ).toBe(false)
+      expect(lateNotifications).toBe(1)
+    } finally {
+      await client.close()
+    }
+  }, 15_000)
+
   it('reads resources end-to-end', async () => {
     const client = new McpClient('mock', { command: process.execPath, args: [MOCK_SERVER] })
     try {

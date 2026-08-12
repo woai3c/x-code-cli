@@ -871,6 +871,7 @@ export async function agentLoop(
   const turnStartedAt = new Date().toISOString()
   const filesModifiedBefore = new Set(state.filesModified)
   state.turnFilesModified.clear()
+  state.visualCheckCallsSinceMutation = 0
 
   // Memory features are root-agent only: toolFilter is the authoritative
   // sub-agent signal (runner.ts always passes one).
@@ -1208,12 +1209,19 @@ export async function agentLoop(
       }
       stepToolCallCount += toolCalls.length
       const toolResultStartIndex = state.messages.length
-      await processToolCalls(toolCalls, state, options, callbacks, model)
+      const toolExecution = await processToolCalls(toolCalls, state, options, callbacks, model)
       const manualToolMessages = state.messages.slice(toolResultStartIndex)
       turnMessages.push(...manualToolMessages)
       // processToolCalls short-circuits on abort with synthetic results;
       // skip the next streamText call which would just throw AbortError.
       if (options.abortSignal?.aborted) break
+      if (toolExecution.stopTurn) {
+        // A user-facing circuit breaker selected Pause. All assistant calls
+        // already have paired results, so return directly to input instead of
+        // trusting another model round to obey a synthetic "wait" message.
+        completedNormally = true
+        break
+      }
       // A queued user message is the natural anchor for late memory. Drain it
       // before attaching recall so providers never see two consecutive user
       // messages (one synthetic memory block plus one queued user message).

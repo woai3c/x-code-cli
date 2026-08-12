@@ -116,6 +116,7 @@ await esbuild.build({
     'undici',
     // Native addons that can't be bundled
     '@vscode/ripgrep',
+    'fs-ext-extra-prebuilt',
     '@fugood/whisper.node',
     '@fugood/node-whisper-darwin-arm64',
     '@fugood/node-whisper-darwin-x64',

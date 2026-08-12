@@ -9,7 +9,7 @@ const limits = {
   files: 40,
 }
 const cliPackage = JSON.parse(readFileSync(resolve('packages/cli/package.json'), 'utf8'))
-const requiredRuntimeDependencies = ['@vscode/ripgrep', 'undici']
+const requiredRuntimeDependencies = ['@vscode/ripgrep', 'fs-ext-extra-prebuilt', 'undici']
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const result = spawnSync(npm, ['pack', './packages/cli', '--dry-run', '--ignore-scripts', '--json'], {

@@ -50,6 +50,13 @@ vi.mock('../src/agent/session-summary.js', () => ({
   generateSessionSummary: vi.fn().mockResolvedValue({}),
 }))
 
+vi.mock('../src/agent/browser/visual-check.js', () => ({
+  runBrowserVisualCheck: vi.fn().mockResolvedValue({
+    text: 'visual check complete',
+    images: [{ data: 'aW1hZ2U=', mediaType: 'image/jpeg' }],
+  }),
+}))
+
 // Block jsonl persistence — keep tests free of fs side effects in the
 // project's `.x-code/sessions/` (which would leak between runs and pollute
 // developers' repos when they execute the suite locally).
@@ -277,6 +284,60 @@ describe('agent loop', () => {
     expect(streamText).toHaveBeenCalledTimes(1)
     expect(mockCallbacks.onError).not.toHaveBeenCalled()
     expect(state.messages.at(-1)).toEqual({ role: 'assistant', content: 'done' })
+  })
+
+  it('returns to input immediately when the visual-check circuit breaker is paused', async () => {
+    const visualCalls = Array.from({ length: 5 }, (_, index) => ({
+      toolName: 'browserVisualCheck',
+      toolCallId: `visual-${index + 1}`,
+      input: { url: 'http://localhost:5173/' },
+    }))
+    const skippedCall = {
+      toolName: 'askUser',
+      toolCallId: 'after-visual-pause',
+      input: {
+        question: 'This should be skipped',
+        options: [
+          { label: 'a', description: 'a' },
+          { label: 'b', description: 'b' },
+        ],
+      },
+    }
+    const toolCalls = [...visualCalls, skippedCall]
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {},
+      },
+      response: Promise.resolve({
+        messages: [
+          {
+            role: 'assistant',
+            content: toolCalls.map((call) => ({ type: 'tool-call', ...call })),
+          },
+        ],
+      }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      finishReason: Promise.resolve('tool-calls'),
+      toolCalls: Promise.resolve(toolCalls),
+    } as any)
+    vi.mocked(mockCallbacks.onAskUser).mockResolvedValue('Pause')
+
+    const result = await agentLoop(
+      'inspect the local UI',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 3, printMode: false },
+      mockCallbacks,
+    )
+
+    expect(result.turnCount).toBe(1)
+    expect(streamText).toHaveBeenCalledTimes(1)
+    expect(mockCallbacks.onAskUser).toHaveBeenCalledTimes(1)
+    expect(mockCallbacks.onToolResult).toHaveBeenCalledWith(
+      skippedCall.toolCallId,
+      expect.stringContaining('user paused the current turn'),
+      true,
+    )
+    expect(mockCallbacks.onError).not.toHaveBeenCalled()
   })
 
   it('marks string error results from auto-executed tools as UI failures', async () => {

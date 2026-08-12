@@ -180,6 +180,55 @@ describe('session-store: round-trip', () => {
     const loaded = await loadSession(getSessionFilePath(state))
     expect(loaded!.messages).toHaveLength(3)
   })
+
+  it('keeps visual-check images in memory but omits their base64 from the session file and resume', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-visual'
+    const screenshotData = 'PRIVATE_SCREENSHOT_BASE64'
+    state.messages = [
+      { role: 'user', content: 'check the UI' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-visual',
+            toolName: 'browserVisualCheck',
+            input: { url: 'http://localhost:5173/' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-visual',
+            toolName: 'browserVisualCheck',
+            output: {
+              type: 'content',
+              value: [
+                { type: 'text', text: 'Visual check captured' },
+                { type: 'image-data', data: screenshotData, mediaType: 'image/jpeg' },
+              ],
+            },
+          },
+        ],
+      },
+    ] as any
+
+    await appendHeader(state, 'openai:test', 'check the UI')
+    await flushPendingMessages(state)
+
+    const raw = await readFile(getSessionFilePath(state), 'utf8')
+    expect(raw).not.toContain(screenshotData)
+    expect(raw).toContain('screenshot omitted from session storage')
+    expect(JSON.stringify(state.messages)).toContain(screenshotData)
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    expect(JSON.stringify(loaded?.messages)).not.toContain(screenshotData)
+    expect(JSON.stringify(loaded?.messages)).toContain('screenshot omitted from session storage')
+  })
 })
 
 describe('session-store: compact boundary', () => {
@@ -214,6 +263,36 @@ describe('session-store: compact boundary', () => {
     expect(loaded!.messages).toHaveLength(2)
     expect(loaded!.messages[0]).toMatchObject({ role: 'user' })
     expect(loaded!.messages[0].content).toContain('[Previous summary]')
+  })
+
+  it('omits visual-check image bytes when compaction reflushes retained messages', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-visual-boundary'
+    const screenshotData = 'BOUNDARY_SCREENSHOT_BASE64'
+    state.messages = [
+      { role: 'user', content: 'check again' },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-visual-boundary',
+            toolName: 'browserVisualCheck',
+            output: {
+              type: 'content',
+              value: [{ type: 'image-data', data: screenshotData, mediaType: 'image/jpeg' }],
+            },
+          },
+        ],
+      },
+    ] as any
+
+    await appendHeader(state, 'openai:test', 'check again')
+    await markBoundaryAndReflush(state)
+
+    const raw = await readFile(getSessionFilePath(state), 'utf8')
+    expect(raw).not.toContain(screenshotData)
+    expect(raw).toContain('screenshot omitted from session storage')
   })
 
   it('only the LAST boundary determines what is loaded (multiple boundaries)', async () => {

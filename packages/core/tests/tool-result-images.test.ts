@@ -72,6 +72,8 @@ describe('deliverToolImages', () => {
     const r = await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG)
     expect(r.images).toBeUndefined()
     expect(r.text).toContain('A MAP OF BERLIN')
+    expect(r.text).toContain('Privacy notice')
+    expect(r.text).toContain('google:gemini-2.5-flash')
     expect(vi.mocked(captionImageBuffer).mock.calls[0]?.[2]).toBe('google:gemini-2.5-flash')
   })
 
@@ -136,6 +138,16 @@ describe('deliverToolImages', () => {
     expect(r.images).toBeUndefined()
     expect(r.text).toContain('no vision model is available')
     expect(captionImageBuffer).not.toHaveBeenCalled()
+  })
+
+  it('uses a caller-specific fallback when no accessibility snapshot exists', async () => {
+    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG, {
+      unavailableFallback: 'No accessibility snapshot was returned for this check.',
+    })
+
+    expect(r.images).toBeUndefined()
+    expect(r.text).toContain('No accessibility snapshot was returned for this check.')
+    expect(r.text).not.toContain('work from the accessibility snapshot')
   })
 
   it('captions every image when several are returned', async () => {

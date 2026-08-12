@@ -13,6 +13,7 @@ import { tokenizeMemoryText } from '../../knowledge/memory/search-index.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
 import { debugLog, isAbortError } from '../../utils.js'
+import { withBrowserOperation } from '../browser/operation-lock.js'
 import { type BrowserMcp, PLAYWRIGHT_MCP_PACKAGE, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
@@ -124,6 +125,28 @@ function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: str
 /** Resolve the model to use for the sub-agent. Need the actual LanguageModel
  *  instance from the parent since we pass it to agentLoop. */
 export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageModel): Promise<RunSubAgentResult> {
+  if (args.agentName !== 'browser') return runSubAgentUnlocked(args, parentModel)
+
+  const startTime = Date.now()
+  try {
+    // Playwright MCP has one mutable current Page. Hold the transaction lock
+    // for the whole browser-agent run, not just individual MCP calls, so a
+    // visual check or second browser task cannot silently switch its tab.
+    return await withBrowserOperation(args.parentOptions.abortSignal, () => runSubAgentUnlocked(args, parentModel))
+  } catch (err) {
+    if (!isAbortError(err, args.parentOptions.abortSignal)) throw err
+    return {
+      resultText: '[Browser agent interrupted before startup]',
+      tokenUsage: zeroUsage(),
+      turnCount: 0,
+      toolCallCount: 0,
+      durationMs: Date.now() - startTime,
+      aborted: true,
+    }
+  }
+}
+
+async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageModel): Promise<RunSubAgentResult> {
   const {
     parentState,
     parentOptions,

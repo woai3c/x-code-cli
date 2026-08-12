@@ -66,16 +66,18 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 > `headless` 默认 `false`（可见窗口，方便观察）；`browser` 默认 `chrome`（用系统 Chrome），也可填 `chromium` / `msedge` / `firefox` / `webkit`。`vision` 控制额外的坐标操作能力，截图本身不受它影响。
 
-`browser: "chrome"` 只表示选择本机 Chrome 可执行文件，并不是连接你日常打开的 Chrome profile。Playwright 会启动独立的托管 profile；同一 workspace 下它自己的 cookies / localStorage 可以跨运行保留，但不会读取普通 Chrome 窗口的 tabs 或 cookies，也不需要插件。同一 workspace 同时运行两个 `xc` 时，可能争用这一个持久化 profile。
+`browser: "chrome"` 只表示选择本机 Chrome 可执行文件，并不是连接你日常打开的 Chrome profile。Playwright 会启动独立的托管 profile；同一 workspace 下它自己的 cookies / localStorage 可以跨运行保留，但不会读取普通 Chrome 窗口的 tabs 或 cookies，也不需要插件。同一 workspace 同时运行两个 `xc` 时，只允许先启动浏览器的一方占用这个 profile；另一方会在启动 Chrome 前提示关闭已有会话，不会自动切换成丢失登录态的临时 profile。进程异常退出留下的 X-Code 占用锁会自动回收，Chrome 自身的 profile 锁仍作为最终兜底。
 
 系统 prompt 会让模型在两条路径中选择：
 
-- 修改网页视觉效果后，默认可用的 `browserVisualCheck` 会在临时 tab 中打开本地 `localhost` 页面，只返回一张当前视口截图和简短的 console error 摘要。截图前后都会校验最终地址，外部重定向会被拒绝；随后关闭临时 tab 并恢复原 tab。导航产生的无障碍树不会进入模型上下文；模型看完后，图片会在下一轮替换成短占位文本，避免重复计费。
+- 修改网页视觉效果后，默认可用的 `browserVisualCheck` 会在临时 tab 中打开本地 `localhost` 页面，只返回一张当前视口截图和简短的 console error 摘要。截图前后都会校验最终地址，外部重定向会被拒绝；随后按 Playwright 的稳定 Page 身份关闭本次临时 tab，并通过 MCP tab API 恢复原 tab。若关闭或恢复失败，结果会明确警告，不会静默声称清理成功。导航产生的无障碍树不会进入模型上下文；模型看完后，图片会在下一轮替换成短占位文本，避免重复计费。连续三次未修改代码的视觉检查会被熔断，修改文件后自动恢复。截图原始 base64 不会写入项目的 `.x-code/sessions/*.jsonl`；MCP 偶尔保存的文件只进入当前系统临时目录，由操作系统或缓存清理软件管理。
 - 需要点击、输入、登录或多步操作时，才需要先开启 `/browser on`，再委派给 `browser` 子 agent。
 
 这是模型决策，不是每次 build 后必触发的确定性 hook，因此模型可能跳过。需要强校验时可以显式要求「做一次视觉检查」。
 
-**隔离设计**：完整的浏览器工具（navigate / snapshot / click …）仍只注入给 `browser` 子 agent 的私有上下文；主 loop 只加载一个很小的 `browserVisualCheck` 窄接口。两条路径复用同一个有状态浏览器进程；退出 CLI，或两项功能都关闭时才退出。若你手动关掉浏览器，下次任务会自动重连。视觉检查截图会发送给当前视觉模型；当前模型不支持图片时，会发送给已配置的视觉描述模型，再把简短检查结果交给当前模型。
+**隔离设计**：完整的浏览器工具（navigate / snapshot / click …）仍只注入给 `browser` 子 agent 的私有上下文；主 loop 只加载一个很小的 `browserVisualCheck` 窄接口。两条路径复用同一个有状态浏览器进程，并按完整浏览器任务串行执行，避免共享的“当前 tab”互相干扰；退出 CLI，或两项功能都关闭时才退出。若你手动关掉浏览器，下次任务会自动重连。视觉检查截图会发送给当前视觉模型；当前模型不支持图片时，会在进度和工具结果中提示后发送给已配置的视觉描述模型，再把简短检查结果交给当前模型。截图、网页内容和 console 输出始终按不可信数据处理，不会被当作指令；console 和浏览器启动诊断中的常见密钥及终端控制序列会先清理。
+
+`localhost` 限制只约束顶层页面及其最终跳转，并不是网络沙箱；本地页面仍可按自身代码加载 CDN、接口或其他外部资源。需要验证完全离线的页面时，应由应用或测试环境自行阻断网络。
 
 ---
 

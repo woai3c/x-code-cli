@@ -122,6 +122,50 @@ export interface BrowserConfig {
   args?: string[]
 }
 
+const BROWSER_CHANNELS = new Set<NonNullable<BrowserConfig['browser']>>([
+  'chrome',
+  'chromium',
+  'msedge',
+  'firefox',
+  'webkit',
+])
+const BROWSER_VIEWPORT_RE = /^(\d{3,4})\s*[,x]\s*(\d{3,4})$/i
+
+/** Sanitize hand-edited browser settings before constructing an MCP command.
+ *  Invalid optional fields fall back to managed defaults; a command override
+ *  is kept only when its argv is a plain string array. */
+export function resolveBrowserConfig(value: unknown): BrowserConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const raw = value as Record<string, unknown>
+  const browser =
+    typeof raw.browser === 'string' && BROWSER_CHANNELS.has(raw.browser as NonNullable<BrowserConfig['browser']>)
+      ? (raw.browser as NonNullable<BrowserConfig['browser']>)
+      : undefined
+  let viewport: string | undefined
+  if (typeof raw.viewport === 'string') {
+    const match = BROWSER_VIEWPORT_RE.exec(raw.viewport.trim())
+    const width = Number(match?.[1])
+    const height = Number(match?.[2])
+    if (match && width >= 320 && width <= 1_920 && height >= 320 && height <= 1_200) {
+      viewport = `${width},${height}`
+    }
+  }
+  const argsAreValid =
+    raw.args === undefined || (Array.isArray(raw.args) && raw.args.every((arg) => typeof arg === 'string'))
+  const command = typeof raw.command === 'string' && raw.command.trim() && argsAreValid ? raw.command.trim() : undefined
+  const args = command && Array.isArray(raw.args) ? (raw.args as string[]) : undefined
+  return {
+    ...(typeof raw.enabled === 'boolean' ? { enabled: raw.enabled } : {}),
+    ...(typeof raw.visualCheck === 'boolean' ? { visualCheck: raw.visualCheck } : {}),
+    ...(typeof raw.headless === 'boolean' ? { headless: raw.headless } : {}),
+    ...(browser ? { browser } : {}),
+    ...(viewport ? { viewport } : {}),
+    ...(typeof raw.vision === 'boolean' ? { vision: raw.vision } : {}),
+    ...(command ? { command } : {}),
+    ...(command && args ? { args } : {}),
+  }
+}
+
 export interface MemoryRecallConfig {
   maxTopicsPerTurn: number
   maxTokensPerTopic: number
@@ -321,7 +365,9 @@ export function loadUserConfig(): UserConfig {
     const raw = fsSync.readFileSync(getUserConfigPath(), 'utf-8')
     const parsed = JSON.parse(raw) as unknown
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as UserConfig
+      const config = parsed as UserConfig
+      if ('browser' in config) config.browser = resolveBrowserConfig(config.browser)
+      return config
     }
   } catch {
     // File may not exist yet, or is malformed — either way fall through to {}

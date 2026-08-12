@@ -8,6 +8,7 @@ import {
   DEFAULT_MEMORY_CONFIG,
   DEFAULT_STREAM_CONFIG,
   getAvailableProviders,
+  resolveBrowserConfig,
   resolveMemoryConfig,
   resolveModelId,
   resolveStreamConfig,
@@ -185,5 +186,27 @@ describe('stream config', () => {
         stream: { maxRetries: 101, idleTimeoutMs: 50 },
       }),
     ).toEqual(DEFAULT_STREAM_CONFIG)
+  })
+})
+
+describe('browser config', () => {
+  it('normalizes supported channels and bounded viewport dimensions', () => {
+    expect(resolveBrowserConfig({ browser: 'chromium', viewport: '1440x900', headless: true })).toEqual({
+      browser: 'chromium',
+      viewport: '1440,900',
+      headless: true,
+    })
+  })
+
+  it('drops malformed browser settings and invalid custom argv', () => {
+    expect(
+      resolveBrowserConfig({
+        browser: 'safari',
+        viewport: '99999,1',
+        command: ' custom-browser ',
+        args: ['--stdio', 42],
+        enabled: 'yes',
+      }),
+    ).toEqual({})
   })
 })

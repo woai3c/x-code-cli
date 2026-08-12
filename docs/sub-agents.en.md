@@ -102,18 +102,27 @@ Choosing `chrome` selects the installed Chrome executable, not the profile of
 your everyday Chrome window. Playwright launches a separate managed profile;
 it can retain its own cookies and local storage between runs for the same
 workspace, but it does not attach to your existing tabs or normal Chrome
-cookies. No extension is required. Two concurrent `xc` instances in the same
-workspace can contend for that one persistent profile.
+cookies. No extension is required. If two `xc` instances in the same workspace
+try to use that persistent profile, the first browser owner wins; the other
+instance reports the existing session before launching Chrome instead of
+silently switching to a temporary profile and losing signed-in state. X-Code
+reclaims a lease left by a crashed process, while Chrome's own profile lock
+remains the final fallback.
 
 The system prompt asks the model to choose between two paths:
 
 - After visual web changes, the default-enabled `browserVisualCheck` opens a
   local `localhost` page in a temporary tab and returns one viewport screenshot
   plus a compact console-error summary. It verifies the final URL before and
-  after capture, rejects external redirects, closes the temporary tab, and
-  restores the previous active tab. Navigation snapshots never enter model
-  context, and the image is replaced with a short placeholder after the model
-  has inspected it.
+  after capture, rejects external redirects, closes the temporary tab by its
+  stable Playwright Page identity, then restores the prior Page through the MCP
+  tab API. Incomplete close/restore cleanup is reported explicitly. Navigation
+  snapshots never enter model context, and the image is replaced with a short
+  placeholder after the model has inspected it. Raw screenshot base64 is not written to the project's
+  `.x-code/sessions/*.jsonl`; occasional MCP output files live only under the
+  current system temp directory and are left to the OS or cache cleaners. Three
+  consecutive checks without a file modification trip a circuit breaker; a
+  successful edit resets it.
 - Clicking, typing, authentication, and other multi-step flows require
   `/browser on` and use the interactive `browser` sub-agent.
 
@@ -122,11 +131,20 @@ skipped. You can explicitly ask for a visual check when verification matters.
 
 **Isolation**: the full browser tool set (navigate / snapshot / click …) remains
 private to the `browser` sub-agent. The main loop only exposes the narrow
-`browserVisualCheck` interface. Both paths reuse the same stateful
-browser process, which closes on CLI exit or when both features are off; if you
-close it yourself, the next task reconnects automatically. A visual check sends
-the captured local UI image to the active vision model, or to a configured
-vision-caption model when the active model is text-only.
+`browserVisualCheck` interface. Both paths reuse the same stateful browser
+process and serialize complete browser tasks so their shared current tab cannot
+interfere. It closes on CLI exit or when both features are off; if you close it
+yourself, the next task reconnects automatically. A visual check sends the
+captured local UI image to the active vision model, or—after a progress/result
+notice—to a configured vision-caption model when the active model is text-only.
+Screenshots, page content, and console output are always treated as untrusted
+data, never instructions; common secrets and terminal control sequences are
+scrubbed from console and browser-startup diagnostics.
+
+The `localhost` restriction covers only the top-level page and its final
+redirects; it is not a network sandbox. The local application can still load
+CDNs, APIs, or other external resources according to its own code. Enforce
+offline behavior in the app or test environment when that is required.
 
 ---
 

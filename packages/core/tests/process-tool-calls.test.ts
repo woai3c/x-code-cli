@@ -7,7 +7,7 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
-import { recordToolCall } from '../src/agent/loop-guard.js'
+import { hashToolCall, recordToolCall } from '../src/agent/loop-guard.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import { createCheckpoint, restoreCheckpoint } from '../src/agent/snapshot.js'
 import { partitionToolCalls, processToolCalls } from '../src/agent/tool-execution.js'
@@ -365,6 +365,156 @@ describe('processToolCalls edit validation', () => {
     expect(callbacks.onFileEdit).not.toHaveBeenCalled()
     expect(callbacks.onToolResult).toHaveBeenCalledWith(toolCallId, expect.stringContaining('was not found'), true)
     expect(state.filesModified.size).toBe(0)
+  })
+})
+
+describe('processToolCalls visual-check retry policy', () => {
+  it('does not let the generic loop guard block a check repeated after visual fixes', async () => {
+    const toolName = 'browserVisualCheck'
+    const toolCallId = 'tc-visual-retry'
+    const input = { url: 'http://localhost:5173/' }
+    const state = createLoopState()
+    state.recentToolCalls = [
+      { toolName, hash: hashToolCall(toolName, input) },
+      { toolName, hash: hashToolCall(toolName, input) },
+    ]
+    state.messages.push(
+      { role: 'user', content: 'check again after the fix' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName, input }],
+      } as ModelMessage,
+    )
+
+    const callbacks = makeCallbacks()
+    await processToolCalls(
+      [{ toolName, toolCallId, input }],
+      state,
+      { ...options, browserVisualCheckEnabled: false },
+      callbacks,
+      stubModel,
+    )
+
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      toolCallId,
+      expect.stringContaining('Automatic local visual checks are disabled'),
+      true,
+    )
+    expect(callbacks.onToolResult).not.toHaveBeenCalledWith(toolCallId, expect.stringContaining('[loop-guard]'), true)
+  })
+
+  it('blocks a fourth visual check when no successful file change occurred', async () => {
+    const toolName = 'browserVisualCheck'
+    const toolCallId = 'tc-visual-limit'
+    const input = { url: 'http://localhost:5173/' }
+    const state = createLoopState()
+    state.visualCheckCallsSinceMutation = 3
+    state.messages.push(
+      { role: 'user', content: 'keep checking' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName, input }],
+      } as ModelMessage,
+    )
+    const callbacks = makeCallbacks()
+
+    await processToolCalls([{ toolName, toolCallId, input }], state, options, callbacks, stubModel)
+
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      toolCallId,
+      expect.stringContaining('[visual-check-guard]'),
+      true,
+    )
+  })
+
+  it('stops the current turn when the user pauses repeated visual checks', async () => {
+    const visualCall = {
+      toolName: 'browserVisualCheck',
+      toolCallId: 'tc-visual-pause',
+      input: { url: 'http://localhost:5173/' },
+    }
+    const laterCall = {
+      toolName: 'askUser',
+      toolCallId: 'tc-after-pause',
+      input: {
+        question: 'This call must not run',
+        options: [
+          { label: 'a', description: 'a' },
+          { label: 'b', description: 'b' },
+        ],
+      },
+    }
+    const state = createLoopState()
+    state.visualCheckCallsSinceMutation = 4
+    state.messages.push(
+      { role: 'user', content: 'keep checking' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [visualCall, laterCall].map((call) => ({ type: 'tool-call', ...call })),
+      } as ModelMessage,
+    )
+    const onAskUser = vi.fn().mockResolvedValue('Pause')
+    const callbacks = makeCallbacks({ onAskUser })
+
+    const result = await processToolCalls([visualCall, laterCall], state, options, callbacks, stubModel)
+
+    expect(result).toEqual({ stopTurn: true })
+    expect(onAskUser).toHaveBeenCalledTimes(1)
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      laterCall.toolCallId,
+      expect.stringContaining('user paused the current turn'),
+      true,
+    )
+    expect(state.messages.at(-1)?.role).toBe('tool')
+  })
+
+  it('re-arms the visual-check budget when the user chooses Continue', async () => {
+    const toolName = 'browserVisualCheck'
+    const toolCallId = 'tc-visual-continue'
+    const input = { url: 'http://localhost:5173/' }
+    const state = createLoopState()
+    state.visualCheckCallsSinceMutation = 4
+    state.messages.push(
+      { role: 'user', content: 'keep checking' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName, input }],
+      } as ModelMessage,
+    )
+
+    const result = await processToolCalls(
+      [{ toolName, toolCallId, input }],
+      state,
+      options,
+      makeCallbacks({ onAskUser: vi.fn().mockResolvedValue('Continue') }),
+      stubModel,
+    )
+
+    expect(result).toEqual({ stopTurn: false })
+    expect(state.visualCheckCallsSinceMutation).toBe(0)
+  })
+
+  it('resets the visual-check budget after a successful file edit', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-visual-budget-'))
+    temporaryDirectories.push(dir)
+    const filePath = path.join(dir, 'page.tsx')
+    await fs.writeFile(filePath, 'before', 'utf8')
+    const toolCallId = 'tc-visual-budget-edit'
+    const input = { filePath, oldString: 'before', newString: 'after' }
+    const state = createLoopState()
+    state.visualCheckCallsSinceMutation = 3
+    state.messages.push(
+      { role: 'user', content: 'fix the page' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId, toolName: 'edit', input }],
+      } as ModelMessage,
+    )
+
+    await processToolCalls([{ toolName: 'edit', toolCallId, input }], state, options, makeCallbacks(), stubModel)
+
+    expect(await fs.readFile(filePath, 'utf8')).toBe('after')
+    expect(state.visualCheckCallsSinceMutation).toBe(0)
   })
 })
 
