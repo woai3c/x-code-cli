@@ -260,6 +260,8 @@ export async function createTuiHarness(options: {
       const exitPattern = new RegExp(`${EXIT_MARKER}(-?\\d+)`)
       if (isWindows) {
         const before = raw.length
+        await waitFor(() => raw.slice(before).includes('\x1b[?1049l'), 'CLI terminal restoration', timeoutMs)
+        await waitForTerminalQuiet()
         processUnderTest.write(`Write-Output ('__X_CODE_CLI_' + 'EXIT__:0')\r`)
         await waitFor(() => exitPattern.test(raw.slice(before)), 'CLI exit marker', timeoutMs)
       }
