@@ -470,11 +470,16 @@ async function replaceWithSnapshot(filePath: string, lines: readonly string[]): 
     await handle.close()
     handle = undefined
     await fs.rename(tempPath, filePath)
-    const directory = await fs.open(path.dirname(filePath), 'r')
-    try {
-      await directory.sync()
-    } finally {
-      await directory.close()
+    // Windows cannot flush directory handles (fsync returns EPERM). The
+    // renamed file itself was already flushed above; keep the directory
+    // durability barrier on platforms that support it.
+    if (process.platform !== 'win32') {
+      const directory = await fs.open(path.dirname(filePath), 'r')
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
     }
     chmodDone.add(filePath)
   } catch (error) {

@@ -8,7 +8,7 @@ import { startFakeProvider } from '../fixtures/fake-provider-server.js'
 import { createTuiHarness } from './harness.js'
 import { exitTui, submitInput } from './test-context.js'
 
-describe('TUI cross-session messaging', () => {
+describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () => {
   it('registers named agents and lets two locally trusted sessions exchange without authority dialogs', async () => {
     const alphaProvider = await startFakeProvider([
       {

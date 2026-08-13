@@ -204,11 +204,15 @@ export function createPeerRegistry(): PeerRegistry {
         await handle.close()
         handle = undefined
         await fs.rename(tempPath, finalPath)
-        const directory = await fs.open(registryDir, 'r')
-        try {
-          await directory.sync()
-        } finally {
-          await directory.close()
+        // Windows cannot flush directory handles (fsync returns EPERM).
+        // The registration file itself has already been flushed above.
+        if (process.platform !== 'win32') {
+          const directory = await fs.open(registryDir, 'r')
+          try {
+            await directory.sync()
+          } finally {
+            await directory.close()
+          }
         }
       } catch (error) {
         await handle?.close().catch(() => {})

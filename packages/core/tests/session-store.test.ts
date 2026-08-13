@@ -46,6 +46,7 @@ import { accumulateUsage, normalizeLanguageModelUsage } from '../src/agent/usage
 
 let tempDir: string
 let originalCwd: string
+const itPosix = it.runIf(process.platform !== 'win32')
 
 beforeEach(() => {
   // Each test gets a clean tmp cwd so jsonl writes don't pollute the
@@ -593,7 +594,7 @@ describe('session-store: concurrent appends', () => {
     ])
   })
 
-  it('forces a root snapshot after rename succeeds but directory fsync fails', async () => {
+  itPosix('forces a root snapshot after rename succeeds but directory fsync fails', async () => {
     const state = createLoopState()
     state.sessionId = '20260101-120000-snapshot-dir-fsync'
     state.messages = [{ role: 'user', content: 'durable root' }]
@@ -638,6 +639,36 @@ describe('session-store: concurrent appends', () => {
       { role: 'assistant', content: 'snapshot reached rename' },
       { role: 'user', content: 'continue after uncertain durability' },
     ])
+  })
+
+  it('commits a snapshot without opening an unsupported Windows directory handle', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-windows-snapshot'
+    state.messages = [{ role: 'user', content: 'windows durable root' }]
+    const filePath = getSessionFilePath(state)
+    const sessionDirectory = join(filePath, '..')
+    const realOpen = fs.open.bind(fs)
+    let directoryOpenAttempts = 0
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === sessionDirectory && args[1] === 'r') {
+        directoryOpenAttempts++
+        throw Object.assign(new Error('operation not permitted, fsync'), { code: 'EPERM' })
+      }
+      return realOpen(...args)
+    })
+    try {
+      await appendHeader(state, 'test:model', 'windows durable root')
+      await flushPendingMessages(state)
+    } finally {
+      openSpy.mockRestore()
+      platformSpy.mockRestore()
+    }
+
+    expect(directoryOpenAttempts).toBe(0)
+    const loaded = await loadSession(filePath)
+    expect(loaded?.transcriptIntegrity).toBe('clean')
+    expect(loaded?.messages).toEqual([{ role: 'user', content: 'windows durable root' }])
   })
 
   it('lets cleanup enqueue a recovery snapshot behind a failing delta flush', async () => {

@@ -14,6 +14,7 @@ import type { PeerTransport } from '../src/peers/transport.js'
 import type { PeerRegistrationV1 } from '../src/peers/types.js'
 
 let testDir: string
+const itPosix = it.runIf(process.platform !== 'win32')
 
 beforeEach(async () => {
   testDir = await mkdtemp(path.join(tmpdir(), 'x-code-registry-'))
@@ -190,7 +191,7 @@ describe('owner-only peer registry', () => {
     expect(await registry.read(value.instanceId)).toBeNull()
   })
 
-  it('removes a dead colliding registration without unlinking a live registration shared socket', async () => {
+  itPosix('removes a dead colliding registration without unlinking a live registration shared socket', async () => {
     const registry = createPeerRegistry()
     await registry.initialize()
     const deadId = 'bbbbbbbb-1111-4111-8111-111111111111'
