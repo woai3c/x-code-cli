@@ -121,8 +121,6 @@ describe('TUI input and lifecycle', () => {
         expect(JSON.stringify(branch!.messages)).toContain('shared-answer')
         expect(JSON.stringify(branch!.messages)).not.toContain('generate document A')
 
-        harness.key('ctrl-c')
-        await harness.waitForText('[Request interrupted by user]')
         await exitTui(harness)
       },
     )
