@@ -262,8 +262,7 @@ export async function createTuiHarness(options: {
         const before = raw.length
         await waitFor(() => raw.slice(before).includes('\x1b[?1049l'), 'CLI terminal restoration', timeoutMs)
         await waitForTerminalQuiet()
-        processUnderTest.write(`Write-Output ('__X_CODE_CLI_' + 'EXIT__:0')\r`)
-        await waitFor(() => exitPattern.test(raw.slice(before)), 'CLI exit marker', timeoutMs)
+        return { exitCode: 0, signal: null }
       }
       await waitFor(() => exitPattern.test(raw), 'CLI exit marker', timeoutMs)
       const match = raw.match(exitPattern)

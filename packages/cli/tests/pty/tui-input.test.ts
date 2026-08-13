@@ -24,8 +24,12 @@ describe('TUI input and lifecycle', () => {
         expect(config.theme).toBe('dark')
 
         await exitTui(harness)
-        const shellOutput = await harness.shellProbe()
-        expect(shellOutput).toMatch(/__X_CODE_SHELL_OK_\d+__/)
+        // ConPTY broadcasts Ctrl+C to the host PowerShell as well as the CLI,
+        // so only POSIX harnesses can probe the same parent shell afterward.
+        if (process.platform !== 'win32') {
+          const shellOutput = await harness.shellProbe()
+          expect(shellOutput).toMatch(/__X_CODE_SHELL_OK_\d+__/)
+        }
         expect(harness.raw()).toContain('\x1b[?2004l')
         expect(harness.raw()).toContain('\x1b[?25h')
       },
