@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
 import { exitTui, inputLine, submitInput, typeInput, withTui } from './test-context.js'
 
 describe('TUI input and lifecycle', () => {
@@ -42,10 +43,10 @@ describe('TUI input and lifecycle', () => {
         await harness.settle()
       }
       harness.key('backspace')
-      await harness.waitForScreen((screen) => screen.includes('❯ 中文abc'), 'whole emoji deletion')
+      await harness.waitForScreen((screen) => screen.includes(`${GLYPH_PROMPT_ARROW} 中文abc`), 'whole emoji deletion')
 
       expect(harness.text()).not.toContain('�')
-      expect(inputLine(harness)).toBe('❯ 中文abc')
+      expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} 中文abc`)
     })
   })
 
@@ -53,13 +54,13 @@ describe('TUI input and lifecycle', () => {
     await withTui('input-shell-clear', [], async ({ harness }) => {
       await typeInput(harness, 'clear with ctrl-u')
       harness.key('ctrl-u')
-      await harness.waitForScreen(() => inputLine(harness) === '❯', 'Ctrl+U input clear')
+      await harness.waitForScreen(() => inputLine(harness) === GLYPH_PROMPT_ARROW, 'Ctrl+U input clear')
 
       harness.paste('first line\nsecond line\nthird line')
       await harness.waitForScreen((screen) => screen.includes('[Pasted text #1 +3 lines]'), 'paste placeholder')
       harness.key('ctrl-home')
       await harness.waitForScreen(
-        (screen) => inputLine(harness) === '❯' && !screen.includes('[Pasted text #1 +3 lines]'),
+        (screen) => inputLine(harness) === GLYPH_PROMPT_ARROW && !screen.includes('[Pasted text #1 +3 lines]'),
         'Ctrl+Home input clear',
       )
     })
@@ -124,20 +125,23 @@ describe('TUI input and lifecycle', () => {
         await harness.waitForText('answer-two')
 
         harness.key('up')
-        await harness.waitForScreen((screen) => screen.includes('❯ hey'), 'latest history entry')
+        await harness.waitForScreen((screen) => screen.includes(`${GLYPH_PROMPT_ARROW} hey`), 'latest history entry')
         harness.key('end')
         await harness.settle()
         await typeInput(harness, '-edited')
-        expect(inputLine(harness)).toBe('❯ hey-edited')
+        expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} hey-edited`)
 
         harness.key('down')
         await harness.waitForScreen(
-          (screen) => screen.includes('❯') && !screen.includes('❯ hey-edited'),
+          (screen) => screen.includes(GLYPH_PROMPT_ARROW) && !screen.includes(`${GLYPH_PROMPT_ARROW} hey-edited`),
           'draft restore',
         )
         harness.key('up')
-        await harness.waitForScreen((screen) => screen.includes('❯ hey'), 'history entry restored again')
-        expect(inputLine(harness)).toBe('❯ hey')
+        await harness.waitForScreen(
+          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} hey`),
+          'history entry restored again',
+        )
+        expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} hey`)
       },
     )
   })
@@ -151,7 +155,10 @@ describe('TUI input and lifecycle', () => {
         await harness.waitForScreen((screen) => screen.includes('@notes/设计 方案[1].md'), 'CJK file completion menu')
 
         harness.key('enter')
-        await harness.waitForScreen((screen) => screen.includes('❯ @notes/设计 方案[1].md'), 'completed CJK file path')
+        await harness.waitForScreen(
+          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} @notes/设计 方案[1].md`),
+          'completed CJK file path',
+        )
         await typeInput(harness, ' done')
         expect(inputLine(harness)).toContain('@notes/设计 方案[1].md done')
       },

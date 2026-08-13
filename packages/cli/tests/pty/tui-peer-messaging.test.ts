@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { GLYPH_SELECT_POINTER } from '../../src/ui/render/terminal-glyphs.js'
 import { createTestWorkspace } from '../fixtures/cli-test-helpers.js'
 import { startFakeProvider } from '../fixtures/fake-provider-server.js'
 import { createTuiHarness } from './harness.js'
@@ -154,7 +155,10 @@ describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () =
         await beta.waitForScreen((screen) => screen.includes('Accept held message from alpha'), 'held dialog visible')
         if (decision === 'Refuse') {
           beta.key('down')
-          await beta.waitForScreen((screen) => screen.includes('❯ 2. Refuse'), 'held refusal selected')
+          await beta.waitForScreen(
+            (screen) => screen.includes(`${GLYPH_SELECT_POINTER} 2. Refuse`),
+            'held refusal selected',
+          )
         }
         beta.key('enter')
         await beta.waitForText(`${decision === 'Accept' ? 'Accepted' : 'Refused'} held message from alpha.`)

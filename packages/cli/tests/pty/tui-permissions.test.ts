@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { GLYPH_SELECT_POINTER } from '../../src/ui/render/terminal-glyphs.js'
 import { waitFor } from '../fixtures/cli-test-helpers.js'
 import { submitInput, withTui } from './test-context.js'
 
@@ -89,7 +90,10 @@ describe('TUI permissions', () => {
       await harness.waitForText('X-Code wants to write a file')
       expect(harness.text()).toContain('all edits this session')
       harness.key('down')
-      await harness.waitForScreen((screen) => screen.includes("❯ Yes, don't ask again"), 'always option selected')
+      await harness.waitForScreen(
+        (screen) => screen.includes(`${GLYPH_SELECT_POINTER} Yes, don't ask again`),
+        'always option selected',
+      )
       harness.key('enter')
       await harness.waitForText('first-write-done')
       await waitFor(() => pathExists(first), 'first always-approved file')

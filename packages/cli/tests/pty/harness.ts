@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
+import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
 import { CLI_BIN, isolatedCliEnv, waitFor } from '../fixtures/cli-test-helpers.js'
 import type { TestWorkspace } from '../fixtures/cli-test-helpers.js'
 import type { FakeProvider } from '../fixtures/fake-provider-server.js'
@@ -163,14 +164,14 @@ export async function createTuiHarness(options: {
   const waitForInputReady = async (): Promise<void> => {
     const probe = 'q'
     const deadline = Date.now() + 5000
-    while (!screenText(terminal).includes(`❯ ${probe}`)) {
+    while (!screenText(terminal).includes(`${GLYPH_PROMPT_ARROW} ${probe}`)) {
       if (Date.now() >= deadline) throw new Error('Timed out waiting for interactive stdin listener')
       processUnderTest.write(probe)
       await waitForRendered()
       await waitFor(
         async () => {
           await waitForRendered()
-          return screenText(terminal).includes(`❯ ${probe}`)
+          return screenText(terminal).includes(`${GLYPH_PROMPT_ARROW} ${probe}`)
         },
         'one input readiness probe attempt',
         100,
@@ -200,7 +201,6 @@ export async function createTuiHarness(options: {
     startCli: async (args = []) => {
       if (cliStarted) throw new Error('This PTY harness already started a CLI process')
       cliStarted = true
-      const startOffset = raw.length
       const cliArgs = ['--no-plugins', '--no-hooks', ...args]
       const values = [process.execPath, CLI_BIN, ...cliArgs]
       const command = isWindows
@@ -208,7 +208,14 @@ export async function createTuiHarness(options: {
         : `${values.map(posixQuote).join(' ')}; __x_code_status=$?; printf '\\n${EXIT_MARKER}%s\\n' "$__x_code_status"\n`
       processUnderTest.write(command)
       await waitFor(() => raw.includes('test-model'), 'CLI header', 10_000)
-      await waitFor(() => raw.slice(startOffset).includes('❯'), 'interactive input prompt', 10_000)
+      await waitFor(
+        async () => {
+          await waitForRendered()
+          return lastPromptLine(terminalScreen(terminal)) !== ''
+        },
+        'interactive input prompt',
+        10_000,
+      )
       await waitForRendered()
       await waitForTerminalQuiet()
       if (options.seedTheme !== false) await waitForInputReady()
