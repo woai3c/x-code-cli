@@ -106,10 +106,11 @@ describe('TUI interruption', () => {
       const pidFile = path.join(workspace.cwd, 'shell-child.pid')
       const finishedFile = path.join(workspace.cwd, 'shell-child.finished')
       const script = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(finishedFile)},'done'),5000)`
+      const encodedScript = Buffer.from(script).toString('base64')
       provider.enqueue({
         type: 'tool-call',
         name: 'shell',
-        input: { command: `node -e ${JSON.stringify(script)}` },
+        input: { command: `node -e "eval(Buffer.from('${encodedScript}','base64').toString())"` },
         finalText: 'shell-interrupt-recovery',
       })
 

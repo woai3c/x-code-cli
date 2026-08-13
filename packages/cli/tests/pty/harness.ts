@@ -118,10 +118,9 @@ export async function createTuiHarness(options: {
     rows,
     cwd: options.workspace.cwd,
     env,
-    // ConPTY's console-list helper races with teardown on headless Windows
-    // runners and emits AttachConsole failures. WinPTY provides the same
-    // terminal contract needed by these black-box tests without that helper.
-    ...(isWindows ? { useConpty: false } : {}),
+    // The DLL-backed ConPTY path avoids the console-list helper, which cannot
+    // AttachConsole during teardown on headless Windows runners.
+    ...(isWindows ? { useConpty: true, useConptyDll: true } : {}),
   })
   let raw = ''
   let disposed = false
@@ -259,6 +258,11 @@ export async function createTuiHarness(options: {
     raw: () => raw,
     waitForCliExit: async (timeoutMs = 10_000) => {
       const exitPattern = new RegExp(`${EXIT_MARKER}(-?\\d+)`)
+      if (isWindows) {
+        const before = raw.length
+        processUnderTest.write(`Write-Output ('__X_CODE_CLI_' + 'EXIT__:0')\r`)
+        await waitFor(() => exitPattern.test(raw.slice(before)), 'CLI exit marker', timeoutMs)
+      }
       await waitFor(() => exitPattern.test(raw), 'CLI exit marker', timeoutMs)
       const match = raw.match(exitPattern)
       return { exitCode: match ? Number(match[1]) : null, signal: null }
@@ -266,7 +270,8 @@ export async function createTuiHarness(options: {
     shellProbe: async (timeoutMs = 5000) => {
       const marker = `__X_CODE_SHELL_OK_${Date.now()}__`
       const before = raw.length
-      processUnderTest.write(isWindows ? `Write-Output ${powershellQuote(marker)}\r` : `printf '${marker}\\n'\n`)
+      const windowsProbe = `Write-Output (${powershellQuote(marker.slice(0, -2))} + ${powershellQuote(marker.slice(-2))})\r`
+      processUnderTest.write(isWindows ? windowsProbe : `printf '${marker}\\n'\n`)
       await waitFor(() => raw.slice(before).includes(marker), 'post-CLI shell marker', timeoutMs)
       await waitForRendered()
       return raw.slice(before)
