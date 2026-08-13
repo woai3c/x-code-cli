@@ -19,10 +19,9 @@
 //
 // Precedence: project > user. An explicit value in a higher-priority
 // scope wins; a missing entry falls through.
-import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { readSettingsFile } from '../settings-io.js'
+import { mutateSettingsFile, readSettingsFile } from '../settings-io.js'
 import { XCODE_DIR, userXcodeDir } from '../utils.js'
 import type { PluginScope } from './types.js'
 
@@ -38,6 +37,16 @@ interface PluginSettingsFile {
   enabledPlugins?: Record<string, boolean>
 }
 
+function enabledPluginsFrom(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+
+  const enabledPlugins: Record<string, boolean> = {}
+  for (const [pluginId, enabled] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof enabled === 'boolean') enabledPlugins[pluginId] = enabled
+  }
+  return enabledPlugins
+}
+
 export function settingsPathForScope(scope: PluginScope, cwd: string = process.cwd()): string {
   if (scope === 'user') return path.join(userXcodeDir(), 'settings.json')
   return path.join(cwd, XCODE_DIR, 'settings.local.json')
@@ -45,14 +54,7 @@ export function settingsPathForScope(scope: PluginScope, cwd: string = process.c
 
 async function readSettings(scope: PluginScope, cwd: string): Promise<PluginSettingsFile> {
   const obj = await readSettingsFile(settingsPathForScope(scope, cwd))
-  if (obj.enabledPlugins && typeof obj.enabledPlugins === 'object' && !Array.isArray(obj.enabledPlugins)) {
-    const out: Record<string, boolean> = {}
-    for (const [k, v] of Object.entries(obj.enabledPlugins as Record<string, unknown>)) {
-      if (typeof v === 'boolean') out[k] = v
-    }
-    return { enabledPlugins: out }
-  }
-  return {}
+  return { enabledPlugins: enabledPluginsFrom(obj.enabledPlugins) }
 }
 
 /** Resolved per-plugin enable state, plus which scope decided it (for
@@ -112,20 +114,14 @@ export async function setPluginEnabled(
   cwd: string = process.cwd(),
 ): Promise<'changed' | 'noop'> {
   const file = settingsPathForScope(scope, cwd)
-  const existing = await readSettingsFile(file)
-
-  const currentMap =
-    existing.enabledPlugins && typeof existing.enabledPlugins === 'object' && !Array.isArray(existing.enabledPlugins)
-      ? { ...(existing.enabledPlugins as Record<string, boolean>) }
-      : {}
-
-  if (currentMap[pluginId] === enabled) return 'noop'
-  currentMap[pluginId] = enabled
-  existing.enabledPlugins = currentMap
-
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
-  return 'changed'
+  const changed = await mutateSettingsFile(file, (existing) => {
+    const currentMap = enabledPluginsFrom(existing.enabledPlugins)
+    if (currentMap[pluginId] === enabled) return false
+    currentMap[pluginId] = enabled
+    existing.enabledPlugins = currentMap
+    return true
+  })
+  return changed ? 'changed' : 'noop'
 }
 
 /** Remove a plugin's entry from a scope's enabledPlugins (used by
@@ -136,26 +132,14 @@ export async function clearPluginEntry(
   cwd: string = process.cwd(),
 ): Promise<'changed' | 'noop'> {
   const file = settingsPathForScope(scope, cwd)
-  const existing = await readSettingsFile(file)
+  const changed = await mutateSettingsFile(file, (existing) => {
+    const currentMap = enabledPluginsFrom(existing.enabledPlugins)
+    if (!(pluginId in currentMap)) return false
+    delete currentMap[pluginId]
 
-  if (
-    !existing.enabledPlugins ||
-    typeof existing.enabledPlugins !== 'object' ||
-    Array.isArray(existing.enabledPlugins)
-  ) {
-    return 'noop'
-  }
-
-  const map = { ...(existing.enabledPlugins as Record<string, boolean>) }
-  if (!(pluginId in map)) return 'noop'
-  delete map[pluginId]
-
-  if (Object.keys(map).length === 0) {
-    delete existing.enabledPlugins
-  } else {
-    existing.enabledPlugins = map
-  }
-
-  await fs.writeFile(file, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
-  return 'changed'
+    if (Object.keys(currentMap).length === 0) delete existing.enabledPlugins
+    else existing.enabledPlugins = currentMap
+    return true
+  })
+  return changed ? 'changed' : 'noop'
 }

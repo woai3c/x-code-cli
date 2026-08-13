@@ -16,7 +16,6 @@ import {
   fetchMarketplace,
   installPlugin,
   listInstalledPlugins,
-  lookupPlugin,
   readAllCachedMarketplaces,
   readKnownMarketplaces,
   refreshPluginContributions,
@@ -25,9 +24,10 @@ import {
   setPluginEnabled,
   uninstallPlugin,
 } from '@x-code-cli/core'
-import type { AgentOptions, PluginScope, PluginSource } from '@x-code-cli/core'
+import type { AgentOptions, PluginScope } from '@x-code-cli/core'
 
 import { formatPluginSource } from '../../../plugins/format.js'
+import { resolvePluginInstallSource } from '../../../plugins/install-source.js'
 import { searchMarketplacePlugins } from '../../../plugins/search.js'
 import { parseScopeFlag } from './scope-flag.js'
 
@@ -178,52 +178,26 @@ export function createPluginCommandHandler(deps: PluginCommandDeps) {
     }
     raw = source_str
 
-    let source: PluginSource
-    let marketplace: string
-    let expectedName: string | undefined
-
-    const isPath = raw.startsWith('./') || raw.startsWith('../') || raw.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(raw)
-    const isGitUrl = /^https?:\/\//i.test(raw) || raw.startsWith('git@')
-    const isGhShort = raw.startsWith('github:')
-    const atIdx = raw.lastIndexOf('@')
-    const isMarketplaceRef = atIdx > 0 && !isPath && !isGitUrl && !isGhShort
-
-    if (isMarketplaceRef) {
-      const name = raw.slice(0, atIdx)
-      const mpName = raw.slice(atIdx + 1)
-      const found = await lookupPlugin(`${name}@${mpName}`)
-      if (!found) {
+    const parsed = await resolvePluginInstallSource(raw)
+    if (!parsed.ok) {
+      if (parsed.code === 'plugin-not-found') {
         addCommandMessage(
           text,
-          `Plugin \`${name}\` not found in marketplace \`${mpName}\`. ` +
-            `Run \`/plugin marketplace refresh ${mpName}\` or check the spelling.`,
+          `Plugin \`${parsed.pluginName}\` not found in marketplace \`${parsed.marketplace}\`. ` +
+            `Run \`/plugin marketplace refresh ${parsed.marketplace}\` or check the spelling.`,
         )
-        return
-      }
-      source = found.entry.source
-      marketplace = mpName
-      expectedName = name
-    } else if (isGhShort) {
-      const m = raw.match(/^github:([^/]+)\/(.+?)(?:#(.+))?$/i)
-      if (!m) {
+      } else if (parsed.code === 'invalid-github-source') {
         addCommandMessage(text, 'Invalid github source. Expected `github:owner/repo` or `github:owner/repo#ref`.')
-        return
+      } else {
+        addCommandMessage(
+          text,
+          `Unrecognised source: \`${parsed.source}\`. Use \`name@marketplace\`, \`github:owner/repo\`, an https/git URL, or a path.`,
+        )
       }
-      source = { kind: 'github', owner: m[1]!, repo: m[2]!, ref: m[3] }
-      marketplace = 'local'
-    } else if (isGitUrl) {
-      source = { kind: 'git', url: raw }
-      marketplace = 'local'
-    } else if (isPath) {
-      source = { kind: 'local', path: raw }
-      marketplace = 'local'
-    } else {
-      addCommandMessage(
-        text,
-        `Unrecognised source: \`${raw}\`. Use \`name@marketplace\`, \`github:owner/repo\`, an https/git URL, or a path.`,
-      )
       return
     }
+
+    const { source, marketplace, expectedName } = parsed
 
     addCommandMessage(text, `Installing from ${formatPluginSource(source)} …`)
     try {

@@ -32,19 +32,6 @@ export function appendTrackedMessage(
   return entry
 }
 
-export function appendTrackedMessages(
-  state: LoopState,
-  messages: readonly ModelMessage[],
-  provenance?: MessageProvenance,
-): TrackedModelMessage[] {
-  const added = messages.map((message) =>
-    createTrackedMessage(message, provenance ?? provenanceForAuthority(currentAuthority(state), message.role)),
-  )
-  state.trackedMessages.push(...added)
-  recalculate(state)
-  return added
-}
-
 export function replaceTrackedMessages(
   state: LoopState,
   messages: readonly ModelMessage[],

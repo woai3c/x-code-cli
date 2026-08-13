@@ -16,7 +16,7 @@ import { XCODE_DIR, userXcodeDir } from '../utils.js'
 
 export type SkillSettingsScope = 'user' | 'project'
 
-export interface SkillSettings {
+interface SkillSettings {
   disabledSkills?: string[]
 }
 
@@ -25,24 +25,16 @@ export function skillSettingsPath(scope: SkillSettingsScope): string {
   return path.join(process.cwd(), XCODE_DIR, 'settings.local.json')
 }
 
-async function readSettings(scope: SkillSettingsScope): Promise<SkillSettings> {
-  const obj = await readSettingsFile(skillSettingsPath(scope))
+function disabledSkillsFrom(obj: Record<string, unknown>): string[] {
   const list = Array.isArray(obj.disabledSkills)
     ? (obj.disabledSkills as unknown[]).filter((s): s is string => typeof s === 'string')
     : []
-  return { disabledSkills: list }
+  return list
 }
 
-async function writeSettings(scope: SkillSettingsScope, settings: SkillSettings): Promise<void> {
-  const file = skillSettingsPath(scope)
-  await mutateSettingsFile(file, (existing) => {
-    const list = settings.disabledSkills ?? []
-    if (list.length === 0) {
-      delete existing.disabledSkills
-    } else {
-      existing.disabledSkills = list
-    }
-  })
+async function readSettings(scope: SkillSettingsScope): Promise<SkillSettings> {
+  const obj = await readSettingsFile(skillSettingsPath(scope))
+  return { disabledSkills: disabledSkillsFrom(obj) }
 }
 
 export async function loadDisabledSkillsSet(): Promise<Set<string>> {
@@ -62,18 +54,19 @@ export async function setSkillDisabled(
   scope: SkillSettingsScope,
   disable: boolean,
 ): Promise<'changed' | 'noop'> {
-  const current = await readSettings(scope)
-  const list = new Set(current.disabledSkills ?? [])
-  const had = list.has(name)
-  if (disable) {
-    if (had) return 'noop'
-    list.add(name)
-  } else {
-    if (!had) return 'noop'
-    list.delete(name)
-  }
-  await writeSettings(scope, { disabledSkills: [...list].sort() })
-  return 'changed'
+  const changed = await mutateSettingsFile(skillSettingsPath(scope), (existing) => {
+    const list = new Set(disabledSkillsFrom(existing))
+    const had = list.has(name)
+    if (disable === had) return false
+
+    if (disable) list.add(name)
+    else list.delete(name)
+
+    if (list.size === 0) delete existing.disabledSkills
+    else existing.disabledSkills = [...list].sort()
+    return true
+  })
+  return changed ? 'changed' : 'noop'
 }
 
 export async function getScopedDisabledSkills(scope: SkillSettingsScope): Promise<string[]> {

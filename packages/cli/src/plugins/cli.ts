@@ -20,16 +20,16 @@ import {
   installPlugin,
   listInstalledPlugins,
   loadAllPlugins,
-  lookupPlugin,
   readAllCachedMarketplaces,
   readKnownMarketplaces,
   removeKnownMarketplace,
   setPluginEnabled,
   uninstallPlugin,
 } from '@x-code-cli/core'
-import type { ConsentPreview, PluginScope, PluginSource } from '@x-code-cli/core'
+import type { ConsentPreview, PluginScope } from '@x-code-cli/core'
 
 import { formatPluginSource } from './format.js'
+import { resolvePluginInstallSource } from './install-source.js'
 import { searchMarketplacePlugins } from './search.js'
 
 const chalk = new Chalk()
@@ -395,43 +395,26 @@ async function promptUserConfig(
   return collected
 }
 
-async function parseInstallSource(
-  raw: string,
-): Promise<{ source: PluginSource; marketplace: string; expectedName?: string } | null> {
-  const isPath = raw.startsWith('./') || raw.startsWith('../') || raw.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(raw)
-  const isGitUrl = /^https?:\/\//i.test(raw) || raw.startsWith('git@')
-  const isGhShort = raw.startsWith('github:')
-  const atIdx = raw.lastIndexOf('@')
-  const isMarketplaceRef = atIdx > 0 && !isPath && !isGitUrl && !isGhShort
+async function parseInstallSource(raw: string) {
+  const result = await resolvePluginInstallSource(raw)
+  if (result.ok) return result
 
-  if (isMarketplaceRef) {
-    const name = raw.slice(0, atIdx)
-    const mpName = raw.slice(atIdx + 1)
-    const found = await lookupPlugin(`${name}@${mpName}`)
-    if (!found) {
+  switch (result.code) {
+    case 'plugin-not-found':
       console.error(
-        `Plugin '${name}' not found in marketplace '${mpName}'. ` +
-          `Run 'xc plugin marketplace refresh ${mpName}' or check the spelling.`,
+        `Plugin '${result.pluginName}' not found in marketplace '${result.marketplace}'. ` +
+          `Run 'xc plugin marketplace refresh ${result.marketplace}' or check the spelling.`,
       )
-      return null
-    }
-    return { source: found.entry.source, marketplace: mpName, expectedName: name }
-  }
-  if (isGhShort) {
-    const m = raw.match(/^github:([^/]+)\/(.+?)(?:#(.+))?$/i)
-    if (!m) {
+      break
+    case 'invalid-github-source':
       console.error('Invalid github source. Expected github:owner/repo[#ref]')
-      return null
-    }
-    return { source: { kind: 'github', owner: m[1]!, repo: m[2]!, ref: m[3] }, marketplace: 'local' }
+      break
+    case 'unrecognized-source':
+      console.error(
+        `Unrecognised source: '${result.source}'. Use name@marketplace, github:owner/repo, an https/git URL, or a path.`,
+      )
+      break
   }
-  if (isGitUrl) {
-    return { source: { kind: 'git', url: raw }, marketplace: 'local' }
-  }
-  if (isPath) {
-    return { source: { kind: 'local', path: raw }, marketplace: 'local' }
-  }
-  console.error(`Unrecognised source: '${raw}'. Use name@marketplace, github:owner/repo, an https/git URL, or a path.`)
   return null
 }
 
