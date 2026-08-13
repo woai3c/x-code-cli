@@ -374,7 +374,9 @@ export {
   clearPeerContext,
   appendMemoryRecall,
   appendMemoryRecallDelete,
+  captureSessionForkSnapshot,
   flushPendingMessages,
+  forkSession,
   getSessionFilePath,
   hydrateLoopState,
   listSessions,
@@ -382,7 +384,13 @@ export {
   markBoundaryAndReflush,
   pickLatestSession,
 } from './agent/session-store.js'
-export type { LoadedSession, SessionListEntry } from './agent/session-store.js'
+export type {
+  ForkedSession,
+  LoadedSession,
+  SessionForkOrigin,
+  SessionForkSnapshot,
+  SessionListEntry,
+} from './agent/session-store.js'
 
 // Rewind snapshots — file-history backing for /rewind.
 export { createCheckpoint, restoreCheckpoint, getDiffStatsForCheckpoint } from './agent/snapshot.js'

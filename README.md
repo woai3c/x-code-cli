@@ -159,6 +159,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Knowledge system** — layered `AGENTS.md` loading (compatible with `CLAUDE.md`), subpackages override root
 - **Auto-memory** — durable facts are extracted after each completed root-agent turn and recalled on demand
 - **Session resumption** — `--continue` resumes the last session, `--resume` opens a picker or jumps by ID
+- **Session branching** — `/fork` copies completed context into an independent conversation, even while the current request is running; branches still share the same working tree
 - **Context compression** — long conversations auto-compress; loop-guard detects cycles; prompt cache reuses prefixes
 - **3-level permission model** — safe by default, prompts before writes; `--trust` bypasses
 
@@ -227,6 +228,7 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/list-agents`         | List reachable named X-Code sessions                                 |
 | `/compact`             | Manually compress context                                            |
 | `/resume`              | Pick a past session to resume                                        |
+| `/fork`                | Branch completed context (the working tree remains shared)           |
 | `/rewind`              | Roll back to a previous message (restores files + truncates history) |
 | `/init`                | Create or update `AGENTS.md` at project root                         |
 | `/review [PR#]`        | Review a GitHub PR (requires `gh`)                                   |

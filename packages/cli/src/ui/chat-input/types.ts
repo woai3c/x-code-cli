@@ -1,6 +1,7 @@
 // ChatInput public + internal data types.
 import type { AuthorityApprovalPreview, DisplayMessage, TodoItem } from '@x-code-cli/core'
 
+import type { TurnOwner } from '../agent/turn-coordinator.js'
 import type { ActiveToolCall } from '../agent/use-agent.js'
 
 export interface ChatInputProps {
@@ -17,6 +18,8 @@ export interface ChatInputProps {
   disabled?: boolean
   hidden?: boolean
   spinner?: SpinnerState | null
+  activeTurnOwner?: TurnOwner | null
+  hasStableForkBoundary?: boolean
   activeToolCalls?: readonly ActiveToolCall[]
   todos?: readonly TodoItem[]
   queuedMessages?: readonly { id: string; text: string }[]

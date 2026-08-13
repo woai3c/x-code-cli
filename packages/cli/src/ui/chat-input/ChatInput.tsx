@@ -30,6 +30,7 @@ import { useStdout } from 'ink'
 
 import { debugLog, suggestRuleLabel } from '@x-code-cli/core'
 
+import { isSlashCommandAllowedWhileBusy } from '../busy-command.js'
 import { renderInlineMarkdown } from '../render/render-markdown.js'
 import {
   flushPendingReadGroup,
@@ -125,6 +126,8 @@ export function ChatInput({
   disabled,
   hidden,
   spinner,
+  activeTurnOwner = null,
+  hasStableForkBoundary = false,
   activeToolCalls,
   todos,
   queuedMessages,
@@ -581,12 +584,16 @@ export function ChatInput({
     if (!raw.trim()) return
     // While the agent is still thinking, slash commands stay blocked —
     // running /compact or /resume mid-turn would corrupt shared state.
-    // `/goal` is the carve-out (pause/cancel/steer act ON the running
-    // turn). Plain text flows through and is queued by the parent for
-    // injection at the next tool boundary, matching Claude Code / Codex.
+    // `/goal` controls the running goal; `/fork` is allowed only for owners
+    // whose submit path captured a stable pre-request prefix.
+    // Plain text still flows through to the normal steering queue.
     if (spinner) {
-      const lower = raw.trimStart().toLowerCase()
-      if (lower.startsWith('/') && !lower.startsWith('/goal')) return
+      const command = raw.trimStart().toLowerCase().split(/\s+/, 1)[0]
+      if (
+        command.startsWith('/') &&
+        (!activeTurnOwner || !isSlashCommandAllowedWhileBusy(raw, activeTurnOwner, hasStableForkBoundary))
+      )
+        return
     }
     const expanded = override ? raw : expandPasteRefs(raw, pastedContents)
     // Record the pre-expansion form in input history (Up/Down recall) so

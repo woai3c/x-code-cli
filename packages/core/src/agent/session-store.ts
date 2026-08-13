@@ -33,7 +33,8 @@ import type {
   TokenUsage,
   TrackedModelMessage,
 } from '../types/index.js'
-import { XCODE_DIR } from '../utils.js'
+import { XCODE_DIR, generateTimestampId } from '../utils.js'
+import { extractText } from '../utils/message-helpers.js'
 import { scanCacheMisses } from './cache-stats.js'
 import type { CacheMissSummary, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState, GoalVerificationResult } from './goal/types.js'
@@ -158,6 +159,14 @@ interface InterruptedEntry {
   ts: string
 }
 
+interface ForkEntry {
+  t: 'meta'
+  kind: 'fork'
+  parentSessionId: string
+  messageCount: number
+  ts: string
+}
+
 /** Rewind checkpoint pointer. Surfaced by `loadSession` so /resume picks
  *  up the same /rewind history. The actual file backups live separately
  *  under `.x-code/file-history/<sessionId>/`. */
@@ -221,6 +230,7 @@ type Entry =
   | UsageEntry
   | CompactBoundaryEntry
   | InterruptedEntry
+  | ForkEntry
   | CheckpointJsonlEntry
   | GoalEntry
   | GoalInputEntry
@@ -489,6 +499,69 @@ async function replaceWithSnapshot(filePath: string, lines: readonly string[]): 
   }
 }
 
+const UNSUPPORTED_HARD_LINK_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'ENOSYS'])
+
+function isUnsupportedHardLinkError(error: unknown): boolean {
+  return UNSUPPORTED_HARD_LINK_CODES.has((error as NodeJS.ErrnoException).code ?? '')
+}
+
+async function writeSnapshotExclusively(filePath: string, payload: string): Promise<void> {
+  let handle: fs.FileHandle | undefined
+  let created = false
+  try {
+    handle = await fs.open(filePath, 'wx', 0o600)
+    created = true
+    await handle.chmod(0o600)
+    await handle.writeFile(payload, 'utf-8')
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    if (created) await fs.unlink(filePath).catch(() => {})
+    throw error
+  }
+}
+
+/** Install a brand-new snapshot without ever replacing an existing session.
+ * Hard links provide an atomic install after the temp inode is flushed. Some
+ * filesystems do not support them, so the fallback claims the destination with
+ * `wx` and preserves the same no-overwrite guarantee. */
+async function createWithSnapshot(filePath: string, lines: readonly string[]): Promise<void> {
+  await ensureProjectStorageDir(path.dirname(filePath))
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`)
+  const payload = lines.join('\n') + '\n'
+  let handle: fs.FileHandle | undefined
+  try {
+    handle = await fs.open(tempPath, 'wx', 0o600)
+    await handle.chmod(0o600)
+    await handle.writeFile(payload, 'utf-8')
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    try {
+      await fs.link(tempPath, filePath)
+    } catch (error) {
+      if (!isUnsupportedHardLinkError(error)) throw error
+      await writeSnapshotExclusively(filePath, payload)
+    }
+    await fs.unlink(tempPath)
+    if (process.platform !== 'win32') {
+      const directory = await fs.open(path.dirname(filePath), 'r')
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
+    }
+    chmodDone.add(filePath)
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    await fs.unlink(tempPath).catch(() => {})
+    throw error
+  }
+}
+
 interface TranscriptSnapshotOptions {
   allowIntegrityRepair?: boolean
   dropCheckpoints?: boolean
@@ -496,10 +569,49 @@ interface TranscriptSnapshotOptions {
   dropMemoryRecall?: boolean
 }
 
+export interface SessionForkOrigin {
+  sessionId: string
+  messageCount: number
+  forkedAt: string
+}
+
+export interface ForkedSession {
+  sessionId: string
+  filePath: string
+  messageCount: number
+  forkedFrom: SessionForkOrigin
+}
+
+/** Detached, point-in-time state used to create a branch while the source
+ * session keeps running. Every mutable value is cloned during capture so
+ * later tool rounds, compaction, goal updates, and memory recall cannot move
+ * the branch boundary. */
+export interface SessionForkSnapshot {
+  sourceSessionId: string
+  trackedMessages: TrackedModelMessage[]
+  contextSecurity: ContextSecurityState
+  sourceIntegrityValid: boolean
+  taskSlug: string
+  tokenUsageTotal: number
+  goal: GoalState | null
+  goalInputs: GoalInput[]
+  memoryRecallAttachments: MemoryRecallAttachment[]
+  memoryRecallTombstones: MemoryRecallTombstone[]
+  memoryGeneration: number
+}
+
 function cloneTrackedTranscript(entries: readonly TrackedModelMessage[]): TrackedModelMessage[] {
   return entries.map((entry) => ({
     entryId: entry.entryId,
     message: structuredClone(entry.message),
+    provenance: structuredClone(entry.provenance),
+  }))
+}
+
+function clonePersistenceSafeTranscript(entries: readonly TrackedModelMessage[]): TrackedModelMessage[] {
+  return entries.map((entry) => ({
+    entryId: entry.entryId,
+    message: structuredClone(persistenceSafeMessage(entry.message)),
     provenance: structuredClone(entry.provenance),
   }))
 }
@@ -567,25 +679,195 @@ export function commitTranscriptSnapshot(
   })
 }
 
-/** Write the session header. Idempotent: if the file already exists (resume
- *  path), we skip — the original header is preserved so picker metadata
- *  stays stable across resumes. */
-export async function appendHeader(
-  state: LoopState,
-  modelId: string,
-  firstPrompt: string,
-  cwd: string = process.cwd(),
-): Promise<void> {
-  const filePath = getSessionFilePath(state, cwd)
-  state.sessionFilePath = filePath
-  try {
-    await fs.access(filePath)
-    return // file already exists — header preserved from original session
-  } catch {
-    // File doesn't exist — fall through and write the header.
+async function reserveForkTarget(
+  cwd: string,
+  sourceSessionId: string,
+  excludedSessionIds: ReadonlySet<string>,
+): Promise<{ sessionId: string; filePath: string; lockPath: string }> {
+  const now = Date.now()
+  await ensureProjectStorageDir(sessionsDir(cwd))
+  for (let offset = 0; offset < 1_000; offset++) {
+    const sessionId = generateTimestampId(new Date(now + offset))
+    if (sessionId === sourceSessionId || excludedSessionIds.has(sessionId)) continue
+    const filePath = path.join(sessionsDir(cwd), `${sessionId}.jsonl`)
+    const lockPath = path.join(sessionsDir(cwd), `.${sessionId}.fork.lock`)
+    let handle: fs.FileHandle | undefined
+    try {
+      handle = await fs.open(lockPath, 'wx', 0o600)
+      await handle.close()
+      handle = undefined
+      await fs.access(filePath)
+    } catch (error) {
+      await handle?.close().catch(() => {})
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') continue
+      if (code === 'ENOENT') return { sessionId, filePath, lockPath }
+      await fs.unlink(lockPath).catch(() => {})
+      throw error
+    }
+    await fs.unlink(lockPath).catch(() => {})
   }
+  throw new Error('Unable to allocate a unique fork session id')
+}
+
+/** Capture every durable value that belongs to a conversation boundary.
+ * This function intentionally performs no I/O and finishes cloning before it
+ * returns, so callers can retain the result while the source keeps running. */
+export function captureSessionForkSnapshot(
+  source: LoopState,
+  options: { messageCount?: number } = {},
+): SessionForkSnapshot {
+  const requestedCount = options.messageCount ?? source.trackedMessages.length
+  if (!Number.isSafeInteger(requestedCount) || requestedCount < 0 || requestedCount > source.trackedMessages.length) {
+    throw new Error(`Invalid fork message count: ${requestedCount}`)
+  }
+
+  const selected = clonePersistenceSafeTranscript(
+    sanitizeTrackedMessageTail(source.trackedMessages.slice(0, requestedCount)),
+  )
+  const completedGoalInputIds = new Set(source.goal?.attempts.map((attempt) => attempt.id) ?? [])
+  const goalInputs = source.goalInputs.map((input) => {
+    const cloned = structuredClone(input)
+    if (cloned.goalId === source.goal?.id && cloned.promotedAt && !completedGoalInputIds.has(cloned.id)) {
+      delete cloned.promotedAt
+    }
+    return cloned
+  })
+  return {
+    sourceSessionId: source.sessionId,
+    trackedMessages: selected,
+    contextSecurity: deriveContextSecurity(selected),
+    sourceIntegrityValid:
+      source.transcriptIntegrity !== 'failed' &&
+      source.contextSecurity.integrityFailure !== true &&
+      isValidContextSecurity(source.contextSecurity, source.trackedMessages),
+    taskSlug: source.taskSlug,
+    tokenUsageTotal: source.tokenUsage.totalTokens,
+    goal: source.goal ? structuredClone(source.goal) : null,
+    goalInputs,
+    memoryRecallAttachments: source.memoryRecallAttachments
+      .filter((attachment) => attachment.anchorMessageIndex < selected.length)
+      .map((attachment) => structuredClone(attachment)),
+    memoryRecallTombstones: source.memoryRecallTombstones.map((tombstone) => structuredClone(tombstone)),
+    memoryGeneration: source.memoryGeneration,
+  }
+}
+
+/** Create an independent session from a previously captured point-in-time
+ * boundary. Rewind sidecars and cumulative usage deliberately start fresh:
+ * they describe branch-local file history and provider work, not model
+ * context. */
+export async function forkSession(
+  snapshot: SessionForkSnapshot,
+  modelId: string,
+  options: { cwd?: string } = {},
+): Promise<ForkedSession> {
+  if (!snapshot.sourceIntegrityValid) {
+    throw new Error('Transcript integrity failed; repair or clear the unsafe context before forking')
+  }
+  if (!isValidContextSecurity(snapshot.contextSecurity, snapshot.trackedMessages)) {
+    throw new Error('Stored context-security boundary does not match the captured transcript')
+  }
+
+  const selected = cloneTrackedTranscript(snapshot.trackedMessages)
+  const forkedAt = new Date().toISOString()
+  const firstUser = selected.find((entry) => entry.message.role === 'user')
+  const firstPrompt = firstUser ? extractText(firstUser.message.content).slice(0, 500) : ''
+
+  const goal = snapshot.goal ? structuredClone(snapshot.goal) : null
+  if (goal) {
+    const usedGoalTokens = Math.max(0, snapshot.tokenUsageTotal - goal.baselineTokens)
+    if (goal.tokenBudget !== undefined) {
+      const remaining = goal.tokenBudget - usedGoalTokens
+      if (remaining <= 0 && ['active', 'paused', 'blocked', 'max_turns'].includes(goal.status)) {
+        goal.status = 'budget_limited'
+      } else {
+        goal.tokenBudget = Math.max(0, remaining)
+        if (goal.status === 'active') goal.status = 'paused'
+      }
+    } else if (goal.status === 'active') {
+      goal.status = 'paused'
+    }
+    goal.baselineTokens = 0
+    goal.updatedAt = forkedAt
+    if (snapshot.goal?.status === 'active') delete goal.pendingTransition
+  }
+  const goalInputs = goal
+    ? snapshot.goalInputs.filter((input) => input.goalId === goal.id).map((input) => structuredClone(input))
+    : []
+  const memoryRecallAttachments = snapshot.memoryRecallAttachments.map((attachment) => structuredClone(attachment))
+  const memoryRecallTombstones = snapshot.memoryRecallTombstones.map((tombstone) => structuredClone(tombstone))
+
+  const cwd = options.cwd ?? process.cwd()
   const gitBranch = await readGitBranch(cwd)
-  const entry: HeaderEntry = {
+  const attemptedSessionIds = new Set<string>()
+  for (let attempt = 0; attempt < 1_000; attempt++) {
+    const target = await reserveForkTarget(cwd, snapshot.sourceSessionId, attemptedSessionIds)
+    attemptedSessionIds.add(target.sessionId)
+    try {
+      const header: HeaderEntry = {
+        t: 'meta',
+        kind: 'header',
+        cwd,
+        gitBranch,
+        modelId,
+        startedAt: forkedAt,
+        firstPrompt,
+        taskSlug: snapshot.taskSlug,
+        sessionId: target.sessionId,
+        firstPromptProvenance: firstUser?.provenance,
+      }
+      const fork: ForkEntry = {
+        t: 'meta',
+        kind: 'fork',
+        parentSessionId: snapshot.sourceSessionId,
+        messageCount: selected.length,
+        ts: forkedAt,
+      }
+      const metadata: Entry[] = [header, fork]
+      if (goal) metadata.push({ t: 'meta', kind: 'goal', goal, ts: forkedAt })
+      for (const input of goalInputs) {
+        metadata.push({ t: 'meta', kind: 'goal-input', goalId: goal!.id, input, ts: forkedAt })
+      }
+      for (const attachment of memoryRecallAttachments) {
+        metadata.push({
+          t: 'meta',
+          kind: 'memory-recall',
+          attachment,
+          memoryGeneration: snapshot.memoryGeneration,
+          ts: forkedAt,
+        })
+      }
+      for (const tombstone of memoryRecallTombstones) {
+        metadata.push({ t: 'meta', kind: 'memory-recall-delete', tombstone, ts: forkedAt })
+      }
+
+      const epoch = epochLines(selected, 'snapshot', selected)
+      await enqueueFileOperation(target.filePath, () =>
+        createWithSnapshot(target.filePath, [...metadata.map((entry) => JSON.stringify(entry)), ...epoch.lines]),
+      )
+      return {
+        sessionId: target.sessionId,
+        filePath: target.filePath,
+        messageCount: selected.length,
+        forkedFrom: {
+          sessionId: snapshot.sourceSessionId,
+          messageCount: selected.length,
+          forkedAt,
+        },
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    } finally {
+      await fs.unlink(target.lockPath).catch(() => {})
+    }
+  }
+  throw new Error('Unable to allocate a unique fork session id')
+}
+
+async function appendHeaderNow(state: LoopState, modelId: string, firstPrompt: string, cwd: string): Promise<void> {
+  const gitBranch = await readGitBranch(cwd)
+  const makeEntry = (sessionId: string): HeaderEntry => ({
     t: 'meta',
     kind: 'header',
     cwd,
@@ -594,12 +876,62 @@ export async function appendHeader(
     startedAt: state.startedAt,
     firstPrompt: firstPrompt.slice(0, 500),
     taskSlug: state.taskSlug,
-    sessionId: state.sessionId,
+    sessionId,
     firstPromptProvenance: state.trackedMessages[0]?.provenance,
+  })
+
+  // Hydrated sessions pin their exact file path. An existing file is the
+  // original header; a missing one is recreated at that same path.
+  if (state.sessionFilePath) {
+    try {
+      await fs.access(state.sessionFilePath)
+      return
+    } catch {
+      // Fall through and recreate the missing pinned file.
+    }
+    try {
+      await createWithSnapshot(state.sessionFilePath, [JSON.stringify(makeEntry(state.sessionId))])
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return
+      throw new Error('Failed to persist session header', { cause: error })
+    }
   }
-  if (!(await appendRawLines(filePath, [JSON.stringify(entry)]))) {
-    throw new Error('Failed to persist session header')
+
+  // Fresh sessions claim their path exclusively. If another process created
+  // the same millisecond id, move this state to the next timestamp instead of
+  // treating the unrelated file as a resumable session.
+  const initialSessionId = state.sessionId
+  const now = Date.now()
+  const attemptedSessionIds = new Set<string>()
+  for (let offset = 0; offset < 1_000; offset++) {
+    const sessionId = offset === 0 ? initialSessionId : generateTimestampId(new Date(now + offset))
+    if (attemptedSessionIds.has(sessionId)) continue
+    attemptedSessionIds.add(sessionId)
+    const filePath = path.join(sessionsDir(cwd), `${sessionId}.jsonl`)
+    try {
+      await createWithSnapshot(filePath, [JSON.stringify(makeEntry(sessionId))])
+      state.sessionId = sessionId
+      state.sessionFilePath = filePath
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+      throw new Error('Failed to persist session header', { cause: error })
+    }
   }
+  throw new Error('Unable to allocate a unique session id')
+}
+
+/** Write the session header. Idempotent for hydrated and already-started
+ * states; fresh sessions claim their path without overwriting another
+ * process. The transcript chain also serializes duplicate calls on one state. */
+export function appendHeader(
+  state: LoopState,
+  modelId: string,
+  firstPrompt: string,
+  cwd: string = process.cwd(),
+): Promise<void> {
+  return enqueueTranscriptOperation(state, () => appendHeaderNow(state, modelId, firstPrompt, cwd))
 }
 
 /** Flush every message in `state.messages` past `state.persistedMessageCount`
@@ -870,6 +1202,7 @@ export interface LoadedSession {
   memoryRecallAttachments: MemoryRecallAttachment[]
   memoryRecallTombstones: MemoryRecallTombstone[]
   memoryGeneration: number
+  forkedFrom?: SessionForkOrigin
   /** Path of the jsonl file so the agent loop can keep appending to the
    *  same file when the user resumes. */
   filePath: string
@@ -931,6 +1264,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   let memoryRecallAttachments: MemoryRecallAttachment[] = []
   let memoryRecallTombstones: MemoryRecallTombstone[] = []
   let memoryGeneration = 0
+  let forkedFrom: SessionForkOrigin | undefined
 
   for (const parsed of parsedLines) {
     if (!parsed.ok) continue
@@ -974,6 +1308,12 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
       } else if (entry.kind === 'memory-recall-delete') {
         memoryRecallTombstones.push(entry.tombstone)
         memoryGeneration = Math.max(memoryGeneration, entry.tombstone.generation)
+      } else if (entry.kind === 'fork') {
+        forkedFrom = {
+          sessionId: entry.parentSessionId,
+          messageCount: entry.messageCount,
+          forkedAt: entry.ts,
+        }
       }
       // 'interrupted' is informational only — doesn't affect state
     } else if (entry.t === 'msg' && !hasEpoch) {
@@ -1141,6 +1481,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     memoryRecallAttachments,
     memoryRecallTombstones,
     memoryGeneration,
+    forkedFrom,
     filePath,
   }
 }

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { loadSession } from '@x-code-cli/core'
+
 import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
 import { exitTui, inputLine, submitInput, typeInput, withTui } from './test-context.js'
 
@@ -88,6 +90,40 @@ describe('TUI input and lifecycle', () => {
       expect(second).toBeGreaterThan(first)
       expect(third).toBeGreaterThan(second)
     })
+  })
+
+  it('forks completed context while the current request is still streaming', async () => {
+    await withTui(
+      'input-fork-mid-turn',
+      [
+        { type: 'completion', text: 'shared-answer' },
+        { type: 'stall', afterHeaders: true },
+      ],
+      async ({ harness, provider, workspace }) => {
+        await submitInput(harness, 'shared context')
+        await harness.waitForText('shared-answer')
+
+        await submitInput(harness, 'generate document A')
+        await provider.waitForMainRequests(2)
+        await harness.waitForText('Thinking')
+        await submitInput(harness, '/fork')
+        await harness.waitForText('Fork created:')
+        await harness.waitForText('The active request remains only in the original session')
+        await harness.waitForText('both sessions still share this working tree')
+
+        const sessionDirectory = path.join(workspace.cwd, '.x-code', 'sessions')
+        const files = (await fs.readdir(sessionDirectory)).filter((file) => file.endsWith('.jsonl'))
+        const sessions = await Promise.all(files.map((file) => loadSession(path.join(sessionDirectory, file))))
+        const branch = sessions.find((session) => session?.forkedFrom)
+        expect(branch).toBeDefined()
+        expect(branch!.messages).toHaveLength(2)
+        expect(JSON.stringify(branch!.messages)).toContain('shared context')
+        expect(JSON.stringify(branch!.messages)).toContain('shared-answer')
+        expect(JSON.stringify(branch!.messages)).not.toContain('generate document A')
+
+        await exitTui(harness)
+      },
+    )
   })
 
   it('clears stale cells after deleting from a soft-wrapped line', async () => {
