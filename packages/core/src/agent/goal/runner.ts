@@ -46,6 +46,11 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
   const { state, goalId, signal } = input
   const goal = state.goal
   if (!goal || goal.id !== goalId) throw new Error(`Goal ${goalId} is not the current goal`)
+  const goalAuthority = goal.authority ?? { source: 'peer' as const, peerTainted: true }
+  goal.authority = structuredClone(goalAuthority)
+  if (goalAuthority.peerTainted || goalAuthority.source === 'peer') {
+    state.executionAuthority = structuredClone(goalAuthority)
+  }
 
   debugLog('goal.runner.start', `${goal.id} ${goal.objective}`)
   while (goal.status === 'active') {

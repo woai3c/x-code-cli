@@ -161,3 +161,12 @@ export {
   suggestRuleLabel,
 } from './session-store.js'
 export { loadPersistedRules, persistRule } from './session-store.js'
+export {
+  MAX_EGRESS_APPROVAL_BYTES,
+  authoritySnapshotHash,
+  canonicalizeToolInput,
+  classifyToolCall,
+  evaluateToolAuthority,
+  sha256Text,
+  verifyAuthorityApproval,
+} from './authority.js'

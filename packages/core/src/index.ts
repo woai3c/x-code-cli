@@ -15,6 +15,16 @@ export type {
   SessionSummary,
   ModelMessage,
   LanguageModel,
+  ExecutionAuthority,
+  AuthorityApproval,
+  AuthorityApprovalPreview,
+  ToolCapability,
+  PublicPeer,
+  QueuedAgentInput,
+  TrackedModelMessage,
+  ContextSecurityState,
+  MessageProvenance,
+  PeerOriginSummary,
 } from './types/index.js'
 
 export {
@@ -30,8 +40,10 @@ export type { ProviderModel } from './types/index.js'
 // Config
 export {
   DEFAULT_MEMORY_CONFIG,
+  DEFAULT_PEER_MESSAGING_CONFIG,
   DEFAULT_STREAM_CONFIG,
   resolveMemoryConfig,
+  resolvePeerMessagingConfig,
   resolveStreamConfig,
   resolveModelId,
   getAvailableProviders,
@@ -39,15 +51,36 @@ export {
   loadUserConfig,
   saveUserConfig,
 } from './config/index.js'
-export type { MemoryConfig, MemoryReasoningMode, MemoryRecallConfig, StreamConfig, UserConfig } from './config/index.js'
+export type {
+  MemoryConfig,
+  MemoryReasoningMode,
+  MemoryRecallConfig,
+  PeerMessagingConfig,
+  StreamConfig,
+  UserConfig,
+} from './config/index.js'
 
 // Provider Registry
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'
 
 // Agent
-export { agentLoop, saveSession, compressMessages, compressMessagesWithUsage } from './agent/loop.js'
+export {
+  agentLoop,
+  compressMessages,
+  compressMessagesWithUsage,
+  drainQueuedInputs,
+  formatQueuedAgentInput,
+  saveSession,
+} from './agent/loop.js'
+export { compressTrackedMessagesWithUsage } from './agent/compression.js'
 export type { AgentLoopResult, CompressionResult } from './agent/loop.js'
 export { createLoopState } from './agent/loop-state.js'
+export {
+  deriveContextSecurity,
+  effectiveExecutionAuthority,
+  mergePeerOriginSummaries,
+  summarizePeerOrigins,
+} from './agent/provenance.js'
 export { KEEP_RECENT, KEEP_RECENT_TOKENS, MIN_KEEP_MESSAGES } from './agent/compression.js'
 export type { LoopState } from './agent/loop.js'
 export type { StepStats } from './agent/loop-state.js'
@@ -157,6 +190,19 @@ export {
 } from './permissions/index.js'
 export { loadPersistedRules, persistRule } from './permissions/index.js'
 export type { AllowRule } from './permissions/session-store.js'
+export {
+  MAX_EGRESS_APPROVAL_BYTES,
+  canonicalizeToolInput,
+  classifyToolCall,
+  evaluateToolAuthority,
+  verifyAuthorityApproval,
+} from './permissions/authority.js'
+
+// Cross-session lifecycle primitives. Stage 0 deliberately exports no transport or service.
+export { createPeerInbox } from './peers/inbox.js'
+export { DEFAULT_PEER_INBOX_LIMITS } from './peers/inbox-types.js'
+export type * from './peers/inbox-types.js'
+export * from './peers/index.js'
 
 // Utils
 export { USER_XCODE_DIR, XCODE_DIR, debugLog, setPluginDebugMirror, userXcodeDir } from './utils.js'
@@ -325,6 +371,7 @@ export {
   appendHeader,
   appendInterrupted,
   appendUsage,
+  clearPeerContext,
   appendMemoryRecall,
   appendMemoryRecallDelete,
   flushPendingMessages,

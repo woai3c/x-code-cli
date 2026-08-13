@@ -6,13 +6,35 @@ import path from 'node:path'
 
 import {
   DEFAULT_MEMORY_CONFIG,
+  DEFAULT_PEER_MESSAGING_CONFIG,
   DEFAULT_STREAM_CONFIG,
   getAvailableProviders,
   resolveBrowserConfig,
   resolveMemoryConfig,
   resolveModelId,
+  resolvePeerMessagingConfig,
   resolveStreamConfig,
 } from '../src/config/index.js'
+
+describe('resolvePeerMessagingConfig', () => {
+  it('falls back safely for malformed policy values', () => {
+    expect(resolvePeerMessagingConfig(undefined)).toEqual(DEFAULT_PEER_MESSAGING_CONFIG)
+    expect(resolvePeerMessagingConfig({ enabled: 'yes', inbound: 'open', dialogExpiryMs: -1 })).toEqual(
+      DEFAULT_PEER_MESSAGING_CONFIG,
+    )
+  })
+
+  it('accepts inbound policy and bounded dialog expiry only', () => {
+    expect(resolvePeerMessagingConfig({ enabled: true, inbound: 'hold', dialogExpiryMs: 10_000 })).toEqual({
+      inbound: 'hold',
+      dialogExpiryMs: 10_000,
+    })
+    expect(resolvePeerMessagingConfig({ enabled: true, inbound: 'accept', dialogExpiryMs: 1_800_001 })).toEqual({
+      inbound: 'accept',
+      dialogExpiryMs: DEFAULT_PEER_MESSAGING_CONFIG.dialogExpiryMs,
+    })
+  })
+})
 
 /** Every provider env var the config module reads. Mirrors `ENV_MAP` in
  *  `src/config/index.ts` plus the `OPENAI_COMPATIBLE_*` pair from

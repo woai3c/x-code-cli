@@ -7,6 +7,8 @@ import type { ModelMessage } from 'ai'
 
 import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
+import type { PreparedPeerSend } from '../peers/service.js'
+import { evaluateToolAuthority, verifyAuthorityApproval } from '../permissions/index.js'
 import { checkPermission } from '../permissions/index.js'
 import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/capabilities.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
@@ -23,13 +25,21 @@ import { markExpectedCacheMiss } from './cache-stats.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
-import { isToolErrorString, toolErrorFromUnknown, toolErrorString, toolResultMessage } from './messages.js'
+import {
+  isToolErrorString,
+  structuredToolResultMessage,
+  toolErrorFromUnknown,
+  toolErrorString,
+  toolResultMessage,
+} from './messages.js'
 import type { ToolImage } from './messages.js'
 import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
+import { effectiveExecutionAuthority } from './provenance.js'
 import { appendUsage } from './session-store.js'
 import { captureFileBeforeMutation } from './snapshot.js'
 import { runSubAgent } from './sub-agents/runner.js'
 import { runToolSearch } from './tool-search/resolve.js'
+import { appendTrackedMessage } from './tracked-messages.js'
 import { accumulateUsage, normalizeLanguageModelUsage } from './usage.js'
 import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
 import type { VisionUsageEvent } from './vision-fallback.js'
@@ -320,7 +330,7 @@ function pushToolResult(
   images?: readonly ToolImage[],
   notifyUi = true,
 ): void {
-  state.messages.push(toolResultMessage(toolCallId, toolName, output, images, isError))
+  appendTrackedMessage(state, toolResultMessage(toolCallId, toolName, output, images, isError))
   // Clear the progress reporter for manually-dispatched tools (shell,
   // writeFile, edit, askUser). Auto-executed tools go through the SDK
   // stream's `tool-result` event and are cleared there — this call is
@@ -346,6 +356,89 @@ interface HandlerCtx {
   callbacks: AgentCallbacks
   parentModel: LanguageModel
   control: ToolExecutionControl
+  authorityApprovedOnce?: boolean
+  preparedPeerSend?: PreparedPeerSend
+}
+
+async function checkCentralAuthority(ctx: HandlerCtx): Promise<boolean> {
+  const authority = effectiveExecutionAuthority(ctx.state.executionAuthority, ctx.state.contextSecurity)
+  ctx.state.executionAuthority = authority
+  const mcpEntry = ctx.options.mcpRegistry?.get(ctx.toolName)
+  const decision = evaluateToolAuthority({
+    toolName: ctx.toolName,
+    input: ctx.input,
+    authority,
+    trustMode: ctx.options.trustMode,
+    cwd: process.cwd(),
+    isMcpTool: Boolean(mcpEntry),
+    mcpServerId: mcpEntry?.serverName,
+  })
+  if (decision.kind === 'allow') return true
+  if (decision.kind === 'deny') {
+    pushToolResult(ctx.state, ctx.callbacks, ctx.toolCallId, ctx.toolName, `Authority denied: ${decision.reason}`, true)
+    return false
+  }
+  if (!ctx.callbacks.onAskAuthority) {
+    pushToolResult(
+      ctx.state,
+      ctx.callbacks,
+      ctx.toolCallId,
+      ctx.toolName,
+      'Authority denied: no local peer-influenced approval UI is available.',
+      true,
+    )
+    return false
+  }
+  let approval
+  try {
+    approval = await ctx.callbacks.onAskAuthority({
+      toolCallId: ctx.toolCallId,
+      toolName: ctx.toolName,
+      input: ctx.input,
+      preview: decision.preview,
+    })
+  } catch (error) {
+    if (isAbortError(error, ctx.options.abortSignal)) {
+      pushToolResult(
+        ctx.state,
+        ctx.callbacks,
+        ctx.toolCallId,
+        ctx.toolName,
+        '[Tool execution interrupted by user]',
+        true,
+      )
+      return false
+    }
+    throw error
+  }
+  const currentAuthority = effectiveExecutionAuthority(ctx.state.executionAuthority, ctx.state.contextSecurity)
+  const currentDecision = evaluateToolAuthority({
+    toolName: ctx.toolName,
+    input: ctx.input,
+    authority: currentAuthority,
+    trustMode: ctx.options.trustMode,
+    cwd: process.cwd(),
+    isMcpTool: Boolean(mcpEntry),
+    mcpServerId: mcpEntry?.serverName,
+  })
+  if (
+    currentDecision.kind !== 'ask' ||
+    currentDecision.preview.authorityHash !== decision.preview.authorityHash ||
+    currentDecision.preview.outboundPayload?.sha256 !== decision.preview.outboundPayload?.sha256 ||
+    !verifyAuthorityApproval(approval, currentDecision.preview, currentAuthority)
+  ) {
+    pushToolResult(
+      ctx.state,
+      ctx.callbacks,
+      ctx.toolCallId,
+      ctx.toolName,
+      'Authority denied: approval did not match the complete canonical call payload.',
+      true,
+    )
+    return false
+  }
+  ctx.authorityApprovedOnce = true
+  return true
 }
 
 /** Wrap pushToolResult with a PostToolUse hook emission. Only the two
@@ -361,7 +454,7 @@ async function pushSuccessfulToolResult(
   images?: readonly ToolImage[],
 ): Promise<void> {
   let effectiveOutput = output
-  if (ctx.options.hookBus?.has('PostToolUse')) {
+  if (!ctx.state.executionAuthority.peerTainted && ctx.options.hookBus?.has('PostToolUse')) {
     try {
       const decisions = await ctx.options.hookBus.emit(
         {
@@ -590,11 +683,11 @@ async function handleToolSearch(ctx: HandlerCtx): Promise<void> {
     .filter((s) => s.status.kind === 'connecting')
     .map((s) => s.name)
   const result = runToolSearch(query, maxResults, catalog, pendingServers)
-  // Observability for manual testing / debugging: shows the query, what it
-  // matched, and the catalog size. No-op without DEBUG_STDOUT.
+  // The query may quote peer-supplied or secret text. Keep only its size and
+  // the non-sensitive catalog result metadata in persistent debug output.
   debugLog(
     'tool-search',
-    `query=${JSON.stringify(query)} max=${maxResults} catalog=${catalog.length} → [${result.activated.join(', ')}]`,
+    `queryBytes=${Buffer.byteLength(query, 'utf8')} max=${maxResults} catalog=${catalog.length} → [${result.activated.join(', ')}]`,
   )
 
   let added = false
@@ -624,6 +717,37 @@ async function handleToolSearch(ctx: HandlerCtx): Promise<void> {
   pushToolResult(state, callbacks, toolCallId, toolName, text)
 }
 
+async function handleListAgents(ctx: HandlerCtx): Promise<void> {
+  const { options, state, callbacks, toolCallId, toolName } = ctx
+  if (!options.peerService?.enabled) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString('Peer messaging is disabled'), true)
+    return
+  }
+  try {
+    const peers = await options.peerService.listAgents(options.abortSignal)
+    pushToolResult(state, callbacks, toolCallId, toolName, JSON.stringify({ agents: peers }))
+  } catch (error) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorFromUnknown(error), true)
+  }
+}
+
+async function handleSendMessage(ctx: HandlerCtx): Promise<void> {
+  const { options, state, callbacks, toolCallId, toolName } = ctx
+  if (!options.peerService?.enabled || !ctx.preparedPeerSend) {
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      toolName,
+      toolErrorString('Peer message was not safely prepared'),
+      true,
+    )
+    return
+  }
+  const result = await options.peerService.sendPrepared(ctx.preparedPeerSend, options.abortSignal)
+  pushToolResult(state, callbacks, toolCallId, toolName, JSON.stringify(result), !result.success)
+}
+
 /** Manual tools that bypass the loop guard and the writeFile/edit/shell
  *  permission + execution pipeline below. Each handler owns its own
  *  pushToolResult call. Adding a new bypass tool is a one-line entry here. */
@@ -641,6 +765,8 @@ const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
   shellOutput: handleShellOutput,
   killShell: handleKillShell,
   toolSearch: handleToolSearch,
+  listAgents: handleListAgents,
+  sendMessage: handleSendMessage,
 }
 
 /** Run the loop-guard machinery for a non-bypass tool. Returns true if the
@@ -779,6 +905,8 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   if (toolName !== 'writeFile' && toolName !== 'edit' && toolName !== 'shell') return true
 
+  if (ctx.authorityApprovedOnce && state.executionAuthority.peerTainted) return true
+
   if (isManagedMemoryMutation(toolName, input, options.memoryService?.memoryRoot)) {
     pushToolResult(
       state,
@@ -849,7 +977,9 @@ function findDeniedShellKeyword(command: string, restrictions: readonly string[]
  *  Auto-executed tools return early because the AI SDK has already produced
  *  their result. Returns the post-execution { output, isError } pair, or
  *  null when there's nothing to push (auto-executed). */
-async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; isError: boolean } | null> {
+async function executeWriteOrShell(
+  ctx: HandlerCtx,
+): Promise<{ output: string; isError: boolean; structuredOutput?: unknown } | null> {
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
@@ -923,7 +1053,27 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{ output: string; i
       )
       return { output: shellResult.output, isError: shellResult.isError }
     }
-    // Tools with execute (readFile, glob, grep, etc.) are auto-executed by AI SDK
+    const manualExecutor = state.manualToolExecutors.get(toolName)
+    if (manualExecutor) {
+      const value = await manualExecutor(input, { toolCallId, abortSignal: options.abortSignal })
+      if (value && typeof value === 'object' && (value as { type?: unknown }).type === 'content') {
+        const parts = (value as { value?: unknown[] }).value ?? []
+        const output = parts
+          .filter((part): part is { type: 'text'; text: string } =>
+            Boolean(
+              part &&
+              typeof part === 'object' &&
+              (part as { type?: unknown }).type === 'text' &&
+              typeof (part as { text?: unknown }).text === 'string',
+            ),
+          )
+          .map((part) => part.text)
+          .join('\n')
+        return { output: output || '[Structured content returned]', isError: false, structuredOutput: value }
+      }
+      const output = typeof value === 'string' ? value : JSON.stringify(value)
+      return { output: output ?? '', isError: false }
+    }
     return null
   } catch (err) {
     return { output: toolErrorFromUnknown(err), isError: true }
@@ -963,78 +1113,130 @@ async function handleToolCall(
   // sees, keeping state.messages valid. A modify can rewrite the input
   // record (mutated in-place on ctx.input so downstream handlers and
   // the loop guard see the post-modification args).
-  if (ctx.options.hookBus?.has('PreToolUse')) {
-    try {
-      const decisions = await ctx.options.hookBus.emit(
-        {
-          name: 'PreToolUse',
-          session: { cwd: process.cwd(), modelId: ctx.options.modelId },
-          tool: { name: ctx.toolName, args: ctx.input, callId: ctx.toolCallId },
-        },
-        { signal: ctx.options.abortSignal },
-      )
-      const effect = aggregatePreToolUse(decisions)
-      if (effect.decision === 'deny') {
-        const reason = effect.reason ?? 'blocked by plugin hook'
+  try {
+    if (!ctx.state.executionAuthority.peerTainted && ctx.options.hookBus?.has('PreToolUse')) {
+      try {
+        const decisions = await ctx.options.hookBus.emit(
+          {
+            name: 'PreToolUse',
+            session: { cwd: process.cwd(), modelId: ctx.options.modelId },
+            tool: { name: ctx.toolName, args: ctx.input, callId: ctx.toolCallId },
+          },
+          { signal: ctx.options.abortSignal },
+        )
+        const effect = aggregatePreToolUse(decisions)
+        if (effect.decision === 'deny') {
+          const reason = effect.reason ?? 'blocked by plugin hook'
+          pushToolResult(
+            state,
+            callbacks,
+            ctx.toolCallId,
+            ctx.toolName,
+            toolErrorString(`Tool denied by plugin hook: ${reason}`),
+            true,
+          )
+          return
+        }
+        if (effect.args && typeof effect.args === 'object' && !Array.isArray(effect.args)) {
+          ctx.input = effect.args as Record<string, unknown>
+        }
+      } catch (err) {
+        if (ctx.options.abortSignal?.aborted) return
+        debugLog('agent.hook-pre-tool-error', String(err))
+      }
+    }
+
+    if (ctx.toolName === 'edit') {
+      try {
+        ctx.input = normalizedEditRecord(normalizeEditInput(ctx.input))
+      } catch (err) {
+        pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, toolErrorFromUnknown(err), true)
+        return
+      }
+    }
+
+    normalizeMcpToolInput(ctx)
+    if (ctx.toolName === 'sendMessage') {
+      const service = ctx.options.peerService
+      if (!service?.enabled) {
         pushToolResult(
           state,
           callbacks,
           ctx.toolCallId,
           ctx.toolName,
-          toolErrorString(`Tool denied by plugin hook: ${reason}`),
+          toolErrorString('Peer messaging is disabled'),
           true,
         )
         return
       }
-      if (effect.args && typeof effect.args === 'object' && !Array.isArray(effect.args)) {
-        ctx.input = effect.args as Record<string, unknown>
+      try {
+        ctx.preparedPeerSend = await service.prepareSend(
+          String(ctx.input.to ?? ''),
+          String(ctx.input.message ?? ''),
+          typeof ctx.input.summary === 'string' ? ctx.input.summary : undefined,
+          typeof ctx.input.messageId === 'string' ? ctx.input.messageId : undefined,
+          options.abortSignal,
+        )
+        ctx.input = {
+          ...ctx.input,
+          _receiverInstanceId: ctx.preparedPeerSend.receiverInstanceId,
+          _receiverAddress: ctx.preparedPeerSend.receiverAddress,
+        }
+      } catch (error) {
+        pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, toolErrorFromUnknown(error), true)
+        return
       }
-    } catch (err) {
-      if (ctx.options.abortSignal?.aborted) return
-      debugLog('agent.hook-pre-tool-error', String(err))
     }
-  }
+    if (!(await checkCentralAuthority(ctx))) return
 
-  if (ctx.toolName === 'edit') {
-    try {
-      ctx.input = normalizedEditRecord(normalizeEditInput(ctx.input))
-    } catch (err) {
-      pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, toolErrorFromUnknown(err), true)
+    if (ctx.toolName === BROWSER_VISUAL_CHECK_TOOL_NAME) {
+      await handleBrowserVisualCheck(ctx)
       return
     }
+
+    const bypassHandler = BYPASS_LOOP_GUARD_HANDLERS[ctx.toolName]
+    if (bypassHandler) {
+      await bypassHandler(ctx)
+      return
+    }
+
+    // MCP tools route through their own permission path (per-tool ask +
+    // always-allow file) rather than the writeFile/edit/shell rules. They
+    // still go through the loop-guard so the model can't spin on a
+    // failing MCP call indefinitely.
+    //
+    // Routing is by registry lookup, not name pattern: MCP tool names are
+    // `<server>__<tool>` (no special prefix), so the only authoritative
+    // "is this MCP?" answer is "is it registered with the MCP registry?".
+    if (ctx.options.mcpRegistry?.get(ctx.toolName)) {
+      await handleMcpToolCall(ctx, deferred)
+      return
+    }
+
+    if (await applyLoopGuard(ctx, deferred)) return
+    if (!(await checkWriteOrShellPermission(ctx))) return
+
+    const result = await executeWriteOrShell(ctx)
+    if (result == null) return
+
+    if (result.structuredOutput !== undefined) {
+      appendTrackedMessage(state, structuredToolResultMessage(ctx.toolCallId, ctx.toolName, result.structuredOutput))
+      clearProgressReporter(ctx.toolCallId)
+      callbacks.onToolResult(ctx.toolCallId, truncateToolResult(result.output), result.isError)
+      return
+    }
+
+    await pushSuccessfulToolResult(ctx, truncateToolResult(result.output), result.isError)
+  } catch (error) {
+    pushToolResult(
+      state,
+      callbacks,
+      tc.toolCallId,
+      tc.toolName,
+      isAbortError(error, options.abortSignal) ? '[Tool execution interrupted by user]' : toolErrorFromUnknown(error),
+      true,
+    )
   }
-
-  if (ctx.toolName === BROWSER_VISUAL_CHECK_TOOL_NAME) {
-    await handleBrowserVisualCheck(ctx)
-    return
-  }
-
-  const bypassHandler = BYPASS_LOOP_GUARD_HANDLERS[ctx.toolName]
-  if (bypassHandler) {
-    await bypassHandler(ctx)
-    return
-  }
-
-  // MCP tools route through their own permission path (per-tool ask +
-  // always-allow file) rather than the writeFile/edit/shell rules. They
-  // still go through the loop-guard so the model can't spin on a
-  // failing MCP call indefinitely.
-  //
-  // Routing is by registry lookup, not name pattern: MCP tool names are
-  // `<server>__<tool>` (no special prefix), so the only authoritative
-  // "is this MCP?" answer is "is it registered with the MCP registry?".
-  if (ctx.options.mcpRegistry?.get(ctx.toolName)) {
-    await handleMcpToolCall(ctx, deferred)
-    return
-  }
-
-  if (await applyLoopGuard(ctx, deferred)) return
-  if (!(await checkWriteOrShellPermission(ctx))) return
-
-  const result = await executeWriteOrShell(ctx)
-  if (result == null) return
-
-  await pushSuccessfulToolResult(ctx, truncateToolResult(result.output), result.isError)
 }
 
 /** Caption prompt for MCP screenshots. Unlike the pasted-image default it
@@ -1228,6 +1430,13 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
     return
   }
 
+  // A peer-influenced allow-once decision is the only approval that applies
+  // to this call. Never consult or update the legacy MCP permission store.
+  if (ctx.authorityApprovedOnce && state.executionAuthority.peerTainted) {
+    await executeApprovedMcpTool(ctx, entry)
+    return
+  }
+
   // Permission gate. trustMode bypasses everything; otherwise consult
   // the store (session + persisted), and fall back to asking the user.
   let approved = options.trustMode
@@ -1259,31 +1468,30 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
     }
   }
 
-  // Normalize browser snapshot/screenshot args. Safe to mutate ctx.input (the
-  // PreToolUse hook may have already rewritten it, and callTool reads ctx.input
-  // below).
-  if (ctx.input && typeof ctx.input === 'object') {
-    const args = ctx.input as Record<string, unknown>
-    // NEVER let the model write the result to a file. @playwright/mcp writes a
-    // `filename` relative to its CWD (the user's repo), littering it — and for
-    // a snapshot the file lands outside --output-dir so the model can't even
-    // read it back (it 404s, then flails). We always want the result inline:
-    // snapshot text / a captioned image. Strip filename on both.
-    if (entry.rawName === 'browser_snapshot' || entry.rawName === 'browser_take_screenshot') {
-      delete args.filename
-    }
-    // Screenshots: force JPEG before capture (a full PNG of a busy page is
-    // ~0.5 MB and makes the downstream vision-caption call crawl; JPEG is
-    // ~5-8x smaller, lossy is fine for "describe what's on screen") and drop
-    // fullPage (a long-page shot is huge; the prompt already says viewport-only).
-    if (entry.rawName === 'browser_take_screenshot') {
-      args.type = 'jpeg'
-      delete args.fullPage
-    }
-  }
+  await executeApprovedMcpTool(ctx, entry)
+}
 
-  // Execute. abortSignal threaded all the way down to the SDK request
-  // so Esc immediately cancels in-flight MCP calls.
+function normalizeMcpToolInput(ctx: HandlerCtx): void {
+  const entry = ctx.options.mcpRegistry?.get(ctx.toolName)
+  if (!entry || !ctx.input || typeof ctx.input !== 'object') return
+  const args = ctx.input
+  if (entry.rawName === 'browser_snapshot' || entry.rawName === 'browser_take_screenshot') delete args.filename
+  if (entry.rawName === 'browser_take_screenshot') {
+    args.type = 'jpeg'
+    delete args.fullPage
+  }
+}
+
+async function executeApprovedMcpTool(
+  ctx: HandlerCtx,
+  entry: NonNullable<ReturnType<NonNullable<AgentOptions['mcpRegistry']>['get']>>,
+): Promise<void> {
+  const { toolName, toolCallId, state, options, callbacks } = ctx
+  const registry = options.mcpRegistry
+  if (!registry) {
+    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString('MCP not configured'), true)
+    return
+  }
   reportProgress(toolCallId, `Calling ${entry.serverName}/${entry.rawName}`)
   try {
     const result = await registry.callTool(toolName, ctx.input, options.abortSignal)

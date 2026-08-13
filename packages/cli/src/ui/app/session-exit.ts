@@ -2,6 +2,7 @@ export interface SessionExitInfo {
   sessionId: string
   taskSlug: string
   messageCount: number
+  peerInfluenced: boolean
 }
 
 let sessionInfoGetter: (() => SessionExitInfo | null) | null = null

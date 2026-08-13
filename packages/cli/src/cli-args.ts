@@ -23,13 +23,17 @@ export async function parseCliArgs() {
       alias: 't',
       type: 'boolean',
       default: false,
-      describe: 'Trust mode: skip write operation confirmations',
+      describe: 'Trust mode: run tool calls without ordinary confirmations, including peer-triggered work',
     })
     .option('print', {
       alias: 'p',
       type: 'boolean',
       default: false,
       describe: 'Non-interactive mode: output result and exit',
+    })
+    .option('name', {
+      type: 'string',
+      describe: 'Name this agent and enable cross-session discovery and messaging',
     })
     .option('max-turns', {
       type: 'number',

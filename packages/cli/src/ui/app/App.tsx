@@ -29,6 +29,7 @@ import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-
 
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
 import { useAgent } from '../agent/use-agent.js'
+import { usePeerInboxAdapter } from '../agent/use-peer-inbox-adapter.js'
 import { ChatInput } from '../chat-input/ChatInput.js'
 import { rebuildPalette } from '../chat-input/palette.js'
 import { buildThemePreview } from '../render/render-diff.js'
@@ -89,7 +90,11 @@ export function App({
   const { exit } = useApp()
   const {
     state,
+    activeTurnOwner,
     submit,
+    enqueuePeerInput,
+    addPeerStatus,
+    addHeldPeerPreview,
     queueMessage,
     popQueuedMessage,
     runGoal,
@@ -101,10 +106,12 @@ export function App({
     editGoal,
     verifyGoal,
     resolvePermission,
+    resolveAuthority,
     resolveQuestion,
     abort,
     cleanup,
     clear,
+    clearPeerContext,
     compact,
     resume,
     rewind,
@@ -124,6 +131,17 @@ export function App({
     askQuestion,
     setPermissionMode,
   } = useAgent(model, options, initialSession)
+
+  const peerInbox = usePeerInboxAdapter({
+    service: options.peerService,
+    activeOwner: activeTurnOwner,
+    dialogsBlocked:
+      state.permissionQueue.length > 0 || state.authorityRequest !== null || state.pendingQuestion !== null,
+    enqueuePeerInput,
+    addPeerStatus,
+    addHeldPeerPreview,
+    askQuestion,
+  })
 
   // Bumped whenever /skill refresh mutates the registry in place. The
   // registry's object identity is stable across refresh (reload() rewrites
@@ -594,7 +612,8 @@ export function App({
     // at the next tool boundary (see consumeQueuedInputs in use-agent).
     // Slash commands still route normally below; ChatInput already gates
     // which ones can arrive here mid-turn (currently only /goal).
-    if (state.isLoading && !text.startsWith('/')) {
+    const activeOwner = activeTurnOwner()
+    if (activeOwner && !text.startsWith('/')) {
       const pendingSkill = pendingSkillRef.current
       if (pendingSkill) {
         pendingSkillRef.current = null
@@ -606,6 +625,15 @@ export function App({
         queueMessage(text)
       }
       return
+    }
+
+    if (activeOwner && text.startsWith('/')) {
+      const [busyCommand = '', busySubcommand = ''] = text.slice(1).trim().toLowerCase().split(/\s+/)
+      const allowedGoalControl = busyCommand === 'goal' && ['pause', 'cancel', 'steer'].includes(busySubcommand)
+      if (!allowedGoalControl) {
+        addInfoMessage(`Cannot run ${text.split(/\s+/, 1)[0]} while ${activeOwner} owns the active turn.`)
+        return
+      }
     }
 
     // Slash commands
@@ -640,6 +668,51 @@ export function App({
           pendingSkillRef.current = null
           clear(text)
           return
+
+        case 'clear-peer-context': {
+          echoCommand(text)
+          const result = await clearPeerContext()
+          addInfoMessage(
+            result.ok
+              ? result.removed > 0
+                ? `Removed ${result.removed} peer-influenced transcript message(s).`
+                : 'No peer-influenced context is active.'
+              : `Peer context was not cleared: ${result.reason ?? 'unknown error'}`,
+          )
+          return
+        }
+
+        case 'list-agents': {
+          echoCommand(text)
+          const service = options.peerService
+          if (!service?.enabled) {
+            addCommandResult('This session is not a named agent. Restart with --name <name> to enable communication.')
+            return
+          }
+          if (!service.isAvailable()) {
+            addCommandResult(`Peer messaging unavailable: ${service.getUnavailableReason() ?? 'service not running'}`)
+            return
+          }
+          try {
+            const { peers, partial } = await service.list()
+            peers.sort(
+              (left, right) => left.startedAt.localeCompare(right.startedAt) || left.name.localeCompare(right.name),
+            )
+            addCommandResult(
+              peers.length === 0
+                ? 'No other reachable X-Code sessions.'
+                : `${peers
+                    .map(
+                      (peer) =>
+                        `${peer.name} · ${peer.address} · ${peer.status}${peer.busyKind ? ` (${peer.busyKind})` : ''} · ${peer.cwd}`,
+                    )
+                    .join('\n')}${partial ? '\nResults may be partial because discovery reached its deadline.' : ''}`,
+            )
+          } catch (error) {
+            addCommandResult(`Unable to list agents: ${error instanceof Error ? error.message : String(error)}`)
+          }
+          return
+        }
 
         case 'compact':
           echoCommand(text)
@@ -1521,6 +1594,7 @@ export function App({
   // auto-scroll that left permanent blank rows in scrollback after the
   // dialog closed — so it's been moved into ChatInput's cell buffer too.
   const permissionRequest = state.permissionQueue[0]
+  const authorityRequest = state.authorityRequest
   const selectActive = !!state.pendingQuestion
 
   return (
@@ -1533,6 +1607,9 @@ export function App({
       permissionMode={state.permissionMode}
       isLoading={state.isLoading}
       notice={notice}
+      peerInfluenced={state.peerInfluenced}
+      trustMode={options.trustMode}
+      pendingPeerCount={peerInbox.accepted + peerInbox.held}
       // Suppress the spinner's "Thinking" line while a select dialog is up,
       // but keep ChatInput itself visible — the dialog is rendered INSIDE
       // its cell buffer now, not in Ink's top subtree.
@@ -1597,6 +1674,15 @@ export function App({
               input: permissionRequest.input,
               mcp: permissionRequest.mcp,
               onResolve: resolvePermission,
+            }
+          : null
+      }
+      authorityRequest={
+        authorityRequest
+          ? {
+              toolName: authorityRequest.toolName,
+              preview: authorityRequest.preview,
+              onResolve: resolveAuthority,
             }
           : null
       }

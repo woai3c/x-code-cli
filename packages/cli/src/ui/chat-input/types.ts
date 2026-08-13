@@ -1,5 +1,5 @@
 // ChatInput public + internal data types.
-import type { DisplayMessage, TodoItem } from '@x-code-cli/core'
+import type { AuthorityApprovalPreview, DisplayMessage, TodoItem } from '@x-code-cli/core'
 
 import type { ActiveToolCall } from '../agent/use-agent.js'
 
@@ -11,6 +11,9 @@ export interface ChatInputProps {
   onEscapeCancel?: () => void
   isLoading?: boolean
   notice?: string | null
+  peerInfluenced?: boolean
+  trustMode?: boolean
+  pendingPeerCount?: number
   disabled?: boolean
   hidden?: boolean
   spinner?: SpinnerState | null
@@ -21,6 +24,7 @@ export interface ChatInputProps {
   draftRestore?: { text: string; nonce: number } | null
   errorMessage?: string | null
   permission?: PermissionRequest | null
+  authorityRequest?: AuthorityRequest | null
   selectRequest?: SelectRequest | null
   commands?: readonly SlashCommand[]
   permissionMode?: 'default' | 'acceptEdits' | 'plan'
@@ -74,6 +78,12 @@ interface PermissionRequest {
    *  Drives the MCP-flavoured title / preview / always-allow label in
    *  the dialog. Absent for built-in tools (shell/edit/writeFile/…). */
   mcp?: { serverName: string; rawName: string }
+}
+
+interface AuthorityRequest {
+  toolName: string
+  preview: AuthorityApprovalPreview
+  onResolve: (allow: boolean, viewedComplete: boolean) => void
 }
 
 interface SelectRequest {

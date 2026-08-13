@@ -54,6 +54,21 @@ describe('system prompt budget and stability', () => {
     expect(buildSystemPrompt(planOptions)).toContain('Plan mode is active')
   })
 
+  it('stays byte-identical across dynamic peer discovery and status changes', () => {
+    const options = { modelId: 'test:model', isGitRepo: true }
+    const before = buildSystemPrompt(options)
+    const dynamicPeers = [
+      { name: 'frontend', address: 'peer:dynamic-one', status: 'idle' },
+      { name: 'backend', address: 'peer:dynamic-two', status: 'busy' },
+    ]
+    dynamicPeers[0]!.status = 'waiting'
+    dynamicPeers.push({ name: 'worker', address: 'peer:dynamic-three', status: 'idle' })
+
+    expect(buildSystemPrompt(options)).toBe(before)
+    expect(before).not.toContain('dynamic-one')
+    expect(before).not.toContain('frontend')
+  })
+
   it('does not claim absent core tools are always directly loaded', () => {
     const prompt = buildSystemPrompt({
       modelId: 'test:model',

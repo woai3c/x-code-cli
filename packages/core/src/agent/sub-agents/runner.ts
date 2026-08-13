@@ -11,7 +11,7 @@ import type { HookEvent } from '../../hooks/types.js'
 import { activeMemoryRecallAttachments } from '../../knowledge/memory/recall-state.js'
 import { tokenizeMemoryText } from '../../knowledge/memory/search-index.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
-import type { AgentCallbacks, AgentOptions, TokenUsage } from '../../types/index.js'
+import type { AgentCallbacks, AgentOptions, ExecutionAuthority, TokenUsage } from '../../types/index.js'
 import { debugLog, isAbortError } from '../../utils.js'
 import { withBrowserOperation } from '../browser/operation-lock.js'
 import { type BrowserMcp, PLAYWRIGHT_MCP_PACKAGE, getBrowserMcp } from '../browser/registry.js'
@@ -48,6 +48,7 @@ export interface RunSubAgentArgs {
   prompt: string
   knowledgeContext: string
   isGitRepo: boolean
+  authority?: ExecutionAuthority
 }
 
 export interface RunSubAgentResult {
@@ -125,6 +126,17 @@ function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: str
 /** Resolve the model to use for the sub-agent. Need the actual LanguageModel
  *  instance from the parent since we pass it to agentLoop. */
 export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageModel): Promise<RunSubAgentResult> {
+  const authority = args.authority ?? args.parentState.executionAuthority
+  if ((authority.peerTainted || authority.source === 'peer') && !args.parentOptions?.trustMode) {
+    return {
+      resultText: '[Sub-agent dispatch denied for peer-influenced context]',
+      tokenUsage: zeroUsage(),
+      turnCount: 0,
+      toolCallCount: 0,
+      durationMs: 0,
+      aborted: false,
+    }
+  }
   if (args.agentName !== 'browser') return runSubAgentUnlocked(args, parentModel)
 
   const startTime = Date.now()
@@ -159,6 +171,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
     isGitRepo,
   } = args
   const startTime = Date.now()
+  const authority = args.authority ?? parentState.executionAuthority
 
   const registry = parentOptions.subAgentRegistry as SubAgentRegistry | undefined
   if (!registry) {
@@ -282,6 +295,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
   })
 
   const subState = createLoopState('default')
+  subState.executionAuthority = structuredClone(authority)
   subState.systemPromptCache = subSystemPrompt
 
   const toolFilter = buildToolFilter(agentDef, parentState.permissionMode)
@@ -295,6 +309,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
 
   const subOptions: AgentOptions = {
     ...parentOptions,
+    executionAuthority: structuredClone(authority),
     modelId: subModelId,
     maxTurns: agentDef.maxTurns,
     toolFilter,

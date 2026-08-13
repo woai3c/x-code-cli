@@ -20,9 +20,10 @@ import {
   capabilitiesOf,
   classifyApiError,
   clearGoal as clearCoreGoal,
+  clearPeerContext as clearCorePeerContext,
   clearPendingTransition,
   cloneUsageBreakdown,
-  compressMessagesWithUsage,
+  compressTrackedMessagesWithUsage,
   createGoal as createCoreGoal,
   createGoalRunCoordinator,
   createLoopState,
@@ -30,6 +31,7 @@ import {
   debugLog,
   estimateContextBreakdown,
   flushPendingMessages,
+  formatQueuedAgentInput,
   generateTaskSlug,
   getDiffStatsForCheckpoint,
   hydrateLoopState,
@@ -47,6 +49,7 @@ import {
   runVerifierLadder,
   saveSession,
   scanCacheMisses,
+  summarizePeerOrigins,
   updateGoalStatus,
 } from '@x-code-cli/core'
 import { extractText } from '@x-code-cli/core'
@@ -54,17 +57,22 @@ import type {
   AgentCallbacks,
   AgentLoopResult,
   AgentOptions,
+  AuthorityApproval,
+  AuthorityApprovalPreview,
   CacheMissSummary,
   CheckpointEntry,
   ContextBreakdown,
   DiffStats,
   DisplayMessage,
+  ExecutionAuthority,
   GoalState,
   GoalVerifier,
   LanguageModel,
   LoadedSession,
   LoopState,
   PermissionMode,
+  PublicPeer,
+  QueuedAgentInput,
   StepStats,
   StreamRetryEvent,
   TodoItem,
@@ -75,6 +83,13 @@ import type {
 
 import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from './agent-tool-lifecycle.js'
 import { invalidateModelDependentState, invalidateToolSurfaceState } from './model-switch-state.js'
+import {
+  ownerMayDrainQueuedInputs,
+  partitionQueuedInputsForDraft,
+  takeFreshQueuedInput,
+} from './queued-agent-inputs.js'
+import { createTurnCoordinator } from './turn-coordinator.js'
+import type { TurnLease, TurnOwner } from './turn-coordinator.js'
 import { useAgentDisplayHelpers } from './use-agent-display-helpers.js'
 import { modelMessagesToDisplay } from './use-agent-display.js'
 import { extractLastAssistantText, useStreamBuffer } from './use-stream-buffer.js'
@@ -89,6 +104,14 @@ interface PendingPermission {
    *  `filesystem__read_file`. Looked up here rather than in ChatInput so
    *  the registry stays a CLI-startup concern. */
   mcp?: { serverName: string; rawName: string }
+}
+
+interface PendingAuthority {
+  toolCallId: string
+  toolName: string
+  input: Record<string, unknown>
+  preview: AuthorityApprovalPreview
+  resolve: (approval: AuthorityApproval) => void
 }
 
 interface PendingQuestion {
@@ -153,6 +176,7 @@ export interface AgentState {
   activeToolCalls: ActiveToolCall[]
   shellOutput: string
   permissionQueue: PendingPermission[]
+  authorityRequest?: PendingAuthority | null
   pendingQuestion: PendingQuestion | null
   /** Mid-turn queue: plain-text submits that arrived while `isLoading`.
    *  Rendered by ChatInput above the spinner; drained by the agent loop
@@ -200,6 +224,8 @@ export interface AgentState {
   /** Per-step token usage snapshots from each agentLoop invocation.
    *  Populated after each submit completes; drives /usage step detail. */
   stepStats: StepStats[]
+  /** Persistent transcript-derived security indicator. */
+  peerInfluenced?: boolean
 }
 
 export interface RunGoalCommand {
@@ -214,12 +240,41 @@ function cloneCacheMissSummary(summary: CacheMissSummary): CacheMissSummary {
   return { ...summary, estimates: summary.estimates.slice() }
 }
 
+function peerExecutionAuthority(peer: PublicPeer, messageId: string): ExecutionAuthority {
+  return {
+    source: 'peer',
+    peerTainted: true,
+    peerOrigins: summarizePeerOrigins([
+      {
+        instanceId: peer.address.slice('peer:'.length),
+        nameAtReceipt: peer.name,
+        messageId,
+      },
+    ]),
+  }
+}
+
+function authorityApproval(
+  preview: AuthorityApprovalPreview,
+  decision: 'allow-once' | 'deny',
+  viewedComplete: boolean,
+): AuthorityApproval {
+  return {
+    decision,
+    viewedComplete,
+    authorityHash: preview.authorityHash,
+    canonicalCallSha256: preview.canonicalCallSha256,
+    ...(preview.outboundPayload ? { canonicalPayloadSha256: preview.outboundPayload.sha256 } : {}),
+  }
+}
+
 const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   messages: [],
   isLoading: false,
   activeToolCalls: [],
   shellOutput: '',
   permissionQueue: [],
+  authorityRequest: null,
   pendingQuestion: null,
   queuedMessages: [],
   restoredDraft: null,
@@ -242,6 +297,7 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   goalRunnerActive: false,
   goalVerificationActive: false,
   stepStats: [],
+  peerInfluenced: false,
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
@@ -265,6 +321,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     ),
     stepStats: initialSession ? initialSession.stepStats.slice() : initialState.stepStats,
     goalStatus: initialSession?.goal ? { ...initialSession.goal } : null,
+    peerInfluenced: initialSession?.contextSecurity.peerInfluenceActive ?? false,
   })
 
   const modelRef = useRef<LanguageModel>(initialModel)
@@ -297,8 +354,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  still being appended (which breaks assistant→tool ordering). */
   const pendingAbortNoticeRef = useRef<string | null>(null)
   const goalCoordinatorRef = useRef(createGoalRunCoordinator())
+  const turnCoordinatorRef = useRef(createTurnCoordinator())
   const initializedRef = useRef(false)
   const pendingQuestionRef = useRef<PendingQuestion | null>(null)
+  const pendingAuthorityRef = useRef<PendingAuthority | null>(null)
   /** Pending tool calls keyed by toolCallId. A single slot can't survive
    *  parallel tool calls in one turn — the SDK emits tool-call A, tool-call
    *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
@@ -324,25 +383,59 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  the ref exists because `consumeQueuedInputs` is called synchronously
    *  by the agent loop between awaits — reading state there would see a
    *  stale closure. Every mutation updates BOTH in the same tick. */
-  const queuedMessagesRef = useRef<QueuedMessage[]>([])
+  const queuedMessagesRef = useRef<QueuedAgentInput[]>([])
+  const consumedPeerInboxKeysRef = useRef<Set<string>>(new Set())
   /** Monotonic id source for queued messages / draft restores. Date.now()
    *  collides within the same millisecond (and `length` repeats after a
    *  pop), which breaks React keys, pop-by-id, and nonce comparisons. */
   const queueSeqRef = useRef(0)
 
+  useEffect(() => {
+    const service = options.peerService
+    if (!service) return
+    return turnCoordinatorRef.current.onChange((lease) => {
+      const busyKind =
+        lease?.owner === 'goal'
+          ? 'goal'
+          : lease && ['compact', 'resume', 'rewind', 'clear'].includes(lease.owner)
+            ? 'maintenance'
+            : 'interactive-turn'
+      void service
+        .updateLocalState(lease ? { status: 'busy', busyKind } : { status: 'idle' })
+        .catch((error) => debugLog('peer.registration-state', String(error)))
+    })
+  }, [options.peerService])
+
   /** Queue a plain-text submit that arrived while a turn was in flight.
    *  The agent loop drains it at the next tool boundary (or on `stop`).
    *  `inject` overrides what the model sees (display text stays clean). */
   const queueMessage = useCallback((text: string, inject?: string) => {
-    const entry: QueuedMessage = { id: `queued-${queueSeqRef.current++}`, text, inject }
+    const entry: QueuedAgentInput = {
+      id: `queued-${queueSeqRef.current++}`,
+      source: 'user',
+      display: text,
+      content: inject ?? text,
+    }
     queuedMessagesRef.current = [...queuedMessagesRef.current, entry]
-    setState((prev) => ({ ...prev, queuedMessages: queuedMessagesRef.current }))
+    setState((prev) => ({
+      ...prev,
+      queuedMessages: queuedMessagesRef.current
+        .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
+        .map((message) => ({ id: message.id, text: message.display, inject: message.content })),
+    }))
   }, [])
 
   /** Remove one queued message by id (ChatInput's ↑-to-pop-back editing). */
   const popQueuedMessage = useCallback((id: string) => {
-    queuedMessagesRef.current = queuedMessagesRef.current.filter((m) => m.id !== id)
-    setState((prev) => ({ ...prev, queuedMessages: queuedMessagesRef.current }))
+    queuedMessagesRef.current = queuedMessagesRef.current.filter(
+      (message) => message.source === 'peer' || message.id !== id,
+    )
+    setState((prev) => ({
+      ...prev,
+      queuedMessages: queuedMessagesRef.current
+        .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
+        .map((message) => ({ id: message.id, text: message.display, inject: message.content })),
+    }))
   }, [])
 
   /** Drain the queue: move every queued message into scrollback as a
@@ -350,20 +443,58 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  `state.messages`. Passed to agentLoop as `consumeQueuedInputs` —
    *  MUST stay atomic (read + clear in one synchronous step) so a
    *  message can never be injected twice. */
-  const consumeQueuedInputs = useCallback((): string[] | undefined => {
+  const consumeQueuedInputs = useCallback((): QueuedAgentInput[] | undefined => {
     const queued = queuedMessagesRef.current
     if (queued.length === 0) return undefined
     queuedMessagesRef.current = []
+    for (const message of queued) {
+      if (message.source === 'peer' && message.inboxKey) consumedPeerInboxKeysRef.current.add(message.inboxKey)
+    }
     const now = Date.now()
     setState((prev) => ({
       ...prev,
       queuedMessages: [],
       messages: [
         ...prev.messages,
-        ...queued.map((m) => ({ id: m.id, role: 'user' as const, content: m.text, timestamp: now })),
+        ...queued.map((message) => ({
+          id: message.id,
+          role: 'user' as const,
+          content: message.display,
+          timestamp: now,
+          ...(message.source === 'peer'
+            ? { kind: 'peer-message' as const, peer: message.peer, peerMessageId: message.messageId }
+            : {}),
+        })),
       ],
     }))
-    return queued.map((m) => m.inject ?? m.text)
+    return queued
+  }, [])
+
+  const dequeueFreshInput = useCallback((): QueuedAgentInput | undefined => {
+    if (queuedMessagesRef.current.length === 0) return undefined
+    const taken = takeFreshQueuedInput(queuedMessagesRef.current)
+    const next = taken.next
+    if (!next) return undefined
+    queuedMessagesRef.current = taken.remaining
+    setState((prev) => ({
+      ...prev,
+      queuedMessages: queuedMessagesRef.current
+        .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
+        .map((message) => ({ id: message.id, text: message.display, inject: message.content })),
+      messages: [
+        ...prev.messages,
+        {
+          id: next.id,
+          role: 'user',
+          content: next.display,
+          timestamp: Date.now(),
+          ...(next.source === 'peer'
+            ? { kind: 'peer-message' as const, peer: next.peer, peerMessageId: next.messageId }
+            : {}),
+        },
+      ],
+    }))
+    return next
   }, [])
 
   /** Move every still-queued message back into the input box as a single
@@ -373,9 +504,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const restoreQueueToDraft = useCallback(() => {
     const queued = queuedMessagesRef.current
     if (queued.length === 0) return
-    queuedMessagesRef.current = []
-    const text = queued.map((m) => m.text).join('\n\n')
-    setState((prev) => ({ ...prev, queuedMessages: [], restoredDraft: { text, nonce: queueSeqRef.current++ } }))
+    const { draft, retained } = partitionQueuedInputsForDraft(queued)
+    queuedMessagesRef.current = retained
+    if (!draft) return
+    setState((prev) => ({ ...prev, queuedMessages: [], restoredDraft: { text: draft, nonce: queueSeqRef.current++ } }))
   }, [])
 
   /** Append a single message to `messages` (used by the stream buffer). */
@@ -466,6 +598,17 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     loadPersistedRules(process.cwd())
   }, [options.memoryService])
 
+  const currentAuthority = useCallback((source: 'user' | 'peer' = 'user'): ExecutionAuthority => {
+    const security = loopStateRef.current?.contextSecurity
+    const peerTainted =
+      source === 'peer' || security?.peerInfluenceActive === true || security?.integrityFailure === true
+    return {
+      source,
+      peerTainted,
+      ...(peerTainted && security?.peerOrigins ? { peerOrigins: security.peerOrigins } : {}),
+    }
+  }, [])
+
   /** Submit a user message.
    *
    *  `silent: true` skips appending the text to the UI scrollback while still
@@ -487,9 +630,22 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
          *  would race the runner's NEXT runAgentTurn, running two
          *  agentLoops concurrently over the same LoopState.messages. */
         skipIdleDrain?: boolean
+        owner?: TurnOwner
+        lease?: TurnLease
+        authority?: ExecutionAuthority
+        rawContent?: boolean
+        peerInboxKeys?: readonly string[]
       },
     ): Promise<AgentLoopResult | null> => {
-      await initialize()
+      const authority = submitOptions?.authority ?? currentAuthority()
+      const existingLease = submitOptions?.lease
+      const lease = existingLease ?? turnCoordinatorRef.current.tryAcquire(submitOptions?.owner ?? 'user', authority)
+      if (!lease) {
+        if ((submitOptions?.owner ?? 'user') === 'user') queueMessage(text)
+        return null
+      }
+      const ownsLease = existingLease === undefined
+      consumedPeerInboxKeysRef.current.clear()
 
       setState((prev) => ({
         ...prev,
@@ -535,6 +691,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               mcp: mcpEntry ? { serverName: mcpEntry.serverName, rawName: mcpEntry.rawName } : undefined,
             }
             setState((prev) => ({ ...prev, permissionQueue: [...prev.permissionQueue, entry] }))
+          })
+        },
+        onAskAuthority: (request) => {
+          return new Promise<AuthorityApproval>((resolve) => {
+            const pending: PendingAuthority = { ...request, resolve }
+            pendingAuthorityRef.current = pending
+            void options.peerService?.updateLocalState({ status: 'waiting' }).catch(() => {})
+            setState((prev) => ({ ...prev, authorityRequest: pending }))
           })
         },
         onAskUser: (question, opts) => {
@@ -654,6 +818,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       }
 
       try {
+        await initialize()
         // Resolve any @path / bare-path references in the input into proper
         // content parts (images for multimodal providers, extracted text for
         // PDF/Office/non-vision providers). Falls through to the plain-string
@@ -666,21 +831,23 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         const modelId = modelIdRef.current
         const providerCaps = capabilitiesOf(modelId)
         const pendingVisionUsage: VisionUsageEvent[] = []
-        const content = await buildUserContent(
-          text,
-          modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
-          (notice) => {
-            appendMessage({
-              id: `ingest-notice-${Date.now()}`,
-              role: 'assistant',
-              content: notice,
-              timestamp: Date.now(),
-              kind: 'command-result',
-            })
-          },
-          abortControllerRef.current.signal,
-          (event) => pendingVisionUsage.push(event),
-        )
+        const content = submitOptions?.rawContent
+          ? text
+          : await buildUserContent(
+              text,
+              modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
+              (notice) => {
+                appendMessage({
+                  id: `ingest-notice-${Date.now()}`,
+                  role: 'assistant',
+                  content: notice,
+                  timestamp: Date.now(),
+                  kind: 'command-result',
+                })
+              },
+              abortControllerRef.current.signal,
+              (event) => pendingVisionUsage.push(event),
+            )
 
         const activeLoopState = loopStateRef.current ?? createLoopState(permissionModeRef.current)
         loopStateRef.current = activeLoopState
@@ -727,15 +894,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             // this read is just a no-op fallthrough.
             permissionMode: permissionModeRef.current,
             abortSignal: controller.signal,
+            executionAuthority: lease.authority as ExecutionAuthority,
             // Mid-turn steering: messages the user queued while this turn
             // runs are injected at tool boundaries / on stop. Stable
             // callback — reads and clears queuedMessagesRef atomically.
-            consumeQueuedInputs,
+            consumeQueuedInputs: ownerMayDrainQueuedInputs(lease.owner) ? consumeQueuedInputs : undefined,
           },
           callbacks,
           activeLoopState,
         )
         loopStateRef.current = agentResult.state
+        const injectedPeerKeys = new Set([...(submitOptions?.peerInboxKeys ?? []), ...consumedPeerInboxKeysRef.current])
+        if (injectedPeerKeys.size > 0) options.peerService?.markAgentInputsInjected([...injectedPeerKeys])
+        consumedPeerInboxKeysRef.current.clear()
         if (submitOptions?.toolFilter) {
           loopStateRef.current.systemPromptCache = null
           markExpectedCacheMiss(loopStateRef.current, 'tool-surface-change')
@@ -768,6 +939,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           compressionLabel: null,
           reconnectLabel: null,
           goalStatus: finalGoal,
+          peerInfluenced: agentResult.state.contextSecurity.peerInfluenceActive,
           stepStats: loopStateRef.current?.stepStats.slice() ?? prev.stepStats,
         }))
         externalSignal?.removeEventListener('abort', abortFromExternal)
@@ -780,8 +952,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           const noticeText = pendingAbortNoticeRef.current
           if (noticeText && loopStateRef.current) {
             loopStateRef.current.messages.push({ role: 'user', content: noticeText })
-            void appendInterrupted(loopStateRef.current)
-            void flushPendingMessages(loopStateRef.current)
+            await appendInterrupted(loopStateRef.current)
+            await flushPendingMessages(loopStateRef.current)
           }
           pendingAbortNoticeRef.current = null
 
@@ -790,19 +962,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // "queued:" row with no spinner and no consumer. Fold it into
           // the restored draft too — zero-loss like abort() itself.
           restoreQueueToDraft()
-        } else if (!submitOptions?.skipIdleDrain && queuedMessagesRef.current.length > 0) {
-          // Idle-drain: a message queued after the loop's last boundary
-          // check (sub-millisecond race at turn end) would otherwise sit
-          // in the pending list until the user's next manual submit. Fire
-          // it as a fresh silent turn — consumeQueuedInputs already moved
-          // it into scrollback. Skipped for goal-runner submits (the
-          // runner owns the next turn; a concurrent drain would corrupt
-          // shared history).
-          const texts = consumeQueuedInputs()
-          if (texts?.length) void submitRef.current?.(texts.join('\n\n'), { silent: true })
         }
         return agentResult
       } catch (err) {
+        const droppedPeerKeys = new Set([...(submitOptions?.peerInboxKeys ?? []), ...consumedPeerInboxKeysRef.current])
+        if (droppedPeerKeys.size > 0) {
+          options.peerService?.markAgentInputsDropped([...droppedPeerKeys], 'agent-turn-failed-before-commit')
+        }
+        consumedPeerInboxKeysRef.current.clear()
         pendingToolsRef.current.clear()
         externalSignal?.removeEventListener('abort', abortFromExternal)
         // User-cancel path: agentLoop swallows AbortError into a clean
@@ -817,8 +984,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           const noticeText = pendingAbortNoticeRef.current
           if (noticeText && loopStateRef.current) {
             loopStateRef.current.messages.push({ role: 'user', content: noticeText })
-            void appendInterrupted(loopStateRef.current)
-            void flushPendingMessages(loopStateRef.current)
+            await appendInterrupted(loopStateRef.current)
+            await flushPendingMessages(loopStateRef.current)
           }
           pendingAbortNoticeRef.current = null
         }
@@ -832,6 +999,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           error: wasAborted ? null : classifyApiError(err).message,
         }))
         return null
+      } finally {
+        if (ownsLease) {
+          lease.release()
+          if (!submitOptions?.skipIdleDrain) {
+            queueMicrotask(() => {
+              if (turnCoordinatorRef.current.isOwned()) return
+              const next = dequeueFreshInput()
+              if (!next) return
+              if (next.source === 'user') {
+                void submitRef.current?.(next.content, { silent: true })
+              } else {
+                const peerAuthority = peerExecutionAuthority(next.peer, next.messageId)
+                void submitRef.current?.(formatQueuedAgentInput(next), {
+                  silent: true,
+                  owner: 'peer',
+                  authority: peerAuthority,
+                  rawContent: true,
+                  ...(next.inboxKey ? { peerInboxKeys: [next.inboxKey] } : {}),
+                })
+              }
+            })
+          }
+        }
       }
     },
     [
@@ -844,7 +1034,98 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       toolLifecycleCallbacks,
       consumeQueuedInputs,
       restoreQueueToDraft,
+      currentAuthority,
+      queueMessage,
+      dequeueFreshInput,
     ],
+  )
+
+  const submitRawPeerContent = useCallback(
+    async (input: {
+      content: string
+      peer: PublicPeer
+      messageId: string
+      inboxKey?: string
+    }): Promise<AgentLoopResult | null> => {
+      const authority = peerExecutionAuthority(input.peer, input.messageId)
+      const lease = turnCoordinatorRef.current.tryAcquire('peer', authority)
+      if (!lease) {
+        queuedMessagesRef.current = [
+          ...queuedMessagesRef.current,
+          {
+            id: `queued-${queueSeqRef.current++}`,
+            source: 'peer',
+            display: input.content,
+            content: input.content,
+            peer: input.peer,
+            messageId: input.messageId,
+            ...(input.inboxKey ? { inboxKey: input.inboxKey } : {}),
+          },
+        ]
+        return null
+      }
+      try {
+        appendMessage({
+          id: `peer-${input.messageId}`,
+          role: 'user',
+          content: input.content,
+          timestamp: Date.now(),
+          kind: 'peer-message',
+          peer: input.peer,
+        })
+        return await submit(
+          formatQueuedAgentInput({
+            id: `peer-${input.messageId}`,
+            source: 'peer',
+            display: input.content,
+            content: input.content,
+            peer: input.peer,
+            messageId: input.messageId,
+            ...(input.inboxKey ? { inboxKey: input.inboxKey } : {}),
+          }),
+          {
+            silent: true,
+            owner: 'peer',
+            lease,
+            authority,
+            rawContent: true,
+            ...(input.inboxKey ? { peerInboxKeys: [input.inboxKey] } : {}),
+          },
+        )
+      } finally {
+        lease.release()
+        queueMicrotask(() => {
+          if (turnCoordinatorRef.current.isOwned()) return
+          const next = dequeueFreshInput()
+          if (!next) return
+          if (next.source === 'user') {
+            void submitRef.current?.(next.content, { silent: true })
+          } else {
+            const nextAuthority = peerExecutionAuthority(next.peer, next.messageId)
+            void submitRef.current?.(formatQueuedAgentInput(next), {
+              silent: true,
+              owner: 'peer',
+              authority: nextAuthority,
+              rawContent: true,
+              ...(next.inboxKey ? { peerInboxKeys: [next.inboxKey] } : {}),
+            })
+          }
+        })
+      }
+    },
+    [appendMessage, dequeueFreshInput, submit],
+  )
+
+  /** Synchronously reserve bounded source-aware queue capacity before a
+   *  PeerInbox claim is committed. The returned boolean is the ownership
+   *  handoff point used by the App adapter. */
+  const enqueuePeerInput = useCallback(
+    (input: { content: string; peer: PublicPeer; messageId: string; inboxKey: string }): boolean => {
+      if (queuedMessagesRef.current.filter((entry) => entry.source === 'peer').length >= 50) return false
+      void submitRawPeerContent(input)
+      return true
+    },
+    [submitRawPeerContent],
   )
 
   /** Self-reference for the idle-drain follow-up fired from inside
@@ -872,6 +1153,25 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       return { ...prev, permissionQueue: tail }
     })
   }, [])
+
+  const resolveAuthority = useCallback(
+    (allow: boolean, viewedComplete: boolean) => {
+      const pending = pendingAuthorityRef.current
+      pendingAuthorityRef.current = null
+      setState((prev) => ({ ...prev, authorityRequest: null }))
+      const owner = turnCoordinatorRef.current.current()?.owner
+      if (owner && options.peerService) {
+        const busyKind = owner === 'goal' ? 'goal' : 'interactive-turn'
+        void options.peerService.updateLocalState({ status: 'busy', busyKind }).catch(() => {})
+      }
+      if (pending) {
+        queueMicrotask(() =>
+          pending.resolve(authorityApproval(pending.preview, allow ? 'allow-once' : 'deny', viewedComplete)),
+        )
+      }
+    },
+    [options.peerService],
+  )
 
   /** Resolve a pending question */
   const resolveQuestion = useCallback((answer: string) => {
@@ -908,6 +1208,50 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     [],
   )
 
+  const hasPendingPeerInput = useCallback((): boolean => {
+    if (queuedMessagesRef.current.some((input) => input.source === 'peer')) return true
+    const snapshot = options.peerService?.inbox.getSnapshot()
+    return Boolean(snapshot && snapshot.accepted + snapshot.held > 0)
+  }, [options.peerService])
+
+  const clearPeerContext = useCallback(async (): Promise<{ ok: boolean; removed: number; reason?: string }> => {
+    const ls = loopStateRef.current
+    if (!ls?.contextSecurity.peerInfluenceActive) return { ok: true, removed: 0 }
+    const lease = turnCoordinatorRef.current.tryAcquire('clear', currentAuthority())
+    if (!lease) return { ok: false, removed: 0, reason: 'Another turn or maintenance operation is in progress.' }
+    try {
+      if (hasPendingPeerInput()) {
+        return { ok: false, removed: 0, reason: 'Peer messages are still queued; process or reject them first.' }
+      }
+      const answer = await askQuestion(
+        'Remove the peer-influenced conversation suffix and restore normal permission automation?',
+        [
+          { label: 'Remove suffix', description: 'Delete the peer message and every response derived from it.' },
+          { label: 'Cancel', description: 'Keep the transcript and reduced authority unchanged.' },
+        ],
+        { noOther: true },
+      )
+      if (answer !== 'Remove suffix') return { ok: false, removed: 0, reason: 'Cancelled.' }
+      if (hasPendingPeerInput()) {
+        return { ok: false, removed: 0, reason: 'A peer message arrived while confirmation was open.' }
+      }
+      const removed = await clearCorePeerContext(ls)
+      setState((prev) => ({
+        ...prev,
+        messages: modelMessagesToDisplay(ls.messages),
+        activeToolCalls: [],
+        permissionQueue: [],
+        pendingQuestion: null,
+        peerInfluenced: false,
+      }))
+      return { ok: true, removed }
+    } catch (error) {
+      return { ok: false, removed: 0, reason: error instanceof Error ? error.message : String(error) }
+    } finally {
+      lease.release()
+    }
+  }, [askQuestion, currentAuthority, hasPendingPeerInput])
+
   const createGoalCallbacks = useCallback((): AgentCallbacks => {
     return {
       onTextDelta: appendTextDelta,
@@ -928,6 +1272,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               },
             ],
           }))
+        })
+      },
+      onAskAuthority: (request) => {
+        return new Promise<AuthorityApproval>((resolve) => {
+          const pending: PendingAuthority = { ...request, resolve }
+          pendingAuthorityRef.current = pending
+          void options.peerService?.updateLocalState({ status: 'waiting' }).catch(() => {})
+          setState((prev) => ({ ...prev, authorityRequest: pending }))
         })
       },
       onAskUser: (question, opts) => {
@@ -963,7 +1315,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       onStreamRetry: handleStreamRetry,
       onError: (error) => setState((prev) => ({ ...prev, error: error.message })),
     }
-  }, [appendMessage, appendTextDelta, goalToolLifecycleCallbacks, handleStreamRetry, options.mcpRegistry])
+  }, [
+    appendMessage,
+    appendTextDelta,
+    goalToolLifecycleCallbacks,
+    handleStreamRetry,
+    options.mcpRegistry,
+    options.peerService,
+  ])
 
   const ensureLoopState = useCallback((): LoopState => {
     if (!loopStateRef.current) {
@@ -980,7 +1339,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   }, [])
 
   const executeGoalLoop = useCallback(
-    async (ls: LoopState, goalId: string, signal: AbortSignal): Promise<void> => {
+    async (ls: LoopState, goalId: string, signal: AbortSignal, lease: TurnLease): Promise<void> => {
       await runGoalLoop({
         state: ls,
         model: modelRef.current,
@@ -1001,6 +1360,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             maxTurns: turnOptions?.finalSummary ? 1 : undefined,
             signal,
             skipIdleDrain: true,
+            owner: 'goal',
+            lease,
+            authority: lease.authority as ExecutionAuthority,
           })
           if (!result) throw new Error('Goal agent turn did not complete')
           return {
@@ -1015,36 +1377,42 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   const runGoal = useCallback(
     async (command: RunGoalCommand): Promise<void> => {
+      const lease = turnCoordinatorRef.current.tryAcquire('goal', currentAuthority())
+      if (!lease) return
       const ls = ensureLoopState()
-      const goal = createCoreGoal(ls, {
-        objective: command.objective,
-        maxTurns: command.maxTurns,
-        tokenBudget: command.tokenBudget,
-        verifiers: command.verifiers ?? [],
-        requiresUserConfirmation: command.requiresUserConfirmation,
-      })
-      setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
-      await prepareGoalSession(ls, command.objective)
-      await appendGoalState(ls)
+      try {
+        const goal = createCoreGoal(ls, {
+          objective: command.objective,
+          maxTurns: command.maxTurns,
+          tokenBudget: command.tokenBudget,
+          verifiers: command.verifiers ?? [],
+          requiresUserConfirmation: command.requiresUserConfirmation,
+        })
+        setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
+        await prepareGoalSession(ls, command.objective)
+        await appendGoalState(ls)
 
-      await goalCoordinatorRef.current.run(goal.id, async (signal) => {
-        try {
-          await executeGoalLoop(ls, goal.id, signal)
-        } finally {
-          if (loopStateRef.current) {
-            void appendGoalState(loopStateRef.current)
-            setState((prev) => ({
-              ...prev,
-              goalStatus: loopStateRef.current?.goal ? { ...loopStateRef.current.goal } : null,
-              goalRunnerActive: false,
-            }))
-          } else {
-            setState((prev) => ({ ...prev, goalRunnerActive: false }))
+        await goalCoordinatorRef.current.run(goal.id, async (signal) => {
+          try {
+            await executeGoalLoop(ls, goal.id, signal, lease)
+          } finally {
+            if (loopStateRef.current) {
+              await appendGoalState(loopStateRef.current)
+              setState((prev) => ({
+                ...prev,
+                goalStatus: loopStateRef.current?.goal ? { ...loopStateRef.current.goal } : null,
+                goalRunnerActive: false,
+              }))
+            } else {
+              setState((prev) => ({ ...prev, goalRunnerActive: false }))
+            }
           }
-        }
-      })
+        })
+      } finally {
+        lease.release()
+      }
     },
-    [ensureLoopState, executeGoalLoop, prepareGoalSession],
+    [currentAuthority, ensureLoopState, executeGoalLoop, prepareGoalSession],
   )
 
   const drainPendingInteractions = useCallback(() => {
@@ -1052,9 +1420,19 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     permissionResolversRef.current = []
     for (const r of permResolvers) r('no')
 
+    const pendingAuthority = pendingAuthorityRef.current
+    pendingAuthorityRef.current = null
+    if (pendingAuthority) pendingAuthority.resolve(authorityApproval(pendingAuthority.preview, 'deny', false))
+
     const pendingQuestion = pendingQuestionRef.current
     pendingQuestionRef.current = null
-    setState((prev) => ({ ...prev, permissionQueue: [], pendingQuestion: null, bufferingReads: false }))
+    setState((prev) => ({
+      ...prev,
+      permissionQueue: [],
+      authorityRequest: null,
+      pendingQuestion: null,
+      bufferingReads: false,
+    }))
     if (pendingQuestion) pendingQuestion.resolve(pendingQuestion.abortAnswer)
   }, [])
 
@@ -1081,27 +1459,36 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const resumeGoal = useCallback(async (): Promise<GoalState | null> => {
     const ls = loopStateRef.current
     if (!ls?.goal) return null
+    const lease = turnCoordinatorRef.current.tryAcquire('goal', currentAuthority())
+    if (!lease) return null
     let goal: GoalState
     try {
       goal = ls.goal.status === 'active' ? ls.goal : resumeCoreGoal(ls)
     } catch {
+      lease.release()
       return null
     }
-    await appendGoalState(ls)
-    setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
-    goalCoordinatorRef.current.wake(goal.id, async (signal) => {
-      try {
-        await executeGoalLoop(ls, goal.id, signal)
-      } finally {
-        setState((prev) => ({
-          ...prev,
-          goalStatus: ls.goal ? { ...ls.goal } : null,
-          goalRunnerActive: false,
-        }))
-      }
-    })
-    return goal
-  }, [executeGoalLoop])
+    try {
+      await appendGoalState(ls)
+      setState((prev) => ({ ...prev, goalStatus: { ...goal }, goalRunnerActive: true }))
+      goalCoordinatorRef.current.wake(goal.id, async (signal) => {
+        try {
+          await executeGoalLoop(ls, goal.id, signal, lease)
+        } finally {
+          lease.release()
+          setState((prev) => ({
+            ...prev,
+            goalStatus: ls.goal ? { ...ls.goal } : null,
+            goalRunnerActive: false,
+          }))
+        }
+      })
+      return goal
+    } catch {
+      lease.release()
+      return null
+    }
+  }, [currentAuthority, executeGoalLoop])
 
   const cancelGoal = useCallback(async (): Promise<GoalState | null> => {
     const ls = loopStateRef.current
@@ -1114,16 +1501,22 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const clearGoal = useCallback(async (): Promise<void> => {
     const ls = loopStateRef.current
     if (!ls) return
+    const lease = turnCoordinatorRef.current.tryAcquire('clear', currentAuthority())
+    if (!lease) return
     const goalId = ls.goal?.id
-    if (goalId) {
-      abortControllerRef.current?.abort()
-      drainPendingInteractions()
-      await goalCoordinatorRef.current.interrupt(goalId)
+    try {
+      if (goalId) {
+        abortControllerRef.current?.abort()
+        drainPendingInteractions()
+        await goalCoordinatorRef.current.interrupt(goalId)
+      }
+      clearCoreGoal(ls)
+      await appendGoalState(ls)
+      setState((prev) => ({ ...prev, goalStatus: null, goalRunnerActive: false }))
+    } finally {
+      lease.release()
     }
-    clearCoreGoal(ls)
-    await appendGoalState(ls)
-    setState((prev) => ({ ...prev, goalStatus: null, goalRunnerActive: false }))
-  }, [drainPendingInteractions])
+  }, [currentAuthority, drainPendingInteractions])
 
   const steerGoal = useCallback(
     async (text: string): Promise<GoalState | null> => {
@@ -1139,27 +1532,38 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     [resumeGoal],
   )
 
-  const editGoal = useCallback(async (input: { objective?: string; maxTurns?: number }): Promise<GoalState | null> => {
-    const ls = loopStateRef.current
-    if (!ls?.goal) return null
-    if (input.objective !== undefined) {
-      const objective = input.objective.trim()
-      if (objective) ls.goal.objective = objective
-    }
-    if (input.maxTurns !== undefined && Number.isFinite(input.maxTurns) && input.maxTurns > 0) {
-      ls.goal.maxTurns = Math.floor(input.maxTurns)
-    }
-    ls.goal.updatedAt = new Date().toISOString()
-    ls.systemPromptCache = null
-    markExpectedCacheMiss(ls, 'goal-change')
-    await appendGoalState(ls)
-    setState((prev) => ({ ...prev, goalStatus: ls.goal ? { ...ls.goal } : null }))
-    return ls.goal
-  }, [])
+  const editGoal = useCallback(
+    async (input: { objective?: string; maxTurns?: number }): Promise<GoalState | null> => {
+      const ls = loopStateRef.current
+      if (!ls?.goal) return null
+      const lease = turnCoordinatorRef.current.tryAcquire('goal', currentAuthority())
+      if (!lease) return null
+      try {
+        if (input.objective !== undefined) {
+          const objective = input.objective.trim()
+          if (objective) ls.goal.objective = objective
+        }
+        if (input.maxTurns !== undefined && Number.isFinite(input.maxTurns) && input.maxTurns > 0) {
+          ls.goal.maxTurns = Math.floor(input.maxTurns)
+        }
+        ls.goal.updatedAt = new Date().toISOString()
+        ls.systemPromptCache = null
+        markExpectedCacheMiss(ls, 'goal-change')
+        await appendGoalState(ls)
+        setState((prev) => ({ ...prev, goalStatus: ls.goal ? { ...ls.goal } : null }))
+        return ls.goal
+      } finally {
+        lease.release()
+      }
+    },
+    [currentAuthority],
+  )
 
   const verifyGoal = useCallback(async (): Promise<{ goal: GoalState; ok: boolean; summary: string } | null> => {
     const ls = loopStateRef.current
     if (!ls?.goal) return null
+    const lease = turnCoordinatorRef.current.tryAcquire('goal', currentAuthority())
+    if (!lease) return null
     const controller = new AbortController()
     abortControllerRef.current = controller
     setState((prev) => ({ ...prev, goalVerificationActive: true }))
@@ -1190,13 +1594,22 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         } else {
           const repeatedFailureCount = recordVerificationFailure(goal, verification.results)
           clearPendingTransition(goal)
-          const input = admitGoalInput(ls, {
-            goalId: goal.id,
-            kind: 'verifier_failure',
-            content: buildVerifierFailurePrompt(goal, verification.results, verification.summary, repeatedFailureCount),
-          })
-          await appendGoalInput(ls, input)
-          await resumeGoal()
+          if (!verification.retryable) {
+            updateGoalStatus(goal, 'blocked', verification.summary)
+          } else {
+            const input = admitGoalInput(ls, {
+              goalId: goal.id,
+              kind: 'verifier_failure',
+              content: buildVerifierFailurePrompt(
+                goal,
+                verification.results,
+                verification.summary,
+                repeatedFailureCount,
+              ),
+            })
+            await appendGoalInput(ls, input)
+            await goalCoordinatorRef.current.run(goal.id, (signal) => executeGoalLoop(ls, goal.id, signal, lease))
+          }
         }
       }
 
@@ -1205,8 +1618,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       return { goal, ok: verification.ok, summary: verification.summary }
     } finally {
       setState((prev) => ({ ...prev, goalVerificationActive: false }))
+      lease.release()
     }
-  }, [createGoalCallbacks, options, resumeGoal])
+  }, [createGoalCallbacks, currentAuthority, executeGoalLoop, options])
 
   /** Abort the in-flight turn. Mirrors Claude Code's onCancel:
    *
@@ -1263,7 +1677,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (loopStateRef.current?.goal?.status === 'active') {
       try {
         pauseCoreGoal(loopStateRef.current)
-        void appendGoalState(loopStateRef.current)
         void goalCoordinatorRef.current.interrupt(loopStateRef.current.goal.id)
         setState((prev) => ({
           ...prev,
@@ -1310,12 +1723,24 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (!ls || ls.messages.length === 0) return null
     const firstUserMsg = ls.messages.find((m) => m.role === 'user')
     const firstPrompt = firstUserMsg ? extractText(firstUserMsg.content).slice(0, 80) : ''
-    return { sessionId: ls.sessionId, taskSlug: ls.taskSlug, messageCount: ls.messages.length, firstPrompt }
+    return {
+      sessionId: ls.sessionId,
+      taskSlug: ls.taskSlug,
+      messageCount: ls.messages.length,
+      firstPrompt,
+      peerInfluenced: ls.contextSecurity.peerInfluenceActive || ls.contextSecurity.integrityFailure === true,
+    }
   }, [])
 
   /** Clear conversation while retaining a display-only command echo. */
   const clear = useCallback(
     (commandText = '/clear') => {
+      const lease = turnCoordinatorRef.current.tryAcquire('clear', currentAuthority())
+      if (!lease) return
+      if (hasPendingPeerInput()) {
+        lease.release()
+        return
+      }
       loopStateRef.current = null
       pendingToolsRef.current.clear()
       permissionResolversRef.current = []
@@ -1340,8 +1765,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           },
         ],
       }))
+      lease.release()
     },
-    [resetBuffer],
+    [currentAuthority, hasPendingPeerInput, resetBuffer],
   )
 
   /** Mid-session resume: hot-swap the agent state to a previously-saved
@@ -1366,6 +1792,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  shells / checklists never ran for the loaded session. */
   const resume = useCallback(
     (loaded: LoadedSession) => {
+      const lease = turnCoordinatorRef.current.tryAcquire('resume', currentAuthority())
+      if (!lease) return
+      if (hasPendingPeerInput()) {
+        lease.release()
+        return
+      }
       pendingToolsRef.current.clear()
       queuedMessagesRef.current = []
       resetBuffer()
@@ -1389,9 +1821,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         cacheMissSummary: cloneCacheMissSummary(loaded.cacheMissSummary ?? scanCacheMisses(loaded.providerTurns ?? [])),
         stepStats: loaded.stepStats.slice(),
         goalStatus: loaded.goal ? { ...loaded.goal } : null,
+        peerInfluenced: loaded.contextSecurity.peerInfluenceActive,
       }))
+      lease.release()
     },
-    [resetBuffer],
+    [currentAuthority, hasPendingPeerInput, resetBuffer],
   )
 
   /** Read the live list of /rewind checkpoints for the current session.
@@ -1427,60 +1861,74 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     ): Promise<{ ok: true; preview: string; messageCount: number } | { ok: false; reason: string }> => {
       const ls = loopStateRef.current
       if (!ls) return { ok: false, reason: 'No active session to rewind.' }
-      if (state.isLoading) {
+      const lease = turnCoordinatorRef.current.tryAcquire('rewind', currentAuthority())
+      if (!lease) {
         return { ok: false, reason: 'A turn is in progress. Press Esc to cancel it, then run /rewind.' }
       }
-      const target = ls.checkpoints.find((c) => c.ckptId === ckptId)
-      if (!target) return { ok: false, reason: `Checkpoint not found: ${ckptId}` }
+      try {
+        const target = ls.checkpoints.find((c) => c.ckptId === ckptId)
+        if (!target) return { ok: false, reason: `Checkpoint not found: ${ckptId}` }
 
-      // Restore working tree (skip for conversation-only rewind).
-      if (mode === 'both' || mode === 'code') {
-        const ok = await restoreCheckpoint(ls, ckptId)
-        if (!ok) {
-          return { ok: false, reason: 'Failed to read checkpoint manifest — backups may have been cleaned up.' }
-        }
-      }
-
-      // Truncate conversation (skip for code-only rewind).
-      if (mode === 'both' || mode === 'conversation') {
-        const newLen = Math.max(0, target.messageCount - 1)
-        ls.messages = ls.messages.slice(0, newLen)
-        ls.persistedMessageCount = ls.messages.length
-
-        const survivingCheckpoints = ls.checkpoints.slice()
-        await markBoundaryAndReflush(ls)
-        ls.checkpoints = survivingCheckpoints
-        for (const c of survivingCheckpoints) {
-          await appendCheckpoint(ls, c)
+        // Restore working tree (skip for conversation-only rewind).
+        if (mode === 'both' || mode === 'code') {
+          const ok = await restoreCheckpoint(ls, ckptId)
+          if (!ok) {
+            return { ok: false, reason: 'Failed to read checkpoint manifest — backups may have been cleaned up.' }
+          }
         }
 
-        pendingToolsRef.current.clear()
-        resetBuffer()
-        const converted = modelMessagesToDisplay(ls.messages)
-        setState((prev) => ({
-          ...prev,
-          activeToolCalls: [],
-          shellOutput: '',
-          error: null,
-          reconnectLabel: null,
-          todos: [],
-          messages: converted,
-        }))
-      }
+        // Truncate conversation (skip for code-only rewind).
+        if (mode === 'both' || mode === 'conversation') {
+          const newLen = Math.max(0, target.messageCount - 1)
+          const candidate = ls.trackedMessages.slice(0, newLen)
 
-      return { ok: true, preview: target.userPrompt, messageCount: target.messageCount - 1 }
+          const survivingCheckpoints = ls.checkpoints.filter(
+            (checkpoint) => checkpoint.messageCount <= candidate.length,
+          )
+          await markBoundaryAndReflush(ls, undefined, candidate)
+          ls.checkpoints = survivingCheckpoints
+          for (const checkpoint of survivingCheckpoints) await appendCheckpoint(ls, checkpoint)
+
+          pendingToolsRef.current.clear()
+          resetBuffer()
+          const converted = modelMessagesToDisplay(ls.messages)
+          setState((prev) => ({
+            ...prev,
+            activeToolCalls: [],
+            shellOutput: '',
+            error: null,
+            reconnectLabel: null,
+            todos: [],
+            messages: converted,
+          }))
+        }
+
+        return { ok: true, preview: target.userPrompt, messageCount: target.messageCount - 1 }
+      } finally {
+        lease.release()
+      }
     },
-    [resetBuffer, state.isLoading],
+    [currentAuthority, resetBuffer],
   )
 
   /** Manual context compression */
   const compact = useCallback(async () => {
     const ls = loopStateRef.current
     if (!ls) return { status: 'nothing' as const, reason: 'no-conversation' as const }
-    const { estimateTokenCount, KEEP_RECENT, KEEP_RECENT_TOKENS } = await import('@x-code-cli/core')
+    const lease = turnCoordinatorRef.current.tryAcquire('compact', currentAuthority())
+    if (!lease) return { status: 'failed' as const, message: 'Another turn or maintenance operation is in progress.' }
+    let compressionApi: typeof import('@x-code-cli/core')
+    try {
+      compressionApi = await import('@x-code-cli/core')
+    } catch (error) {
+      lease.release()
+      throw error
+    }
+    const { estimateTokenCount, KEEP_RECENT, KEEP_RECENT_TOKENS } = compressionApi
 
     const before = estimateTokenCount(ls.messages)
     if (ls.messages.length <= KEEP_RECENT) {
+      lease.release()
       return {
         status: 'nothing' as const,
         reason: 'too-few-messages' as const,
@@ -1513,9 +1961,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       const read = [...ls.readFileCache.keys()].filter((p) => !ls.filesModified.has(p))
       const filesTracked = { modified, read }
 
-      const originalMessages = ls.messages
-      const compressed = await compressMessagesWithUsage(
-        originalMessages,
+      const originalTrackedMessages = ls.trackedMessages
+      const compressed = await compressTrackedMessagesWithUsage(
+        originalTrackedMessages,
         modelRef.current,
         previousSummary,
         filesTracked,
@@ -1525,7 +1973,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         debugLog('compression.manual.cancelled', `tokens=${before}`)
         return { status: 'cancelled' as const }
       }
-      if (compressed.messages === originalMessages) {
+      if (
+        compressed.trackedMessages.length === originalTrackedMessages.length &&
+        compressed.trackedMessages.every((entry, index) => entry.entryId === originalTrackedMessages[index]?.entryId)
+      ) {
         debugLog('compression.manual.skipped', `messages=${ls.messages.length} tokens=${before}`)
         return {
           status: 'nothing' as const,
@@ -1534,7 +1985,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           retentionTokens: KEEP_RECENT_TOKENS,
         }
       }
-      ls.messages = compressed.messages
+      await markBoundaryAndReflush(ls, compressed.summary, compressed.trackedMessages)
       if (compressed.usage) {
         const usageModelId = attributedModelId(modelIdRef.current, compressed.modelId)
         accumulateUsage(ls, {
@@ -1556,7 +2007,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       // to the jsonl so the loader can pick up the post-compaction state.
       ls.lastInputTokens = 0
       markExpectedCacheMiss(ls, 'compaction')
-      await markBoundaryAndReflush(ls, compressed.summary)
       const after = estimateTokenCount(ls.messages)
       // Include the system prompt overhead so the reported numbers match
       // the footer's "N / M · X%" indicator (which shows the full context
@@ -1584,8 +2034,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       // mid-turn queue. `/compact` has no agent loop to consume it, so put it
       // back in the editable input instead of leaving a stranded queue row.
       restoreQueueToDraft()
+      lease.release()
     }
-  }, [restoreQueueToDraft])
+  }, [currentAuthority, restoreQueueToDraft])
 
   /** Switch model at runtime */
   const switchModel = useCallback(
@@ -1669,12 +2120,47 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     return input ? estimateContextBreakdown(input) : null
   }, [options])
 
+  const activeTurnOwner = useCallback(() => turnCoordinatorRef.current.current()?.owner ?? null, [])
+
+  const addPeerStatus = useCallback(
+    (content: string, peer?: PublicPeer) => {
+      appendMessage({
+        id: `peer-status-${Date.now()}-${queueSeqRef.current++}`,
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+        kind: 'peer-status',
+        ...(peer ? { peer } : {}),
+      })
+    },
+    [appendMessage],
+  )
+
+  const addHeldPeerPreview = useCallback(
+    (content: string, peer: PublicPeer, summary?: string) => {
+      appendMessage({
+        id: `peer-held-${Date.now()}-${queueSeqRef.current++}`,
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+        kind: 'peer-message',
+        peer: { ...peer, ...(summary ? { summary } : {}) },
+      })
+    },
+    [appendMessage],
+  )
+
   const { addInfoMessage, addUserMessage, echoCommand, addCommandMessage, addCommandResult } =
     useAgentDisplayHelpers(appendMessage)
 
   return {
     state,
+    activeTurnOwner,
     submit,
+    submitRawPeerContent,
+    enqueuePeerInput,
+    addPeerStatus,
+    addHeldPeerPreview,
     queueMessage,
     popQueuedMessage,
     runGoal,
@@ -1686,10 +2172,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     editGoal,
     verifyGoal,
     resolvePermission,
+    resolveAuthority,
     resolveQuestion,
     abort,
     cleanup,
     clear,
+    clearPeerContext,
     compact,
     resume,
     rewind,

@@ -4,13 +4,21 @@ import type { ModelMessage } from 'ai'
 import type { MemoryRecallAttachment, MemoryRecallTombstone, MemoryRecallTrace } from '../knowledge/memory/types.js'
 import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
-import type { PermissionMode, TodoItem, TokenUsage } from '../types/index.js'
+import type {
+  ContextSecurityState,
+  ExecutionAuthority,
+  PermissionMode,
+  TodoItem,
+  TokenUsage,
+  TrackedModelMessage,
+} from '../types/index.js'
 import { generateTimestampId } from '../utils.js'
 import { createCacheMissSummary } from './cache-stats.js'
 import type { CacheMissReason, CacheMissSummary, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState } from './goal/types.js'
 import type { CheckpointEntry } from './snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
+import { createModelMessageView, replaceTrackedMessages } from './tracked-messages.js'
 import { createUsageBreakdown } from './usage.js'
 import type { UsageBreakdown } from './usage.js'
 
@@ -39,7 +47,23 @@ export interface CheckpointFileCacheEntry {
 }
 
 export interface LoopState {
+  /** Canonical transcript. Message objects and their provenance always move
+   * together; `messages` below is a storage-free compatibility projection. */
+  trackedMessages: TrackedModelMessage[]
   messages: ModelMessage[]
+  contextSecurity: ContextSecurityState
+  executionAuthority: ExecutionAuthority
+  /** Last fully committed transcript epoch. Undefined means a new or legacy
+   * transcript whose first mutation must be a root snapshot. */
+  committedTranscriptEpochId?: string
+  transcriptIntegrity: 'clean' | 'legacy' | 'failed'
+  transcriptRequiresSnapshot: boolean
+  /** Manual tool bodies are captured when buildTools strips `execute`; this
+   * guarantees authority evaluation happens before every data-bearing tool. */
+  manualToolExecutors: Map<
+    string,
+    (input: Record<string, unknown>, options: { toolCallId: string; abortSignal?: AbortSignal }) => Promise<unknown>
+  >
   tokenUsage: TokenUsage
   /** Cumulative usage indexed two ways. Source and model are parallel views
    *  over the same requests and must never be added together. */
@@ -120,11 +144,11 @@ export interface LoopState {
    *  "everything-after-last-boundary wins" rule reconstructs the same
    *  in-memory state on resume. See `agent/session-store.ts`. */
   persistedMessageCount: number
-  /** Promise of the most recent in-flight `appendRawLines` inside
-   *  `flushPendingMessages`. `saveSession` awaits this before running
-   *  its own flush — without it, print mode's `process.exit()` can
-   *  kill the fire-and-forget agentLoop final flush mid-write. */
-  pendingFlush: Promise<boolean> | null
+  /** Tail of the LoopState-level transcript transaction chain. Both state
+   *  derivation (parent epoch/message range) and durable I/O run inside this
+   *  chain, so concurrent turn-final and exit-time flushes cannot create
+   *  sibling epochs. `saveSession` awaits this full state commit. */
+  pendingFlush: Promise<void> | null
 
   // ── Cache break detection ──
 
@@ -211,8 +235,14 @@ export interface LoopState {
  *  scan the same way. */
 
 export function createLoopState(initialMode: PermissionMode = 'default'): LoopState {
-  return {
-    messages: [],
+  const state = {
+    trackedMessages: [],
+    messages: [] as ModelMessage[],
+    contextSecurity: { peerInfluenceActive: false },
+    executionAuthority: { source: 'user', peerTainted: false },
+    transcriptIntegrity: 'clean',
+    transcriptRequiresSnapshot: false,
+    manualToolExecutors: new Map(),
     tokenUsage: {
       inputTokens: 0,
       outputTokens: 0,
@@ -261,5 +291,13 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     surfacedMemoryHashes: new Set(),
     memoryTokensInWindow: 0,
     lastMemoryRecallTrace: null,
-  }
+  } satisfies LoopState
+  const view = createModelMessageView(state)
+  Object.defineProperty(state, 'messages', {
+    enumerable: true,
+    configurable: false,
+    get: () => view,
+    set: (messages: ModelMessage[]) => replaceTrackedMessages(state, messages),
+  })
+  return state
 }

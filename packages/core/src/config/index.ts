@@ -204,6 +204,35 @@ export const DEFAULT_STREAM_CONFIG: Readonly<StreamConfig> = {
   idleTimeoutMs: 300_000,
 }
 
+export interface PeerMessagingConfig {
+  inbound: 'auto' | 'accept' | 'hold' | 'refuse'
+  dialogExpiryMs: number
+}
+
+export const DEFAULT_PEER_MESSAGING_CONFIG: Readonly<PeerMessagingConfig> = {
+  inbound: 'auto',
+  dialogExpiryMs: 300_000,
+}
+
+export function resolvePeerMessagingConfig(value: unknown): PeerMessagingConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ...DEFAULT_PEER_MESSAGING_CONFIG }
+  const raw = value as Record<string, unknown>
+  const inbound =
+    raw.inbound === 'auto' || raw.inbound === 'accept' || raw.inbound === 'hold' || raw.inbound === 'refuse'
+      ? raw.inbound
+      : DEFAULT_PEER_MESSAGING_CONFIG.inbound
+  return {
+    inbound,
+    dialogExpiryMs:
+      typeof raw.dialogExpiryMs === 'number' &&
+      Number.isSafeInteger(raw.dialogExpiryMs) &&
+      raw.dialogExpiryMs >= 10_000 &&
+      raw.dialogExpiryMs <= 1_800_000
+        ? raw.dialogExpiryMs
+        : DEFAULT_PEER_MESSAGING_CONFIG.dialogExpiryMs,
+  }
+}
+
 export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = {
   model: 'inherit',
   reasoning: 'auto',
@@ -349,6 +378,7 @@ export interface UserConfig {
    *  five-minute inactivity watchdog. */
   stream?: Partial<StreamConfig>
   memory?: Partial<Omit<MemoryConfig, 'recall'>> & { recall?: Partial<MemoryRecallConfig> }
+  peerMessaging?: Partial<PeerMessagingConfig>
 }
 
 /** Path to the user config file. Exposed so other modules that want to
@@ -367,6 +397,7 @@ export function loadUserConfig(): UserConfig {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const config = parsed as UserConfig
       if ('browser' in config) config.browser = resolveBrowserConfig(config.browser)
+      if ('peerMessaging' in config) config.peerMessaging = resolvePeerMessagingConfig(config.peerMessaging)
       return config
     }
   } catch {

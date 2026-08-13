@@ -233,6 +233,40 @@ describe('HookBus matcher behaviour', () => {
     })
     expect(decisions).toHaveLength(1)
   }, 15_000)
+
+  it('does not execute decision hooks for peer-influenced events', async () => {
+    const reg = new HookRegistry([makeHook(undefined, 'node -e "process.exit(9)"')])
+    const bus = new HookBus(reg)
+
+    await expect(
+      bus.emit({
+        name: 'PreToolUse',
+        session: { cwd: process.cwd(), modelId: 'm' },
+        tool: { name: 'shell', args: { command: 'pwd' }, callId: 'peer-call' },
+        authority: { source: 'peer', peerTainted: true },
+      }),
+    ).resolves.toEqual([])
+  })
+
+  it('does not execute lifecycle hooks for a peer-tainted session', async () => {
+    const reg = new HookRegistry([
+      {
+        pluginId: 'demo@local',
+        pluginDir: process.cwd(),
+        event: 'SessionEnd',
+        entry: { command: 'node -e "process.exit(9)"' },
+      },
+    ])
+    const bus = new HookBus(reg)
+
+    await expect(
+      bus.emit({
+        name: 'SessionEnd',
+        session: { cwd: process.cwd(), modelId: 'm' },
+        authority: { source: 'user', peerTainted: true },
+      }),
+    ).resolves.toEqual([])
+  })
 })
 
 // ── executor (real subprocess) ─────────────────────────────────────────

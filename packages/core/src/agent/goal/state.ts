@@ -58,6 +58,7 @@ export function createGoal(state: LoopState, input: CreateGoalInput): GoalState 
     createdAt: now,
     updatedAt: now,
     createdBy: input.createdBy ?? 'slash',
+    authority: structuredClone(state.executionAuthority),
     maxTurns: input.maxTurns && input.maxTurns > 0 ? Math.floor(input.maxTurns) : undefined,
     turnCount: 0,
     tokenBudget: input.tokenBudget && input.tokenBudget > 0 ? Math.floor(input.tokenBudget) : undefined,
@@ -96,6 +97,12 @@ export function resumeGoal(state: LoopState): GoalState {
     throw new Error(`Cannot resume a goal with status ${state.goal.status}`)
   }
   state.goal.status = 'active'
+  if (!state.goal.authority) {
+    state.goal.authority = { source: 'peer', peerTainted: true }
+  }
+  if (state.goal.authority.peerTainted || state.goal.authority.source === 'peer') {
+    state.executionAuthority = structuredClone(state.goal.authority)
+  }
   state.goal.updatedAt = new Date().toISOString()
   state.systemPromptCache = null
   markExpectedCacheMiss(state, 'goal-change')

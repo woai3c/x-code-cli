@@ -224,7 +224,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
   const appendTextDelta = useCallback(
     (delta: string) => {
       if (!delta) return
-      debugLog('buffer.append', delta)
+      debugLog('buffer.append', `chars=${delta.length} bytes=${Buffer.byteLength(delta, 'utf8')}`)
       bufferRef.current += delta
       const boundary = findSafeBoundary(bufferRef.current)
       if (boundary > 0) {

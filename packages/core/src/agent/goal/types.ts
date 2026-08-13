@@ -1,4 +1,4 @@
-import type { TokenUsage } from '../../types/index.js'
+import type { ExecutionAuthority, TokenUsage } from '../../types/index.js'
 
 export type GoalStatus =
   | 'active'
@@ -81,6 +81,7 @@ export interface GoalState {
   createdAt: string
   updatedAt: string
   createdBy: 'slash' | 'tool' | 'resume'
+  authority: ExecutionAuthority
   maxTurns?: number
   turnCount: number
   tokenBudget?: number

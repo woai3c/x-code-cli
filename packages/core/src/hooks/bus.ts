@@ -54,6 +54,7 @@ export class HookBus {
    *  for the three DecisionEvents; for the others they just await
    *  completion for side effects. */
   async emit(event: HookEvent, opts: EmitOptions = {}): Promise<HookDecision[]> {
+    if ('authority' in event && (event.authority?.peerTainted || event.authority?.source === 'peer')) return []
     const hooks = this.registry.get(event.name)
     if (hooks.length === 0) return []
 

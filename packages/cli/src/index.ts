@@ -33,13 +33,15 @@ import {
   setPluginDebugMirror,
   shutdownBrowserMcp,
 } from '@x-code-cli/core'
-import type { AgentOptions, HookBus, LoadedSession, McpRegistry } from '@x-code-cli/core'
+import type { AgentOptions, HookBus, LoadedSession, McpRegistry, PeerService } from '@x-code-cli/core'
 
 import { getCleanupFn, startApp } from './app.js'
 import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
+import { startCliPeerService } from './peer-lifecycle.js'
 import { runPluginCli } from './plugins/cli.js'
 import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
+import { getSessionExitInfo } from './ui/app/session-exit.js'
 import { rebuildPalette } from './ui/chat-input/palette.js'
 import { setSyntaxTheme } from './ui/render/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/render/theme.js'
@@ -106,6 +108,7 @@ let shutdownInProgress = false
  *  is faster and less surprising. */
 let mcpRegistryForShutdown: McpRegistry | null = null
 let memoryServiceForShutdown: MemoryService | null = null
+let peerServiceForShutdown: PeerService | null = null
 /** Plugin hook bus captured at startup so gracefulShutdown can fire
  *  `SessionEnd` to plugin hooks before the process exits. */
 let hookBusForShutdown: HookBus | null = null
@@ -144,10 +147,20 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
   if (mcpRegistryForShutdown) {
     finalizers.push(mcpRegistryForShutdown.shutdown())
   }
+  if (peerServiceForShutdown) {
+    finalizers.push(peerServiceForShutdown.shutdown())
+  }
   finalizers.push(shutdownBrowserMcp())
 
   if (hookBusForShutdown?.has('SessionEnd')) {
-    finalizers.push(hookBusForShutdown.emit({ name: 'SessionEnd', session: { cwd: process.cwd(), modelId: '' } }))
+    const peerInfluenced = getSessionExitInfo()?.peerInfluenced === true
+    finalizers.push(
+      hookBusForShutdown.emit({
+        name: 'SessionEnd',
+        session: { cwd: process.cwd(), modelId: '' },
+        ...(peerInfluenced ? { authority: { source: 'peer', peerTainted: true } } : {}),
+      }),
+    )
   }
 
   let drainTimer: ReturnType<typeof setTimeout> | undefined
@@ -483,6 +496,18 @@ async function main() {
   // without a key configured.
   if (!process.env.TAVILY_API_KEY && !process.env.BRAVE_API_KEY) {
     printNoWebSearchKeyHint()
+  }
+
+  const peerService = await startCliPeerService({
+    userConfig: userConfig.peerMessaging,
+    printMode: false,
+    name: argv.name,
+    cwd: process.cwd(),
+    getPermissionClass: () => (options.trustMode ? 'bypass' : 'prompted'),
+  })
+  if (peerService) {
+    peerServiceForShutdown = peerService
+    options.peerService = peerService
   }
 
   // Start the app — waitUntilExit resolves when Ink unmounts (including on Ctrl+C)

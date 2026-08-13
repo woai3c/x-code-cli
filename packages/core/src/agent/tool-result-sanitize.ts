@@ -21,6 +21,8 @@ import type { ModelMessage } from 'ai'
 
 import { truncateToolResult } from '../tools/truncate.js'
 import type { TruncateOptions } from '../tools/truncate.js'
+import type { TrackedModelMessage } from '../types/index.js'
+import { createTrackedMessage, mergeProvenance } from './provenance.js'
 
 const PER_TOOL_POLICY: Record<string, TruncateOptions> = {
   readFile: { direction: 'head-tail' },
@@ -239,6 +241,130 @@ export function repairOrphanToolCalls(messages: ModelMessage[]): void {
         content: orphanParts as never,
       } as ModelMessage)
     }
+  }
+}
+
+/** Provenance-preserving orphan repair. Structural moves and removals operate
+ * on whole tracked entries; rewritten content keeps the original entryId and
+ * provenance, and synthetic results inherit the matching assistant calls. */
+export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): void {
+  for (let i = 0; i < entries.length; i++) {
+    const message = entries[i]?.message
+    if (!message || message.role !== 'assistant' || !Array.isArray(message.content)) continue
+    const hasToolCall = (message.content as Array<{ type?: string }>).some((part) => part?.type === 'tool-call')
+    if (!hasToolCall) continue
+    let cursor = i + 1
+    const displaced: number[] = []
+    while (cursor < entries.length) {
+      const role = entries[cursor]?.message.role
+      if (role === 'tool') {
+        cursor++
+        continue
+      }
+      if (role === 'user') {
+        displaced.push(cursor)
+        cursor++
+        continue
+      }
+      break
+    }
+    if (displaced.length === 0) continue
+    const extracted = displaced.map((index) => entries[index]!)
+    for (let index = displaced.length - 1; index >= 0; index--) entries.splice(displaced[index]!, 1)
+    const insertAt = cursor - displaced.length
+    entries.splice(insertAt, 0, ...extracted)
+    i = insertAt + extracted.length - 1
+  }
+
+  const expected = new Set<string>()
+  const toolNameById = new Map<string, string>()
+  const sourceById = new Map<string, TrackedModelMessage>()
+  for (const entry of entries) {
+    const message = entry.message
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
+    for (const part of message.content as Array<{ type?: string; toolCallId?: string; toolName?: string }>) {
+      if (part?.type !== 'tool-call' || typeof part.toolCallId !== 'string') continue
+      expected.add(part.toolCallId)
+      sourceById.set(part.toolCallId, entry)
+      if (typeof part.toolName === 'string') toolNameById.set(part.toolCallId, part.toolName)
+    }
+  }
+
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!
+    const message = entry.message
+    if (message.role !== 'tool' || !Array.isArray(message.content)) continue
+    const parts = message.content as Array<{ type?: string; toolCallId?: string }>
+    const kept = parts.filter(
+      (part) => part?.type !== 'tool-result' || typeof part.toolCallId !== 'string' || expected.has(part.toolCallId),
+    )
+    if (kept.length === 0) {
+      const previous = entries[i - 1]?.message
+      const next = entries[i + 1]?.message
+      if (entry.provenance.derivedFromPeer || (previous?.role === 'assistant' && next?.role === 'assistant')) {
+        entries[i] = {
+          ...entry,
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: '[Stale tool result discarded — no matching tool_call in history.]' }],
+          } as ModelMessage,
+        }
+      } else {
+        entries.splice(i, 1)
+      }
+    } else if (kept.length !== parts.length) {
+      entries[i] = { ...entry, message: { ...message, content: kept } as ModelMessage }
+    }
+  }
+
+  const fulfilled = new Set<string>()
+  for (const entry of entries) {
+    const message = entry.message
+    if (message.role !== 'tool' || !Array.isArray(message.content)) continue
+    for (const part of message.content as Array<{ type?: string; toolCallId?: string }>) {
+      if (part?.type === 'tool-result' && typeof part.toolCallId === 'string') fulfilled.add(part.toolCallId)
+    }
+  }
+
+  const orphanParts: Array<{
+    type: 'tool-result'
+    toolCallId: string
+    toolName: string
+    output: { type: 'text'; value: string }
+  }> = []
+  const provenanceSources: TrackedModelMessage[] = []
+  for (const id of expected) {
+    if (fulfilled.has(id)) continue
+    const source = sourceById.get(id)
+    if (source) provenanceSources.push(source)
+    orphanParts.push({
+      type: 'tool-result',
+      toolCallId: id,
+      toolName: toolNameById.get(id) ?? 'unknown',
+      output: {
+        type: 'text',
+        value:
+          'Error: Tool input failed validation (likely missing required fields). The assistant should retry with the correct schema.',
+      },
+    })
+  }
+  if (orphanParts.length === 0) return
+  const tail = entries[entries.length - 1]
+  if (tail?.message.role === 'tool' && Array.isArray(tail.message.content)) {
+    entries[entries.length - 1] = {
+      ...tail,
+      message: {
+        ...tail.message,
+        content: [...(tail.message.content as unknown[]), ...(orphanParts as unknown[])],
+      } as ModelMessage,
+    }
+  } else {
+    entries.push(
+      createTrackedMessage(
+        { role: 'tool', content: orphanParts as never } as ModelMessage,
+        mergeProvenance(provenanceSources),
+      ),
+    )
   }
 }
 

@@ -19,9 +19,10 @@
 // Ink still owns the bottom-of-screen dynamic region (spinner, in-progress
 // tool call, permission dialog, chat input). That region is short and
 // mostly ASCII, so Ink's own measurement is good enough.
-import { debugLog } from '@x-code-cli/core'
+import { debugLog, stripTerminalControls } from '@x-code-cli/core'
 import type { DisplayMessage, DisplayToolCall } from '@x-code-cli/core'
 
+import { authorityVisibleText } from '../chat-input/authority-display.js'
 import {
   RESULT_INDENT,
   formatDuration,
@@ -51,8 +52,8 @@ function truncatePreview(s: string, maxLen: number): string {
 }
 
 function formatToolCall(tc: DisplayToolCall): string {
-  const label = getToolLabel(tc.toolName)
-  const rawPreview = getToolInputPreview(tc.toolName, tc.input)
+  const label = authorityVisibleText(getToolLabel(tc.toolName))
+  const rawPreview = authorityVisibleText(getToolInputPreview(tc.toolName, tc.input))
   // Cap the preview so long Bash commands / file paths don't wrap into a
   // ragged multi-line block in scrollback. Compute the budget against the
   // terminal width so wide terminals get more room. The line1 prefix is
@@ -245,8 +246,8 @@ function writeToolRow(write: InkWrite, tc: DisplayToolCall): void {
  *  is to drop the per-call result rows. */
 function writeCollapsedGroup(write: InkWrite, tools: readonly DisplayToolCall[]): void {
   const { label, detail } = formatReadGroupSummary(tools)
-  const detailSuffix = detail ? paint('primary')(`(${detail})`) : ''
-  const line = ` ${paint('success')(GLYPH_BULLET)} ${c.bold(label)}${detailSuffix}`
+  const detailSuffix = detail ? paint('primary')(`(${authorityVisibleText(detail)})`) : ''
+  const line = ` ${paint('success')(GLYPH_BULLET)} ${c.bold(authorityVisibleText(label))}${detailSuffix}`
   const lead = prevWriteEndedWithBlankRow ? '' : '\n'
   write(toCRLF(lead + line + '\n'))
   prevWriteEndedWithBlankRow = false
@@ -276,6 +277,21 @@ export function flushPendingReadGroup(write: InkWrite): void {
 
 /** Print a DisplayMessage to stdout. */
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
+  if (msg.kind === 'peer-message' || msg.kind === 'peer-status') {
+    msg = {
+      ...msg,
+      content: stripTerminalControls(msg.content),
+      ...(msg.peer
+        ? {
+            peer: {
+              name: stripTerminalControls(msg.peer.name),
+              address: stripTerminalControls(msg.peer.address),
+              ...(msg.peer.summary === undefined ? {} : { summary: stripTerminalControls(msg.peer.summary) }),
+            },
+          }
+        : {}),
+    }
+  }
   // Read-group buffering: a message that bundles only completed,
   // non-edit, read-only tool calls is held in `pendingReadGroup` until
   // the next non-collapsible message arrives or `flushPendingReadGroup`
@@ -288,6 +304,30 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     return
   }
   flushPendingReadGroup(write)
+
+  if (msg.kind === 'peer-message') {
+    const content = normalizeLineEndings(msg.content)
+    const peer = msg.peer
+    const heading = peer ? `Peer message · ${peer.name} · ${peer.address}` : 'Peer message'
+    const summary = peer?.summary ? `\n   ${c.gray(`Summary: ${peer.summary}`)}` : ''
+    const body = content
+      .split('\n')
+      .map((line) => `   ${line}`)
+      .join('\n')
+    const lead = prevWriteEndedWithBlankRow ? '' : '\n'
+    write(toCRLF(`${lead} ${paint('warning')(GLYPH_BULLET)} ${c.bold(heading)}${summary}\n${body}\n\n`))
+    prevWriteEndedWithBlankRow = true
+    prevWriteWasStreamingChunk = false
+    return
+  }
+
+  if (msg.kind === 'peer-status') {
+    const content = normalizeLineEndings(msg.content)
+    write(toCRLF(`  ${c.gray(GLYPH_RESULT_BRACKET)}  ${renderInlineMarkdown(content)}\n`))
+    prevWriteEndedWithBlankRow = false
+    prevWriteWasStreamingChunk = false
+    return
+  }
 
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)

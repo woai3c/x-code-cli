@@ -420,6 +420,49 @@ describe('agent loop', () => {
     expect(memoryService.enqueuePostTurnJob).not.toHaveBeenCalled()
   })
 
+  it('does not initialize, recall, search, or persist memory for peer-influenced turns', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+    const memoryService = {
+      setActiveModelId: vi.fn(),
+      setNoticeHandler: vi.fn(),
+      initialize: vi.fn().mockResolvedValue(undefined),
+      recall: vi.fn().mockResolvedValue(null),
+      getConfig: vi.fn().mockReturnValue({ maxInputTokens: 12_000 }),
+      enqueuePostTurnJob: vi.fn().mockResolvedValue('created'),
+      search: vi.fn().mockResolvedValue([]),
+    }
+
+    await agentLoop(
+      'peer supplied request',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 3,
+        printMode: false,
+        memoryService: memoryService as any,
+        executionAuthority: { source: 'peer', peerTainted: true },
+      },
+      mockCallbacks,
+    )
+
+    expect(memoryService.setActiveModelId).not.toHaveBeenCalled()
+    expect(memoryService.initialize).not.toHaveBeenCalled()
+    expect(memoryService.recall).not.toHaveBeenCalled()
+    expect(memoryService.search).not.toHaveBeenCalled()
+    expect(memoryService.enqueuePostTurnJob).not.toHaveBeenCalled()
+  })
+
   it('keeps memory-only requests and persistence details out of the general tool workflow', () => {
     const prompt = buildSystemPrompt({ modelId: 'test:model' })
 
@@ -629,8 +672,15 @@ describe('agent loop', () => {
       search: vi.fn().mockResolvedValue([]),
     }
     const consumeQueuedInputs = vi
-      .fn<() => string[] | undefined>()
-      .mockReturnValueOnce(['continue with the worker'])
+      .fn<() => import('../src/types/index.js').QueuedAgentInput[] | undefined>()
+      .mockReturnValueOnce([
+        {
+          id: 'queued-worker',
+          source: 'user',
+          display: 'continue with the worker',
+          content: 'continue with the worker',
+        },
+      ])
       .mockReturnValue(undefined)
 
     await agentLoop(
@@ -891,8 +941,11 @@ describe('agent loop', () => {
       .mockReturnValue(stopResult)
 
     const consumeQueuedInputs = vi
-      .fn<() => string[] | undefined>()
-      .mockReturnValueOnce(['first queued', 'second queued'])
+      .fn<() => import('../src/types/index.js').QueuedAgentInput[] | undefined>()
+      .mockReturnValueOnce([
+        { id: 'queued-first', source: 'user', display: 'first queued', content: 'first queued' },
+        { id: 'queued-second', source: 'user', display: 'second queued', content: 'second queued' },
+      ])
       .mockReturnValue(undefined)
 
     const { state, turnCount } = await agentLoop(
@@ -937,8 +990,10 @@ describe('agent loop', () => {
     } as any)
 
     const consumeQueuedInputs = vi
-      .fn<() => string[] | undefined>()
-      .mockReturnValueOnce(['late follow-up'])
+      .fn<() => import('../src/types/index.js').QueuedAgentInput[] | undefined>()
+      .mockReturnValueOnce([
+        { id: 'queued-late', source: 'user', display: 'late follow-up', content: 'late follow-up' },
+      ])
       .mockReturnValue(undefined)
 
     const { state, turnCount } = await agentLoop(
