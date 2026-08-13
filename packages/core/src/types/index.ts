@@ -10,6 +10,7 @@ import type { MemoryService } from '../knowledge/memory/service.js'
 import type { MemoryWriteNotice } from '../knowledge/memory/types.js'
 import type { McpPermissionStore } from '../mcp/permissions.js'
 import type { McpRegistry } from '../mcp/registry.js'
+import type { PeerService } from '../peers/service.js'
 import type { PluginRegistry } from '../plugins/registry.js'
 import type { SkillRegistry } from '../skills/registry.js'
 
@@ -36,6 +37,124 @@ export type PermissionLevel = 'always-allow' | 'ask' | 'deny'
  *                     pure friction. exitPlanMode auto-switches into this
  *                     mode on approval. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
+
+// ─── Execution authority and transcript provenance ───
+
+export interface PeerOrigin {
+  instanceId: string
+  nameAtReceipt: string
+  messageId: string
+}
+
+export interface PeerOriginSummary {
+  items: PeerOrigin[]
+  totalCount: number
+  digest: string
+  truncated: boolean
+}
+
+export type MessageAuthority = 'user' | 'peer' | 'internal'
+
+export interface MessageProvenance {
+  authority: MessageAuthority
+  derivedFromPeer: boolean
+  peerOrigins?: PeerOriginSummary
+}
+
+export interface TrackedModelMessage {
+  entryId: string
+  message: ModelMessage
+  provenance: MessageProvenance
+}
+
+export interface ContextSecurityState {
+  peerInfluenceActive: boolean
+  firstTaintedEntryId?: string
+  peerOrigins?: PeerOriginSummary
+  integrityFailure?: boolean
+}
+
+export interface ExecutionAuthority {
+  source: 'user' | 'peer'
+  peerTainted: boolean
+  peerOrigins?: PeerOriginSummary
+}
+
+export type ToolCapability =
+  | 'pure-compute'
+  | 'session-metadata-read'
+  | 'content-read'
+  | 'sensitive-read'
+  | 'network-egress'
+  | 'peer-egress'
+  | 'opaque-mcp'
+  | 'local-mutation'
+  | 'configuration-change'
+  | 'unknown'
+
+export interface AuthorityApprovalPreview {
+  toolName: string
+  serverId?: string
+  paths?: string[]
+  destination?: string
+  summary: string
+  outboundPayload?: {
+    format: 'text' | 'canonical-json' | 'shell-command'
+    canonical: string
+    byteLength: number
+    sha256: string
+  }
+  complete: boolean
+  approvable: boolean
+  reason?: string
+  authorityHash: string
+  canonicalCallSha256: string
+}
+
+export interface ClassifiedToolCall {
+  capabilities: readonly ToolCapability[]
+  approvalPreview: AuthorityApprovalPreview
+}
+
+export type AuthorityDecision =
+  | {
+      kind: 'allow'
+      basis: 'pure-compute' | 'session-metadata' | 'user-authority' | 'user-approval-once'
+    }
+  | { kind: 'ask'; reason: string; preview: AuthorityApprovalPreview }
+  | { kind: 'deny'; reason: string }
+
+export interface AuthorityApproval {
+  decision: 'allow-once' | 'deny'
+  viewedComplete: boolean
+  canonicalPayloadSha256?: string
+  canonicalCallSha256: string
+  authorityHash: string
+}
+
+export interface PublicPeer {
+  name: string
+  address: `peer:${string}`
+  cwd: string
+  status: 'idle' | 'busy' | 'waiting'
+  busyKind?: 'interactive-turn' | 'goal' | 'maintenance'
+  startedAt: string
+  sessionId?: string
+}
+
+export type QueuedAgentInput =
+  | { id: string; source: 'user'; display: string; content: string }
+  | {
+      id: string
+      source: 'peer'
+      display: string
+      content: string
+      peer: PublicPeer
+      messageId: string
+      /** Service-owned inbound ledger key. Kept internal to queue/lifecycle
+       *  handoff and never included in model-visible content. */
+      inboxKey?: string
+    }
 
 // ─── Todo list (TodoWrite tool) ───
 
@@ -111,7 +230,12 @@ export interface DisplayMessage {
    *  ⎿ prefix and a single trailing newline instead of markdown + \n\n.
    *  Used only for short, single-line command responses. Long multi-line
    *  output (/help, /usage) keeps the regular assistant-message path. */
-  kind?: 'command-echo' | 'command-result'
+  kind?: 'command-echo' | 'command-result' | 'peer-message' | 'peer-status'
+  peer?: {
+    name: string
+    address: string
+    summary?: string
+  }
 }
 
 export interface DisplayToolCall {
@@ -154,6 +278,15 @@ export interface AgentCallbacks {
     toolName: string
     input: Record<string, unknown>
   }) => Promise<'yes' | 'always' | 'no'>
+  /** Peer-influenced calls use a separate allow-once-only surface. The
+   *  callback must prove that the complete canonical payload was rendered;
+   *  absence of this callback is a fail-closed denial. */
+  onAskAuthority?: (request: {
+    toolCallId: string
+    toolName: string
+    input: Record<string, unknown>
+    preview: AuthorityApprovalPreview
+  }) => Promise<AuthorityApproval>
   onAskUser: (question: string, options: { label: string; description: string }[]) => Promise<string>
   /** Triggered by `exitPlanMode`. Resolve `true` to leave plan mode and
    *  let the model start implementing; resolve `false` to reject the plan
@@ -218,6 +351,10 @@ export interface AgentOptions {
   permissionMode?: PermissionMode
   systemPromptExtra?: string
   abortSignal?: AbortSignal
+  /** Explicit invocation authority. The loop always applies the persistent
+   *  context taint as a ceiling, even if a caller accidentally passes a clean
+   *  value here. */
+  executionAuthority?: ExecutionAuthority
   /** Application-level retry budget for a dropped provider stream. */
   streamMaxRetries?: number
   /** Silence between stream chunks before the request is treated as stale.
@@ -320,7 +457,11 @@ export interface AgentOptions {
    *  undefined/empty when nothing is queued. Absent ⇒ mid-turn queueing
    *  disabled (sub-agents, --print). Mirrors Codex's steer_input and
    *  Claude Code's priority-'next' queue consumption. */
-  consumeQueuedInputs?: () => string[] | undefined
+  consumeQueuedInputs?: () => QueuedAgentInput[] | undefined
+
+  /** Process-owned peer service. Present only on the root agent when
+   *  cross-session messaging was explicitly enabled at startup. */
+  peerService?: PeerService
 
   /** Global Memory v2 service. Present only on the root agent. */
   memoryService?: MemoryService

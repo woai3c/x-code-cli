@@ -60,6 +60,7 @@ import {
   visualWidth,
 } from '../render/text-width.js'
 import { formatTokenCount, getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
+import { authorityViewerLines, authorityVisibleText } from './authority-display.js'
 import { type Cell, ansiTextToCells, cellsEqual, renderRowToAnsi, textToCells } from './cells.js'
 import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank, useFileCompletion } from './file-completion.js'
 import { buildVisualLines, computePostContentScrollRows, locateVisualCursor, moveCursorVisual } from './geometry.js'
@@ -118,6 +119,9 @@ export function ChatInput({
   onEscapeCancel,
   isLoading = false,
   notice,
+  peerInfluenced = false,
+  trustMode = false,
+  pendingPeerCount = 0,
   disabled,
   hidden,
   spinner,
@@ -128,6 +132,7 @@ export function ChatInput({
   draftRestore,
   errorMessage,
   permission,
+  authorityRequest,
   selectRequest,
   commands = [],
   permissionMode = 'default',
@@ -192,6 +197,10 @@ export function ChatInput({
   const lastFlushTimeRef = useRef(0)
   /** Pending deferred (non-commit) write that can be superseded by a commit. */
   const deferredFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** setImmediate queued by a fired deferred timer. The timer ref is already
+   *  null at that point, so this handle is required to cancel the final
+   *  callback during superseding renders and unmount. */
+  const deferredImmediateRef = useRef<ReturnType<typeof setImmediate> | null>(null)
   /** Pending throttled commit. Set when a commit fires within MIN_COMMIT_GAP_MS
    *  of the previous write — the commit's payload waits just long enough that
    *  it lands in a fresh terminal paint cycle instead of inside the same vsync
@@ -322,11 +331,22 @@ export function ChatInput({
   // react-hooks/set-state-in-effect lint.
   // https://react.dev/reference/react/useState#storing-information-from-previous-renders
   const [permissionSelected, setPermissionSelected] = useState(0)
+  const [authoritySelected, setAuthoritySelected] = useState(1)
+  const [authorityViewedComplete, setAuthorityViewedComplete] = useState(false)
+  const [authorityPage, setAuthorityPage] = useState(0)
   const [lastPermissionKey, setLastPermissionKey] = useState<string | null>(null)
   const permissionKey = permission ? `${permission.toolName}:${JSON.stringify(permission.input)}` : null
   if (permissionKey !== lastPermissionKey) {
     setLastPermissionKey(permissionKey)
     setPermissionSelected(0)
+  }
+  const [lastAuthorityKey, setLastAuthorityKey] = useState<string | null>(null)
+  const authorityKey = authorityRequest?.preview.canonicalCallSha256 ?? null
+  if (authorityKey !== lastAuthorityKey) {
+    setLastAuthorityKey(authorityKey)
+    setAuthoritySelected(1)
+    setAuthorityViewedComplete(false)
+    setAuthorityPage(0)
   }
 
   // Selected index for the in-frame select-options dialog. Reset whenever a
@@ -377,6 +397,16 @@ export function ChatInput({
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
+  const authorityViewerRows = useMemo(() => {
+    if (!authorityRequest) return []
+    return authorityViewerLines(authorityRequest.preview).flatMap((line) => {
+      const style = line.kind === 'metadata' ? S_PRIMARY : S_DIM
+      const cells = textToCells(line.text, style)
+      const rows = wrapCellsToRows(cells, Math.max(20, termWidth - 4), Math.max(1, cells.length))
+      return rows.length > 0 ? rows : [[]]
+    })
+  }, [authorityRequest, termWidth])
+  const authorityPageCount = Math.max(1, Math.ceil(authorityViewerRows.length / 8))
 
   // ── Terminal resize handling ──
   // Force a re-render tick on resize so termWidth/termRows pick up the new
@@ -623,6 +653,7 @@ export function ChatInput({
     onInterrupt,
     onText: (chunk) => {
       const dialogSlashDraft = textRef.current.trimStart().startsWith('/') || chunk.trimStart().startsWith('/')
+      if (authorityRequest) return
       // Route single-char y/n to the Permission resolver when a dialog is
       // active. Slash commands remain editable so `/goal pause` /
       // `/goal cancel` can interrupt a goal even while a tool approval is
@@ -666,6 +697,7 @@ export function ChatInput({
     },
     onPaste: (content) => {
       const dialogSlashPaste = content.trimStart().startsWith('/')
+      if (authorityRequest) return
       if (permission) {
         if (dialogSlashPaste) {
           insertAtCursor(content)
@@ -705,6 +737,33 @@ export function ChatInput({
     },
     onKey: (key) => {
       const dialogSlashMode = textRef.current.trimStart().startsWith('/')
+      if (authorityRequest) {
+        if (key === 'escape') {
+          authorityRequest.onResolve(false, authorityViewedComplete)
+          return
+        }
+        if (!authorityViewedComplete && (key === 'down' || key === 'right' || key === 'pagedown' || key === 'return')) {
+          setAuthorityPage((page) => {
+            const next = Math.min(authorityPageCount - 1, page + 1)
+            if (next === authorityPageCount - 1) setAuthorityViewedComplete(true)
+            return next
+          })
+          return
+        }
+        if (!authorityViewedComplete && (key === 'up' || key === 'left' || key === 'pageup')) {
+          setAuthorityPage((page) => Math.max(0, page - 1))
+          return
+        }
+        if (key === 'up' || key === 'down') {
+          setAuthoritySelected((selected) => (selected === 0 ? 1 : 0))
+          return
+        }
+        if (key === 'return') {
+          authorityRequest.onResolve(authoritySelected === 0, true)
+          return
+        }
+        return
+      }
       // Permission dialog captures navigation + submit keys.
       if (permission && !dialogSlashMode) {
         const hasAlwaysOption = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp) !== null
@@ -1326,8 +1385,8 @@ export function ChatInput({
           // separate" jolt).
           if (idx > 0) frame.push([])
 
-          const label = getToolLabel(tc.toolName)
-          const preview = getToolInputPreview(tc.toolName, tc.input)
+          const label = authorityVisibleText(getToolLabel(tc.toolName))
+          const preview = authorityVisibleText(getToolInputPreview(tc.toolName, tc.input))
 
           const row1: Cell[] = []
           row1.push({ char: ' ', style: S_NONE, width: 1 })
@@ -1382,7 +1441,7 @@ export function ChatInput({
                 row.push(...textToCells(glyph, S_SPINNER))
                 row.push({ char: ' ', style: S_NONE, width: 1 })
               }
-              row.push(...textToCells(history[hi]!, isLast ? S_DIM : S_GRAY_90))
+              row.push(...textToCells(authorityVisibleText(history[hi]!), isLast ? S_DIM : S_GRAY_90))
               if (isLast && idx === tools.length - 1 && meta) {
                 row.push(...textToCells(meta, S_GRAY_90))
               }
@@ -1396,7 +1455,7 @@ export function ChatInput({
             row2.push({ char: ' ', style: S_NONE, width: 1 })
             row2.push(...textToCells(glyph, S_SPINNER))
             row2.push({ char: ' ', style: S_NONE, width: 1 })
-            row2.push(...textToCells(tc.progress ?? 'Running...', S_DIM))
+            row2.push(...textToCells(authorityVisibleText(tc.progress ?? 'Running...'), S_DIM))
             if (idx === tools.length - 1 && meta) {
               row2.push(...textToCells(meta, S_GRAY_90))
             }
@@ -1489,6 +1548,37 @@ export function ChatInput({
         noCells.push(...textToCells('No', S_DIM))
       }
       frame.push(noCells)
+    }
+
+    if (authorityRequest) {
+      const preview = authorityRequest.preview
+      const titleCells: Cell[] = []
+      titleCells.push(...textToCells('  Peer-influenced request · allow once only', S_WARNING_BOLD))
+      frame.push(truncateCellRow(titleCells, termWidth))
+
+      const firstViewerRow = authorityPage * 8
+      for (const row of authorityViewerRows.slice(firstViewerRow, firstViewerRow + 8)) {
+        frame.push([...textToCells('  ', S_NONE), ...row])
+      }
+      frame.push(
+        textToCells(
+          authorityViewedComplete
+            ? `  Complete payload viewed · SHA-256 ${preview.outboundPayload?.sha256 ?? preview.canonicalCallSha256}`
+            : `  Payload page ${authorityPage + 1}/${authorityPageCount} · Enter/→ for next page; approval locked.`,
+          authorityViewedComplete ? S_SUCCESS : S_WARNING,
+        ),
+      )
+
+      const allowCells = textToCells(
+        `${authoritySelected === 0 ? `    ${GLYPH_SELECT_POINTER}` : '     '} Allow once`,
+        authoritySelected === 0 ? S_SUCCESS : S_DIM,
+      )
+      frame.push(allowCells)
+      const denyCells = textToCells(
+        `${authoritySelected === 1 ? `    ${GLYPH_SELECT_POINTER}` : '     '} Deny`,
+        authoritySelected === 1 ? S_ERROR_BOLD : S_DIM,
+      )
+      frame.push(denyCells)
     }
 
     // Select-options dialog — rendered inside our cell buffer, same slot
@@ -1888,6 +1978,24 @@ export function ChatInput({
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
       cells.push(...ansiTextToCells(notice))
+      leftCells = cells
+    } else if (peerInfluenced || pendingPeerCount > 0) {
+      const cells: Cell[] = []
+      cells.push({ char: ' ', style: S_NONE, width: 1 })
+      if (peerInfluenced) {
+        cells.push(
+          ...textToCells(
+            trustMode
+              ? 'Peer-influenced context · local trust active'
+              : 'Peer-influenced context · auto permissions off',
+            S_WARNING_BOLD,
+          ),
+        )
+      }
+      if (pendingPeerCount > 0) {
+        if (peerInfluenced) cells.push(...textToCells('  ·  ', S_DIM))
+        cells.push(...textToCells(`${pendingPeerCount} peer pending`, S_DIM))
+      }
       leftCells = cells
     } else if (permissionMode === 'plan') {
       // Kimi-style mode badge: the mode name takes the primary/warning
@@ -2921,6 +3029,10 @@ export function ChatInput({
         deferredFlushRef.current = null
         debugLog('chatinput.flush.deferred-cancelled-empty', 'empty diff supersedes stale deferred')
       }
+      if (deferredImmediateRef.current !== null) {
+        clearImmediate(deferredImmediateRef.current)
+        deferredImmediateRef.current = null
+      }
       // Still need to apply the pending blank-rows update; the
       // shrink path may have computed a new value.
       if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
@@ -2942,7 +3054,10 @@ export function ChatInput({
       'chatinput.flush',
       `bytes=${payload.length} preBufBytes=${preBuf.length} bufBytes=${buf.length} msgsCommitted=${writtenMessageCountRef.current} pendingBlanks=${pendingFreeBlanks} frameTop=${frameTop} nextH=${nextH}`,
     )
-    debugLog('chatinput.flush.payload', JSON.stringify(payload))
+    // The rendered frame may contain peer messages, secrets, or the complete
+    // egress approval viewer. Log only geometry so debug mode cannot become a
+    // second, persistent copy of security-sensitive terminal content.
+    debugLog('chatinput.flush.payload', `bytes=${Buffer.byteLength(payload, 'utf8')} rows=${nextH}`)
 
     // ── Anti-flicker write scheduling ──────────────────────────────────
     //
@@ -3026,10 +3141,20 @@ export function ChatInput({
     // reported: the `● Read` row "appears then disappears" between
     // consecutive read tools.
     if (didCommitMessages || hasNewMessages) {
+      // Invalidate a deferred frame as soon as a commit is observed, not
+      // only after the commit reaches stdout. Its timer may already have
+      // queued a setImmediate and cleared deferredFlushRef; without this
+      // generation bump that stale callback can paint first, clear the
+      // pending scrollback bytes, and make the throttled commit skip itself.
+      flushGenRef.current++
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
         debugLog('chatinput.flush.deferred-cancelled', 'commit superseded deferred frame')
+      }
+      if (deferredImmediateRef.current !== null) {
+        clearImmediate(deferredImmediateRef.current)
+        deferredImmediateRef.current = null
       }
       // Newer commit's payload (incl. fresher scrollback + spinner glyph)
       // supersedes any previously throttled commit.
@@ -3125,6 +3250,10 @@ export function ChatInput({
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
       }
+      if (deferredImmediateRef.current !== null) {
+        clearImmediate(deferredImmediateRef.current)
+        deferredImmediateRef.current = null
+      }
       // Spinner ticks defer 160ms. Rationale:
       //   - useStreamBuffer drains 150ms after a chunk queues, then a
       //     React render scheduling adds ~10ms before our commit lands.
@@ -3151,7 +3280,8 @@ export function ChatInput({
       const flushId = flushGenRef.current
       deferredFlushRef.current = setTimeout(() => {
         deferredFlushRef.current = null
-        setImmediate(() => {
+        deferredImmediateRef.current = setImmediate(() => {
+          deferredImmediateRef.current = null
           if (flushId !== flushGenRef.current) {
             debugLog('chatinput.flush.deferred-stale', `flushId=${flushId} gen=${flushGenRef.current}`)
             return
@@ -3167,9 +3297,14 @@ export function ChatInput({
   // Unmount cleanup
   useEffect(() => {
     return () => {
+      flushGenRef.current++ // eslint-disable-line react-hooks/exhaustive-deps -- invalidates callbacks queued before unmount
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
+      }
+      if (deferredImmediateRef.current !== null) {
+        clearImmediate(deferredImmediateRef.current)
+        deferredImmediateRef.current = null
       }
       if (commitThrottleRef.current !== null) {
         clearTimeout(commitThrottleRef.current)

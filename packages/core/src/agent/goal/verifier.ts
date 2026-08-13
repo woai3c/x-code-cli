@@ -43,6 +43,19 @@ export async function runVerifierLadder(input: {
   const { goal, state, options, callbacks, model } = input
   const verificationRunId =
     input.verificationRunId ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  const authority = goal.authority ?? { source: 'peer' as const, peerTainted: true }
+  if ((authority.peerTainted || authority.source === 'peer') && !options.trustMode) {
+    const result = makeResult({
+      verifier: goal.verifiers[0] ?? AUTOMATIC_SEMANTIC_VERIFIER,
+      ok: false,
+      retryable: false,
+      summary: 'Goal verification is disabled for peer-influenced context.',
+      start: Date.now(),
+      verificationRunId,
+    })
+    recordVerificationResult(goal, result)
+    return { ok: false, retryable: false, results: [result], summary: result.summary }
+  }
   const results: GoalVerificationResult[] = []
 
   for (const verifier of [...goal.verifiers, AUTOMATIC_SEMANTIC_VERIFIER]) {

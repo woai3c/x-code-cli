@@ -19,6 +19,8 @@
 // summariser operates on the signal-rich remainder.
 import type { ModelMessage } from 'ai'
 
+import type { TrackedModelMessage } from '../types/index.js'
+
 /** Content of a tool-result part that we should drop on sight. */
 const LOOP_GUARD_SENTINEL = '[loop-guard]'
 
@@ -116,6 +118,61 @@ export function lightCompactMessages(messages: ModelMessage[]): LightCompactResu
   return { messages: out, dropped }
 }
 
+export interface TrackedLightCompactResult {
+  trackedMessages: TrackedModelMessage[]
+  dropped: number
+}
+
+/** Tracked variant used by the agent. Tainted loop-guard pairs are retained:
+ * ordinary compaction is not a decontamination operation and must never
+ * remove the final peer-derived evidence from the active transcript. */
+export function lightCompactTrackedMessages(entries: readonly TrackedModelMessage[]): TrackedLightCompactResult {
+  const messages = entries.map((entry) => entry.message)
+  const candidateIds = collectLoopGuardedIds(messages)
+  if (candidateIds.size === 0) return { trackedMessages: entries.slice(), dropped: 0 }
+
+  const taintedIds = new Set<string>()
+  for (const entry of entries) {
+    if (!entry.provenance.derivedFromPeer || !Array.isArray(entry.message.content)) continue
+    for (const part of entry.message.content as Array<{ type?: string; toolCallId?: string }>) {
+      if (
+        (part?.type === 'tool-call' || part?.type === 'tool-result') &&
+        typeof part.toolCallId === 'string' &&
+        candidateIds.has(part.toolCallId)
+      ) {
+        taintedIds.add(part.toolCallId)
+      }
+    }
+  }
+  const idsToRemove = new Set([...candidateIds].filter((id) => !taintedIds.has(id)))
+  if (idsToRemove.size === 0) return { trackedMessages: entries.slice(), dropped: 0 }
+
+  const out: TrackedModelMessage[] = []
+  let dropped = 0
+  for (const entry of entries) {
+    const message = entry.message
+    if (hasDropTargetResult(message)) {
+      const ids = Array.isArray(message.content)
+        ? (message.content as ToolResultPartLike[])
+            .filter(isToolResultDropTarget)
+            .map((part) => part.toolCallId)
+            .filter((id): id is string => typeof id === 'string')
+        : []
+      if (ids.some((id) => idsToRemove.has(id))) {
+        dropped++
+        continue
+      }
+    }
+    const stripped = stripToolCallParts(message, idsToRemove)
+    if (stripped == null) {
+      dropped++
+      continue
+    }
+    out.push(stripped === message ? entry : { ...entry, message: stripped })
+  }
+  return { trackedMessages: out, dropped }
+}
+
 // ── Smart tool-result truncation ──
 //
 // Intermediate compaction layer between the loop-guard dropper above and the
@@ -202,4 +259,9 @@ export function truncateOldToolResults(messages: ModelMessage[]): TruncateOldToo
   }
 
   return { messages, truncatedCount, charsSaved }
+}
+
+export function truncateOldTrackedToolResults(entries: readonly TrackedModelMessage[]): TruncateOldToolResultsResult {
+  const messages = entries.map((entry) => entry.message)
+  return truncateOldToolResults(messages)
 }

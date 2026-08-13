@@ -1,5 +1,7 @@
 import type { Terminal } from '@xterm/headless'
 
+import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
+
 export function terminalScreen(terminal: Terminal): string[] {
   const buffer = terminal.buffer.active
   const lines: string[] = []
@@ -21,7 +23,7 @@ export function screenText(terminal: Terminal): string {
 export function lastPromptLine(lines: string[]): string {
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index]!
-    if (line === '❯' || line.startsWith('❯ ')) return line
+    if (line === GLYPH_PROMPT_ARROW || line.startsWith(`${GLYPH_PROMPT_ARROW} `)) return line
   }
   return ''
 }

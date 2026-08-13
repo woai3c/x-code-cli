@@ -15,6 +15,19 @@ describe('goal state', () => {
     expect(() => createGoal(state, { objective: 'another goal' })).toThrow(/Cannot create/)
   })
 
+  it('captures peer authority durably and restores the taint when resumed', () => {
+    const state = createLoopState()
+    state.executionAuthority = { source: 'peer', peerTainted: true }
+    const goal = createGoal(state, { objective: 'do not elevate this goal' })
+
+    expect(goal.authority).toEqual({ source: 'peer', peerTainted: true })
+    pauseGoal(state)
+    state.executionAuthority = { source: 'user', peerTainted: false }
+    resumeGoal(state)
+
+    expect(state.executionAuthority).toEqual({ source: 'peer', peerTainted: true })
+  })
+
   it('leaves turn and token limits unlimited unless explicitly configured', () => {
     const state = createLoopState()
     const goal = createGoal(state, { objective: 'keep working until verified' })

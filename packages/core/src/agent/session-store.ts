@@ -15,6 +15,7 @@
 // This module replaces the old per-session `<id>.usage.json` and
 // `<id>.json` (LLM summary) files — both are now meta entries inside the
 // jsonl. /usage history and /resume both source from the same file.
+import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -25,14 +26,30 @@ import { resetMemoryRecallWindow } from '../knowledge/memory/recall-state.js'
 import type { MemoryRecallAttachment, MemoryRecallTombstone } from '../knowledge/memory/types.js'
 import { ensureProjectStorageDir } from '../project-storage.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
-import type { PermissionMode, TokenUsage } from '../types/index.js'
+import type {
+  ContextSecurityState,
+  MessageProvenance,
+  PermissionMode,
+  TokenUsage,
+  TrackedModelMessage,
+} from '../types/index.js'
 import { XCODE_DIR } from '../utils.js'
 import { scanCacheMisses } from './cache-stats.js'
 import type { CacheMissSummary, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState, GoalVerificationResult } from './goal/types.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
+import {
+  canonicalSecurityJson,
+  canonicalTranscriptDigest,
+  createTrackedMessage,
+  deriveContextSecurity,
+  effectiveExecutionAuthority,
+  isValidContextSecurity,
+  isValidProvenance,
+} from './provenance.js'
 import type { CheckpointEntry } from './snapshot.js'
+import { setTrackedTranscript } from './tracked-messages.js'
 import { cloneUsageBreakdown, createUsageBreakdown } from './usage.js'
 import type { UsageBreakdown } from './usage.js'
 
@@ -68,11 +85,42 @@ interface HeaderEntry {
   firstPrompt: string
   taskSlug: string
   sessionId: string
+  firstPromptProvenance?: MessageProvenance
 }
 
 interface MsgEntry {
   t: 'msg'
+  epochId?: string
+  entryId?: string
   message: ModelMessage
+  provenance?: MessageProvenance
+  ts: string
+}
+
+interface TranscriptEpochStartEntry {
+  t: 'meta'
+  kind: 'transcript-epoch-start'
+  epochId: string
+  parentEpochId?: string
+  mode: 'snapshot' | 'delta'
+  ts: string
+}
+
+interface ContextSecurityBoundaryEntry {
+  t: 'meta'
+  kind: 'context-security-boundary'
+  epochId: string
+  state: ContextSecurityState
+  resultEntryCount: number
+  resultTranscriptDigest: string
+  ts: string
+}
+
+interface TranscriptEpochCommitEntry {
+  t: 'meta'
+  kind: 'transcript-epoch-commit'
+  epochId: string
+  boundaryDigest: string
   ts: string
 }
 
@@ -180,6 +228,9 @@ type Entry =
   | StepStatsEntry
   | MemoryRecallEntry
   | MemoryRecallDeleteEntry
+  | TranscriptEpochStartEntry
+  | ContextSecurityBoundaryEntry
+  | TranscriptEpochCommitEntry
 
 interface PersistedToolResultPart {
   type?: string
@@ -226,76 +277,53 @@ async function appendLine(filePath: string, entry: Entry): Promise<void> {
   await appendRawLines(filePath, [JSON.stringify(entry)])
 }
 
-/** Per-file write queues with batching (Claude Code's sessionStorage model).
- *  All appends are fire-and-forget (flushPendingMessages / appendUsage /
- *  appendCheckpoint), so several writes to the SAME file are routinely in
- *  flight at once. Concurrent appends are not atomic — on Windows they
- *  interleave and overwrite, producing glued / split jsonl lines that the
- *  loader then has to skip (observed: a 500 KB msg line torn apart by a
- *  checkpoint line landing mid-write). The queue serializes them; whatever
- *  piles up while one appendFile is in flight is merged into a SINGLE
- *  follow-up append, so a turn-end burst (messages + usage + checkpoint)
- *  costs two syscalls instead of N. */
-interface PendingWrite {
-  lines: string[]
-  resolve: (ok: boolean) => void
-}
-
-interface FileWriteQueue {
-  pending: PendingWrite[]
-  writing: boolean
-}
-
-const writeQueues = new Map<string, FileWriteQueue>()
+/** Every append and atomic snapshot for one session shares this operation
+ * chain. A snapshot rename can therefore never race and discard a usage,
+ * checkpoint, goal, or memory append that was already acknowledged. */
+const fileOperations = new Map<string, Promise<void>>()
 /** Files already chmod'd this process — avoids a redundant syscall on every
  *  append. */
 const chmodDone = new Set<string>()
 
-async function drainWriteQueue(filePath: string, queue: FileWriteQueue): Promise<void> {
-  queue.writing = true
+function enqueueFileOperation<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const previous = fileOperations.get(filePath) ?? Promise.resolve()
+  let resolveTail!: () => void
+  const tail = new Promise<void>((resolve) => {
+    resolveTail = resolve
+  })
+  fileOperations.set(filePath, tail)
+  return previous
+    .catch(() => {})
+    .then(operation)
+    .finally(() => {
+      resolveTail()
+      if (fileOperations.get(filePath) === tail) fileOperations.delete(filePath)
+    })
+}
+
+async function appendRawLinesNow(filePath: string, lines: string[]): Promise<boolean> {
   try {
-    // Yield once so enqueue calls issued in the same tick (the common
-    // turn-end burst) coalesce into the first batch too.
-    await Promise.resolve()
-    while (queue.pending.length > 0) {
-      const batch = queue.pending.splice(0)
-      const lines = batch.flatMap((w) => w.lines)
-      let ok = true
-      try {
-        await ensureProjectStorageDir(path.dirname(filePath))
-        await fs.appendFile(filePath, lines.join('\n') + '\n', 'utf-8')
-        // Transcripts can contain secrets pasted into prompts — restrict to
-        // owner-only. No-op on Windows, where chmod only toggles read-only.
-        if (!chmodDone.has(filePath)) {
-          chmodDone.add(filePath)
-          await fs.chmod(filePath, 0o600).catch(() => {})
-        }
-      } catch {
-        // Persistence is best-effort — never block the agent loop on FS errors.
-        ok = false
-      }
-      for (const w of batch) w.resolve(ok)
+    await ensureProjectStorageDir(path.dirname(filePath))
+    const handle = await fs.open(filePath, 'a', 0o600)
+    try {
+      await handle.writeFile(lines.join('\n') + '\n', 'utf-8')
+      await handle.sync()
+    } finally {
+      await handle.close()
     }
-  } finally {
-    queue.writing = false
+    if (!chmodDone.has(filePath)) {
+      chmodDone.add(filePath)
+      await fs.chmod(filePath, 0o600).catch(() => {})
+    }
+    return true
+  } catch {
+    return false
   }
 }
 
-/** Batch-append pre-serialised jsonl rows. Returns true on success so
- *  callers can keep "only advance state when disk write succeeded" — e.g.
- *  markBoundaryAndReflush mustn't clear the in-memory checkpoint list
- *  unless the boundary actually landed on disk. */
 function appendRawLines(filePath: string, lines: string[]): Promise<boolean> {
   if (lines.length === 0) return Promise.resolve(true)
-  let queue = writeQueues.get(filePath)
-  if (!queue) {
-    queue = { pending: [], writing: false }
-    writeQueues.set(filePath, queue)
-  }
-  return new Promise<boolean>((resolve) => {
-    queue.pending.push({ lines, resolve })
-    if (!queue.writing) void drainWriteQueue(filePath, queue)
-  })
+  return enqueueFileOperation(filePath, () => appendRawLinesNow(filePath, lines))
 }
 
 /** Try to read the current git branch from `.git/HEAD`. Cheap, fully sync
@@ -309,6 +337,234 @@ async function readGitBranch(cwd: string): Promise<string | undefined> {
   } catch {
     return undefined
   }
+}
+
+function persistenceSafeTrackedMessage(entry: TrackedModelMessage): TrackedModelMessage {
+  return {
+    entryId: entry.entryId,
+    message: persistenceSafeMessage(entry.message),
+    provenance: structuredClone(entry.provenance),
+  }
+}
+
+function epochLines(
+  entries: readonly TrackedModelMessage[],
+  mode: 'snapshot' | 'delta',
+  resultingTranscript: readonly TrackedModelMessage[],
+  parentEpochId?: string,
+): { epochId: string; lines: string[] } {
+  const epochId = randomUUID()
+  const ts = new Date().toISOString()
+  const start: TranscriptEpochStartEntry = {
+    t: 'meta',
+    kind: 'transcript-epoch-start',
+    epochId,
+    ...(parentEpochId ? { parentEpochId } : {}),
+    mode,
+    ts,
+  }
+  const projectedEntries = entries.map(persistenceSafeTrackedMessage)
+  const projectedResult = resultingTranscript.map(persistenceSafeTrackedMessage)
+  const boundary: ContextSecurityBoundaryEntry = {
+    t: 'meta',
+    kind: 'context-security-boundary',
+    epochId,
+    state: deriveContextSecurity(projectedResult),
+    resultEntryCount: projectedResult.length,
+    resultTranscriptDigest: canonicalTranscriptDigest(projectedResult),
+    ts,
+  }
+  const commit: TranscriptEpochCommitEntry = {
+    t: 'meta',
+    kind: 'transcript-epoch-commit',
+    epochId,
+    boundaryDigest: createHash('sha256').update(canonicalSecurityJson(boundary)).digest('hex'),
+    ts,
+  }
+  return {
+    epochId,
+    lines: [
+      JSON.stringify(start),
+      ...projectedEntries.map((entry) =>
+        JSON.stringify({
+          t: 'msg',
+          epochId,
+          entryId: entry.entryId,
+          message: entry.message,
+          provenance: entry.provenance,
+          ts,
+        } satisfies MsgEntry),
+      ),
+      JSON.stringify(boundary),
+      JSON.stringify(commit),
+    ],
+  }
+}
+
+function isTranscriptLine(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entry = value as { t?: string; kind?: string }
+  return (
+    entry.t === 'msg' ||
+    (entry.t === 'meta' &&
+      ['compact-boundary', 'transcript-epoch-start', 'context-security-boundary', 'transcript-epoch-commit'].includes(
+        entry.kind ?? '',
+      ))
+  )
+}
+
+async function retainedMetadataLines(
+  filePath: string,
+  options: {
+    dropCheckpoints?: boolean
+    checkpointMessageCountAtMost?: number
+    dropMemoryRecall?: boolean
+  } = {},
+): Promise<string[]> {
+  let raw = ''
+  try {
+    raw = await fs.readFile(filePath, 'utf-8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const lines: string[] = []
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue
+    let entry: unknown
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const metadata = entry as { t?: string; kind?: string; messageCount?: number }
+    if (metadata.t === 'meta' && metadata.kind === 'checkpoint') {
+      if (options.dropCheckpoints) continue
+      if (
+        options.checkpointMessageCountAtMost !== undefined &&
+        (typeof metadata.messageCount !== 'number' || metadata.messageCount > options.checkpointMessageCountAtMost)
+      ) {
+        continue
+      }
+    }
+    if (
+      options.dropMemoryRecall &&
+      metadata.t === 'meta' &&
+      (metadata.kind === 'memory-recall' || metadata.kind === 'memory-recall-delete')
+    ) {
+      continue
+    }
+    if (!isTranscriptLine(entry)) lines.push(JSON.stringify(entry))
+  }
+  return lines
+}
+
+async function replaceWithSnapshot(filePath: string, lines: readonly string[]): Promise<void> {
+  await ensureProjectStorageDir(path.dirname(filePath))
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`)
+  let handle: fs.FileHandle | undefined
+  try {
+    handle = await fs.open(tempPath, 'wx', 0o600)
+    await handle.chmod(0o600)
+    await handle.writeFile(lines.join('\n') + '\n', 'utf-8')
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await fs.rename(tempPath, filePath)
+    // Windows cannot flush directory handles (fsync returns EPERM). The
+    // renamed file itself was already flushed above; keep the directory
+    // durability barrier on platforms that support it.
+    if (process.platform !== 'win32') {
+      const directory = await fs.open(path.dirname(filePath), 'r')
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
+    }
+    chmodDone.add(filePath)
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    await fs.unlink(tempPath).catch(() => {})
+    throw error
+  }
+}
+
+interface TranscriptSnapshotOptions {
+  allowIntegrityRepair?: boolean
+  dropCheckpoints?: boolean
+  checkpointMessageCountAtMost?: number
+  dropMemoryRecall?: boolean
+}
+
+function cloneTrackedTranscript(entries: readonly TrackedModelMessage[]): TrackedModelMessage[] {
+  return entries.map((entry) => ({
+    entryId: entry.entryId,
+    message: structuredClone(entry.message),
+    provenance: structuredClone(entry.provenance),
+  }))
+}
+
+function enqueueTranscriptOperation(state: LoopState, operation: () => Promise<void>): Promise<void> {
+  const previous = state.pendingFlush ?? Promise.resolve()
+  const current = previous.catch(() => {}).then(operation)
+  state.pendingFlush = current
+  void current.then(
+    () => {
+      if (state.pendingFlush === current) state.pendingFlush = null
+    },
+    () => {
+      if (state.pendingFlush === current) state.pendingFlush = null
+    },
+  )
+  return current
+}
+
+async function commitTranscriptSnapshotNow(
+  state: LoopState,
+  candidate: readonly TrackedModelMessage[],
+  options: TranscriptSnapshotOptions,
+  replaceInMemory: boolean,
+): Promise<void> {
+  try {
+    if (state.transcriptIntegrity === 'failed' && !options.allowIntegrityRepair) {
+      throw new Error('Transcript integrity failed; refusing a decontaminating snapshot')
+    }
+    const filePath = getSessionFilePath(state)
+    const projected = candidate.map(persistenceSafeTrackedMessage)
+    const epoch = epochLines(projected, 'snapshot', projected)
+    await enqueueFileOperation(filePath, async () => {
+      const metadata = await retainedMetadataLines(filePath, options)
+      await replaceWithSnapshot(filePath, [...metadata, ...epoch.lines])
+    })
+    if (replaceInMemory) setTrackedTranscript(state, candidate)
+    state.committedTranscriptEpochId = epoch.epochId
+    state.transcriptIntegrity = 'clean'
+    state.transcriptRequiresSnapshot = false
+    state.persistedMessageCount = candidate.length
+  } catch (error) {
+    // rename may already have replaced the durable file before a directory
+    // fsync reports failure. The in-memory parent is then no longer safe for
+    // a delta; every snapshot failure forces the next operation to rewrite a
+    // fresh root snapshot from the current tracked transcript.
+    state.transcriptRequiresSnapshot = true
+    throw error
+  }
+}
+
+/** Commit a complete root snapshot. The live transcript changes only after
+ * temp-file fsync, atomic rename, and directory fsync all succeed. State
+ * derivation and I/O share the LoopState transcript chain, not just the
+ * per-file writer queue. */
+export function commitTranscriptSnapshot(
+  state: LoopState,
+  candidate?: readonly TrackedModelMessage[],
+  options: TranscriptSnapshotOptions = {},
+): Promise<void> {
+  const requestedCandidate = candidate === undefined ? undefined : cloneTrackedTranscript(candidate)
+  return enqueueTranscriptOperation(state, async () => {
+    const selected = requestedCandidate ?? cloneTrackedTranscript(state.trackedMessages)
+    await commitTranscriptSnapshotNow(state, selected, options, requestedCandidate !== undefined)
+  })
 }
 
 /** Write the session header. Idempotent: if the file already exists (resume
@@ -339,8 +595,11 @@ export async function appendHeader(
     firstPrompt: firstPrompt.slice(0, 500),
     taskSlug: state.taskSlug,
     sessionId: state.sessionId,
+    firstPromptProvenance: state.trackedMessages[0]?.provenance,
   }
-  await appendLine(filePath, entry)
+  if (!(await appendRawLines(filePath, [JSON.stringify(entry)]))) {
+    throw new Error('Failed to persist session header')
+  }
 }
 
 /** Flush every message in `state.messages` past `state.persistedMessageCount`
@@ -354,48 +613,37 @@ export async function appendHeader(
  *  a compact-boundary marker so the loader can correctly truncate-on-load
  *  and then re-appends the trimmed messages so post-boundary jsonl content
  *  matches the new in-memory state. */
-export async function flushPendingMessages(state: LoopState): Promise<void> {
-  if (state.persistedMessageCount >= state.messages.length) return
-  const filePath = getSessionFilePath(state)
-  const ts = new Date().toISOString()
-  const lines: string[] = []
-  for (let i = state.persistedMessageCount; i < state.messages.length; i++) {
-    const message = state.messages[i]
-    if (!message) continue
-    const entry: MsgEntry = { t: 'msg', message: persistenceSafeMessage(message), ts }
-    lines.push(JSON.stringify(entry))
-  }
-  // Preserve the pre-refactor early-bail: when the loop produces nothing
-  // (every unpersisted slot was a defensive `!message` skip), leave
-  // persistedMessageCount alone so a future repeat-with-real-messages
-  // doesn't think it already covered the range.
-  if (lines.length === 0) return
-  // Bump the counter BEFORE the await. agentLoop's final flush is
-  // fire-and-forget and print mode's saveSession flush starts immediately
-  // after — with the counter bumped post-await, both pass the guard above
-  // and the tail messages land in the jsonl twice (observed in e2e
-  // transcripts). Capture the end index too: messages pushed while the
-  // write is in flight belong to the NEXT flush, not this one.
-  const startCount = state.persistedMessageCount
-  const flushEnd = state.messages.length
-  state.persistedMessageCount = flushEnd
-  const writePromise = appendRawLines(filePath, lines)
-  // Stash on LoopState so saveSession can await this in-flight write
-  // before process.exit() kills it.  print mode calls saveSession
-  // (awaited) right after agentLoop returns; without this hook the pre-
-  // bump above makes saveSession a no-op and process.exit() races the
-  // fire-and-forget appendFile.
-  state.pendingFlush = writePromise
-  if (!(await writePromise)) {
-    // Write failed — roll back so a later flush retries these messages,
-    // but ONLY if no newer flush ran while we were awaiting: rewinding
-    // past a count another flush already advanced would re-append its
-    // lines (the very duplicate-tail bug this pre-bump fixes).
-    if (state.persistedMessageCount === flushEnd) {
-      state.persistedMessageCount = startCount
+export function flushPendingMessages(state: LoopState): Promise<void> {
+  return enqueueTranscriptOperation(state, async () => {
+    if (state.transcriptIntegrity === 'failed') {
+      throw new Error('Transcript integrity failed; automatic permission remains disabled')
     }
-  }
-  state.pendingFlush = null
+    if (
+      state.transcriptRequiresSnapshot ||
+      state.transcriptIntegrity !== 'clean' ||
+      !state.committedTranscriptEpochId
+    ) {
+      const selected = cloneTrackedTranscript(state.trackedMessages)
+      await commitTranscriptSnapshotNow(state, selected, {}, false)
+      return
+    }
+    if (state.persistedMessageCount >= state.trackedMessages.length) return
+    const filePath = getSessionFilePath(state)
+    const flushEnd = state.trackedMessages.length
+    const resultingTranscript = state.trackedMessages.slice(0, flushEnd)
+    const pending = resultingTranscript.slice(state.persistedMessageCount)
+    if (pending.length === 0) return
+    const epoch = epochLines(pending, 'delta', resultingTranscript, state.committedTranscriptEpochId)
+    if (!(await appendRawLines(filePath, epoch.lines))) {
+      // append mode can leave any byte prefix on disk before reporting an I/O
+      // failure. Retrying another delta would chain across that unauthenticated
+      // tail, so the next operation must atomically replace it with a snapshot.
+      state.transcriptRequiresSnapshot = true
+      throw new Error('Failed to commit transcript delta')
+    }
+    state.persistedMessageCount = flushEnd
+    state.committedTranscriptEpochId = epoch.epochId
+  })
 }
 
 /** Append a usage snapshot for the current turn. Called from the agent loop
@@ -450,29 +698,47 @@ export async function appendStepStats(state: LoopState, step: StepStats): Promis
  *  Light compaction (loop-guard pruning) calls this with `summary=undefined`
  *  — the trimmed messages still need a boundary so the loader doesn't
  *  resurrect the dropped loop-guard pairs. */
-export async function markBoundaryAndReflush(state: LoopState, summary?: string): Promise<void> {
-  const filePath = getSessionFilePath(state)
-  const ts = new Date().toISOString()
-  const boundary: CompactBoundaryEntry = {
-    t: 'meta',
-    kind: 'compact-boundary',
-    memoryGeneration: state.memoryGeneration,
-    ts,
-  }
-  if (summary !== undefined) boundary.summary = summary
-  const lines = [JSON.stringify(boundary)]
-  for (const message of state.messages) {
-    const entry: MsgEntry = { t: 'msg', message: persistenceSafeMessage(message), ts }
-    lines.push(JSON.stringify(entry))
-  }
-  if (!(await appendRawLines(filePath, lines))) return
-  state.persistedMessageCount = state.messages.length
+export async function markBoundaryAndReflush(
+  state: LoopState,
+  summary?: string,
+  candidate: readonly TrackedModelMessage[] = state.trackedMessages,
+): Promise<void> {
+  void summary
+  await commitTranscriptSnapshot(state, candidate, { dropCheckpoints: true, dropMemoryRecall: true })
   // Compaction shrinks/rewrites the messages array — every prior
   // checkpoint's `messageCount` now points past the end. Clear the
   // in-memory list to mirror the loader's behaviour (which drops
   // pre-boundary checkpoint lines on resume).
   state.checkpoints = []
   resetMemoryRecallWindow(state)
+}
+
+export async function clearPeerContext(state: LoopState): Promise<number> {
+  if (state.transcriptIntegrity !== 'clean' || state.contextSecurity.integrityFailure) {
+    throw new Error('Transcript integrity must be repaired before peer context can be cleared')
+  }
+  if (!isValidContextSecurity(state.contextSecurity, state.trackedMessages)) {
+    throw new Error('Stored context-security boundary does not match the tracked transcript')
+  }
+  const derived = deriveContextSecurity(state.trackedMessages)
+  const firstTaintedEntryId = derived.firstTaintedEntryId
+  if (!derived.peerInfluenceActive || !firstTaintedEntryId) return 0
+  const firstTaintedIndex = state.trackedMessages.findIndex((entry) => entry.entryId === firstTaintedEntryId)
+  if (
+    firstTaintedIndex < 0 ||
+    state.trackedMessages.slice(0, firstTaintedIndex).some((entry) => entry.provenance.derivedFromPeer)
+  ) {
+    throw new Error('The first tainted transcript entry cannot be located safely')
+  }
+  const removed = state.trackedMessages.length - firstTaintedIndex
+  const safePrefix = state.trackedMessages.slice(0, firstTaintedIndex)
+  await commitTranscriptSnapshot(state, safePrefix, {
+    checkpointMessageCountAtMost: safePrefix.length,
+    dropMemoryRecall: true,
+  })
+  state.checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.messageCount <= safePrefix.length)
+  resetMemoryRecallWindow(state)
+  return removed
 }
 
 /** Append a rewind checkpoint marker. Fire-and-forget, like the other
@@ -582,6 +848,14 @@ export interface LoadedSession {
   gitBranch?: string
   firstPrompt: string
   messages: ModelMessage[]
+  trackedMessages: TrackedModelMessage[]
+  contextSecurity: ContextSecurityState
+  committedTranscriptEpochId?: string
+  transcriptIntegrity: 'clean' | 'legacy' | 'failed'
+  /** The loaded in-memory transcript differs from the last durable commit or
+   *  discarded an incomplete tail. The first append must atomically replace
+   *  the transcript instead of extending the stale/broken epoch chain. */
+  transcriptRequiresSnapshot: boolean
   tokenUsage: TokenUsage
   usageBreakdown?: UsageBreakdown
   providerTurns?: ProviderTurnUsage[]
@@ -628,10 +902,28 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   } catch {
     return null
   }
+  const rawLines = raw.split('\n').filter((line) => line.trim())
+  const parsedLines = rawLines.map((line) => {
+    try {
+      return { ok: true as const, entry: JSON.parse(line) as Entry }
+    } catch {
+      return { ok: false as const }
+    }
+  })
+  const hasEpoch = parsedLines.some(
+    (line) =>
+      line.ok &&
+      line.entry.t === 'meta' &&
+      ['transcript-epoch-start', 'context-security-boundary', 'transcript-epoch-commit'].includes(line.entry.kind),
+  )
+  const hasLegacyMessages = parsedLines.some(
+    (line) => line.ok && line.entry.t === 'msg' && !(line.entry as MsgEntry).epochId,
+  )
+
   let header: HeaderEntry | null = null
   let lastUsage: UsageEntry | null = null
   const providerTurns: ProviderTurnUsage[] = []
-  let messages: ModelMessage[] = []
+  let legacyMessages: ModelMessage[] = []
   let checkpoints: CheckpointEntry[] = []
   let goal: GoalState | null = null
   const goalInputs: GoalInput[] = []
@@ -640,22 +932,17 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   let memoryRecallTombstones: MemoryRecallTombstone[] = []
   let memoryGeneration = 0
 
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue
-    let entry: Entry
-    try {
-      entry = JSON.parse(line) as Entry
-    } catch {
-      continue // skip malformed lines silently
-    }
+  for (const parsed of parsedLines) {
+    if (!parsed.ok) continue
+    const entry = parsed.entry
     if (entry.t === 'meta') {
       if (entry.kind === 'header') {
         header = entry
       } else if (entry.kind === 'usage') {
         lastUsage = entry
         if (entry.turn) providerTurns.push(entry.turn)
-      } else if (entry.kind === 'compact-boundary') {
-        messages = []
+      } else if (entry.kind === 'compact-boundary' && !hasEpoch) {
+        legacyMessages = []
         // Checkpoints anchored to pre-compaction message counts are now
         // meaningless — the array shrank under them. Drop along with msgs.
         checkpoints = []
@@ -689,19 +976,145 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
         memoryGeneration = Math.max(memoryGeneration, entry.tombstone.generation)
       }
       // 'interrupted' is informational only — doesn't affect state
-    } else if (entry.t === 'msg') {
+    } else if (entry.t === 'msg' && !hasEpoch) {
       // Also protect resumed sessions created by older releases. This does not
       // rewrite their append-only files, but keeps legacy screenshots out of a
       // new provider request after resume.
-      messages.push(persistenceSafeMessage(entry.message))
+      legacyMessages.push(persistenceSafeMessage(entry.message))
     }
   }
   if (!header) return null
 
+  let trackedMessages: TrackedModelMessage[] = []
+  let committedTranscriptEpochId: string | undefined
+  let transcriptIntegrity: 'clean' | 'legacy' | 'failed' = hasEpoch ? 'clean' : 'legacy'
+  let transcriptPrefixNeedsReplacement = false
+
+  if (!hasEpoch) {
+    trackedMessages = legacyMessages.map((message, index) =>
+      createTrackedMessage(
+        message,
+        { authority: 'user', derivedFromPeer: false },
+        createHash('sha256')
+          .update(`${header!.sessionId}\u0000${index}\u0000${canonicalSecurityJson(message)}`)
+          .digest('hex'),
+      ),
+    )
+  } else if (hasLegacyMessages) {
+    transcriptIntegrity = 'failed'
+  } else {
+    interface PendingEpoch {
+      start: TranscriptEpochStartEntry
+      entries: TrackedModelMessage[]
+      boundary?: ContextSecurityBoundaryEntry
+    }
+    let active: PendingEpoch | undefined
+    let validTranscript: TrackedModelMessage[] = []
+    let sawCommittedSnapshot = false
+    const seenEntryIds = new Set<string>()
+
+    for (let index = 0; index < parsedLines.length; index++) {
+      const parsed = parsedLines[index]!
+      if (!parsed.ok) {
+        const laterTranscriptLine = parsedLines
+          .slice(index + 1)
+          .some((later) => later.ok && isTranscriptLine(later.entry))
+        // A malformed row terminates the continuous transcript prefix. A
+        // trailing partial write is recoverable from the last commit, but a
+        // later epoch must never be accepted across the gap: its parentage
+        // and the bytes hidden by the malformed row cannot be authenticated.
+        transcriptPrefixNeedsReplacement = true
+        if (laterTranscriptLine) transcriptIntegrity = 'failed'
+        break
+      }
+      const entry = parsed.entry
+      if (!isTranscriptLine(entry)) continue
+      if (entry.t === 'msg') {
+        if (
+          !active ||
+          entry.epochId !== active.start.epochId ||
+          active.boundary ||
+          typeof entry.entryId !== 'string' ||
+          !isValidProvenance(entry.provenance) ||
+          seenEntryIds.has(entry.entryId)
+        ) {
+          transcriptIntegrity = 'failed'
+          break
+        }
+        active.entries.push(
+          createTrackedMessage(persistenceSafeMessage(entry.message), entry.provenance, entry.entryId),
+        )
+        continue
+      }
+      if (entry.kind === 'compact-boundary') {
+        transcriptIntegrity = 'failed'
+        break
+      }
+      if (entry.kind === 'transcript-epoch-start') {
+        if (
+          active ||
+          (entry.mode === 'snapshot' && (entry.parentEpochId !== undefined || sawCommittedSnapshot)) ||
+          (entry.mode === 'delta' && (!sawCommittedSnapshot || entry.parentEpochId !== committedTranscriptEpochId))
+        ) {
+          transcriptIntegrity = 'failed'
+          break
+        }
+        active = { start: entry, entries: [] }
+        continue
+      }
+      if (entry.kind === 'context-security-boundary') {
+        if (!active || active.boundary || entry.epochId !== active.start.epochId) {
+          transcriptIntegrity = 'failed'
+          break
+        }
+        active.boundary = entry
+        continue
+      }
+      if (entry.kind === 'transcript-epoch-commit') {
+        if (!active || !active.boundary || entry.epochId !== active.start.epochId) {
+          transcriptIntegrity = 'failed'
+          break
+        }
+        const candidate = active.start.mode === 'snapshot' ? active.entries : [...validTranscript, ...active.entries]
+        const boundary = active.boundary
+        const boundaryHash = createHash('sha256').update(canonicalSecurityJson(boundary)).digest('hex')
+        if (
+          entry.boundaryDigest !== boundaryHash ||
+          boundary.resultEntryCount !== candidate.length ||
+          boundary.resultTranscriptDigest !== canonicalTranscriptDigest(candidate) ||
+          !isValidContextSecurity(boundary.state, candidate)
+        ) {
+          transcriptIntegrity = 'failed'
+          break
+        }
+        validTranscript = candidate
+        for (const tracked of active.entries) seenEntryIds.add(tracked.entryId)
+        committedTranscriptEpochId = entry.epochId
+        sawCommittedSnapshot = true
+        active = undefined
+      }
+    }
+    if (active) transcriptPrefixNeedsReplacement = true
+    trackedMessages = validTranscript
+    if (!sawCommittedSnapshot) transcriptIntegrity = 'failed'
+  }
+
+  const committedDigestBeforeRepair = canonicalTranscriptDigest(trackedMessages)
   // Repair binary parts that older builds persisted as JSON-serialized
   // Buffers — without this the resumed transcript fails the SDK's
   // ModelMessage schema on the very first request.
-  normalizeSerializedBinaryParts(messages)
+  normalizeSerializedBinaryParts(trackedMessages.map((entry) => entry.message))
+
+  trackedMessages = sanitizeTrackedMessageTail(trackedMessages)
+  const transcriptRequiresSnapshot =
+    transcriptIntegrity !== 'clean' ||
+    transcriptPrefixNeedsReplacement ||
+    canonicalTranscriptDigest(trackedMessages) !== committedDigestBeforeRepair
+  const derivedSecurity = deriveContextSecurity(trackedMessages)
+  const contextSecurity: ContextSecurityState =
+    transcriptIntegrity === 'failed'
+      ? { ...derivedSecurity, peerInfluenceActive: true, integrityFailure: true }
+      : derivedSecurity
 
   return {
     sessionId: header.sessionId,
@@ -711,7 +1124,12 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     cwd: header.cwd,
     gitBranch: header.gitBranch,
     firstPrompt: header.firstPrompt,
-    messages: sanitizeMessageTail(messages),
+    messages: trackedMessages.map((entry) => entry.message),
+    trackedMessages,
+    contextSecurity,
+    committedTranscriptEpochId,
+    transcriptIntegrity,
+    transcriptRequiresSnapshot,
     tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
     usageBreakdown: lastUsage?.breakdown ?? createUsageBreakdown(),
     providerTurns,
@@ -832,6 +1250,12 @@ function sanitizeMessageTail(messages: ModelMessage[]): ModelMessage[] {
     break
   }
   return cutAt < messages.length ? messages.slice(0, cutAt) : messages
+}
+
+export function sanitizeTrackedMessageTail(entries: readonly TrackedModelMessage[]): TrackedModelMessage[] {
+  const sanitizedMessages = sanitizeMessageTail(entries.map((entry) => entry.message))
+  if (sanitizedMessages.length === entries.length) return entries.slice()
+  return entries.slice(0, sanitizedMessages.length)
 }
 
 // ── List for picker ─────────────────────────────────────────────────────
@@ -956,7 +1380,12 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
   state.sessionFilePath = loaded.filePath
   state.taskSlug = loaded.taskSlug
   state.startedAt = loaded.startedAt
-  state.messages = loaded.messages.slice()
+  setTrackedTranscript(state, loaded.trackedMessages)
+  state.contextSecurity = structuredClone(loaded.contextSecurity)
+  state.executionAuthority = effectiveExecutionAuthority({ source: 'user', peerTainted: false }, state.contextSecurity)
+  state.committedTranscriptEpochId = loaded.committedTranscriptEpochId
+  state.transcriptIntegrity = loaded.transcriptIntegrity
+  state.transcriptRequiresSnapshot = loaded.transcriptRequiresSnapshot
   state.tokenUsage = { ...loaded.tokenUsage }
   state.usageBreakdown = loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown()
   state.providerTurns = loaded.providerTurns?.slice() ?? []
@@ -964,7 +1393,7 @@ export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionM
     ? { ...loaded.cacheMissSummary, estimates: scanCacheMisses(state.providerTurns).estimates }
     : scanCacheMisses(state.providerTurns)
   state.lastInputTokens = loaded.tokenUsage.inputTokens
-  state.persistedMessageCount = loaded.messages.length
+  state.persistedMessageCount = loaded.trackedMessages.length
   state.checkpoints = loaded.checkpoints.slice()
   state.goal = loaded.goal ? structuredClone(loaded.goal) : null
   state.goalInputs = loaded.goalInputs.map((input) => ({ ...input }))

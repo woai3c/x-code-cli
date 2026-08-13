@@ -14,13 +14,15 @@ import { generateText } from 'ai'
 import type { LanguageModel, LanguageModelUsage, ModelMessage } from 'ai'
 
 import type { HookBus } from '../hooks/bus.js'
-import type { AgentCallbacks } from '../types/index.js'
+import type { AgentCallbacks, ExecutionAuthority, TrackedModelMessage } from '../types/index.js'
 import { debugLog } from '../utils.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
 import { estimateMessageTokenCount, estimateTokenCount } from './context-window.js'
-import { lightCompactMessages, truncateOldToolResults } from './light-compact.js'
+import { lightCompactTrackedMessages, truncateOldTrackedToolResults } from './light-compact.js'
 import type { LoopState } from './loop-state.js'
+import { createTrackedMessage, mergeProvenance } from './provenance.js'
 import { appendUsage, markBoundaryAndReflush } from './session-store.js'
+import { setTrackedTranscript } from './tracked-messages.js'
 import { accumulateUsage, attributedModelId, normalizeLanguageModelUsage } from './usage.js'
 
 /** Optional hook surface threaded through both compression paths. Lets
@@ -31,6 +33,7 @@ export interface CompactionHookContext {
   modelId: string
   cwd: string
   abortSignal?: AbortSignal
+  authority?: ExecutionAuthority
 }
 
 /** Approximate token budget for the "recent" slice kept verbatim.
@@ -178,6 +181,45 @@ export async function compressMessagesWithUsage(
   }
 }
 
+export interface TrackedCompressionResult {
+  trackedMessages: TrackedModelMessage[]
+  summary: string
+  usage?: LanguageModelUsage
+  modelId?: string
+}
+
+export async function compressTrackedMessagesWithUsage(
+  entries: readonly TrackedModelMessage[],
+  model: LanguageModel,
+  previousSummary?: string,
+  filesTracked?: { modified: string[]; read: string[] },
+  abortSignal?: AbortSignal,
+): Promise<TrackedCompressionResult> {
+  const messages = entries.map((entry) => entry.message)
+  let keepCount = 0
+  let tokenBudget = 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msgTokens = estimateMessageTokenCount(messages[i])
+    if (tokenBudget + msgTokens > KEEP_RECENT_TOKENS && keepCount >= MIN_KEEP_MESSAGES) break
+    tokenBudget += msgTokens
+    keepCount++
+  }
+  while (keepCount < messages.length && messages[messages.length - keepCount]?.role === 'tool') keepCount++
+  const recentEntries = entries.slice(-keepCount)
+  const oldEntries = entries.slice(0, -keepCount)
+  if (oldEntries.length === 0) {
+    return { trackedMessages: entries.slice(), summary: previousSummary ?? '' }
+  }
+  const result = await compressMessagesWithUsage(messages, model, previousSummary, filesTracked, abortSignal)
+  const summaryMessage = result.messages[0]!
+  return {
+    trackedMessages: [createTrackedMessage(summaryMessage, mergeProvenance(oldEntries)), ...recentEntries],
+    summary: result.summary,
+    usage: result.usage,
+    modelId: result.modelId,
+  }
+}
+
 /** Backward-compatible public API. */
 export async function compressMessages(
   messages: ModelMessage[],
@@ -222,34 +264,41 @@ export async function checkAndCompressContext(
   })
 
   callbacks.onCompressionProgress?.('Removing duplicate tool calls...')
-  const light = lightCompactMessages(state.messages)
+  let candidate = structuredClone(state.trackedMessages)
+  const light = lightCompactTrackedMessages(candidate)
   if (light.dropped > 0) {
-    state.messages = light.messages
-    const stillOver = estimateTokenCount(state.messages) > threshold
+    candidate = light.trackedMessages
+    const stillOver = estimateTokenCount(candidate.map((entry) => entry.message)) > threshold
     callbacks.onContextCompressed(
       `Dropped ${light.dropped} looped tool-call message(s) to reclaim context${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
     if (!stillOver) {
-      await finishLightweightCompression(state, hookCtx)
+      await finishLightweightCompression(state, candidate, hookCtx)
       return
     }
   }
 
   callbacks.onCompressionProgress?.('Truncating old tool results...')
-  const trunc = truncateOldToolResults(state.messages)
+  const trunc = truncateOldTrackedToolResults(candidate)
   if (trunc.truncatedCount > 0) {
-    const stillOver = estimateTokenCount(state.messages) > threshold
+    const stillOver = estimateTokenCount(candidate.map((entry) => entry.message)) > threshold
     callbacks.onContextCompressed(
       `Truncated ${trunc.truncatedCount} old tool result(s), saved ~${Math.round(trunc.charsSaved / 3)} tokens${stillOver ? ' — still over threshold, summarising' : ''}.`,
     )
     if (!stillOver) {
-      await finishLightweightCompression(state, hookCtx)
+      await finishLightweightCompression(state, candidate, hookCtx)
       return
     }
   }
 
   callbacks.onCompressionProgress?.('Summarizing conversation...')
-  const { compressed, tokensBefore, tokensAfter } = await summarizeLoopState(state, model, callbacks, hookCtx)
+  const { compressed, tokensBefore, tokensAfter } = await summarizeLoopState(
+    state,
+    candidate,
+    model,
+    callbacks,
+    hookCtx,
+  )
   const beforeK = Math.round(tokensBefore / 1000)
   const afterK = Math.round(tokensAfter / 1000)
   callbacks.onContextCompressed(`Context compressed: ~${beforeK}k → ~${afterK}k tokens.`)
@@ -280,7 +329,13 @@ export async function handleContextTooLong(
     tokenEstimate: estimateTokenCount(state.messages),
   })
   callbacks.onCompressionProgress?.('Summarizing conversation...')
-  const { compressed, tokensBefore, tokensAfter } = await summarizeLoopState(state, model, callbacks, hookCtx)
+  const { compressed, tokensBefore, tokensAfter } = await summarizeLoopState(
+    state,
+    structuredClone(state.trackedMessages),
+    model,
+    callbacks,
+    hookCtx,
+  )
 
   // Anti-spin guard. If summarizing barely freed context, the overflow
   // lives in the kept recent messages — bail so the user can /clear.
@@ -305,8 +360,13 @@ export async function handleContextTooLong(
 
 const SUMMARY_PREFIX = '[Previous conversation summary]\n'
 
-async function finishLightweightCompression(state: LoopState, hookCtx?: CompactionHookContext): Promise<void> {
-  await markBoundaryAndReflush(state)
+async function finishLightweightCompression(
+  state: LoopState,
+  candidate: readonly TrackedModelMessage[],
+  hookCtx?: CompactionHookContext,
+): Promise<void> {
+  await markBoundaryAndReflush(state, undefined, candidate)
+  setTrackedTranscript(state, candidate)
   state.lastInputTokens = 0
   markExpectedCacheMiss(state, 'compaction')
   emitCompactionHook(hookCtx, {
@@ -319,30 +379,31 @@ async function finishLightweightCompression(state: LoopState, hookCtx?: Compacti
 
 async function summarizeLoopState(
   state: LoopState,
+  candidate: readonly TrackedModelMessage[],
   model: LanguageModel,
   callbacks: AgentCallbacks,
   hookCtx?: CompactionHookContext,
-): Promise<{ compressed: CompressionResult; tokensBefore: number; tokensAfter: number }> {
+): Promise<{ compressed: TrackedCompressionResult; tokensBefore: number; tokensAfter: number }> {
   const tokensBefore = estimateTokenCount(state.messages)
-  const compressed = await compressMessagesWithUsage(
-    state.messages,
+  const compressed = await compressTrackedMessagesWithUsage(
+    candidate,
     model,
     extractPreviousSummary(state.messages),
     buildFilesTracked(state),
     hookCtx?.abortSignal,
   )
-  state.messages = compressed.messages
+  await markBoundaryAndReflush(state, compressed.summary, compressed.trackedMessages)
+  setTrackedTranscript(state, compressed.trackedMessages)
   await recordCompressionUsage(state, compressed, callbacks, hookCtx)
   state.lastInputTokens = 0
   markExpectedCacheMiss(state, 'compaction')
   const tokensAfter = estimateTokenCount(state.messages)
-  await markBoundaryAndReflush(state, compressed.summary)
   return { compressed, tokensBefore, tokensAfter }
 }
 
 async function recordCompressionUsage(
   state: LoopState,
-  result: CompressionResult,
+  result: Pick<CompressionResult, 'usage' | 'modelId'>,
   callbacks: AgentCallbacks,
   hookCtx?: CompactionHookContext,
 ): Promise<void> {
@@ -386,6 +447,7 @@ function emitCompactionHook(
     | { name: 'PreCompact'; trigger: 'proactive' | 'reactive'; messageCount: number; tokenEstimate: number }
     | { name: 'PostCompact'; trigger: 'proactive' | 'reactive'; messageCount: number; summary: string },
 ): void {
+  if (ctx?.authority?.peerTainted || ctx?.authority?.source === 'peer') return
   if (!ctx?.hookBus?.has(partial.name)) return
   void ctx.hookBus
     .emit(

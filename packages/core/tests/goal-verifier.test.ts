@@ -80,6 +80,52 @@ describe('goal verifier', () => {
     expect(spawn).toHaveBeenCalledWith('pwd', expect.objectContaining({ cwd: process.cwd() }))
   })
 
+  it('fails closed before any verifier executes for peer-influenced goals', async () => {
+    const state = createLoopState()
+    state.executionAuthority = { source: 'peer', peerTainted: true }
+    const goal = createGoal(state, {
+      objective: 'peer goal',
+      verifiers: [{ kind: 'shell', command: 'pwd' }],
+    })
+    const cb = callbacks()
+
+    const result = await runVerifierLadder({ goal, state, options: options(), callbacks: cb, model: {} as any })
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        retryable: false,
+        summary: 'Goal verification is disabled for peer-influenced context.',
+      }),
+    )
+    expect(spawn).not.toHaveBeenCalled()
+    expect(runSubAgent).not.toHaveBeenCalled()
+    expect(cb.onAskPermission).not.toHaveBeenCalled()
+    expect(cb.onAskUser).not.toHaveBeenCalled()
+  })
+
+  it('uses local trust for peer-influenced goal verification', async () => {
+    const state = createLoopState()
+    state.executionAuthority = { source: 'peer', peerTainted: true }
+    const goal = createGoal(state, {
+      objective: 'trusted peer goal',
+      verifiers: [{ kind: 'shell', command: 'pwd' }],
+    })
+    const cb = callbacks()
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: { ...options(), trustMode: true },
+      callbacks: cb,
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(spawn).toHaveBeenCalledWith('pwd', expect.objectContaining({ cwd: process.cwd() }))
+    expect(cb.onAskPermission).not.toHaveBeenCalled()
+  })
+
   it('fails when shell verifier permission is denied', async () => {
     const state = createLoopState()
     const goal = createGoal(state, {

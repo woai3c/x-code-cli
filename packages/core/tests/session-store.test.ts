@@ -19,7 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { mkdtempSync, rmSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import fs, { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -27,6 +27,7 @@ import { appendProviderTurnUsage, createProviderTurnUsage } from '../src/agent/c
 import { admitGoalInput, promoteNextGoalInput } from '../src/agent/goal/input.js'
 import { createGoal } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
+import { saveSession } from '../src/agent/loop.js'
 import {
   appendGoalInput,
   appendGoalState,
@@ -45,6 +46,7 @@ import { accumulateUsage, normalizeLanguageModelUsage } from '../src/agent/usage
 
 let tempDir: string
 let originalCwd: string
+const itPosix = it.runIf(process.platform !== 'win32')
 
 beforeEach(() => {
   // Each test gets a clean tmp cwd so jsonl writes don't pollute the
@@ -352,8 +354,17 @@ describe('session-store: orphan tool-call sanitisation', () => {
     const loaded = await loadSession(getSessionFilePath(state))
     // The orphan tool_call assistant message at index 3 is dropped.
     expect(loaded!.messages).toHaveLength(3)
+    expect(loaded!.transcriptRequiresSnapshot).toBe(true)
     const lastAssistant = loaded!.messages[1]
     expect(lastAssistant.role).toBe('assistant')
+
+    const resumed = hydrateLoopState(loaded!)
+    resumed.messages.push({ role: 'assistant', content: 'recovered' })
+    await flushPendingMessages(resumed)
+    const reloaded = await loadSession(getSessionFilePath(resumed))
+    expect(reloaded?.transcriptIntegrity).toBe('clean')
+    expect(reloaded?.messages).toHaveLength(4)
+    expect(reloaded?.messages.at(-1)).toEqual({ role: 'assistant', content: 'recovered' })
   })
 
   it('keeps fully-resolved assistant tool_calls intact', async () => {
@@ -408,6 +419,15 @@ describe('session-store: serialized binary part repair', () => {
     const content = loaded!.messages[0].content as Array<Record<string, unknown>>
     expect(content[1].image).toBe(Buffer.from([137, 80, 78, 71]).toString('base64'))
     expect(content[2].data).toBe(Buffer.from([37, 80, 68, 70]).toString('base64'))
+    expect(loaded!.transcriptRequiresSnapshot).toBe(true)
+
+    const resumed = hydrateLoopState(loaded!)
+    resumed.messages.push({ role: 'assistant', content: 'attachment processed' })
+    await flushPendingMessages(resumed)
+    const reloaded = await loadSession(getSessionFilePath(resumed))
+    expect(reloaded?.transcriptIntegrity).toBe('clean')
+    expect(reloaded?.messages).toHaveLength(2)
+    expect(reloaded?.transcriptRequiresSnapshot).toBe(false)
   })
 
   it('restores the numeric-keys Uint8Array form and tool-result media entries', async () => {
@@ -461,11 +481,242 @@ describe('session-store: concurrent appends', () => {
 
     const raw = await readFile(getSessionFilePath(state), 'utf-8')
     const lines = raw.split('\n').filter((l) => l.trim())
-    // header + 1 msg + 2 usage entries, every one a complete JSON document.
-    expect(lines).toHaveLength(4)
+    // Header + the four-line committed snapshot epoch + two usage entries;
+    // every line must remain a complete JSON document under concurrent writes.
+    expect(lines).toHaveLength(7)
     for (const line of lines) {
       expect(() => JSON.parse(line)).not.toThrow()
     }
+  })
+
+  it('serializes concurrent delta state derivation so epochs remain parent-linear', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-concurrent-deltas'
+    state.messages = [{ role: 'user', content: 'root' }]
+    await appendHeader(state, 'test:model', 'root')
+    await flushPendingMessages(state)
+
+    state.messages.push({ role: 'assistant', content: 'first delta' })
+    let signalWriteStarted!: () => void
+    const writeStarted = new Promise<void>((resolve) => (signalWriteStarted = resolve))
+    let releaseWrite!: () => void
+    const writeGate = new Promise<void>((resolve) => (releaseWrite = resolve))
+    const realOpen = fs.open.bind(fs)
+    let blockNextAppend = true
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args)
+      if (args[1] !== 'a' || !blockNextAppend) return handle
+      blockNextAppend = false
+      const writeFile = handle.writeFile.bind(handle)
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'writeFile') {
+            return async (...writeArgs: Parameters<typeof handle.writeFile>) => {
+              signalWriteStarted()
+              await writeGate
+              return writeFile(...writeArgs)
+            }
+          }
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+    })
+    try {
+      const first = flushPendingMessages(state)
+      await writeStarted
+      state.messages.push({ role: 'user', content: 'second delta' })
+      const second = flushPendingMessages(state)
+      releaseWrite()
+      await Promise.all([first, second])
+    } finally {
+      releaseWrite()
+      openSpy.mockRestore()
+    }
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    expect(loaded?.transcriptIntegrity).toBe('clean')
+    expect(loaded?.transcriptRequiresSnapshot).toBe(false)
+    expect(loaded?.messages).toEqual([
+      { role: 'user', content: 'root' },
+      { role: 'assistant', content: 'first delta' },
+      { role: 'user', content: 'second delta' },
+    ])
+
+    const raw = await readFile(getSessionFilePath(state), 'utf8')
+    const starts = raw
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { kind?: string; epochId?: string; parentEpochId?: string })
+      .filter((entry) => entry.kind === 'transcript-epoch-start')
+    expect(starts).toHaveLength(3)
+    expect(starts[1]?.parentEpochId).toBe(starts[0]?.epochId)
+    expect(starts[2]?.parentEpochId).toBe(starts[1]?.epochId)
+  })
+
+  it('atomically replaces a partially written failed delta before retrying', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-partial-delta'
+    state.messages = [{ role: 'user', content: 'durable' }]
+    await appendHeader(state, 'test:model', 'durable')
+    await flushPendingMessages(state)
+
+    state.messages.push({ role: 'assistant', content: 'retry me' })
+    const filePath = getSessionFilePath(state)
+    const fakeHandle = {
+      async writeFile(data: string | Uint8Array) {
+        const payload = typeof data === 'string' ? data : Buffer.from(data).toString('utf8')
+        await fs.appendFile(filePath, payload.slice(0, payload.indexOf('\n') + 1) + '{', 'utf8')
+        throw new Error('simulated partial write')
+      },
+      async sync() {},
+      async close() {},
+    }
+    const openSpy = vi.spyOn(fs, 'open').mockResolvedValueOnce(fakeHandle as never)
+    try {
+      await expect(flushPendingMessages(state)).rejects.toThrow('Failed to commit transcript delta')
+    } finally {
+      openSpy.mockRestore()
+    }
+
+    expect(state.transcriptRequiresSnapshot).toBe(true)
+    expect(state.persistedMessageCount).toBe(1)
+    expect(state.pendingFlush).toBeNull()
+
+    await flushPendingMessages(state)
+    const raw = await readFile(filePath, 'utf8')
+    for (const line of raw.trim().split('\n')) expect(() => JSON.parse(line)).not.toThrow()
+    const loaded = await loadSession(filePath)
+    expect(loaded?.transcriptIntegrity).toBe('clean')
+    expect(loaded?.messages).toEqual([
+      { role: 'user', content: 'durable' },
+      { role: 'assistant', content: 'retry me' },
+    ])
+  })
+
+  itPosix('forces a root snapshot after rename succeeds but directory fsync fails', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-snapshot-dir-fsync'
+    state.messages = [{ role: 'user', content: 'durable root' }]
+    await appendHeader(state, 'test:model', 'durable root')
+    await flushPendingMessages(state)
+    const oldEpochId = state.committedTranscriptEpochId
+
+    state.messages.push({ role: 'assistant', content: 'snapshot reached rename' })
+    state.transcriptRequiresSnapshot = true
+    const filePath = getSessionFilePath(state)
+    const sessionDirectory = join(filePath, '..')
+    const realOpen = fs.open.bind(fs)
+    let failDirectorySync = true
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args)
+      if (String(args[0]) !== sessionDirectory || args[1] !== 'r' || !failDirectorySync) return handle
+      failDirectorySync = false
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') return async () => Promise.reject(new Error('simulated directory fsync failure'))
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+    })
+    try {
+      await expect(flushPendingMessages(state)).rejects.toThrow('simulated directory fsync failure')
+    } finally {
+      openSpy.mockRestore()
+    }
+
+    expect(state.committedTranscriptEpochId).toBe(oldEpochId)
+    expect(state.transcriptRequiresSnapshot).toBe(true)
+    state.messages.push({ role: 'user', content: 'continue after uncertain durability' })
+    await flushPendingMessages(state)
+
+    const loaded = await loadSession(filePath)
+    expect(loaded?.transcriptIntegrity).toBe('clean')
+    expect(loaded?.transcriptRequiresSnapshot).toBe(false)
+    expect(loaded?.messages).toEqual([
+      { role: 'user', content: 'durable root' },
+      { role: 'assistant', content: 'snapshot reached rename' },
+      { role: 'user', content: 'continue after uncertain durability' },
+    ])
+  })
+
+  it('commits a snapshot without opening an unsupported Windows directory handle', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-windows-snapshot'
+    state.messages = [{ role: 'user', content: 'windows durable root' }]
+    const filePath = getSessionFilePath(state)
+    const sessionDirectory = join(filePath, '..')
+    const realOpen = fs.open.bind(fs)
+    let directoryOpenAttempts = 0
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === sessionDirectory && args[1] === 'r') {
+        directoryOpenAttempts++
+        throw Object.assign(new Error('operation not permitted, fsync'), { code: 'EPERM' })
+      }
+      return realOpen(...args)
+    })
+    try {
+      await appendHeader(state, 'test:model', 'windows durable root')
+      await flushPendingMessages(state)
+    } finally {
+      openSpy.mockRestore()
+      platformSpy.mockRestore()
+    }
+
+    expect(directoryOpenAttempts).toBe(0)
+    const loaded = await loadSession(filePath)
+    expect(loaded?.transcriptIntegrity).toBe('clean')
+    expect(loaded?.messages).toEqual([{ role: 'user', content: 'windows durable root' }])
+  })
+
+  it('lets cleanup enqueue a recovery snapshot behind a failing delta flush', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-cleanup-repair'
+    state.messages = [{ role: 'user', content: 'durable' }]
+    await appendHeader(state, 'test:model', 'durable')
+    await flushPendingMessages(state)
+
+    state.messages.push({ role: 'assistant', content: 'must survive cleanup' })
+    const filePath = getSessionFilePath(state)
+    let signalPartialWrite!: () => void
+    const partialWriteStarted = new Promise<void>((resolve) => (signalPartialWrite = resolve))
+    let releaseFailure!: () => void
+    const failureGate = new Promise<void>((resolve) => (releaseFailure = resolve))
+    const fakeHandle = {
+      async writeFile(data: string | Uint8Array) {
+        const payload = typeof data === 'string' ? data : Buffer.from(data).toString('utf8')
+        await fs.appendFile(filePath, payload.slice(0, payload.indexOf('\n') + 1) + '{', 'utf8')
+        signalPartialWrite()
+        await failureGate
+        throw new Error('simulated concurrent partial append')
+      },
+      async sync() {},
+      async close() {},
+    }
+    const openSpy = vi.spyOn(fs, 'open').mockResolvedValueOnce(fakeHandle as never)
+    try {
+      const failedFlush = flushPendingMessages(state)
+      const observedFailure = expect(failedFlush).rejects.toThrow('Failed to commit transcript delta')
+      await partialWriteStarted
+      const cleanup = saveSession(state, {} as never)
+      releaseFailure()
+      await observedFailure
+      await cleanup
+    } finally {
+      releaseFailure()
+      openSpy.mockRestore()
+    }
+
+    expect(state.transcriptRequiresSnapshot).toBe(false)
+    const loaded = await loadSession(filePath)
+    expect(loaded?.transcriptIntegrity).toBe('clean')
+    expect(loaded?.transcriptRequiresSnapshot).toBe(false)
+    expect(loaded?.messages).toEqual([
+      { role: 'user', content: 'durable' },
+      { role: 'assistant', content: 'must survive cleanup' },
+    ])
   })
 })
 
@@ -492,7 +743,7 @@ describe('session-store: malformed input', () => {
     expect(result).toBeNull()
   })
 
-  it('skips malformed lines silently', async () => {
+  it('stops at a malformed gap and fails closed instead of accepting a later epoch', async () => {
     const state = createLoopState()
     state.sessionId = '20260101-120000-000'
     state.taskSlug = 'mixed-junk'
@@ -506,7 +757,9 @@ describe('session-store: malformed input', () => {
     await flushPendingMessages(state)
 
     const loaded = await loadSession(fp)
-    expect(loaded!.messages).toHaveLength(2)
+    expect(loaded!.messages).toEqual([{ role: 'user', content: 'real' }])
+    expect(loaded!.transcriptIntegrity).toBe('failed')
+    expect(loaded!.contextSecurity).toMatchObject({ peerInfluenceActive: true, integrityFailure: true })
   })
 })
 

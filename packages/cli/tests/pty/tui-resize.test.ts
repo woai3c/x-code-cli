@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
 import { occurrences } from './screen.js'
 import { inputLine, submitInput, typeInput, withTui } from './test-context.js'
 
@@ -83,10 +84,10 @@ describe('TUI resize behavior', () => {
         await harness.waitForScreen((screen) => screen.includes('@resize 菜单[1].txt'), 'file menu after expanding')
         harness.key('enter')
         await harness.waitForScreen(
-          (screen) => screen.includes('❯ @resize 菜单[1].txt'),
+          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} @resize 菜单[1].txt`),
           'file completion after resize',
         )
-        expect(inputLine(harness)).toBe('❯ @resize 菜单[1].txt')
+        expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} @resize 菜单[1].txt`)
       },
       {
         columns: 120,

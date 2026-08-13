@@ -232,7 +232,11 @@ describe('checkAndCompressContext', () => {
     })
 
     expect(generateText).toHaveBeenCalledOnce()
-    expect(markBoundaryAndReflush).toHaveBeenCalledWith(state, 'single summary')
+    expect(markBoundaryAndReflush).toHaveBeenCalledWith(
+      state,
+      'single summary',
+      expect.arrayContaining([expect.objectContaining({ provenance: expect.any(Object) })]),
+    )
     expect(state.messages[0]?.content).toContain('single summary')
     expect(state.tokenUsage).toMatchObject({
       inputTokens: 100,

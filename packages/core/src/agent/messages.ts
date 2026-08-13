@@ -46,6 +46,13 @@ export function toolResultMessage(
   }
 }
 
+export function structuredToolResultMessage(toolCallId: string, toolName: string, output: unknown): ModelMessage {
+  return {
+    role: 'tool',
+    content: [{ type: 'tool-result', toolCallId, toolName, output } as never],
+  }
+}
+
 /** Reattach tool-returned media for Chat Completions providers whose `tool`
  *  role is text-only. AI SDK's internal ImagePart expects raw base64 plus a
  *  media type; its provider converter adds the data-URL prefix on the wire. */

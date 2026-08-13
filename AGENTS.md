@@ -12,6 +12,7 @@ This file is loaded into the agent's context at the start of every session. Keep
 - Use sub-agents judiciously and avoid unnecessary parallelism.
 - Keep code changes minimal and avoid unrelated refactoring.
 - Verify actual results through testing; do not assume something is complete just because it looks complete.
+- Keep all features and tests compatible with Windows, macOS, and Linux. Do not assume POSIX paths, shells, signals, terminal glyphs, process behavior, or file-lock semantics. Platform-conditional tests are allowed only when the underlying capability cannot be tested equivalently, and the reason must be explicit.
 - Protect existing code and data.
 - Report key results without unnecessary progress updates.
 
@@ -48,6 +49,8 @@ packages/
 **Deferred tools** (`core/src/agent/tool-search/`): MCP tools and non-core built-ins are listed by name under `## Deferred Tools` in the system prompt and loaded on demand via `toolSearch`; `buildDeferredCatalog` falls back to full injection for weak models and small catalogs so the prompt stays byte-stable. Sub-agents get no catalog and keep the inline `## MCP Tools` block.
 
 **Sub-agents** (`core/src/agent/sub-agents/`): `task` tool delegates to isolated agentLoop with fresh LoopState. Registry is built at CLI startup and frozen. Adding/editing agent files requires a CLI restart because the agent list is embedded in the byte-stable `systemPromptCache`. Sub-agents always deny `task` (no recursion). In plan mode, write tools are denied via tool filter.
+
+**Cross-session messaging** (`core/src/peers/`, `cli/src/peer-lifecycle.ts`): `--name` enables local discovery and messaging for interactive root sessions. Peer input taints the derived context and routes tool calls through the authority evaluator; do not bypass that path. Transport is local Unix sockets on macOS/Linux in this release; Windows must fail closed as unsupported until it has an audited native transport.
 
 **Knowledge** (`core/src/knowledge/`): four layers merged into system prompt — user AGENTS.md, user memory Core profile (`~/.x-code/memory/MEMORY.md`), project AGENTS.md chain (root→leaf, leaf wins), AGENTS.local.md.
 

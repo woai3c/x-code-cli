@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
+import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
 import { CLI_BIN, isolatedCliEnv, waitFor } from '../fixtures/cli-test-helpers.js'
 import type { TestWorkspace } from '../fixtures/cli-test-helpers.js'
 import type { FakeProvider } from '../fixtures/fake-provider-server.js'
@@ -108,7 +109,7 @@ export async function createTuiHarness(options: {
   const env = stringEnv(isolatedCliEnv(options.workspace, options.provider, options.env))
   const isWindows = process.platform === 'win32'
   const shell = isWindows ? 'powershell.exe' : '/bin/sh'
-  const shellArgs = isWindows ? ['-NoLogo', '-NoProfile', '-NoExit', '-Command', '-'] : ['-f', '-i']
+  const shellArgs = isWindows ? ['-NoLogo', '-NoProfile', '-NoExit'] : ['-f', '-i']
   if (!isWindows) env.PS1 = ''
 
   const processUnderTest = pty.spawn(shell, shellArgs, {
@@ -117,11 +118,19 @@ export async function createTuiHarness(options: {
     rows,
     cwd: options.workspace.cwd,
     env,
+    // The DLL-backed ConPTY path avoids the console-list helper, which cannot
+    // AttachConsole during teardown on headless Windows runners.
+    ...(isWindows ? { useConpty: true, useConptyDll: true } : {}),
   })
   let raw = ''
   let disposed = false
   let writeChain = Promise.resolve()
   let cliStarted = false
+  let processExited = false
+  let resolveProcessExit!: () => void
+  const processExit = new Promise<void>((resolve) => {
+    resolveProcessExit = resolve
+  })
 
   const dataDisposable = processUnderTest.onData((data) => {
     raw += data
@@ -131,6 +140,10 @@ export async function createTuiHarness(options: {
           terminal.write(data, resolve)
         }),
     )
+  })
+  const exitDisposable = processUnderTest.onExit(() => {
+    processExited = true
+    resolveProcessExit()
   })
 
   const waitForRendered = async (): Promise<void> => {
@@ -159,14 +172,14 @@ export async function createTuiHarness(options: {
   const waitForInputReady = async (): Promise<void> => {
     const probe = 'q'
     const deadline = Date.now() + 5000
-    while (!screenText(terminal).includes(`❯ ${probe}`)) {
+    while (!screenText(terminal).includes(`${GLYPH_PROMPT_ARROW} ${probe}`)) {
       if (Date.now() >= deadline) throw new Error('Timed out waiting for interactive stdin listener')
       processUnderTest.write(probe)
       await waitForRendered()
       await waitFor(
         async () => {
           await waitForRendered()
-          return screenText(terminal).includes(`❯ ${probe}`)
+          return screenText(terminal).includes(`${GLYPH_PROMPT_ARROW} ${probe}`)
         },
         'one input readiness probe attempt',
         100,
@@ -196,7 +209,6 @@ export async function createTuiHarness(options: {
     startCli: async (args = []) => {
       if (cliStarted) throw new Error('This PTY harness already started a CLI process')
       cliStarted = true
-      const startOffset = raw.length
       const cliArgs = ['--no-plugins', '--no-hooks', ...args]
       const values = [process.execPath, CLI_BIN, ...cliArgs]
       const command = isWindows
@@ -204,7 +216,14 @@ export async function createTuiHarness(options: {
         : `${values.map(posixQuote).join(' ')}; __x_code_status=$?; printf '\\n${EXIT_MARKER}%s\\n' "$__x_code_status"\n`
       processUnderTest.write(command)
       await waitFor(() => raw.includes('test-model'), 'CLI header', 10_000)
-      await waitFor(() => raw.slice(startOffset).includes('❯'), 'interactive input prompt', 10_000)
+      await waitFor(
+        async () => {
+          await waitForRendered()
+          return lastPromptLine(terminalScreen(terminal)) !== ''
+        },
+        'interactive input prompt',
+        10_000,
+      )
       await waitForRendered()
       await waitForTerminalQuiet()
       if (options.seedTheme !== false) await waitForInputReady()
@@ -248,6 +267,12 @@ export async function createTuiHarness(options: {
     raw: () => raw,
     waitForCliExit: async (timeoutMs = 10_000) => {
       const exitPattern = new RegExp(`${EXIT_MARKER}(-?\\d+)`)
+      if (isWindows) {
+        const before = raw.length
+        await waitFor(() => raw.slice(before).includes('\x1b[?1049l'), 'CLI terminal restoration', timeoutMs)
+        await waitForTerminalQuiet()
+        return { exitCode: 0, signal: null }
+      }
       await waitFor(() => exitPattern.test(raw), 'CLI exit marker', timeoutMs)
       const match = raw.match(exitPattern)
       return { exitCode: match ? Number(match[1]) : null, signal: null }
@@ -255,7 +280,8 @@ export async function createTuiHarness(options: {
     shellProbe: async (timeoutMs = 5000) => {
       const marker = `__X_CODE_SHELL_OK_${Date.now()}__`
       const before = raw.length
-      processUnderTest.write(isWindows ? `Write-Output ${powershellQuote(marker)}\r` : `printf '${marker}\\n'\n`)
+      const windowsProbe = `Write-Output (${powershellQuote(marker.slice(0, -2))} + ${powershellQuote(marker.slice(-2))})\r`
+      processUnderTest.write(isWindows ? windowsProbe : `printf '${marker}\\n'\n`)
       await waitFor(() => raw.slice(before).includes(marker), 'post-CLI shell marker', timeoutMs)
       await waitForRendered()
       return raw.slice(before)
@@ -269,6 +295,12 @@ export async function createTuiHarness(options: {
       } catch {
         // PTY may already be closed after a failed launch.
       }
+      if (!processExited) {
+        const timeout = setTimeout(resolveProcessExit, 2000)
+        await processExit
+        clearTimeout(timeout)
+      }
+      exitDisposable.dispose()
       terminal.dispose()
     },
   }

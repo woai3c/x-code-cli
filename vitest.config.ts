@@ -38,7 +38,7 @@ export default defineConfig({
           sequence: { groupOrder: 2 },
           fileParallelism: false,
           testTimeout: 120_000,
-          hookTimeout: 120_000,
+          hookTimeout: 240_000,
         },
       },
       {

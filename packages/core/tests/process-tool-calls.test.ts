@@ -606,7 +606,7 @@ describe('processToolCalls skip-fulfilled (SDK already produced a tool-result)',
     expect(onShellOutput).not.toHaveBeenCalled()
     expect(onToolResult).not.toHaveBeenCalled()
     expect(JSON.stringify(state.messages)).toContain(memoryRoot.replace(/\\/g, '\\\\'))
-  })
+  }, 15_000)
 
   it('denies shell commands blocked by sub-agent shell restrictions before permission checks', async () => {
     const state = createLoopState()

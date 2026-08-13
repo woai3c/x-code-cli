@@ -16,6 +16,7 @@ import type { FakeProvider } from '../fixtures/fake-provider-server.js'
 
 const providers: FakeProvider[] = []
 const cleanups: Array<() => Promise<void>> = []
+const itWithPosixSignals = it.runIf(process.platform !== 'win32')
 
 afterEach(async () => {
   await Promise.allSettled(providers.splice(0).map((provider) => provider.close()))
@@ -157,7 +158,7 @@ describe('stream interruption recovery', () => {
     expect(result.stderr).not.toContain('[error]')
   })
 
-  it('threads abort to a tool that started after a complete tool call', async () => {
+  itWithPosixSignals('threads abort to a tool that started after a complete tool call', async () => {
     const { provider, workspace } = await setup([])
     const readyPath = path.join(workspace.cwd, 'ready.txt')
     const abortedPath = path.join(workspace.cwd, 'aborted.txt')
@@ -185,25 +186,33 @@ describe('stream interruption recovery', () => {
       timeoutMs: 15_000,
     })
 
-    await waitFor(async () => {
-      try {
-        await fs.access(readyPath)
-        return true
-      } catch {
-        return false
-      }
-    }, 'controlled tool to start')
+    await waitFor(
+      async () => {
+        try {
+          await fs.access(readyPath)
+          return true
+        } catch {
+          return false
+        }
+      },
+      'controlled tool to start',
+      15_000,
+    )
     processUnderTest.kill('SIGINT')
     const result = await processUnderTest.wait()
 
-    await waitFor(async () => {
-      try {
-        await fs.access(abortedPath)
-        return true
-      } catch {
-        return false
-      }
-    }, 'controlled tool to observe abort')
+    await waitFor(
+      async () => {
+        try {
+          await fs.access(abortedPath)
+          return true
+        } catch {
+          return false
+        }
+      },
+      'controlled tool to observe abort',
+      15_000,
+    )
     expect(result.stderr).not.toMatch(/unhandled|NoOutputGeneratedError|APICallError|RetryError/i)
     const entries = await readSessionJsonl(workspace.cwd)
     expect(orphanToolCallIds(entries)).toEqual([])

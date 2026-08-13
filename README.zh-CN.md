@@ -149,6 +149,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **子 Agent** — 内置 5 个（explore / general-purpose / plan / code-reviewer / goal-verifier），支持自定义
 - **Plan 模式** — `--plan` 或 `/plan` 进入只读探索，Agent 先制定方案、批准后再执行
 - **持续目标循环** — `/goal` 自动执行→验证→修复，直到验证通过或触发停止条件
+- **跨会话消息** — 命名后的本机 Session 可以互相发现，并在权限边界内移交工作（macOS / Linux；详见[文档](./docs/peer-messaging.md)）
 - **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / Office 文档（docx / xlsx / pptx / odt / ods / odp）/ 图片 / 音频
 - **本地音频转写** — 附件支持 MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus；当前模型不支持音频输入时，X-Code CLI 用 Whisper（whisper.cpp）在本地转写，只把带时间戳的文字交给模型——音频不会离开你的电脑。Whisper 模型首次使用时自动下载，缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
 - **视觉辅助** — DeepSeek 等纯文本模型可借用其他多模态厂商生成图片描述
@@ -190,6 +191,7 @@ xc [options] [prompt]
 --trust, -t           信任模式：跳过写操作确认
 --print, -p           非交互模式：输出结果后退出
 --plan                Plan 模式（只读探索，批准后才执行）
+--name <名称>         为交互式 Session 命名并启用本机跨会话消息
 --continue, -c        恢复最近一次会话
 --resume, -r [id]     恢复会话：无参数打开选择器，指定 ID 直达
 --max-turns <n>       Agent 循环轮次上限（默认无上限）
@@ -221,6 +223,8 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/usage`              | 查看 Token 用量：上下文构成分解、分步明细、归因与缓存命中                           |
 | `/usage-history`      | 列出历史会话用量                                                                    |
 | `/clear`              | 清空当前会话                                                                        |
+| `/clear-peer-context` | 确认后删除受 Peer 影响的对话后缀                                                    |
+| `/list-agents`        | 列出可访问的命名 X-Code Session                                                     |
 | `/compact`            | 手动压缩上下文                                                                      |
 | `/resume`             | 从历史会话中选择恢复                                                                |
 | `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
@@ -242,6 +246,7 @@ README 是入门视图，每个功能的完整用法在 [`docs/`](./docs/) 下�
 | -------------------------------------------------------- | ------------------------------------ |
 | [`docs/skills.md`](./docs/skills.md)                     | 可复用工作流模板                     |
 | [`docs/goal.md`](./docs/goal.md)                         | 持续目标循环（`/goal`）              |
+| [`docs/peer-messaging.md`](./docs/peer-messaging.md)     | 跨会话 Agent 消息                    |
 | [`docs/sub-agents.md`](./docs/sub-agents.md)             | 内置 / 自定义子 Agent（`task` 工具） |
 | [`docs/mcp.md`](./docs/mcp.md)                           | MCP 服务器配置                       |
 | [`docs/knowledge.md`](./docs/knowledge.md)               | 分层知识库与自动记忆                 |

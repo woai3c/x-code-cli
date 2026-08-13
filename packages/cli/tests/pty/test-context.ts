@@ -65,6 +65,7 @@ export async function withTui(
   } catch (error) {
     const artifactDir = await saveFailureArtifacts(name, context)
     const detail = error instanceof Error ? error : new Error(String(error))
+    detail.message += `\nPTY output tail: ${JSON.stringify(context.harness.raw().slice(-2000))}`
     detail.message += `\nPTY diagnostics: ${artifactDir}`
     throw detail
   } finally {
@@ -76,7 +77,7 @@ export async function withTui(
 
 export function inputLine(harness: TuiHarness): string {
   // terminalScreen() trims trailing spaces, so an empty live prompt is
-  // represented as just `❯`. Requiring `❯ ` made repeated prompts
+  // represented as just the platform glyph. Requiring its trailing space made repeated prompts
   // compare against the previous scrollback entry instead of the live input.
   return lastPromptLine(harness.screen())
 }

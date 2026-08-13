@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -27,36 +28,61 @@ let installPrefix = ''
 let tarballPath = ''
 let installedCliJs = ''
 
+function powershellQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+function commandInvocation(executable: string, args: string[]): { executable: string; args: string[] } {
+  if (process.platform !== 'win32' || !executable.toLowerCase().endsWith('.cmd')) return { executable, args }
+
+  // Node 22 rejects direct .cmd spawning with EINVAL on Windows. An encoded
+  // PowerShell invocation preserves spaces and Unicode without cmd.exe's
+  // nested quoting ambiguities.
+  const script = [
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+    "$ProgressPreference = 'SilentlyContinue'",
+    `& ${[executable, ...args].map(powershellQuote).join(' ')}`,
+    '$__ec = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }',
+    'exit $__ec',
+  ].join('\n')
+  return {
+    executable: 'powershell.exe',
+    args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+  }
+}
+
 function command(
   executable: string,
   args: string[],
   options: { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    import('node:child_process').then(({ spawn }) => {
-      const child = spawn(executable, args, {
-        cwd: options.cwd,
-        env: options.env ?? process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let stdout = ''
-      let stderr = ''
-      child.stdout.on('data', (value: Buffer) => {
-        stdout += value.toString('utf-8')
-      })
-      child.stderr.on('data', (value: Buffer) => {
-        stderr += value.toString('utf-8')
-      })
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM')
-        setTimeout(() => child.kill('SIGKILL'), 2000).unref()
-      }, options.timeoutMs ?? 120_000)
-      child.once('error', reject)
-      child.once('close', (exitCode) => {
-        clearTimeout(timer)
-        resolve({ stdout, stderr, exitCode })
-      })
-    }, reject)
+    const invocation = commandInvocation(executable, args)
+    const child = spawn(invocation.executable, invocation.args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (value: Buffer) => {
+      stdout += value.toString('utf-8')
+    })
+    child.stderr.on('data', (value: Buffer) => {
+      stderr += value.toString('utf-8')
+    })
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 2000).unref()
+    }, options.timeoutMs ?? 120_000)
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.once('close', (exitCode) => {
+      clearTimeout(timer)
+      resolve({ stdout, stderr, exitCode })
+    })
   })
 }
 
@@ -85,9 +111,6 @@ beforeAll(async () => {
   installPrefix = path.join(suiteRoot, 'npm prefix')
   await fs.mkdir(packDir, { recursive: true })
 
-  const build = await command(packageManager, ['build'], { cwd: REPO_ROOT })
-  if (build.exitCode !== 0) throw new Error(`pnpm build failed\n${build.stdout}\n${build.stderr}`)
-
   const packed = await command(packageManager, ['pack', '--pack-destination', packDir], {
     cwd: path.join(REPO_ROOT, 'packages', 'cli'),
   })
@@ -96,9 +119,14 @@ beforeAll(async () => {
   if (tarballs.length !== 1) throw new Error(`Expected one CLI tarball, found: ${tarballs.join(', ')}`)
   tarballPath = path.join(packDir, tarballs[0]!)
 
-  const installed = await command(npmCommand, ['install', '--prefix', installPrefix, tarballPath], {
-    cwd: suiteRoot,
-  })
+  const installed = await command(
+    npmCommand,
+    ['install', '--no-audit', '--no-fund', '--prefix', installPrefix, tarballPath],
+    {
+      cwd: suiteRoot,
+      timeoutMs: 180_000,
+    },
+  )
   if (installed.exitCode !== 0) throw new Error(`npm install failed\n${installed.stdout}\n${installed.stderr}`)
   installedCliJs = path.join(installPrefix, 'node_modules', '@x-code-cli', 'cli', 'dist', 'cli.js')
 })

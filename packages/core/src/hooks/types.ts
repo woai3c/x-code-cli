@@ -21,6 +21,7 @@
 // Claude/Codex shape — plugins that want to log every sub-agent
 // invocation or persist state before compaction wipes it had no other
 // hook to attach to.
+import type { ExecutionAuthority } from '../types/index.js'
 
 export type HookEventName =
   | 'SessionStart'
@@ -94,16 +95,18 @@ export interface SessionContext {
  *  [[HookBus.emit]] — the executor serialises them as JSON for stdin. */
 export type HookEvent =
   | { name: 'SessionStart'; session: SessionContext }
-  | { name: 'UserPromptSubmit'; session: SessionContext; prompt: string }
+  | { name: 'UserPromptSubmit'; session: SessionContext; prompt: string; authority?: ExecutionAuthority }
   | {
       name: 'PreToolUse'
       session: SessionContext
       tool: { name: string; args: unknown; callId: string }
+      authority?: ExecutionAuthority
     }
   | {
       name: 'PostToolUse'
       session: SessionContext
       tool: { name: string; args: unknown; callId: string; output: string; isError: boolean }
+      authority?: ExecutionAuthority
     }
   | {
       name: 'PreCompact'
@@ -114,6 +117,7 @@ export type HookEvent =
       /** Approximate message count and token count before compaction. */
       messageCount: number
       tokenEstimate: number
+      authority?: ExecutionAuthority
     }
   | {
       name: 'PostCompact'
@@ -125,6 +129,7 @@ export type HookEvent =
       /** Empty string when the path was a light-compact (no LLM summary
        *  was written). */
       summary: string
+      authority?: ExecutionAuthority
     }
   | {
       name: 'SubagentStart'
@@ -137,6 +142,7 @@ export type HookEvent =
         /** The full prompt the parent agent sent to the sub-agent. */
         prompt: string
       }
+      authority?: ExecutionAuthority
     }
   | {
       name: 'SubagentStop'
@@ -151,14 +157,16 @@ export type HookEvent =
        *  and reaching the per-agent maxTurns cap without finalising. */
       outcome: 'completed' | 'aborted' | 'failed'
       tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number }
+      authority?: ExecutionAuthority
     }
   | {
       name: 'TurnComplete'
       session: SessionContext
       turn: number
       tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number }
+      authority?: ExecutionAuthority
     }
-  | { name: 'SessionEnd'; session: SessionContext }
+  | { name: 'SessionEnd'; session: SessionContext; authority?: ExecutionAuthority }
 
 /** What a hook can ask the agent to do via its stdout JSON. */
 export type HookDecision =
