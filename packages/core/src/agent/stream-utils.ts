@@ -29,6 +29,7 @@ export interface StreamResult {
     | undefined
   >
   finishReason: Promise<string>
+  rawFinishReason?: PromiseLike<string | undefined>
   toolCalls: Promise<
     Array<{
       toolName: string
@@ -48,6 +49,7 @@ export function drainStreamResult(result: StreamResult): void {
   const noop = () => {}
   Promise.resolve(result.response).catch(noop)
   Promise.resolve(result.finishReason).catch(noop)
+  if (result.rawFinishReason) Promise.resolve(result.rawFinishReason).catch(noop)
   Promise.resolve(result.usage).catch(noop)
   Promise.resolve(result.toolCalls).catch(noop)
 }

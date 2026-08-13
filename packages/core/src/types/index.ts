@@ -829,7 +829,7 @@ export const PROVIDER_REASONING_TIERS: Record<
     ],
   },
   deepseek: {
-    // V4 Flash supports low/high/max; V4 Pro currently only high/max (low→high server-side).
+    // V4 Flash and Pro both support low/high/max; medium/xhigh map to high server-side.
     modelPattern: /deepseek-v4/,
     options: [
       { label: 'Low', value: 'low', description: 'Faster, less reasoning' },

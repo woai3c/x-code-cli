@@ -45,7 +45,6 @@ import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 import { canonicalTranscriptDigest, effectiveExecutionAuthority, summarizePeerOrigins } from './provenance.js'
 import {
   downgradeBinaryPartsForProvider,
-  ensureReasoningContentParts,
   reattachToolResultImagesForProvider,
   stripBinaryPartsFromMessages,
 } from './provider-compat.js'
@@ -408,7 +407,6 @@ async function collectTurnResponse(
   truncateToolResultsInMessages(response.messages)
   state.messages.push(...response.messages)
   turnMessages.push(...response.messages)
-  ensureReasoningContentParts(state.messages, modelId)
 
   const usage = await result.usage
   if (usage) {
@@ -1372,6 +1370,16 @@ export async function agentLoop(
 
     if (outcome.finishReason === 'content-filter') {
       callbacks.onError(new Error('Response stopped by the provider content filter.'))
+    } else if (outcome.finishReason === 'error' || outcome.finishReason === 'other') {
+      const rawFinishReason = await Promise.resolve(outcome.result.rawFinishReason).catch(() => undefined)
+      const detail = rawFinishReason ? ` (${rawFinishReason})` : ''
+      callbacks.onError(
+        new Error(
+          outcome.finishReason === 'error'
+            ? `Provider failed to complete the response${detail}.`
+            : `Provider response ended without a recognized completion reason${detail}.`,
+        ),
+      )
     } else if (outcome.finishReason === 'stop') {
       // Follow-up: the user queued messages while this turn was streaming.
       // Inject and keep looping instead of returning to the UI — Codex's

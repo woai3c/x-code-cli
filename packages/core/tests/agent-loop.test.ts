@@ -798,6 +798,55 @@ describe('agent loop', () => {
     expect(turnCount).toBe(1)
   })
 
+  it('reports a provider finish error with its raw reason', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: { async *[Symbol.asyncIterator]() {} },
+      response: Promise.resolve({ messages: [] }),
+      usage: Promise.resolve(undefined),
+      finishReason: Promise.resolve('error'),
+      rawFinishReason: Promise.resolve('insufficient_system_resource'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    await agentLoop(
+      'Try this task',
+      {} as any,
+      { modelId: 'deepseek:deepseek-v4-flash', trustMode: false, maxTurns: 10, printMode: false },
+      mockCallbacks,
+    )
+
+    expect(mockCallbacks.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('insufficient_system_resource') }),
+    )
+  })
+
+  it('reports an unrecognized finish instead of silently accepting partial output', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'partial' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'partial' }] }),
+      usage: Promise.resolve({ inputTokens: 5, outputTokens: 1 }),
+      finishReason: Promise.resolve('other'),
+      rawFinishReason: Promise.resolve(undefined),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const { state } = await agentLoop(
+      'Give a complete answer',
+      {} as any,
+      { modelId: 'deepseek:deepseek-v4-flash', trustMode: false, maxTurns: 10, printMode: false },
+      mockCallbacks,
+    )
+
+    expect(state.messages.at(-1)).toEqual({ role: 'assistant', content: 'partial' })
+    expect(mockCallbacks.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('without a recognized completion reason') }),
+    )
+  })
+
   it('reports error when max turns exceeded', async () => {
     // Force tool-calls finish reason to keep looping
     vi.mocked(streamText).mockReturnValue({
