@@ -50,6 +50,8 @@ packages/
 
 **Sub-agents** (`core/src/agent/sub-agents/`): `task` tool delegates to isolated agentLoop with fresh LoopState. Registry is built at CLI startup and frozen. Adding/editing agent files requires a CLI restart because the agent list is embedded in the byte-stable `systemPromptCache`. Sub-agents always deny `task` (no recursion). In plan mode, write tools are denied via tool filter.
 
+**Cross-session messaging** (`core/src/peers/`, `cli/src/peer-lifecycle.ts`): `--name` enables local discovery and messaging for interactive root sessions. Peer input taints the derived context and routes tool calls through the authority evaluator; do not bypass that path. Transport is local Unix sockets on macOS/Linux in this release; Windows must fail closed as unsupported until it has an audited native transport.
+
 **Knowledge** (`core/src/knowledge/`): four layers merged into system prompt — user AGENTS.md, user memory Core profile (`~/.x-code/memory/MEMORY.md`), project AGENTS.md chain (root→leaf, leaf wins), AGENTS.local.md.
 
 **Provider config**: API keys read only from env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `ALIBABA_API_KEY`, `XAI_API_KEY`, `ZHIPU_API_KEY`, `MOONSHOT_API_KEY`) plus escape hatch `OPENAI_COMPATIBLE_API_KEY` + `OPENAI_COMPATIBLE_BASE_URL`. When adding a provider, also update `packages/core/tests/config.test.ts:PROVIDER_ENV_VARS`.
