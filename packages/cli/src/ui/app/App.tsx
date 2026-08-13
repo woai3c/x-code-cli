@@ -30,6 +30,7 @@ import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
 import { useAgent } from '../agent/use-agent.js'
 import { usePeerInboxAdapter } from '../agent/use-peer-inbox-adapter.js'
+import { isSlashCommandAllowedWhileBusy } from '../busy-command.js'
 import { ChatInput } from '../chat-input/ChatInput.js'
 import { rebuildPalette } from '../chat-input/palette.js'
 import { buildThemePreview } from '../render/render-diff.js'
@@ -91,6 +92,7 @@ export function App({
   const {
     state,
     activeTurnOwner,
+    hasActiveForkBoundary,
     submit,
     enqueuePeerInput,
     addPeerStatus,
@@ -110,6 +112,7 @@ export function App({
     resolveQuestion,
     abort,
     cleanup,
+    fork,
     clear,
     clearPeerContext,
     compact,
@@ -610,8 +613,8 @@ export function App({
     // a competing agentLoop (concurrent loops would corrupt the shared
     // message history) — it lands in the pending queue and gets injected
     // at the next tool boundary (see consumeQueuedInputs in use-agent).
-    // Slash commands still route normally below; ChatInput already gates
-    // which ones can arrive here mid-turn (currently only /goal).
+    // Slash commands still route normally below; ChatInput and this handler
+    // share the same explicit busy-safe command policy.
     const activeOwner = activeTurnOwner()
     if (activeOwner && !text.startsWith('/')) {
       const pendingSkill = pendingSkillRef.current
@@ -628,9 +631,7 @@ export function App({
     }
 
     if (activeOwner && text.startsWith('/')) {
-      const [busyCommand = '', busySubcommand = ''] = text.slice(1).trim().toLowerCase().split(/\s+/)
-      const allowedGoalControl = busyCommand === 'goal' && ['pause', 'cancel', 'steer'].includes(busySubcommand)
-      if (!allowedGoalControl) {
+      if (!isSlashCommandAllowedWhileBusy(text, activeOwner, hasActiveForkBoundary())) {
         addInfoMessage(`Cannot run ${text.split(/\s+/, 1)[0]} while ${activeOwner} owns the active turn.`)
         return
       }
@@ -728,6 +729,22 @@ export function App({
           echoCommand(text)
           await handleResume()
           return
+
+        case 'fork': {
+          echoCommand(text)
+          const result = await fork()
+          if (!result.ok) {
+            addCommandResult(`Fork failed: ${result.reason}`)
+            return
+          }
+          const boundary = result.excludedActiveTurn
+            ? 'The active request remains only in the original session.'
+            : 'Copied all completed conversation context.'
+          addCommandResult(
+            `Fork created: **${result.sessionId}** (${result.messageCount} messages).\n\n${boundary}\n\nThe conversation is independent, but both sessions still share this working tree. Avoid concurrent edits to the same files.\n\nOpen another terminal:\n\n\`xc --resume ${result.sessionId}\``,
+          )
+          return
+        }
 
         case 'rewind':
           echoCommand(text)
@@ -1641,6 +1658,8 @@ export function App({
             }
           : null
       }
+      activeTurnOwner={activeTurnOwner()}
+      hasStableForkBoundary={hasActiveForkBoundary()}
       contextUsage={
         // Footer indicator (`6.6k / 200k · 3%`) — uses the snapshot from the
         // most recent API response, NOT cumulative session counters.

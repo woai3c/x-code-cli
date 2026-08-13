@@ -159,6 +159,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **知识库系统** — 分层加载 `AGENTS.md`（兼容 `CLAUDE.md`），子包可覆盖根级约定
 - **自动记忆** — 每次根 Agent 完整结束后提取长期事实，并在相关请求中按需召回
 - **会话恢复** — `--continue` 恢复最近会话，`--resume` 打开选择器或按 ID 直达
+- **会话分叉** — `/fork` 把已完成的上下文复制成独立对话，当前请求运行中也可执行；分叉后仍共享同一个工作区
 - **上下文压缩** — 长对话自动压缩；loop-guard 检测循环调用；prompt cache 复用前缀
 - **三级权限模型** — 默认安全，写操作前请求确认；`--trust` 跳过
 
@@ -227,6 +228,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/list-agents`        | 列出可访问的命名 X-Code Session                                                     |
 | `/compact`            | 手动压缩上下文                                                                      |
 | `/resume`             | 从历史会话中选择恢复                                                                |
+| `/fork`               | 分叉已完成的上下文（仍共享当前工作区）                                              |
 | `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
 | `/init`               | 分析代码库后创建或更新 `AGENTS.md`                                                  |
 | `/review [PR号]`      | 评审 GitHub PR（需本地装好 `gh`）                                                   |

@@ -18,6 +18,7 @@ import {
   buildVerifierFailurePrompt,
   cancelGoal as cancelCoreGoal,
   capabilitiesOf,
+  captureSessionForkSnapshot,
   classifyApiError,
   clearGoal as clearCoreGoal,
   clearPeerContext as clearCorePeerContext,
@@ -31,6 +32,7 @@ import {
   debugLog,
   estimateContextBreakdown,
   flushPendingMessages,
+  forkSession as forkCoreSession,
   formatQueuedAgentInput,
   generateTaskSlug,
   getDiffStatsForCheckpoint,
@@ -73,6 +75,7 @@ import type {
   PermissionMode,
   PublicPeer,
   QueuedAgentInput,
+  SessionForkSnapshot,
   StepStats,
   StreamRetryEvent,
   TodoItem,
@@ -343,6 +346,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   // ~/.x-code/config.json on launch).
   const thinkingRef = useRef<boolean>(options.thinking ?? false)
   const loopStateRef = useRef<LoopState | null>(null)
+  /** Detached point-in-time state used by `/fork` while an agentLoop is
+   *  active. The outer object is also a sentinel for a first request with no
+   *  completed context, where `snapshot` is null. */
+  const activeForkBoundaryRef = useRef<{ snapshot: SessionForkSnapshot | null; error?: string } | null>(null)
+  const pendingForksRef = useRef(new Set<Promise<unknown>>())
   const abortControllerRef = useRef<AbortController | null>(null)
   /** Identifies the controller owned by `/compact`. Manual compression uses
    *  the shared loading/abort UI, but cancelling it must not append a normal
@@ -646,6 +654,17 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       }
       const ownsLease = existingLease === undefined
       consumedPeerInboxKeysRef.current.clear()
+      const boundaryState = loopStateRef.current
+      try {
+        activeForkBoundaryRef.current = {
+          snapshot: boundaryState ? captureSessionForkSnapshot(boundaryState) : null,
+        }
+      } catch (error) {
+        activeForkBoundaryRef.current = {
+          snapshot: null,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
 
       setState((prev) => ({
         ...prev,
@@ -1000,6 +1019,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         }))
         return null
       } finally {
+        activeForkBoundaryRef.current = null
         if (ownsLease) {
           lease.release()
           if (!submitOptions?.skipIdleDrain) {
@@ -1707,7 +1727,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     const memoryDrain = options.memoryService
       ? options.memoryService.shutdown(options.memoryService.getConfig().drainTimeoutMs)
       : Promise.resolve()
-    await Promise.all([sessionSave, memoryDrain])
+    const forkDrain = Promise.allSettled([...pendingForksRef.current])
+    await Promise.all([sessionSave, memoryDrain, forkDrain])
   }, [options.memoryService])
 
   const reloadMemory = useCallback(async () => {
@@ -1729,6 +1750,48 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       messageCount: ls.messages.length,
       firstPrompt,
       peerInfluenced: ls.contextSecurity.peerInfluenceActive || ls.contextSecurity.integrityFailure === true,
+    }
+  }, [])
+
+  /** Persist an independent conversation branch without switching or
+   *  interrupting the current session. The active boundary was fully detached
+   *  before that request started, so later compaction and metadata updates in
+   *  the original cannot move the branch point. */
+  const fork = useCallback(async () => {
+    const boundary = activeForkBoundaryRef.current
+    const activeOwner = turnCoordinatorRef.current.current()?.owner
+    if (activeOwner && !boundary) {
+      return {
+        ok: false as const,
+        reason: `Cannot fork while ${activeOwner} owns the active turn because no stable conversation boundary exists.`,
+      }
+    }
+    if (boundary?.error) return { ok: false as const, reason: boundary.error }
+    let snapshot = boundary?.snapshot ?? null
+    if (!boundary && loopStateRef.current) {
+      try {
+        snapshot = captureSessionForkSnapshot(loopStateRef.current)
+      } catch (error) {
+        return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }
+      }
+    }
+    if (!snapshot || snapshot.trackedMessages.length === 0) {
+      return {
+        ok: false as const,
+        reason: boundary
+          ? 'No completed conversation context exists before the active request.'
+          : 'No active conversation to fork.',
+      }
+    }
+    const operation = forkCoreSession(snapshot, modelIdRef.current)
+    pendingForksRef.current.add(operation)
+    try {
+      const result = await operation
+      return { ok: true as const, ...result, excludedActiveTurn: boundary !== null }
+    } catch (error) {
+      return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }
+    } finally {
+      pendingForksRef.current.delete(operation)
     }
   }, [])
 
@@ -2121,6 +2184,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   }, [options])
 
   const activeTurnOwner = useCallback(() => turnCoordinatorRef.current.current()?.owner ?? null, [])
+  const hasActiveForkBoundary = useCallback(() => activeForkBoundaryRef.current !== null, [])
 
   const addPeerStatus = useCallback(
     (content: string, peer?: PublicPeer) => {
@@ -2156,6 +2220,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   return {
     state,
     activeTurnOwner,
+    hasActiveForkBoundary,
     submit,
     submitRawPeerContent,
     enqueuePeerInput,
@@ -2176,6 +2241,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     resolveQuestion,
     abort,
     cleanup,
+    fork,
     clear,
     clearPeerContext,
     compact,

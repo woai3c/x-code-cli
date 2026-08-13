@@ -34,7 +34,9 @@ import {
   appendHeader,
   appendMemoryRecall,
   appendUsage,
+  captureSessionForkSnapshot,
   flushPendingMessages,
+  forkSession,
   getSessionFilePath,
   hydrateLoopState,
   listSessions,
@@ -106,6 +108,37 @@ describe('session-store: round-trip', () => {
     expect(loaded!.messages[1]).toEqual({ role: 'assistant', content: 'Hi there' })
     expect(loaded!.tokenUsage.inputTokens).toBe(100)
     expect(loaded!.tokenUsage.totalTokens).toBe(120)
+  })
+
+  it('falls back to exclusive creation when the filesystem does not support hard links', async () => {
+    const source = createLoopState()
+    const competitor = createLoopState()
+    source.sessionId = '20260101-120000-050'
+    competitor.sessionId = source.sessionId
+    source.messages = [
+      { role: 'user', content: 'shared context' },
+      { role: 'assistant', content: 'shared answer' },
+    ]
+    const linkSpy = vi
+      .spyOn(fs, 'link')
+      .mockRejectedValue(Object.assign(new Error('hard links are unsupported'), { code: 'ENOTSUP' }))
+
+    try {
+      await Promise.all([
+        appendHeader(source, 'openai:test', 'shared context'),
+        appendHeader(competitor, 'openai:test', 'competing context'),
+      ])
+      await flushPendingMessages(source)
+      const forked = await forkSession(captureSessionForkSnapshot(source), 'openai:test', { cwd: tempDir })
+
+      expect(source.sessionId).not.toBe(competitor.sessionId)
+      expect((await loadSession(getSessionFilePath(competitor)))?.firstPrompt).toBe('competing context')
+      expect((await loadSession(getSessionFilePath(source)))?.messages).toHaveLength(2)
+      expect((await loadSession(forked.filePath))?.messages).toHaveLength(2)
+      expect(linkSpy.mock.calls.length).toBeGreaterThanOrEqual(4)
+    } finally {
+      linkSpy.mockRestore()
+    }
   })
 
   it('restores source/model attribution and main-turn cache diagnostics', async () => {
@@ -468,6 +501,19 @@ describe('session-store: serialized binary part repair', () => {
 })
 
 describe('session-store: concurrent appends', () => {
+  it('moves a fresh session to a new id instead of sharing an existing path', async () => {
+    const first = createLoopState()
+    const second = createLoopState()
+    first.sessionId = '20260101-120000-000'
+    second.sessionId = first.sessionId
+
+    await Promise.all([appendHeader(first, 'test:model', 'first'), appendHeader(second, 'test:model', 'second')])
+
+    expect(first.sessionId).not.toBe(second.sessionId)
+    const loaded = await Promise.all([loadSession(getSessionFilePath(first)), loadSession(getSessionFilePath(second))])
+    expect(loaded.map((session) => session?.firstPrompt).sort()).toEqual(['first', 'second'])
+  })
+
   it('serializes fire-and-forget writes so lines never interleave', async () => {
     const state = createLoopState()
     state.sessionId = '20260101-120000-000'
@@ -874,5 +920,269 @@ describe('session-store: hydrateLoopState', () => {
     const loaded = await loadSession(getSessionFilePath(state))
     expect(loaded?.memoryGeneration).toBe(7)
     expect(hydrateLoopState(loaded!).memoryGeneration).toBe(7)
+  })
+})
+
+describe('session-store: forkSession', () => {
+  it('creates an independent root snapshot from the requested stable prefix', async () => {
+    const source = createLoopState()
+    source.sessionId = '20260101-120000-000'
+    source.taskSlug = 'write-docs'
+    source.tokenUsage = {
+      inputTokens: 90,
+      outputTokens: 10,
+      totalTokens: 100,
+      cacheReadTokens: 20,
+      cacheCreationTokens: 0,
+      currentContextTokens: 40,
+    }
+    source.messages = [
+      { role: 'user', content: 'inspect the code' },
+      { role: 'assistant', content: 'shared findings' },
+      { role: 'user', content: 'generate document A' },
+    ]
+    source.stepStats = [
+      {
+        prompt: 'inspect the code',
+        inputTokens: 90,
+        outputTokens: 10,
+        turnCount: 1,
+        toolCallCount: 2,
+        startedAt: new Date().toISOString(),
+      },
+    ]
+    source.checkpoints = [
+      {
+        ckptId: '20260101-120000-001',
+        messageCount: 1,
+        ts: new Date().toISOString(),
+        userPrompt: 'inspect the code',
+      },
+    ]
+    createGoal(source, { objective: 'finish both documents', tokenBudget: 500 })
+    source.memoryGeneration = 4
+    source.memoryRecallAttachments = [
+      {
+        anchorMessageIndex: 0,
+        placement: 'before-user',
+        estimatedTokens: 5,
+        topics: [
+          {
+            topicId: 'project.docs',
+            topicHash: 'included-hash',
+            factIds: ['doc-format'],
+            factHashes: { 'doc-format': 'fact-hash' },
+            renderedContent: 'Use the project documentation format.',
+          },
+        ],
+      },
+      {
+        anchorMessageIndex: 2,
+        placement: 'before-user',
+        estimatedTokens: 5,
+        topics: [
+          {
+            topicId: 'document.a',
+            topicHash: 'excluded-hash',
+            factIds: ['document-a'],
+            factHashes: { 'document-a': 'fact-hash' },
+            renderedContent: 'Only relevant to document A.',
+          },
+        ],
+      },
+    ]
+
+    const originalEntryIds = source.trackedMessages.slice(0, 2).map((entry) => entry.entryId)
+    const snapshot = captureSessionForkSnapshot(source, { messageCount: 2 })
+    const forked = await forkSession(snapshot, 'openai:test', { cwd: tempDir })
+
+    expect(forked.sessionId).not.toBe(source.sessionId)
+    expect(forked.messageCount).toBe(2)
+    expect(forked.filePath).not.toBe(getSessionFilePath(source, tempDir))
+
+    source.messages.push({ role: 'assistant', content: 'document A complete' })
+    const loaded = await loadSession(forked.filePath)
+    expect(loaded).not.toBeNull()
+    expect(loaded!.messages.map((message) => message.content)).toEqual(['inspect the code', 'shared findings'])
+    expect(loaded!.trackedMessages.map((entry) => entry.entryId)).toEqual(originalEntryIds)
+    expect(loaded!.transcriptIntegrity).toBe('clean')
+    expect(loaded!.forkedFrom).toEqual({
+      sessionId: source.sessionId,
+      messageCount: 2,
+      forkedAt: forked.forkedFrom.forkedAt,
+    })
+    expect(loaded!.tokenUsage.totalTokens).toBe(0)
+    expect(loaded!.stepStats).toEqual([])
+    expect(loaded!.checkpoints).toEqual([])
+    expect(loaded!.goal?.status).toBe('paused')
+    expect(loaded!.goal?.baselineTokens).toBe(0)
+    expect(loaded!.memoryGeneration).toBe(4)
+    expect(loaded!.memoryRecallAttachments.map((attachment) => attachment.topics[0]?.topicId)).toEqual(['project.docs'])
+
+    const branch = hydrateLoopState(loaded!)
+    branch.messages.push({ role: 'user', content: 'generate document B' })
+    await flushPendingMessages(branch)
+    expect((await loadSession(forked.filePath))!.messages).toHaveLength(3)
+    expect(source.messages).toHaveLength(4)
+  })
+
+  it('preserves peer provenance and rejects failed transcript integrity', async () => {
+    const source = createLoopState()
+    source.sessionId = '20260101-120000-010'
+    source.executionAuthority = { source: 'peer', peerTainted: true }
+    source.messages.push({ role: 'user', content: 'peer-derived context' })
+    expect(source.contextSecurity.peerInfluenceActive).toBe(true)
+
+    const forked = await forkSession(captureSessionForkSnapshot(source), 'openai:test', { cwd: tempDir })
+    const loaded = await loadSession(forked.filePath)
+    expect(loaded?.contextSecurity.peerInfluenceActive).toBe(true)
+    expect(loaded?.trackedMessages[0]?.provenance).toMatchObject({ authority: 'peer', derivedFromPeer: true })
+
+    source.transcriptIntegrity = 'failed'
+    source.contextSecurity.integrityFailure = true
+    await expect(forkSession(captureSessionForkSnapshot(source), 'openai:test', { cwd: tempDir })).rejects.toThrow(
+      'Transcript integrity failed',
+    )
+  })
+
+  it('rejects a prefix outside the live transcript', async () => {
+    const source = createLoopState()
+    source.messages.push({ role: 'user', content: 'one' })
+    expect(() => captureSessionForkSnapshot(source, { messageCount: 2 })).toThrow('Invalid fork message count')
+  })
+
+  it('allocates distinct files for concurrent forks', async () => {
+    const source = createLoopState()
+    source.sessionId = '20260101-120000-020'
+    source.messages.push({ role: 'user', content: 'shared' })
+    const snapshot = captureSessionForkSnapshot(source)
+
+    const [left, right] = await Promise.all([
+      forkSession(snapshot, 'openai:test', { cwd: tempDir }),
+      forkSession(snapshot, 'openai:test', { cwd: tempDir }),
+    ])
+
+    expect(left.sessionId).not.toBe(right.sessionId)
+    expect(await loadSession(left.filePath)).not.toBeNull()
+    expect(await loadSession(right.filePath)).not.toBeNull()
+  })
+
+  it('retries without overwriting a session created after target reservation', async () => {
+    const source = createLoopState()
+    source.sessionId = '20260101-120000-025'
+    source.messages.push({ role: 'user', content: 'shared' })
+    const snapshot = captureSessionForkSnapshot(source)
+    const realLink = fs.link.bind(fs)
+    let competingPath = ''
+    let injectCollision = true
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (...args: Parameters<typeof fs.link>) => {
+      if (injectCollision) {
+        injectCollision = false
+        competingPath = String(args[1])
+        await writeFile(competingPath, 'competing session\n', 'utf8')
+      }
+      return realLink(...args)
+    })
+
+    try {
+      const forked = await forkSession(snapshot, 'openai:test', { cwd: tempDir })
+      expect(forked.filePath).not.toBe(competingPath)
+      expect(await readFile(competingPath, 'utf8')).toBe('competing session\n')
+      expect(await loadSession(forked.filePath)).not.toBeNull()
+    } finally {
+      linkSpy.mockRestore()
+    }
+  })
+
+  it('restores only the in-flight goal input to pending', () => {
+    const source = createLoopState()
+    createGoal(source, { objective: 'write both documents' })
+    const completed = admitGoalInput(source, {
+      goalId: source.goal!.id,
+      kind: 'initial',
+      content: 'inspect the shared context',
+    })
+    const completedPromotion = promoteNextGoalInput(source, source.goal!.id)!
+    source.goal!.attempts.push({
+      id: completed.id,
+      turn: 1,
+      inputKind: completed.kind,
+      promptPreview: completed.content,
+      startedAt: completedPromotion.promotedAt!,
+      endedAt: new Date().toISOString(),
+      turnCount: 1,
+      tokenUsageBefore: structuredClone(source.tokenUsage),
+      tokenUsageAfter: structuredClone(source.tokenUsage),
+      finish: 'stop',
+    })
+    const inFlight = admitGoalInput(source, {
+      goalId: source.goal!.id,
+      kind: 'user_steering',
+      content: 'use the shared format',
+    })
+    promoteNextGoalInput(source, source.goal!.id)
+
+    const snapshot = captureSessionForkSnapshot(source)
+
+    expect(snapshot.goalInputs.find((input) => input.id === completed.id)?.promotedAt).toBe(
+      completedPromotion.promotedAt,
+    )
+    expect(snapshot.goalInputs.find((input) => input.id === inFlight.id)?.promotedAt).toBeUndefined()
+    expect(inFlight.promotedAt).toBeDefined()
+  })
+
+  it('keeps transcript and durable metadata at the same pre-turn boundary', async () => {
+    const source = createLoopState()
+    source.sessionId = '20260101-120000-030'
+    createGoal(source, { objective: 'write both documents', tokenBudget: 500 })
+    admitGoalInput(source, { goalId: source.goal!.id, kind: 'user_steering', content: 'shared format' })
+    source.messages = [
+      { role: 'user', content: 'inspect the code' },
+      { role: 'assistant', content: 'shared findings' },
+    ]
+    source.tokenUsage.totalTokens = 100
+    source.memoryGeneration = 1
+    source.memoryRecallAttachments = [
+      {
+        anchorMessageIndex: 0,
+        placement: 'before-user',
+        estimatedTokens: 4,
+        topics: [
+          {
+            topicId: 'project.docs',
+            topicHash: 'shared-hash',
+            factIds: ['format'],
+            factHashes: { format: 'format-hash' },
+            renderedContent: 'Use the shared format.',
+          },
+        ],
+      },
+    ]
+    const promoted = promoteNextGoalInput(source, source.goal!.id)
+    expect(promoted).not.toBeNull()
+    const snapshot = captureSessionForkSnapshot(source)
+    expect(source.goalInputs[0]?.promotedAt).toBe(promoted!.promotedAt)
+    expect(snapshot.goalInputs[0]?.promotedAt).toBeUndefined()
+
+    // Simulate the active request compacting/replacing the transcript and
+    // mutating every other durable subsystem after the boundary was captured.
+    source.messages = [
+      { role: 'user', content: '[Previous conversation summary]\nchanged by document A' },
+      { role: 'user', content: 'generate document A' },
+    ]
+    source.tokenUsage.totalTokens = 450
+    source.goal!.turnCount = 9
+    source.memoryGeneration = 2
+    source.memoryRecallTombstones.push({ generation: 2, factIds: ['format'] })
+
+    const forked = await forkSession(snapshot, 'openai:test', { cwd: tempDir })
+    const loaded = await loadSession(forked.filePath)
+    expect(loaded?.messages.map((message) => message.content)).toEqual(['inspect the code', 'shared findings'])
+    expect(loaded?.goal?.tokenBudget).toBe(400)
+    expect(loaded?.goal?.turnCount).toBe(0)
+    expect(loaded?.goalInputs[0]?.content).toBe('shared format')
+    expect(loaded?.goalInputs[0]?.promotedAt).toBeUndefined()
+    expect(loaded?.memoryGeneration).toBe(1)
+    expect(loaded?.memoryRecallTombstones).toEqual([])
   })
 })
