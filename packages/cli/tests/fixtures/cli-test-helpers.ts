@@ -63,7 +63,7 @@ export async function createTestWorkspace(prefix = 'xc-release-test-'): Promise<
   return {
     cwd,
     xcodeHome,
-    cleanup: () => fs.rm(cwd, { recursive: true, force: true }),
+    cleanup: () => fs.rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
   }
 }
 

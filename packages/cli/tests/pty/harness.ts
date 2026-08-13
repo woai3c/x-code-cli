@@ -126,6 +126,11 @@ export async function createTuiHarness(options: {
   let disposed = false
   let writeChain = Promise.resolve()
   let cliStarted = false
+  let processExited = false
+  let resolveProcessExit!: () => void
+  const processExit = new Promise<void>((resolve) => {
+    resolveProcessExit = resolve
+  })
 
   const dataDisposable = processUnderTest.onData((data) => {
     raw += data
@@ -135,6 +140,10 @@ export async function createTuiHarness(options: {
           terminal.write(data, resolve)
         }),
     )
+  })
+  const exitDisposable = processUnderTest.onExit(() => {
+    processExited = true
+    resolveProcessExit()
   })
 
   const waitForRendered = async (): Promise<void> => {
@@ -286,6 +295,12 @@ export async function createTuiHarness(options: {
       } catch {
         // PTY may already be closed after a failed launch.
       }
+      if (!processExited) {
+        const timeout = setTimeout(resolveProcessExit, 2000)
+        await processExit
+        clearTimeout(timeout)
+      }
+      exitDisposable.dispose()
       terminal.dispose()
     },
   }
