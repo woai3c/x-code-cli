@@ -6,6 +6,8 @@ import path from 'node:path'
 import { readSessionJsonl, waitFor } from '../fixtures/cli-test-helpers.js'
 import { submitInput, typeInput, withTui } from './test-context.js'
 
+const itPosix = it.runIf(process.platform !== 'win32')
+
 async function pathExists(file: string): Promise<boolean> {
   return fs
     .access(file)
@@ -101,7 +103,7 @@ describe('TUI interruption', () => {
     })
   })
 
-  it('terminates an in-flight shell child process', async () => {
+  itPosix('terminates an in-flight shell child process', async () => {
     await withTui('interrupt-shell', [], async ({ harness, provider, workspace }) => {
       const pidFile = path.join(workspace.cwd, 'shell-child.pid')
       const finishedFile = path.join(workspace.cwd, 'shell-child.finished')
