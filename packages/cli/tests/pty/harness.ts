@@ -117,6 +117,10 @@ export async function createTuiHarness(options: {
     rows,
     cwd: options.workspace.cwd,
     env,
+    // ConPTY's console-list helper races with teardown on headless Windows
+    // runners and emits AttachConsole failures. WinPTY provides the same
+    // terminal contract needed by these black-box tests without that helper.
+    ...(isWindows ? { useConpty: false } : {}),
   })
   let raw = ''
   let disposed = false

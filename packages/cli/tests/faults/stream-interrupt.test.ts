@@ -16,6 +16,7 @@ import type { FakeProvider } from '../fixtures/fake-provider-server.js'
 
 const providers: FakeProvider[] = []
 const cleanups: Array<() => Promise<void>> = []
+const itWithPosixSignals = it.runIf(process.platform !== 'win32')
 
 afterEach(async () => {
   await Promise.allSettled(providers.splice(0).map((provider) => provider.close()))
@@ -157,7 +158,7 @@ describe('stream interruption recovery', () => {
     expect(result.stderr).not.toContain('[error]')
   })
 
-  it('threads abort to a tool that started after a complete tool call', async () => {
+  itWithPosixSignals('threads abort to a tool that started after a complete tool call', async () => {
     const { provider, workspace } = await setup([])
     const readyPath = path.join(workspace.cwd, 'ready.txt')
     const abortedPath = path.join(workspace.cwd, 'aborted.txt')
