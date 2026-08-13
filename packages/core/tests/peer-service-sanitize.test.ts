@@ -15,6 +15,7 @@ function candidate(registration: PeerRegistrationV1): RegistrationCandidate {
 
 describe('peer service terminal sanitization', () => {
   it('sanitizes custom registry and protocol values before canonical queue admission', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
     const receiver = createPeerIdentity({ name: 'receiver', cwd: '/receiver' })
     const sender = createPeerIdentity({ name: 'sender', cwd: '/sender' })
     const timestamp = '2026-08-13T00:00:00.000Z'
@@ -100,6 +101,7 @@ describe('peer service terminal sanitization', () => {
       })
     } finally {
       await service.shutdown()
+      platformSpy.mockRestore()
     }
   })
 })

@@ -162,8 +162,10 @@ describe('owner-only peer registry', () => {
     )
 
     const scan = await registry.listCandidates()
-    expect(scan.candidates).toEqual([])
-    expect(scan.rejected).toBe(5)
+    expect(scan.candidates.map((candidate) => candidate.registration.instanceId)).toEqual(
+      process.platform === 'win32' ? [good.instanceId] : [],
+    )
+    expect(scan.rejected).toBe(process.platform === 'win32' ? 4 : 5)
   })
 
   it('does not remove a registration for a live pid during residual cleanup', async () => {

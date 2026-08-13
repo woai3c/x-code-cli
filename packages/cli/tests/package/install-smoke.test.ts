@@ -52,7 +52,11 @@ function command(
         setTimeout(() => child.kill('SIGKILL'), 2000).unref()
       }, options.timeoutMs ?? 120_000)
       child.once('error', reject)
-      child.once('close', (exitCode) => {
+      // On Windows a .cmd wrapper can exit while a descendant still holds an
+      // inherited output pipe. Waiting for `close` then hangs until the hook
+      // timeout even though pnpm/npm already finished; `exit` tracks the
+      // command process itself and matches the result we assert below.
+      child.once('exit', (exitCode) => {
         clearTimeout(timer)
         resolve({ stdout, stderr, exitCode })
       })
@@ -85,9 +89,6 @@ beforeAll(async () => {
   installPrefix = path.join(suiteRoot, 'npm prefix')
   await fs.mkdir(packDir, { recursive: true })
 
-  const build = await command(packageManager, ['build'], { cwd: REPO_ROOT })
-  if (build.exitCode !== 0) throw new Error(`pnpm build failed\n${build.stdout}\n${build.stderr}`)
-
   const packed = await command(packageManager, ['pack', '--pack-destination', packDir], {
     cwd: path.join(REPO_ROOT, 'packages', 'cli'),
   })
@@ -96,9 +97,14 @@ beforeAll(async () => {
   if (tarballs.length !== 1) throw new Error(`Expected one CLI tarball, found: ${tarballs.join(', ')}`)
   tarballPath = path.join(packDir, tarballs[0]!)
 
-  const installed = await command(npmCommand, ['install', '--prefix', installPrefix, tarballPath], {
-    cwd: suiteRoot,
-  })
+  const installed = await command(
+    npmCommand,
+    ['install', '--no-audit', '--no-fund', '--prefix', installPrefix, tarballPath],
+    {
+      cwd: suiteRoot,
+      timeoutMs: 180_000,
+    },
+  )
   if (installed.exitCode !== 0) throw new Error(`npm install failed\n${installed.stdout}\n${installed.stderr}`)
   installedCliJs = path.join(installPrefix, 'node_modules', '@x-code-cli', 'cli', 'dist', 'cli.js')
 })

@@ -1,6 +1,7 @@
 import type { DisplayMessage } from '@x-code-cli/core'
 
 import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/render/stdout-writer.js'
+import { GLYPH_RESULT_BRACKET } from '../src/ui/render/terminal-glyphs.js'
 
 function render(message: DisplayMessage): string {
   let output = ''
@@ -33,6 +34,6 @@ describe('peer message renderer', () => {
       timestamp: 0,
       kind: 'peer-status',
     })
-    expect(output).toContain('⎿  Message deadbeef: denied by backend.')
+    expect(output).toContain(`${GLYPH_RESULT_BRACKET}  Message deadbeef: denied by backend.`)
   })
 })
