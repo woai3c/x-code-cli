@@ -99,7 +99,10 @@ export async function submitInput(harness: TuiHarness, text: string): Promise<vo
 export async function exitTui(harness: TuiHarness): Promise<void> {
   harness.key('ctrl-c')
   await harness.waitForText('Press Ctrl+C again to exit')
+  // ConPTY can emit the terminal-restore sequence synchronously with the
+  // second Ctrl+C, so arm the output waiter before triggering that exit.
+  const cliExit = harness.waitForCliExit()
   harness.key('ctrl-c')
-  const result = await harness.waitForCliExit()
+  const result = await cliExit
   expect(result.exitCode).toBe(0)
 }
