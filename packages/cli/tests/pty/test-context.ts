@@ -65,6 +65,7 @@ export async function withTui(
   } catch (error) {
     const artifactDir = await saveFailureArtifacts(name, context)
     const detail = error instanceof Error ? error : new Error(String(error))
+    detail.message += `\nPTY output tail: ${JSON.stringify(context.harness.raw().slice(-2000))}`
     detail.message += `\nPTY diagnostics: ${artifactDir}`
     throw detail
   } finally {

@@ -108,7 +108,7 @@ export async function createTuiHarness(options: {
   const env = stringEnv(isolatedCliEnv(options.workspace, options.provider, options.env))
   const isWindows = process.platform === 'win32'
   const shell = isWindows ? 'powershell.exe' : '/bin/sh'
-  const shellArgs = isWindows ? ['-NoLogo', '-NoProfile', '-NoExit', '-Command', '-'] : ['-f', '-i']
+  const shellArgs = isWindows ? ['-NoLogo', '-NoProfile', '-NoExit'] : ['-f', '-i']
   if (!isWindows) env.PS1 = ''
 
   const processUnderTest = pty.spawn(shell, shellArgs, {
