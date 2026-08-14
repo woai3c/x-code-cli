@@ -36,9 +36,9 @@ export let S_DIM = cellFg('textDim')
  *  the spinner can diverge later without touching emphasis styles. */
 export let S_SPINNER = cellFg('primary')
 export let S_SUCCESS = cellFg('success', { bold: true })
-// Non-bold variant of SUCCESS — used for the live tool `●` bullet so it
+// Non-bold variant of SUCCESS — used for the live tool `•` bullet so it
 // matches the committed `stdout-writer.formatToolCall` output exactly
-// (`paint('success')('●')` is non-bold there). If live used the bold
+// (`paint('success')(GLYPH_TOOL_BULLET)` is non-bold there). If live used the bold
 // variant, the dot would visibly "de-bold" at the moment the tool finishes.
 export let S_SUCCESS_DOT = cellFg('success')
 // Dim half of the running-tool bullet pulse animation. Same green hue as

@@ -28,8 +28,16 @@ const IS_LEGACY_TERMINAL =
 // Each export pair: `GLYPH_NAME` = rich Unicode, fallback = ASCII/Latin-1.
 // Consumers import the name and get the right variant at module load time.
 
-/** Tool-call bullet: `●` (U+25CF) → `*` */
+/** "Current selection" radio marker in picker dialogs: `●` (U+25CF) → `*` */
 export const GLYPH_BULLET = IS_LEGACY_TERMINAL ? '*' : '●'
+
+/** Row-leading status bullet (tool calls, collapsed read groups, peer
+ *  messages) in scrollback and live frames: `•` (U+2022) → `*`. Half the
+ *  visual size of GLYPH_BULLET — the full-size `●` read as oversized next
+ *  to single-line tool rows. U+2022 is in CP437/Windows-1252 so even the
+ *  legacy ConHost fonts carry it; the `*` fallback stays for consistency
+ *  with the rest of the table. */
+export const GLYPH_TOOL_BULLET = IS_LEGACY_TERMINAL ? '*' : '\u2022'
 
 /** User-message prompt arrow: `❯` (U+276F) → `>` */
 export const GLYPH_PROMPT_ARROW = IS_LEGACY_TERMINAL ? '>' : '❯'

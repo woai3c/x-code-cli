@@ -35,8 +35,9 @@ import {
 } from '../utils.js'
 import { renderEditDiff } from './render-diff.js'
 import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
-import { GLYPH_BULLET, GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET } from './terminal-glyphs.js'
-import { chalk as c, paint } from './tokens.js'
+import { GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET, GLYPH_TOOL_BULLET } from './terminal-glyphs.js'
+import { visualWidth } from './text-width.js'
+import { chalk as c, paint, paintEchoArrow, paintEchoBg, paintEchoFg } from './tokens.js'
 
 /** Function that writes to stdout through Ink's log-update coordination. */
 export type InkWrite = (data: string) => void
@@ -73,7 +74,7 @@ function formatToolCall(tc: DisplayToolCall): string {
 
   const dotStyle = paint(isFailure ? 'error' : 'success')
   const previewSuffix = inputPreview ? paint('primary')(`(${inputPreview})`) : ''
-  const line1 = ` ${dotStyle(GLYPH_BULLET)} ${c.bold(label)}${previewSuffix}`
+  const line1 = ` ${dotStyle(GLYPH_TOOL_BULLET)} ${c.bold(label)}${previewSuffix}`
 
   // Edit / writeFile success path: render the structured diff under the
   // bullet INSTEAD of the plain "Wrote N lines" / "Applied changes" summary.
@@ -247,7 +248,7 @@ function writeToolRow(write: InkWrite, tc: DisplayToolCall): void {
 function writeCollapsedGroup(write: InkWrite, tools: readonly DisplayToolCall[]): void {
   const { label, detail } = formatReadGroupSummary(tools)
   const detailSuffix = detail ? paint('primary')(`(${authorityVisibleText(detail)})`) : ''
-  const line = ` ${paint('success')(GLYPH_BULLET)} ${c.bold(authorityVisibleText(label))}${detailSuffix}`
+  const line = ` ${paint('success')(GLYPH_TOOL_BULLET)} ${c.bold(authorityVisibleText(label))}${detailSuffix}`
   const lead = prevWriteEndedWithBlankRow ? '' : '\n'
   write(toCRLF(lead + line + '\n'))
   prevWriteEndedWithBlankRow = false
@@ -315,7 +316,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       .map((line) => `   ${line}`)
       .join('\n')
     const lead = prevWriteEndedWithBlankRow ? '' : '\n'
-    write(toCRLF(`${lead} ${paint('warning')(GLYPH_BULLET)} ${c.bold(heading)}${summary}\n${body}\n\n`))
+    write(toCRLF(`${lead} ${paint('warning')(GLYPH_TOOL_BULLET)} ${c.bold(heading)}${summary}\n${body}\n\n`))
     prevWriteEndedWithBlankRow = true
     prevWriteWasStreamingChunk = false
     return
@@ -459,20 +460,59 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
 
 /**
  * Echo a user message in full. For multi-line content we indent continuation
- * lines with two spaces so they align under the text that followed the `❯`
- * prompt glyph on the first line. `content` is assumed to have already been
- * normalized to use `\n` line separators.
+ * lines so they align under the text that followed the `❯` prompt glyph on
+ * the first line. `content` is assumed to have already been normalized to
+ * use `\n` line separators.
  *
- * `compact` is set for slash-command echoes: we drop the trailing blank
- * line so the `  ⎿  result` line that follows sits flush under the echo,
- * matching Claude Code's 2-line command block.
+ * Each line gets a subtle full-row background (padding painted INSIDE the
+ * bg span) so questions read as solid blocks next to the assistant's
+ * markdown — codex-rs does the same via `user_message_style`. The block
+ * gets breathing room beyond the text: one full-width bg row above and
+ * below as vertical padding, plus a one-cell inset left of the `❯`. On
+ * *-ansi themes and under NO_COLOR `paintEchoBg()` returns null and we
+ * fall back to bold text instead of forcing a hex bg onto the terminal's
+ * own palette.
+ *
+ * `compact` is set for slash-command echoes: we drop the bottom padding
+ * row and the trailing blank line so the `  ⎿  result` line that follows
+ * sits flush under the echo, matching Claude Code's 2-line command block.
  */
 function writeUserMessage(write: InkWrite, content: string, compact = false): void {
+  const bg = paintEchoBg()
+  const cols = process.stdout.columns ?? 0
   const arrow = paint('border')(GLYPH_PROMPT_ARROW)
   const lines = content.split('\n')
   const [first = '', ...rest] = lines
-  const indentedRest = rest.map((line) => `  ${line}`)
-  const body = [`${arrow} ${first}`, ...indentedRest].join('\n')
+  if (!bg) {
+    const body = [`${arrow} ${c.bold(first)}`, ...rest.map((line) => `  ${c.bold(line)}`)].join('\n')
+    const trailing = compact ? '\n' : '\n\n'
+    write(toCRLF('\n' + body + trailing))
+    return
+  }
+  // The card is theme-independent, so its content is too: fixed light
+  // arrow + text (see paintEchoArrow/paintEchoFg in tokens.ts) — in
+  // light themes the terminal default fg is dark and would vanish on the
+  // dark card.
+  const bgArrow = paintEchoArrow()(GLYPH_PROMPT_ARROW)
+  const echoText = paintEchoFg()
+  const renderLine = (text: string, isFirst: boolean): string => {
+    const prefix = isFirst ? ` ${GLYPH_PROMPT_ARROW} ` : '   '
+    // Rows longer than the terminal wrap on their own; only pad short rows.
+    // Lines containing tabs skip padding entirely: charWidth counts `\t` as
+    // 1 cell but the terminal jumps to the next 8-col stop, so the computed
+    // pad would overshoot the width and wrap into a torn bg block.
+    const pad = cols > 0 && !text.includes('\t') ? ' '.repeat(Math.max(0, cols - visualWidth(prefix + text))) : ''
+    const visible = isFirst ? ` ${bgArrow} ${echoText(text)}` : `   ${echoText(text)}`
+    return bg(visible + pad)
+  }
+  // Full-width blank bg rows as vertical padding. Skipped when the
+  // terminal width is unknown (piped output) — a 1-cell bg sliver in a
+  // log file is worse than no padding.
+  const padRow = cols > 0 ? bg(' '.repeat(cols)) : null
+  const rows = [renderLine(first, true), ...rest.map((line) => renderLine(line, false))]
+  if (padRow !== null) rows.unshift(padRow)
+  if (padRow !== null && !compact) rows.push(padRow)
+  const body = rows.join('\n')
   // Leading \n gives one blank row of margin-top so the echo doesn't
   // crowd against the previous assistant reply's last line of content.
   // Explicit CRLF line breaks — see toCRLF() above for rationale.

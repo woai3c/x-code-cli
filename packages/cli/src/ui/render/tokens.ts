@@ -125,6 +125,50 @@ export function paint(token: ChromeToken): (s: string) => string {
   return (s) => c.hex(def[kind])(s)
 }
 
+// ── User-echo block ───────────────────────────────────────────────────
+//
+// The committed `❯ user question` block in scrollback gets a full-row
+// background so questions read as distinct blocks next to the
+// assistant's markdown (which already uses bold/primary freely, ruling
+// out text-level highlight). Same approach as codex-rs's
+// `user_message_style`, except codex probes the terminal bg via OSC 11
+// and blends a shade at runtime.
+//
+// The card is deliberately theme-INDEPENDENT: dark warm gray #3c3836
+// (gruvbox dark bg1) in BOTH dark and light themes, and the text/arrow
+// inside are fixed light hexes. Chosen through live user iterations:
+// per-theme light panels read as either invisible (#eee4cf / #f0ece1)
+// or glaring (#ebdbb2) on white terminals, and a cool tint (catppuccin
+// surface0 #313244) reads muddy next to the neutral chrome. In light
+// themes the terminal default fg is dark — on the dark card it would be
+// unreadable, so the content must carry its own light colors.
+const USER_ECHO_BG = '#3c3836'
+const USER_ECHO_FG = '#f8f8f2'
+const USER_ECHO_ARROW_FG = '#b3b3b3'
+
+/** Background styler for the user-message echo block. Returns null for
+ *  the *-ansi themes (they honor the terminal's own 16-color palette —
+ *  forcing a hex bg would clash) and when colors are disabled; callers
+ *  fall back to bold text in that case. */
+export function paintEchoBg(): ((s: string) => string) | null {
+  if (!COLORS_ENABLED) return null
+  if (themeKind() === 'ansi') return null
+  return (s) => c.bgHex(USER_ECHO_BG)(s)
+}
+
+/** Fixed light foreground for the echo card's question text — theme-
+ *  independent like the card itself. */
+export function paintEchoFg(): (s: string) => string {
+  return (s) => c.hex(USER_ECHO_FG)(s)
+}
+
+/** Fixed light-gray arrow color for the echo card (contrast ~5:1 on
+ *  USER_ECHO_BG). The theme-resolved border/textDim values would drop to
+ *  ~1.3:1 on the card in light themes. */
+export function paintEchoArrow(): (s: string) => string {
+  return (s) => c.hex(USER_ECHO_ARROW_FG)(s)
+}
+
 export interface CellMods {
   bold?: boolean
   dim?: boolean

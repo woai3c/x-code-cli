@@ -40,7 +40,6 @@ import {
 } from '../render/stdout-writer.js'
 import {
   GLYPH_ACCEPT_EDITS,
-  GLYPH_BULLET,
   GLYPH_ELLIPSIS,
   GLYPH_PLAN_MODE,
   GLYPH_PROMPT_ARROW,
@@ -50,6 +49,7 @@ import {
   GLYPH_TODO_CHECK,
   GLYPH_TODO_IN_PROGRESS,
   GLYPH_TODO_PENDING,
+  GLYPH_TOOL_BULLET,
   SPINNER_FRAMES,
 } from '../render/terminal-glyphs.js'
 import {
@@ -1405,7 +1405,7 @@ export function ChatInput({
           // bullet — same hue, no dim — so the transition is just "stop
           // pulsing", not a color change.
           const dotStyle = spinnerFrame % 6 < 3 ? S_SUCCESS_DOT : S_SUCCESS_DOT_DIM
-          row1.push(...textToCells(GLYPH_BULLET, dotStyle))
+          row1.push(...textToCells(GLYPH_TOOL_BULLET, dotStyle))
           row1.push({ char: ' ', style: S_NONE, width: 1 })
           row1.push(...textToCells(label, S_BOLD))
           if (preview) {
