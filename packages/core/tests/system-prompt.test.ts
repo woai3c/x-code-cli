@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
+import { shell } from '../src/tools/shell.js'
 import { createTaskTool } from '../src/tools/task.js'
 import { todoWrite } from '../src/tools/todo-write.js'
 
@@ -23,6 +24,9 @@ describe('system prompt budget and stability', () => {
     expect(prompt).toContain('Never modify the managed memory store')
     expect(prompt).toContain('If a tool result starts with [Truncated:]')
     expect(prompt).toContain('proactively call browserVisualCheck once')
+    expect(prompt).toContain('decide from task and repo state whether to use ordinary `git worktree` commands')
+    expect(prompt).toContain('remove only the worktree and branch you created')
+    expect(prompt).not.toContain('select worktree isolation for the shell call')
   })
 
   it('lists enabled skills once and keeps identical options byte-stable', () => {
@@ -81,6 +85,11 @@ describe('system prompt budget and stability', () => {
 })
 
 describe('heavy tool description budgets', () => {
+  it('keeps worktree decisions in the model instead of the shell runtime schema', () => {
+    expect(Object.keys((shell.inputSchema as any).shape)).toEqual(['command', 'timeout', 'runInBackground'])
+    expect(shell.description).not.toContain('isolation')
+  })
+
   it('keeps task guidance focused without repeated dialogue examples', () => {
     const task = createTaskTool({
       list: () => [{ name: 'reviewer', description: 'Review pending code changes' }],

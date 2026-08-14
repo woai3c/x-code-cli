@@ -149,6 +149,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Sub-agents** — ships with 5 (explore / general-purpose / plan / code-reviewer / goal-verifier), supports custom agents
 - **Plan mode** — `--plan` or `/plan` enters read-only exploration; the agent designs a plan, then executes after approval
 - **Durable goal loops** — `/goal` runs execute → verify → repair cycles until passing or hitting a stop condition
+- **Model-directed Git worktrees** — when repository state and verification risk warrant it, the agent can use ordinary Git commands to create and clean up a temporary worktree instead of risking the active checkout
 - **Cross-session messaging** — named local sessions can discover one another and exchange peer-authorized work (macOS / Linux; see [docs](./docs/peer-messaging.en.md))
 - **File attachments** — `@path` or bare absolute paths auto-ingest text / code / PDF / Office docs (docx / xlsx / pptx / odt / ods / odp) / images / audio
 - **Local audio transcription** — attach MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus files; when the active model can't take audio input, X-Code CLI transcribes them locally via Whisper (whisper.cpp) and feeds the model timestamped text — the audio never leaves your machine. The Whisper model auto-downloads on first use and is cached under `~/.x-code/whisper-models/` (default `tiny`; set `X_CODE_WHISPER_MODEL` to pick another, e.g. `base`)

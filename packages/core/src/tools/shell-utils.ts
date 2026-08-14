@@ -161,7 +161,7 @@ const READ_ONLY_COMMANDS = [
 ]
 
 /** Git sub-commands that are read-only */
-const READ_ONLY_GIT_SUBCOMMANDS = ['status', 'log', 'diff', 'branch', 'show', 'remote', 'tag', 'stash list', 'reflog']
+const READ_ONLY_GIT_SUBCOMMANDS = ['status', 'log', 'diff', 'show', 'remote', 'tag', 'stash list', 'reflog']
 
 // Pre-compiled regexes for performance. `/i` flag makes the match
 // case-insensitive so `Get-ChildItem` / `get-childitem` / `GET-CHILDITEM`
@@ -176,6 +176,7 @@ const TSC_COMMAND_RE = /^\s*(?:pnpm\s+exec\s+)?tsc(?:\.cmd)?(?:\s|$)/i
 const TSC_READ_ONLY_FLAG_RE = /(?:^|\s)(?:--noemit|--showconfig|--version|-v|--help|-h)(?=\s|=|$)/i
 const TSC_WRITE_FLAG_RE =
   /(?:^|\s)(?:-b|--build|--incremental|--tsbuildinfofile|--generatetrace|--outdir|--outfile|--emitdeclarationonly)(?=\s|=|$)/i
+const READ_ONLY_GIT_BRANCH_RE = /^\s*git\s+branch(?:\s+--show-current|\s+--list(?:\s+(?!-)\S+)*)?\s*$/i
 
 const DESTRUCTIVE_PATTERNS: RegExp[] = [
   // ── Filesystem destruction ──
@@ -305,6 +306,7 @@ function isReadOnlyControlFlow(cmd: string): boolean {
 export function isReadOnly(cmd: string): boolean {
   const c = cmd.trim()
   if (READ_ONLY_REGEX.test(c)) return true
+  if (READ_ONLY_GIT_BRANCH_RE.test(c)) return true
   if (TSC_COMMAND_RE.test(c) && TSC_READ_ONLY_FLAG_RE.test(c) && !TSC_WRITE_FLAG_RE.test(c)) return true
   return isReadOnlyControlFlow(c)
 }

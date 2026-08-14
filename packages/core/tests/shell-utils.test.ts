@@ -101,6 +101,10 @@ describe('isReadOnly', () => {
     expect(isReadOnly('git log --oneline')).toBe(true)
     expect(isReadOnly('git diff')).toBe(true)
     expect(isReadOnly('git branch')).toBe(true)
+    expect(isReadOnly('git branch --list x-code-*')).toBe(true)
+    expect(isReadOnly('git branch --show-current')).toBe(true)
+    expect(isReadOnly('git branch x-code-verify')).toBe(false)
+    expect(isReadOnly('git branch -D x-code-verify')).toBe(false)
   })
 
   it('rejects write commands', () => {

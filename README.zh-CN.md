@@ -149,6 +149,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **子 Agent** — 内置 5 个（explore / general-purpose / plan / code-reviewer / goal-verifier），支持自定义
 - **Plan 模式** — `--plan` 或 `/plan` 进入只读探索，Agent 先制定方案、批准后再执行
 - **持续目标循环** — `/goal` 自动执行→验证→修复，直到验证通过或触发停止条件
+- **模型自主 Git worktree** — 当仓库状态和验证风险确有需要时，Agent 可自主使用普通 Git 命令创建并清理临时 worktree，避免冒险改动当前工作区
 - **跨会话消息** — 命名后的本机 Session 可以互相发现，并在权限边界内移交工作（macOS / Linux；详见[文档](./docs/peer-messaging.md)）
 - **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / Office 文档（docx / xlsx / pptx / odt / ods / odp）/ 图片 / 音频
 - **本地音频转写** — 附件支持 MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus；当前模型不支持音频输入时，X-Code CLI 用 Whisper（whisper.cpp）在本地转写，只把带时间戳的文字交给模型——音频不会离开你的电脑。Whisper 模型首次使用时自动下载，缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
