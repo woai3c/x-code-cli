@@ -1,5 +1,37 @@
 import { getContextWindow } from '@x-code-cli/core'
-import type { GoalState, TokenUsage } from '@x-code-cli/core'
+import type { GoalState, SessionForkOrigin, TokenUsage } from '@x-code-cli/core'
+
+import { GLYPH_FORK_ARROW } from '../render/terminal-glyphs.js'
+
+/** Lineage hint for picker rows: `↳ fork of <parent name or prompt>`, falling
+ *  back to the parent id prefix when the parent session was deleted. */
+export function forkLineageHint(
+  entry: { forkedFrom?: SessionForkOrigin },
+  sessionsById: ReadonlyMap<string, { name?: string; firstPrompt: string }>,
+): string | null {
+  const origin = entry.forkedFrom
+  if (!origin) return null
+  const parent = sessionsById.get(origin.sessionId)
+  if (!parent) return `${GLYPH_FORK_ARROW} fork of ${origin.sessionId.slice(0, 8)}`
+  const label = parent.name || (parent.firstPrompt || '(empty)').slice(0, 40).replace(/\s+/g, ' ').trim()
+  return `${GLYPH_FORK_ARROW} fork of ${label}`
+}
+
+/** askQuestion matches the user's pick by label string, so duplicate labels
+ *  (e.g. two forks given the same name) would make later entries
+ *  unselectable. Append the sessionId to repeats to keep every row unique. */
+export function dedupeChoiceLabels<T extends { label: string; sessionId: string }>(choices: T[]): T[] {
+  const seen = new Set<string>()
+  return choices.map((choice) => {
+    if (!seen.has(choice.label)) {
+      seen.add(choice.label)
+      return choice
+    }
+    const label = `${choice.label}  ·  ${choice.sessionId}`
+    seen.add(label)
+    return { ...choice, label }
+  })
+}
 
 export function compactionHintForResume(
   tokens: number | null,

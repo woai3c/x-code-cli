@@ -67,6 +67,9 @@ export const GLYPH_LIST_BULLET = IS_LEGACY_TERMINAL ? '-' : '\u2022'
 /** Header separator pipe: `│` (U+2502) → `|` */
 export const GLYPH_HEADER_PIPE = IS_LEGACY_TERMINAL ? '|' : '\u2502'
 
+/** Fork lineage arrow in session pickers: `↳` (U+21B3) → `->` */
+export const GLYPH_FORK_ARROW = IS_LEGACY_TERMINAL ? '->' : '\u21b3'
+
 /** Ellipsis: `…` (U+2026) — present in Windows-1252 and all ConHost fonts,
  *  no fallback needed. Exported for consistency so consumers don't hardcode
  *  the literal, but the value is the same on every platform. */

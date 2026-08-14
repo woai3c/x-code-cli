@@ -55,7 +55,14 @@ import { createMcpCommandHandler } from './commands/mcp.js'
 import { createPluginCommandHandler } from './commands/plugin.js'
 import { createSkillCommandHandler } from './commands/skill.js'
 import type { SessionExitInfo } from './session-exit.js'
-import { canResumeGoalStatus, compactionHintForResume, formatGoalStatus, formatRelativeTime } from './session-format.js'
+import {
+  canResumeGoalStatus,
+  compactionHintForResume,
+  dedupeChoiceLabels,
+  forkLineageHint,
+  formatGoalStatus,
+  formatRelativeTime,
+} from './session-format.js'
 import { formatUsageReport } from './usage-report.js'
 
 interface AppProps {
@@ -310,16 +317,21 @@ export function App({
       )
       return
     }
-    const choices = sessions.slice(0, 30).map((s) => {
-      const preview = (s.firstPrompt || '(empty)').slice(0, 60).replace(/\s+/g, ' ').trim()
-      const ago = formatRelativeTime(s.mtime)
-      const totalTokens = s.tokenUsage ? s.tokenUsage.totalTokens.toLocaleString('en-US') : '—'
-      return {
-        label: `${preview}  ·  ${ago}`,
-        description: `${s.modelId}  ·  ${totalTokens} tokens  ·  ${s.sessionId}`,
-        filePath: s.filePath,
-      }
-    })
+    const byId = new Map(sessions.map((s) => [s.sessionId, s]))
+    const choices = dedupeChoiceLabels(
+      sessions.slice(0, 30).map((s) => {
+        const preview = (s.firstPrompt || '(empty)').slice(0, 60).replace(/\s+/g, ' ').trim()
+        const ago = formatRelativeTime(s.mtime)
+        const totalTokens = s.tokenUsage ? s.tokenUsage.totalTokens.toLocaleString('en-US') : '—'
+        const lineage = forkLineageHint(s, byId)
+        return {
+          label: `${s.name ? `${s.name}  ·  ` : ''}${preview}  ·  ${ago}`,
+          description: `${s.modelId}  ·  ${totalTokens} tokens  ·  ${s.sessionId}${lineage ? `  ·  ${lineage}` : ''}`,
+          sessionId: s.sessionId,
+          filePath: s.filePath,
+        }
+      }),
+    )
     const answer = await askQuestion(
       `Pick a session to resume (${sessions.length} total in this project):`,
       choices.map((c) => ({ label: c.label, description: c.description })),
@@ -345,7 +357,7 @@ export function App({
         loaded.modelId,
       ) ?? ''
     addInfoMessage(
-      `**Resumed session:** ${loaded.firstPrompt.slice(0, 80) || '(no first prompt)'}\n\nContinuing from ${loaded.messages.length} message${loaded.messages.length === 1 ? '' : 's'}.${hint}`,
+      `**Resumed session:** ${loaded.name ? `${loaded.name} — ` : ''}${loaded.firstPrompt.slice(0, 80) || '(no first prompt)'}\n\nContinuing from ${loaded.messages.length} message${loaded.messages.length === 1 ? '' : 's'}.${hint}`,
     )
   }, [addInfoMessage, askQuestion, resume])
 
@@ -571,7 +583,7 @@ export function App({
           initialSession.modelId,
         ) ?? ''
       addInfoMessage(
-        `**Resumed session** — ${preview}\n\nRestored ${initialSession.messages.length} message${initialSession.messages.length === 1 ? '' : 's'}. Continuing the same conversation.${hint}`,
+        `**Resumed session** — ${initialSession.name ? `${initialSession.name} — ` : ''}${preview}\n\nRestored ${initialSession.messages.length} message${initialSession.messages.length === 1 ? '' : 's'}. Continuing the same conversation.${hint}`,
       )
       return
     }
@@ -732,7 +744,8 @@ export function App({
 
         case 'fork': {
           echoCommand(text)
-          const result = await fork()
+          const name = arg.trim() || undefined
+          const result = await fork(name)
           if (!result.ok) {
             addCommandResult(`Fork failed: ${result.reason}`)
             return
@@ -740,8 +753,10 @@ export function App({
           const boundary = result.excludedActiveTurn
             ? 'The active request remains only in the original session.'
             : 'Copied all completed conversation context.'
+          const title = name ? `**${name}** (\`${result.sessionId}\`)` : `**${result.sessionId}**`
+          const resumeKey = name ? `"${name}"` : result.sessionId
           addCommandResult(
-            `Fork created: **${result.sessionId}** (${result.messageCount} messages).\n\n${boundary}\n\nThe conversation is independent, but both sessions still share this working tree. Avoid concurrent edits to the same files.\n\nOpen another terminal:\n\n\`xc --resume ${result.sessionId}\``,
+            `Fork created: ${title} (${result.messageCount} messages).\n\n${boundary}\n\nThe conversation is independent, but both sessions still share this working tree. Avoid concurrent edits to the same files.\n\nOpen another terminal:\n\n\`xc --resume ${resumeKey}\``,
           )
           return
         }
@@ -1388,17 +1403,22 @@ export function App({
       return
     }
 
+    const byId = new Map(sessions.map((s) => [s.sessionId, s]))
     const fmt = (n: number) => n.toLocaleString('en-US')
-    const choices = sessions.map((s) => {
-      const preview = (s.firstPrompt || '(empty)').slice(0, 50).replace(/\s+/g, ' ').trim()
-      const ago = formatRelativeTime(s.mtime)
-      const total = s.tokenUsage ? fmt(s.tokenUsage.totalTokens) : '—'
-      return {
-        label: `${preview}  ·  ${ago}`,
-        description: `${s.modelId}  ·  ${total} tokens`,
-        session: s,
-      }
-    })
+    const choices = dedupeChoiceLabels(
+      sessions.map((s) => {
+        const preview = (s.firstPrompt || '(empty)').slice(0, 50).replace(/\s+/g, ' ').trim()
+        const ago = formatRelativeTime(s.mtime)
+        const total = s.tokenUsage ? fmt(s.tokenUsage.totalTokens) : '—'
+        const lineage = forkLineageHint(s, byId)
+        return {
+          label: `${s.name ? `${s.name}  ·  ` : ''}${preview}  ·  ${ago}`,
+          description: `${s.modelId}  ·  ${total} tokens${lineage ? `  ·  ${lineage}` : ''}`,
+          sessionId: s.sessionId,
+          session: s,
+        }
+      }),
+    )
 
     const BACK_LABEL = '← Back to list'
     const tick = () => new Promise<void>((r) => setTimeout(r, 50))
@@ -1417,7 +1437,7 @@ export function App({
       const usage = s.tokenUsage
       if (!usage) {
         addInfoMessage(
-          `**${(s.firstPrompt || '(empty)').slice(0, 60)}**\n\nNo usage data recorded (interrupted before first turn).`,
+          `**${s.name ? `${s.name} — ` : ''}${(s.firstPrompt || '(empty)').slice(0, 60)}**\n\nNo usage data recorded (interrupted before first turn).`,
         )
       } else {
         addInfoMessage(
@@ -1425,7 +1445,7 @@ export function App({
             usage,
             s.modelId,
             'history',
-            s.firstPrompt.slice(0, 80) || undefined,
+            s.name ?? (s.firstPrompt.slice(0, 80) || undefined),
             undefined,
             s.usageBreakdown,
             s.cacheMissSummary,

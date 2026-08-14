@@ -1757,7 +1757,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  interrupting the current session. The active boundary was fully detached
    *  before that request started, so later compaction and metadata updates in
    *  the original cannot move the branch point. */
-  const fork = useCallback(async () => {
+  const fork = useCallback(async (name?: string) => {
     const boundary = activeForkBoundaryRef.current
     const activeOwner = turnCoordinatorRef.current.current()?.owner
     if (activeOwner && !boundary) {
@@ -1783,7 +1783,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           : 'No active conversation to fork.',
       }
     }
-    const operation = forkCoreSession(snapshot, modelIdRef.current)
+    const operation = forkCoreSession(snapshot, modelIdRef.current, { name })
     pendingForksRef.current.add(operation)
     try {
       const result = await operation

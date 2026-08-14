@@ -106,20 +106,36 @@ describe('TUI input and lifecycle', () => {
         await submitInput(harness, 'generate document A')
         await provider.waitForMainRequests(2)
         await harness.waitForText('Thinking')
+        // Named fork: multi-word name exercises the `/fork <name...>` arg
+        // reassembly; unnamed fork right after covers the no-arg path.
+        await submitInput(harness, '/fork doc branch')
+        await harness.waitForText('xc --resume "doc branch"')
         await submitInput(harness, '/fork')
-        await harness.waitForText('Fork created:')
-        await harness.waitForText('The active request remains only in the original session')
-        await harness.waitForText('both sessions still share this working tree')
-
+        // Both forks race the stalled turn; wait for both branch files.
         const sessionDirectory = path.join(workspace.cwd, '.x-code', 'sessions')
-        const files = (await fs.readdir(sessionDirectory)).filter((file) => file.endsWith('.jsonl'))
+        let files: string[] = []
+        for (let attempt = 0; attempt < 50; attempt++) {
+          files = (await fs.readdir(sessionDirectory)).filter((file) => file.endsWith('.jsonl'))
+          if (files.length >= 3) break
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+
         const sessions = await Promise.all(files.map((file) => loadSession(path.join(sessionDirectory, file))))
-        const branch = sessions.find((session) => session?.forkedFrom)
-        expect(branch).toBeDefined()
-        expect(branch!.messages).toHaveLength(2)
-        expect(JSON.stringify(branch!.messages)).toContain('shared context')
-        expect(JSON.stringify(branch!.messages)).toContain('shared-answer')
-        expect(JSON.stringify(branch!.messages)).not.toContain('generate document A')
+        const branches = sessions.filter((session) => session?.forkedFrom)
+        expect(branches).toHaveLength(2)
+        const named = branches.find((session) => session?.name)
+        const unnamed = branches.find((session) => !session?.name)
+        expect(named!.name).toBe('doc branch')
+        expect(unnamed).toBeDefined()
+        for (const branch of branches) {
+          expect(branch!.messages).toHaveLength(2)
+          expect(JSON.stringify(branch!.messages)).toContain('shared context')
+          expect(JSON.stringify(branch!.messages)).toContain('shared-answer')
+          expect(JSON.stringify(branch!.messages)).not.toContain('generate document A')
+        }
+        const screen = harness.screen().join('\n')
+        expect(screen).toContain('xc --resume "doc branch"')
+        expect(screen).toContain(`xc --resume ${unnamed!.sessionId}`)
 
         await exitTui(harness)
       },

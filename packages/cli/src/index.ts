@@ -535,6 +535,7 @@ async function main() {
  *  path. Accepts the same forms a user might paste from the post-exit
  *  hint we print:
  *    - bare sessionId (`20260101-120000-000`)
+ *    - fork name (`experiment-a`, assigned via `/fork <name>`)
  *    - legacy slug (`fix-login`)
  *    - legacy filename stem (`fix-login-20260101-120000-000`)
  *  Exact matches are preferred; if nothing exact matches, falls back
@@ -546,6 +547,8 @@ async function findSessionFile(input: string): Promise<string | null> {
     if (s.sessionId === input) return s.filePath
     if (s.taskSlug && s.taskSlug === input) return s.filePath
     if (s.taskSlug && `${s.taskSlug}-${s.sessionId}` === input) return s.filePath
+    // Sessions are newest-first, so duplicate names resolve to the latest.
+    if (s.name && s.name === input) return s.filePath
   }
   if (input.length >= 8) {
     for (const s of sessions) {

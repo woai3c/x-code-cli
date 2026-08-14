@@ -45,7 +45,11 @@ export const SLASH_COMMANDS = [
     ],
   },
   { name: '/resume', description: 'Pick a past session in this project to resume', argumentHint: '[id]' },
-  { name: '/fork', description: 'Branch completed context (working tree stays shared)' },
+  {
+    name: '/fork',
+    description: 'Branch completed context into a new session, optionally named (working tree stays shared)',
+    argumentHint: '[name]',
+  },
   {
     name: '/rewind',
     description: 'Roll back files + conversation to a previous user message (no-arg = picker)',

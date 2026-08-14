@@ -1051,6 +1051,35 @@ describe('session-store: forkSession', () => {
     expect(() => captureSessionForkSnapshot(source, { messageCount: 2 })).toThrow('Invalid fork message count')
   })
 
+  it('persists an optional display name and surfaces name + lineage in listSessions', async () => {
+    const source = createLoopState()
+    source.sessionId = '20260101-120000-020'
+    source.taskSlug = 'main-line'
+    source.messages = [{ role: 'user', content: 'base work' }]
+    await appendHeader(source, 'm1', 'base work')
+    await flushPendingMessages(source)
+
+    const named = await forkSession(captureSessionForkSnapshot(source), 'openai:test', { cwd: tempDir, name: '实验 A' })
+    const unnamed = await forkSession(captureSessionForkSnapshot(source), 'openai:test', { cwd: tempDir })
+    expect(named.name).toBe('实验 A')
+    expect(unnamed.name).toBeUndefined()
+
+    expect((await loadSession(named.filePath))!.name).toBe('实验 A')
+    expect((await loadSession(unnamed.filePath))!.name).toBeUndefined()
+
+    const list = await listSessions()
+    const namedEntry = list.find((s) => s.sessionId === named.sessionId)
+    expect(namedEntry!.name).toBe('实验 A')
+    expect(namedEntry!.forkedFrom).toEqual({
+      sessionId: source.sessionId,
+      messageCount: 1,
+      forkedAt: named.forkedFrom.forkedAt,
+    })
+    const sourceEntry = list.find((s) => s.sessionId === source.sessionId)
+    expect(sourceEntry!.name).toBeUndefined()
+    expect(sourceEntry!.forkedFrom).toBeUndefined()
+  })
+
   it('allocates distinct files for concurrent forks', async () => {
     const source = createLoopState()
     source.sessionId = '20260101-120000-020'

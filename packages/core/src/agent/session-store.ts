@@ -85,6 +85,8 @@ interface HeaderEntry {
    *  preview without paying to read the whole first user message off disk. */
   firstPrompt: string
   taskSlug: string
+  /** Optional free-form display name, currently only set by `/fork <name>`. */
+  name?: string
   sessionId: string
   firstPromptProvenance?: MessageProvenance
 }
@@ -579,6 +581,7 @@ export interface ForkedSession {
   sessionId: string
   filePath: string
   messageCount: number
+  name?: string
   forkedFrom: SessionForkOrigin
 }
 
@@ -760,7 +763,7 @@ export function captureSessionForkSnapshot(
 export async function forkSession(
   snapshot: SessionForkSnapshot,
   modelId: string,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; name?: string } = {},
 ): Promise<ForkedSession> {
   if (!snapshot.sourceIntegrityValid) {
     throw new Error('Transcript integrity failed; repair or clear the unsafe context before forking')
@@ -773,6 +776,10 @@ export async function forkSession(
   const forkedAt = new Date().toISOString()
   const firstUser = selected.find((entry) => entry.message.role === 'user')
   const firstPrompt = firstUser ? extractText(firstUser.message.content).slice(0, 500) : ''
+  // The header must stay well inside listSessions' 8KB head read together
+  // with the 500-char firstPrompt, or the session silently drops out of the
+  // picker and `--resume <name>`.
+  const name = options.name?.trim().slice(0, 200) || undefined
 
   const goal = snapshot.goal ? structuredClone(snapshot.goal) : null
   if (goal) {
@@ -814,6 +821,7 @@ export async function forkSession(
         startedAt: forkedAt,
         firstPrompt,
         taskSlug: snapshot.taskSlug,
+        name,
         sessionId: target.sessionId,
         firstPromptProvenance: firstUser?.provenance,
       }
@@ -850,6 +858,7 @@ export async function forkSession(
         sessionId: target.sessionId,
         filePath: target.filePath,
         messageCount: selected.length,
+        name,
         forkedFrom: {
           sessionId: snapshot.sourceSessionId,
           messageCount: selected.length,
@@ -1174,6 +1183,7 @@ export async function appendMemoryRecallDelete(state: LoopState, tombstone: Memo
 export interface LoadedSession {
   sessionId: string
   taskSlug: string
+  name?: string
   startedAt: string
   modelId: string
   cwd: string
@@ -1459,6 +1469,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
   return {
     sessionId: header.sessionId,
     taskSlug: header.taskSlug,
+    name: header.name,
     startedAt: header.startedAt,
     modelId: lastUsage?.modelId ?? header.modelId,
     cwd: header.cwd,
@@ -1605,7 +1616,12 @@ export interface SessionListEntry {
   filePath: string
   sessionId: string
   taskSlug: string
+  /** Free-form display name written by `/fork <name>`; absent elsewhere. */
+  name?: string
   firstPrompt: string
+  /** Present when the session was created by `/fork` (parsed from the fork
+   *  meta line, which sits right after the header inside the head read). */
+  forkedFrom?: SessionForkOrigin
   startedAt: string
   modelId: string
   /** File mtime in epoch milliseconds — sort key for the picker. */
@@ -1635,13 +1651,28 @@ export async function listSessions(cwd: string = process.cwd()): Promise<Session
       try {
         const stat = await fs.stat(filePath)
         const head = await readRange(filePath, 0, Math.min(8 * 1024, stat.size))
-        const headerLine = head.split('\n').find((l) => l.includes('"kind":"header"'))
+        const headLines = head.split('\n')
+        const headerLine = headLines.find((l) => l.includes('"kind":"header"'))
         if (!headerLine) return null
         let header: HeaderEntry
         try {
           header = JSON.parse(headerLine) as HeaderEntry
         } catch {
           return null
+        }
+        let forkedFrom: SessionForkOrigin | undefined
+        const forkLine = headLines.find((l) => l.includes('"kind":"fork"'))
+        if (forkLine) {
+          try {
+            const fork = JSON.parse(forkLine) as ForkEntry
+            // Guard against substring hits on non-fork content so a malformed
+            // line can't produce a forkedFrom with an undefined sessionId.
+            if (fork.kind === 'fork' && typeof fork.parentSessionId === 'string') {
+              forkedFrom = { sessionId: fork.parentSessionId, messageCount: fork.messageCount, forkedAt: fork.ts }
+            }
+          } catch {
+            // Malformed fork line — lineage hint is best-effort only.
+          }
         }
         const tailStart = Math.max(0, stat.size - 4 * 1024)
         const tail = await readRange(filePath, tailStart, stat.size - tailStart)
@@ -1669,6 +1700,8 @@ export async function listSessions(cwd: string = process.cwd()): Promise<Session
           filePath,
           sessionId: header.sessionId,
           taskSlug: header.taskSlug,
+          name: header.name,
+          forkedFrom,
           firstPrompt: header.firstPrompt,
           startedAt: header.startedAt,
           modelId: latestModelId,
