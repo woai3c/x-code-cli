@@ -252,12 +252,22 @@ export class UnifiedShellSessionManager implements ShellSessionController {
 
     if (request.prepared.hardTimeoutMs !== undefined) {
       session.hardTimeoutAt = startedAt + request.prepared.hardTimeoutMs
-      session.hardTimeoutTimer = setTimeout(() => {
+      const hardTimeoutMonotonicAt = session.startedMonotonicAt + request.prepared.hardTimeoutMs
+      session.hardTimeoutMonotonicAt = hardTimeoutMonotonicAt
+      const onHardTimeout = () => {
+        if (session.treeConfirmedExited) return
+        const remaining = hardTimeoutMonotonicAt - this.monotonicNow()
+        if (remaining > 0) {
+          session.hardTimeoutTimer = setTimeout(onHardTimeout, remaining)
+          return
+        }
+        session.hardTimeoutTimer = undefined
         session.timedOut = true
         void this.terminate(shellId, 'hard-timeout').catch((error) => {
           debugLog('shell-session.hard-timeout-error', `${shellId} ${String(error)}`)
         })
-      }, request.prepared.hardTimeoutMs)
+      }
+      session.hardTimeoutTimer = setTimeout(onHardTimeout, request.prepared.hardTimeoutMs)
     }
 
     return this.observeSessionUntil(session, {
@@ -493,16 +503,25 @@ export class UnifiedShellSessionManager implements ShellSessionController {
         return { kind: 'failed', reason: 'spawn-failure-cleanup', failure: this.failure('spawn-failed', outcome.error) }
       }
       const reason =
-        outcome.kind === 'aborted' ? 'turn-abort-before-ready' : (session.managerDrainingReason ?? 'manager-dispose')
+        outcome.kind === 'aborted'
+          ? 'turn-abort-before-ready'
+          : (session.terminationReason ?? session.managerDrainingReason ?? 'manager-dispose')
       return {
         kind: 'cancelled',
         reason,
         failure: {
-          code: outcome.kind === 'aborted' ? 'spawn-failed' : 'manager-disposed',
+          code:
+            outcome.kind === 'aborted'
+              ? 'spawn-failed'
+              : session.terminationReason
+                ? 'termination-failed'
+                : 'manager-disposed',
           message:
             outcome.kind === 'aborted'
               ? 'Shell start was interrupted before the process became ready'
-              : 'Shell manager began draining before the process became ready',
+              : session.terminationReason
+                ? `Shell start was terminated before ready (${session.terminationReason})`
+                : 'Shell manager began draining before the process became ready',
         },
       }
     } finally {
@@ -618,7 +637,13 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       this.commitTreeConfirmed(session)
       return
     }
-    session.failure = { code: 'spawn-failed', message: frame.message }
+    const failure = { code: 'termination-failed' as const, message: frame.message }
+    session.failure = failure
+    const cleanup = this.terminate(session.id, 'provider-failure')
+    session.lifecycleChanged.notify({ kind: 'provider-failure', failure })
+    void cleanup.catch((error) => {
+      debugLog('shell-session.provider-failure-cleanup-error', `${session.id} ${String(error)}`)
+    })
   }
 
   private appendOutput(session: ShellSession, stream: 'stdout' | 'stderr', chunk: Uint8Array, publish: boolean): void {
@@ -681,6 +706,11 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   private commitTreeConfirmed(session: ShellSession): void {
     if (session.treeConfirmedExited) return
     session.treeConfirmedExited = true
+    session.treeConfirmedMonotonicAt = this.monotonicNow()
+    if (session.hardTimeoutTimer) {
+      clearTimeout(session.hardTimeoutTimer)
+      session.hardTimeoutTimer = undefined
+    }
     unregisterManagedShellTarget(this.managerInstanceId, session.id)
     session.treeConfirmedAt = this.now()
     session.terminationConfirmed = session.terminationReason !== undefined ? true : session.terminationConfirmed
@@ -770,6 +800,19 @@ export class UnifiedShellSessionManager implements ShellSessionController {
           }
 
           if (session.status === 'termination-failed') {
+            this.exposeInitialNonTerminal(session, context, 'termination-failed')
+            return {
+              kind: 'running',
+              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+                forceError: true,
+              }),
+            }
+          }
+          if (
+            session.terminationReason === 'provider-failure' &&
+            session.failure !== undefined &&
+            !session.treeConfirmedExited
+          ) {
             this.exposeInitialNonTerminal(session, context, 'termination-failed')
             return {
               kind: 'running',
@@ -1017,7 +1060,10 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     }
     session.terminationReason ??= reason
     session.status = 'terminating'
-    const result = await session.process.terminateTree(session.terminationReason, budget)
+    const result =
+      session.spawnOutcome === 'pending' && session.attempt
+        ? await session.attempt.cancelBeforeReady(session.terminationReason, budget)
+        : await session.process.terminateTree(session.terminationReason, budget)
     this.applyTerminationMetadata(session, result)
     if (result.rootExited) this.commitRootExit(session, result.exitCode, result.signal, session.activation === 'active')
     if (result.treeConfirmedExited) {

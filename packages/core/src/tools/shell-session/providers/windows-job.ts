@@ -53,26 +53,18 @@ function timeoutWake(ms: number): { promise: Promise<false>; dispose(): void } {
   }
 }
 
-function nativeSearchRoots(): string[] {
-  const roots: string[] = []
-  let current = path.dirname(fileURLToPath(import.meta.url))
-  for (let depth = 0; depth < 7; depth++) {
-    roots.push(path.join(current, 'native', 'windows'))
-    roots.push(path.join(current, 'dist', 'native', 'windows'))
-    const parent = path.dirname(current)
-    if (parent === current) break
-    current = parent
+export function resolveWindowsSupervisorNativeRoot(modulePath: string): string {
+  const moduleDir = path.dirname(modulePath)
+  if (!/^windows-job\.(?:[cm]?js|ts)$/.test(path.basename(modulePath))) {
+    return path.join(moduleDir, 'native', 'windows')
   }
-  return roots
-}
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath)
-    return true
-  } catch {
-    return false
+  const sourceRoot = path.dirname(path.dirname(path.dirname(moduleDir)))
+  if (path.basename(sourceRoot) === 'dist') return path.join(sourceRoot, 'native', 'windows')
+  if (path.basename(sourceRoot) === 'src') {
+    return path.join(path.dirname(sourceRoot), 'dist', 'native', 'windows')
   }
+  throw new Error(`Windows shell supervisor module has an unsupported package layout: ${modulePath}`)
 }
 
 export async function resolveWindowsSupervisorArtifact(
@@ -81,31 +73,33 @@ export async function resolveWindowsSupervisorArtifact(
   if (arch !== 'x64' && arch !== 'arm64') {
     throw new Error(`Windows unified shell does not support architecture ${arch}`)
   }
-  for (const root of nativeSearchRoots()) {
-    const manifestPath = path.join(root, 'manifest.json')
-    if (!(await pathExists(manifestPath))) continue
-    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as WindowsSupervisorManifest
-    if (manifest.protocolVersion !== WINDOWS_SUPERVISOR_PROTOCOL_VERSION) {
-      throw new Error(
-        `Windows shell supervisor manifest protocol mismatch: expected ${WINDOWS_SUPERVISOR_PROTOCOL_VERSION}, received ${manifest.protocolVersion}`,
-      )
-    }
-    const artifact = manifest.artifacts[arch]
-    if (!artifact) throw new Error(`Windows shell supervisor manifest has no ${arch} artifact`)
-    if (!/^[a-f0-9]{64}$/i.test(artifact.sha256)) throw new Error('Windows shell supervisor manifest hash is invalid')
-    const executablePath = path.resolve(root, artifact.file)
-    const relative = path.relative(root, executablePath)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error('Windows shell supervisor manifest points outside its native directory')
-    }
-    const bytes = await fs.readFile(executablePath)
-    const actualHash = createHash('sha256').update(bytes).digest('hex')
-    if (actualHash !== artifact.sha256.toLowerCase()) {
-      throw new Error(`Windows shell supervisor hash mismatch for ${arch}`)
-    }
-    return { executablePath, sha256: actualHash }
+  const root = resolveWindowsSupervisorNativeRoot(fileURLToPath(import.meta.url))
+  const manifestPath = path.join(root, 'manifest.json')
+  let manifest: WindowsSupervisorManifest
+  try {
+    manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as WindowsSupervisorManifest
+  } catch (error) {
+    throw new Error(`Windows shell supervisor artifact is missing for ${arch}; reinstall x-code-cli`, { cause: error })
   }
-  throw new Error(`Windows shell supervisor artifact is missing for ${arch}; reinstall x-code-cli`)
+  if (manifest.protocolVersion !== WINDOWS_SUPERVISOR_PROTOCOL_VERSION) {
+    throw new Error(
+      `Windows shell supervisor manifest protocol mismatch: expected ${WINDOWS_SUPERVISOR_PROTOCOL_VERSION}, received ${manifest.protocolVersion}`,
+    )
+  }
+  const artifact = manifest.artifacts[arch]
+  if (!artifact) throw new Error(`Windows shell supervisor manifest has no ${arch} artifact`)
+  if (!/^[a-f0-9]{64}$/i.test(artifact.sha256)) throw new Error('Windows shell supervisor manifest hash is invalid')
+  const executablePath = path.resolve(root, artifact.file)
+  const relative = path.relative(root, executablePath)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Windows shell supervisor manifest points outside its native directory')
+  }
+  const bytes = await fs.readFile(executablePath)
+  const actualHash = createHash('sha256').update(bytes).digest('hex')
+  if (actualHash !== artifact.sha256.toLowerCase()) {
+    throw new Error(`Windows shell supervisor hash mismatch for ${arch}`)
+  }
+  return { executablePath, sha256: actualHash }
 }
 
 class WindowsManagedProcess implements ManagedProcess {
@@ -113,14 +107,20 @@ class WindowsManagedProcess implements ManagedProcess {
   private readonly treeExit = createDeferred<void>()
   private readonly helperSpawnFailed = createDeferred<void>()
   private helper?: ChildProcessWithoutNullStreams
-  private helperState: 'absent' | 'pending' | 'spawned' | 'exited' = 'absent'
+  private helperState: 'absent' | 'pending' | 'spawned' | 'exited' = 'pending'
   private protocolFailure?: string
   private terminationFlight?: Promise<ProcessTerminationResult>
   private currentRootPid?: number
   private currentExitStatus: ManagedExitStatus = {}
 
+  constructor(private readonly cancelPendingSpawn: () => void) {}
+
   get rootPid(): number | undefined {
     return this.currentRootPid
+  }
+
+  get treeConfirmedExited(): boolean {
+    return this.treeExit.settled
   }
 
   attachHelper(helper: ChildProcessWithoutNullStreams): void {
@@ -138,6 +138,12 @@ class WindowsManagedProcess implements ManagedProcess {
       this.helperSpawnFailed.resolve()
     }
     this.protocolFailure = message
+  }
+
+  markSpawnAbsent(): void {
+    if (this.helperState !== 'pending' || this.helper) return
+    this.helperState = 'absent'
+    this.helperSpawnFailed.resolve()
   }
 
   setRootPid(rootPid: number): void {
@@ -193,6 +199,11 @@ class WindowsManagedProcess implements ManagedProcess {
   forceTreeSync(deadlineAt: number): 'already-exited' | 'force-sent-unconfirmed' | 'deadline-exhausted' | 'failed' {
     if (this.treeExit.settled || this.helperState === 'absent') return 'already-exited'
     if (performance.now() >= deadlineAt) return 'deadline-exhausted'
+    if (this.helperState === 'pending' && !this.helper) {
+      this.cancelPendingSpawn()
+      this.markSpawnAbsent()
+      return 'already-exited'
+    }
     try {
       return this.helper?.kill() ? 'force-sent-unconfirmed' : 'failed'
     } catch {
@@ -205,6 +216,11 @@ class WindowsManagedProcess implements ManagedProcess {
     budget: TerminationBudget,
   ): Promise<ProcessTerminationResult> {
     if (this.treeExit.settled || this.helperState === 'absent') return this.confirmed(false, false)
+    if (this.helperState === 'pending' && !this.helper) {
+      this.cancelPendingSpawn()
+      this.markSpawnAbsent()
+      return this.confirmed(false, false)
+    }
     let gracefulAttempted = false
     let forceAttempted = false
 
@@ -277,7 +293,7 @@ class WindowsManagedProcess implements ManagedProcess {
 }
 
 class WindowsSpawnAttempt implements ManagedSpawnAttempt {
-  readonly handle = new WindowsManagedProcess()
+  readonly handle: WindowsManagedProcess
   readonly ready: Promise<SpawnReadyResult>
   private readonly readyState = createDeferred<SpawnReadyResult>()
   private readonly frames = new ActivationFrameBuffer()
@@ -290,6 +306,7 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
     artifact: Promise<WindowsSupervisorArtifact>,
     private readonly powerShellExecutable: string,
   ) {
+    this.handle = new WindowsManagedProcess(() => this.cancelPendingSpawn())
     this.ready = this.readyState.promise
     void this.initialize(artifact)
   }
@@ -306,9 +323,8 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
     reason: TerminationReason | 'turn-abort-before-ready',
     budget: TerminationBudget = { gracefulMs: 1_000, forceMs: 1_000, confirmMs: 250 },
   ): Promise<ProcessTerminationResult> {
-    this.cancelled = true
+    this.cancelPendingSpawn()
     if (!this.helper) {
-      this.readyState.reject(new Error('Windows shell start was cancelled before supervisor launch'))
       return {
         gracefulAttempted: false,
         forceAttempted: false,
@@ -320,10 +336,19 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
     return this.handle.terminateTree(mappedReason, budget)
   }
 
+  private cancelPendingSpawn(): void {
+    this.cancelled = true
+    this.readyState.reject(new Error('Windows shell start was cancelled before supervisor launch'))
+    if (!this.helper) this.handle.markSpawnAbsent()
+  }
+
   private async initialize(artifactPromise: Promise<WindowsSupervisorArtifact>): Promise<void> {
     try {
       const artifact = await artifactPromise
-      if (this.cancelled) return
+      if (this.cancelled) {
+        this.handle.markSpawnAbsent()
+        return
+      }
       const helper = spawn(artifact.executablePath, [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
@@ -359,6 +384,11 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
       })
       helper.once('exit', (code) => {
         this.handle.observeHelperExit()
+        if (this.readyState.settled && !this.handle.treeConfirmedExited) {
+          const message = `Windows shell supervisor exited before reporting an empty Job Object (code ${code ?? 'unknown'})`
+          this.handle.observeProtocolFailure(message)
+          this.frames.push({ kind: 'failure', message })
+        }
         if (!this.readyState.settled) {
           this.readyState.reject(
             new Error(
@@ -423,7 +453,9 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
       return
     }
     if (kind === WindowsSupervisorFrameKind.terminationError) {
-      this.handle.observeProtocolFailure(payload.toString('utf8') || 'Windows Job Object termination failed')
+      const message = payload.toString('utf8') || 'Windows Job Object termination failed'
+      this.handle.observeProtocolFailure(message)
+      this.frames.push({ kind: 'failure', message })
       return
     }
     this.failProtocol(new Error(`unknown Windows shell supervisor frame kind ${kind}`))
@@ -433,6 +465,7 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
     const message = error instanceof Error ? error.message : String(error)
     this.handle.observeProtocolFailure(message)
     this.readyState.reject(new Error(message))
+    this.frames.push({ kind: 'failure', message })
     this.helper?.kill()
     debugLog('shell-session.windows-protocol-error', `messageBytes=${Buffer.byteLength(message, 'utf8')}`)
   }

@@ -48,6 +48,7 @@ export type ShellLifecycleChange =
   | { kind: 'spawn-ready' }
   | { kind: 'root-exited'; exitCode?: number; signal?: string }
   | { kind: 'tree-confirmed' }
+  | { kind: 'provider-failure'; failure: ShellFailure }
   | { kind: 'manager-draining'; reason: TerminationReason }
   | { kind: 'termination-failed'; reason: TerminationReason; failure: ShellFailure }
 
@@ -93,6 +94,8 @@ export interface ShellSession {
   exitedMonotonicAt?: number
   exitedSeq?: number
   hardTimeoutAt?: number
+  hardTimeoutMonotonicAt?: number
+  treeConfirmedMonotonicAt?: number
   rootExited: boolean
   treeConfirmedExited: boolean
   outputFinalized: boolean

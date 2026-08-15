@@ -1,8 +1,10 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import path from 'node:path'
 
 import {
   WindowsJobObjectProvider,
   resolveWindowsSupervisorArtifact,
+  resolveWindowsSupervisorNativeRoot,
 } from '../src/tools/shell-session/providers/windows-job.js'
 import {
   defaultWindowsPowerShellExecutable,
@@ -15,6 +17,51 @@ import {
 } from '../src/tools/shell-session/providers/windows-supervisor-protocol.js'
 
 const isWindows = process.platform === 'win32'
+
+describe('Windows supervisor artifact boundary', () => {
+  it('resolves only deterministic package-local native directories', () => {
+    const coreRoot = path.resolve('virtual', 'core')
+    expect(
+      resolveWindowsSupervisorNativeRoot(
+        path.join(coreRoot, 'src', 'tools', 'shell-session', 'providers', 'windows-job.ts'),
+      ),
+    ).toBe(path.join(coreRoot, 'dist', 'native', 'windows'))
+    expect(
+      resolveWindowsSupervisorNativeRoot(
+        path.join(coreRoot, 'dist', 'tools', 'shell-session', 'providers', 'windows-job.js'),
+      ),
+    ).toBe(path.join(coreRoot, 'dist', 'native', 'windows'))
+
+    const cliBundle = path.resolve('virtual', 'cli', 'dist', 'cli.js')
+    expect(resolveWindowsSupervisorNativeRoot(cliBundle)).toBe(path.join(path.dirname(cliBundle), 'native', 'windows'))
+  })
+
+  it('does not report a pending artifact resolution as an absent process tree', async () => {
+    let resolveArtifact!: (artifact: { executablePath: string; sha256: string }) => void
+    const artifact = new Promise<{ executablePath: string; sha256: string }>((resolve) => {
+      resolveArtifact = resolve
+    })
+    const provider = new WindowsJobObjectProvider({ artifact })
+    const attempt = provider.spawnManaged('Write-Output "never-started"', {
+      cwd: process.cwd(),
+      buffer: false,
+      isolatedProcessTree: true,
+      tty: false,
+    })
+    const readyFailure = attempt.ready.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+
+    expect(await attempt.handle.probeTree()).not.toBe('confirmed-exited')
+    const cleanup = await attempt.cancelBeforeReady('stop-command')
+    expect(cleanup.treeConfirmedExited).toBe(true)
+    expect(await attempt.handle.probeTree()).toBe('confirmed-exited')
+
+    resolveArtifact({ executablePath: 'not-used-after-cancellation.exe', sha256: '0'.repeat(64) })
+    expect(await readyFailure).toBeInstanceOf(Error)
+  })
+})
 
 function withTimeout<T>(promise: Promise<T>, ms = 10_000): Promise<T> {
   return Promise.race([

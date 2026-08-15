@@ -638,6 +638,11 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
         delete tools[name]
       }
     }
+    if (tools.shell && (!tools.shellOutput || !tools.killShell)) {
+      delete tools.shell
+      delete tools.shellOutput
+      delete tools.killShell
+    }
   }
 
   return tools

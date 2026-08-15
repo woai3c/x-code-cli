@@ -70,6 +70,7 @@ class FakeAttempt implements ManagedSpawnAttempt {
   readonly ready: Promise<SpawnReadyResult>
   cancelResult: ProcessTerminationResult = CONFIRMED_TERMINATION
   cancelReasons: Array<TerminationReason | 'turn-abort-before-ready'> = []
+  cancelHandler?: (reason: TerminationReason | 'turn-abort-before-ready') => Promise<ProcessTerminationResult>
   private frames: ManagedProcessFrame[]
   private listener?: (frame: ManagedProcessFrame) => void
   private activated = false
@@ -96,6 +97,7 @@ class FakeAttempt implements ManagedSpawnAttempt {
 
   async cancelBeforeReady(reason: TerminationReason | 'turn-abort-before-ready'): Promise<ProcessTerminationResult> {
     this.cancelReasons.push(reason)
+    if (this.cancelHandler) return this.cancelHandler(reason)
     return this.cancelResult
   }
 
@@ -502,6 +504,54 @@ describe('UnifiedShellSessionManager', () => {
     if (observation.kind === 'terminal') observation.lease.ack()
   })
 
+  it('waits for starting-session cancellation instead of confirming an absent provisional tree', async () => {
+    let resolveCancellation!: (result: ProcessTerminationResult) => void
+    const cancellation = new Promise<ProcessTerminationResult>((resolve) => {
+      resolveCancellation = resolve
+    })
+    const provider = new FakeProvider()
+    const attempt = new FakeAttempt({ ready: new Promise(() => {}) })
+    attempt.cancelHandler = () => cancellation
+    provider.nextAttempt = attempt
+    const shellManager = manager(provider)
+    const starting = shellManager.start(startRequest({ kind: 'timed', ms: 1_000 }))
+    await flushEvents()
+
+    const shellId = shellManager.list()[0]!.shellId
+    let stopSettled = false
+    const stopping = shellManager.terminate(shellId, 'stop-command').then((result) => {
+      stopSettled = true
+      return result
+    })
+    await flushEvents()
+
+    expect(stopSettled).toBe(false)
+    expect(attempt.cancelReasons).toEqual(['stop-command'])
+    expect(attempt.handle.terminationCalls).toEqual([])
+
+    resolveCancellation({
+      gracefulAttempted: true,
+      forceAttempted: true,
+      rootExited: false,
+      treeConfirmedExited: false,
+      failure: { code: 'termination-unconfirmed', message: 'injected cancellation failure' },
+    })
+    const stopped = await stopping
+    const observation = await starting
+
+    expect(stopped.treeConfirmedExited).toBe(false)
+    expect(observation.kind).toBe('running')
+    expect(observation.result.cleanupResidual).toBe(true)
+    expect(shellManager.list()[0]).toMatchObject({
+      treeConfirmedExited: false,
+      cleanupResidual: true,
+      status: 'termination-failed',
+    })
+
+    attempt.cancelHandler = undefined
+    await shellManager.terminate(shellId, 'stop-command')
+  })
+
   it('restarts terminal retention after a final observation lease is released', async () => {
     vi.useFakeTimers()
     try {
@@ -609,6 +659,70 @@ describe('UnifiedShellSessionManager', () => {
     expect(summary?.timedOut).toBe(true)
     expect(summary?.status).toBe('exited')
     expect(provider.attempts[0]!.handle.terminationCalls[0]?.reason).toBe('hard-timeout')
+  })
+
+  it('does not mark a tree confirmed before the deadline as timed out while output EOF is delayed', async () => {
+    const provider = new FakeProvider()
+    const attempt = new FakeAttempt()
+    provider.nextAttempt = attempt
+    const shellManager = manager(provider, { trailingOutputGraceMs: 100 })
+    const request = startRequest({ kind: 'timed', ms: 1_000 })
+    request.prepared.hardTimeoutMs = 20
+    const pending = shellManager.start(request)
+    await flushEvents()
+
+    attempt.emit({ kind: 'root-exit', exitCode: 0 })
+    attempt.emit({ kind: 'tree-exit' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 40))
+
+    expect(shellManager.list()[0]?.timedOut).toBe(false)
+    attempt.emit({ kind: 'stream-end', stream: 'stdout' })
+    attempt.emit({ kind: 'stream-end', stream: 'stderr' })
+    const observation = await pending
+
+    expect(observation.kind).toBe('terminal')
+    expect(observation.result.exitCode).toBe(0)
+    expect(observation.result.timedOut).toBe(false)
+    if (observation.kind === 'terminal') observation.lease.ack()
+  })
+
+  it('wakes an observer and starts bounded cleanup when an active provider reports failure', async () => {
+    const provider = new FakeProvider()
+    const attempt = new FakeAttempt()
+    attempt.handle.terminationResult = {
+      gracefulAttempted: true,
+      forceAttempted: true,
+      rootExited: false,
+      treeConfirmedExited: false,
+      failure: { code: 'termination-unconfirmed', message: 'tree state unavailable' },
+    }
+    provider.nextAttempt = attempt
+    const shellManager = manager(provider)
+    const started = await shellManager.start(startRequest({ kind: 'immediate' }))
+    const waiting = shellManager.interact({
+      shellId: started.result.shellId!,
+      toolCallId: 'call-provider-failure',
+      chars: '',
+      wait: { kind: 'timed', ms: 5_000 },
+      maxOutputBytes: 1024,
+    })
+    await flushEvents()
+
+    attempt.emit({ kind: 'failure', message: 'malformed supervisor frame' })
+    const observation = await Promise.race([
+      waiting,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('provider failure did not wake wait')), 250)),
+    ])
+
+    expect(observation.kind).toBe('running')
+    expect(observation.result.isError).toBe(true)
+    expect(observation.result.failure?.message).toMatch(/malformed supervisor frame|tree state unavailable/)
+    expect(attempt.handle.terminationCalls[0]?.reason).toBe('provider-failure')
+    await waitUntil(() => shellManager.list()[0]?.status === 'termination-failed')
+
+    attempt.handle.terminationResult = CONFIRMED_TERMINATION
+    await flushEvents()
+    await shellManager.terminate(started.result.shellId!, 'stop-command')
   })
 
   it('wakes a timed observer when manager draining starts', async () => {

@@ -15,7 +15,7 @@ import type { SubAgentDefinition } from './types.js'
 export type SubAgentReloadSummary = ReloadSummary
 
 function acceptsAgentDefinition(agent: SubAgentDefinition): boolean {
-  const allowsShell = agent.tools?.some((tool) => tool === 'shell' || tool === '*') ?? false
+  const allowsShell = agent.tools === undefined || agent.tools.some((tool) => tool === 'shell' || tool === '*')
   const denied = new Set(agent.disallowedTools ?? [])
   if (!allowsShell || denied.has('shell')) return true
   const conflict = ['shellOutput', 'killShell'].find((tool) => denied.has(tool))

@@ -30,6 +30,7 @@ export type TerminationReason =
   | 'sighup'
   | 'fatal-exit'
   | 'root-exited-residual'
+  | 'provider-failure'
 
 export interface TerminationBudget {
   gracefulMs: number

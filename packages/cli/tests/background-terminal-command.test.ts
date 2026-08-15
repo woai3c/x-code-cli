@@ -74,4 +74,42 @@ describe('background terminal slash command formatting', () => {
     expect(text).toContain('Stopped 1 background terminal; 1 could not be confirmed stopped.')
     expect(text).toContain('bg_2 · termination-unconfirmed · still live')
   })
+
+  it('reports naturally exited targets separately from terminals stopped by this command', () => {
+    const text = formatStopResult({
+      managerInstanceId: 'manager',
+      reason: 'stop-command',
+      requested: 2,
+      confirmed: 1,
+      alreadyExited: 1,
+      results: [
+        {
+          managerInstanceId: 'manager',
+          shellId: 'bg_1',
+          reason: 'stop-command',
+          disposition: 'terminated',
+          gracefulAttempted: true,
+          forceAttempted: false,
+          rootExited: true,
+          treeConfirmedExited: true,
+          terminationConfirmed: true,
+          output: '',
+        },
+        {
+          managerInstanceId: 'manager',
+          shellId: 'bg_2',
+          reason: 'stop-command',
+          disposition: 'already-exited',
+          gracefulAttempted: false,
+          forceAttempted: false,
+          rootExited: true,
+          treeConfirmedExited: true,
+          terminationConfirmed: true,
+          output: '',
+        },
+      ],
+    })
+
+    expect(text).toBe('Stopped 1 background terminal; 1 background terminal had already exited.')
+  })
 })

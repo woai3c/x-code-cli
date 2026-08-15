@@ -606,13 +606,14 @@ async function runOriginalShellPost(
   origin: ShellHookOrigin,
   output: string,
   isError: boolean,
+  fallbackOutput = output,
 ): Promise<string> {
   if (
     origin.preToolUse === 'skipped-peer-tainted' ||
     origin.hookSnapshot.postHooks.length === 0 ||
     !ctx.options.hookBus
   ) {
-    return output
+    return fallbackOutput
   }
   const decisions = await ctx.options.hookBus.emitToolSnapshot(
     origin.hookSnapshot,
@@ -631,7 +632,7 @@ async function runOriginalShellPost(
     },
     { signal: ctx.options.abortSignal },
   )
-  return aggregatePostToolUse(decisions).output ?? output
+  return aggregatePostToolUse(decisions).output ?? fallbackOutput
 }
 
 function notifyShellResultNoThrow(ctx: HandlerCtx, output: string, isError: boolean): void {
@@ -667,7 +668,13 @@ async function commitShellObservation(ctx: HandlerCtx, observation: ShellObserva
   try {
     let output = baseOutput
     try {
-      output = await runOriginalShellPost(ctx, observation.lease.origin, baseOutput, observation.lease.post.isError)
+      output = await runOriginalShellPost(
+        ctx,
+        observation.lease.origin,
+        observation.lease.post.output,
+        observation.lease.post.isError,
+        baseOutput,
+      )
     } catch (error) {
       if (!isAbortError(error, ctx.options.abortSignal)) throw error
       debugLog('agent.shell-post-aborted', observation.lease.claimId)

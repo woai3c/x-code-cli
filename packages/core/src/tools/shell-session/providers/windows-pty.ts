@@ -97,6 +97,10 @@ class WindowsPtyManagedProcess implements ManagedProcess {
     return this.currentRootPid
   }
 
+  get treeConfirmedExited(): boolean {
+    return this.treeExit.settled
+  }
+
   get terminalAttached(): boolean {
     return this.spawnState === 'attached'
   }
@@ -438,6 +442,8 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
     events.once('close', () => {
       if (!this.readyState.settled) {
         this.readyState.reject(new Error('Windows PTY supervisor event pipe closed before ready'))
+      } else if (!this.handle.treeConfirmedExited) {
+        this.failProtocol(new Error('Windows PTY supervisor event pipe closed before reporting an empty Job Object'))
       }
     })
     this.maybeSendLaunch()
@@ -503,7 +509,9 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
       return
     }
     if (kind === WindowsSupervisorFrameKind.terminationError) {
-      this.handle.observeProtocolFailure(payload.toString('utf8') || 'Windows PTY Job Object termination failed')
+      const message = payload.toString('utf8') || 'Windows PTY Job Object termination failed'
+      this.handle.observeProtocolFailure(message)
+      this.frames.push({ kind: 'failure', message })
       return
     }
     this.failProtocol(new Error(`unexpected Windows PTY supervisor frame kind ${kind}`))

@@ -33,6 +33,20 @@ describe('HeadTailOutputBuffer', () => {
     })
   })
 
+  it('does not concatenate the retained tail for every small append after truncation', () => {
+    const buffer = new HeadTailOutputBuffer(1024 * 1024)
+    buffer.append(Buffer.alloc(1024 * 1024, 97))
+    buffer.append('b')
+    const concat = vi.spyOn(Buffer, 'concat')
+    try {
+      for (let index = 0; index < 10_000; index++) buffer.append('x')
+      expect(concat).not.toHaveBeenCalled()
+      expect(buffer.retainedBytes).toBe(1024 * 1024)
+    } finally {
+      concat.mockRestore()
+    }
+  })
+
   it('never slices a multibyte character into a replacement glyph', () => {
     const value = '开头-中间-结尾'
     const buffer = new HeadTailOutputBuffer(13)

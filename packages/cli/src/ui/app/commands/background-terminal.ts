@@ -41,12 +41,16 @@ export function formatBackgroundTerminals(sessions: readonly ShellSessionSummary
 export function formatStopResult(result: TerminateAllResult | null): string {
   if (!result || result.requested === 0) return 'No running background terminals.'
   const failed = result.results.filter((entry) => !entry.treeConfirmedExited)
-  const stopped = result.confirmed + result.alreadyExited
+  const stopped = result.confirmed
+  const alreadyExited =
+    result.alreadyExited > 0
+      ? `; ${result.alreadyExited} background terminal${result.alreadyExited === 1 ? '' : 's'} had already exited`
+      : ''
   if (failed.length === 0) {
-    return `Stopped ${stopped} background terminal${stopped === 1 ? '' : 's'}.`
+    return `Stopped ${stopped} background terminal${stopped === 1 ? '' : 's'}${alreadyExited}.`
   }
   const lines = [
-    `Stopped ${stopped} background terminal${stopped === 1 ? '' : 's'}; ${failed.length} could not be confirmed stopped.`,
+    `Stopped ${stopped} background terminal${stopped === 1 ? '' : 's'}${alreadyExited}; ${failed.length} could not be confirmed stopped.`,
   ]
   for (const entry of failed) {
     lines.push(

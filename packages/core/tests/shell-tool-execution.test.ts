@@ -319,7 +319,13 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
     if (transportTool === 'shellOutput') provider.attempts[0]!.complete()
 
     await processToolCalls(
-      [{ toolName: transportTool, toolCallId: observerCallId, input: { shellId, block: false } }],
+      [
+        {
+          toolName: transportTool,
+          toolCallId: observerCallId,
+          input: { shellId, block: false, ...(transportTool === 'shellOutput' ? { maxOutputTokens: 1 } : {}) },
+        },
+      ],
       state,
       { ...options, modelId: 'observer-model' },
       callbacks,
@@ -348,6 +354,8 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
       name: 'shell',
       callId: 'call-shell',
       args: { command: 'hook-modified-command', cwd: process.cwd(), runInBackground: true },
+      output: 'done\n',
+      isError: false,
     })
     expect(capture).toHaveBeenCalledTimes(1)
     expect(emitCurrent).not.toHaveBeenCalled()
