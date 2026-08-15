@@ -26,6 +26,8 @@ export const SLASH_COMMANDS = [
     argumentHint: '[on|off]',
   },
   { name: '/clear', description: 'Clear conversation history' },
+  { name: '/ps', description: 'List managed background terminals' },
+  { name: '/stop', description: 'Stop all or one managed background terminal', argumentHint: '[shell-id]' },
   { name: '/clear-peer-context', description: 'Remove the peer-influenced conversation suffix' },
   { name: '/list-agents', description: 'List reachable cross-session peers' },
   { name: '/compact', description: 'Manually compress context' },

@@ -86,7 +86,15 @@ describe('system prompt budget and stability', () => {
 
 describe('heavy tool description budgets', () => {
   it('keeps worktree decisions in the model instead of the shell runtime schema', () => {
-    expect(Object.keys((shell.inputSchema as any).shape)).toEqual(['command', 'timeout', 'runInBackground'])
+    expect(Object.keys((shell.inputSchema as any).shape)).toEqual([
+      'command',
+      'timeout',
+      'yieldTimeMs',
+      'cwd',
+      'maxOutputTokens',
+      'tty',
+      'runInBackground',
+    ])
     expect(shell.description).not.toContain('isolation')
   })
 

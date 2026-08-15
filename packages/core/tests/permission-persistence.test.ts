@@ -30,9 +30,16 @@ describe('permission persistence', () => {
 
     const localDir = path.join(cwd, '.x-code', 'local')
     const data = JSON.parse(await fs.readFile(path.join(localDir, 'permissions.json'), 'utf-8')) as {
-      allow: string[]
+      version: number
+      allow: unknown[]
     }
-    expect(data.allow).toEqual(['shell:git commit:*', 'shell:git push:*'])
+    expect(data).toEqual({
+      version: 2,
+      allow: [
+        { tool: 'shell', pattern: 'git commit', type: 'prefix', cwd: path.resolve(cwd) },
+        { tool: 'shell', pattern: 'git push', type: 'prefix', cwd: path.resolve(cwd) },
+      ],
+    })
     expect(await fs.readFile(path.join(localDir, '.gitignore'), 'utf-8')).toBe('*\n')
   })
 
@@ -48,8 +55,10 @@ describe('permission persistence', () => {
     await fs.writeFile(filePath, JSON.stringify(data), 'utf-8')
 
     loadPersistedRules(cwd)
-    expect(sessionRulesMatch('shell', { command: 'npm install lodash' })).toBe(true)
-    expect(readPersistedRules(cwd)).toEqual([{ tool: 'shell', pattern: 'npm install', type: 'prefix' }])
+    expect(sessionRulesMatch('shell', { command: 'npm install lodash' }, path.resolve(cwd))).toBe(true)
+    expect(readPersistedRules(cwd)).toEqual([
+      { tool: 'shell', pattern: 'npm install', type: 'prefix', cwd: path.resolve(cwd) },
+    ])
   })
 
   it('keeps persistence synchronous and propagates write failures', async () => {

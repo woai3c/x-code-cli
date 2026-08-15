@@ -103,11 +103,11 @@ describe('TUI interruption', () => {
     })
   })
 
-  itPosix('terminates an in-flight shell child process', async () => {
+  itPosix('keeps an interrupted shell session alive until /stop terminates its process tree', async () => {
     await withTui('interrupt-shell', [], async ({ harness, provider, workspace }) => {
       const pidFile = path.join(workspace.cwd, 'shell-child.pid')
       const finishedFile = path.join(workspace.cwd, 'shell-child.finished')
-      const script = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(finishedFile)},'done'),5000)`
+      const script = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(finishedFile)},'done'),30000)`
       const encodedScript = Buffer.from(script).toString('base64')
       provider.enqueue({
         type: 'tool-call',
@@ -125,6 +125,11 @@ describe('TUI interruption', () => {
 
       harness.key('ctrl-c')
       await harness.waitForText('Press Ctrl+C again to exit')
+      await harness.waitForText('[Request interrupted by user')
+      expect(processExists(pid)).toBe(true)
+
+      await submitInput(harness, '/stop')
+      await harness.waitForText('Stopped 1 background terminal.')
       await waitFor(() => !processExists(pid), 'shell child termination', 5000)
       expect(await pathExists(finishedFile)).toBe(false)
 
@@ -156,9 +161,10 @@ describe('TUI interruption', () => {
         harness.key('ctrl-c')
         await harness.waitForText('Press Ctrl+C again to exit')
         await waitFor(() => provider.mainRequests()[1]?.cancelled === true, 'sub-agent request cancellation', 5000)
+        await harness.waitForText('[Request interrupted by user')
 
         await submitInput(harness, 'hi')
-        await harness.waitForText('sub-agent-recovery-ok')
+        await harness.waitForText('sub-agent-recovery-ok', 10_000)
       },
     )
   })
@@ -178,6 +184,10 @@ describe('TUI interruption', () => {
         await waitFor(() => provider.mainRequests()[0]?.cancelled === true, 'session request cancellation')
         await harness.waitForText('[Request interrupted by user]')
 
+        await waitFor(
+          async () => JSON.stringify(await readSessionJsonl(workspace.cwd)).includes('[Request interrupted by user]'),
+          'interruption persisted to session JSONL',
+        )
         const interrupted = await readSessionJsonl(workspace.cwd)
         expect(interrupted[0]).toMatchObject({ t: 'meta', kind: 'header' })
         expect(JSON.stringify(interrupted)).toContain('[Request interrupted by user]')

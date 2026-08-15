@@ -1,3 +1,19 @@
+## Unreleased
+
+### Features
+
+- unify foreground and background shell execution into managed sessions with automatic 10-second yielding, `/ps`, and `/stop`
+- use a bundled, hash-verified Windows Job Object supervisor for reliable process-tree cleanup on Windows x64 and arm64; normal Node.js builds do not require Rust
+- support interactive `tty: true` shell sessions through PTY/ConPTY with Unicode stdin, Ctrl+C, and terminal resize
+
+### Breaking Behavior Changes
+
+- omitting `shell.timeout` no longer applies a 30-second hard limit; commands keep running until their session ends or an explicit timeout is reached
+- `shellOutput({ shellId })` now waits up to 5 seconds for a change by default; use `block: false` or `yieldTimeMs: 0` for an immediate result
+- Esc stops waiting after a shell has started but does not kill it; use `killShell` or `/stop` to terminate it
+- `/clear` and `/resume` now terminate the current session's managed shells before replacing its runtime state
+- shell ids are runtime-only opaque ids and do not survive `/clear`, `/resume`, or a CLI restart
+
 ## v0.4.4 (2026-08-10)
 
 ### Bug Fixes

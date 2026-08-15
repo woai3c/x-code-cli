@@ -16,6 +16,7 @@ const result = spawnSync(npm, ['pack', './packages/cli', '--dry-run', '--ignore-
   encoding: 'utf8',
   shell: process.platform === 'win32',
   stdio: ['ignore', 'pipe', 'pipe'],
+  windowsHide: true,
 })
 
 if (result.error) {

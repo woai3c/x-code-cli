@@ -14,14 +14,14 @@ function isRipgrepAvailable(): boolean {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const rg = require('@vscode/ripgrep') as { rgPath: string }
-    execFileSync(rg.rgPath, ['--version'], { stdio: 'ignore' })
+    execFileSync(rg.rgPath, ['--version'], { stdio: 'ignore', windowsHide: true })
     return true
   } catch {
     /* fall through */
   }
   // Fallback to system rg
   try {
-    execFileSync('rg', ['--version'], { stdio: 'ignore' })
+    execFileSync('rg', ['--version'], { stdio: 'ignore', windowsHide: true })
     return true
   } catch {
     return false

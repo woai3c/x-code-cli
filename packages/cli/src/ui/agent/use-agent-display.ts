@@ -75,6 +75,15 @@ export function modelMessagesToDisplay(messages: ModelMessage[]): DisplayMessage
         // use-agent.ts) — skip it here too so a resumed session doesn't
         // suddenly surface the tool-search calls the live view hid.
         if (part.toolName === TOOL_SEARCH_TOOL_NAME) continue
+        if (
+          part.toolName === 'shellOutput' &&
+          (!part.input ||
+            typeof part.input !== 'object' ||
+            !('chars' in (part.input as Record<string, unknown>)) ||
+            (part.input as Record<string, unknown>).chars === '')
+        ) {
+          continue
+        }
         tcIdx++
         const result = toolResults.get(part.toolCallId)
         const tc: DisplayToolCall = {

@@ -54,9 +54,9 @@ const WEAK_MODEL_PATTERNS = [
  *  while keeping file / grep / exec direct. The small browserVisualCheck
  *  composite stays direct because deferring it would add a whole model round
  *  to the common post-frontend-edit verification path. */
-export const DEFERRED_BUILTIN_TOOLS = ['webSearch', 'webFetch', 'todoWrite', 'shellOutput', 'killShell'] as const
+export const DEFERRED_BUILTIN_TOOLS = ['webSearch', 'webFetch', 'todoWrite'] as const
 
-const STANDARD_DEFERRED_BUILTIN_TOOLS = ['task', 'webSearch', 'webFetch', 'shellOutput', 'killShell'] as const
+const STANDARD_DEFERRED_BUILTIN_TOOLS = ['task', 'webSearch', 'webFetch'] as const
 
 export type ToolProfile = 'full' | 'standard'
 

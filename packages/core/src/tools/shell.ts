@@ -4,7 +4,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 export const shell = tool({
-  description: `Execute a shell command and return stdout/stderr. The working directory persists between commands.
+  description: `Execute a shell command and return stdout/stderr. Commands that are still running after the initial wait automatically continue as background shell sessions.
 
 IMPORTANT: Avoid using this tool to run grep, rg, cat, head, tail, sed, or awk commands. Instead, use the appropriate dedicated tool — they provide a better user experience:
 - File search: Use glob (NOT find or ls)
@@ -19,21 +19,35 @@ Instructions:
 - When issuing multiple commands: if they are independent, make multiple shell tool calls in a single message for parallelism. If they depend on each other, use '&&' to chain them. Use ';' only when you need sequential execution but don't care if earlier commands fail. Do NOT use newlines to separate commands.
 - For git commands: prefer creating a new commit rather than amending. Never skip hooks (--no-verify) unless the user explicitly asks. Before running destructive operations (git reset --hard, git push --force), consider safer alternatives.
 - Do not sleep between commands that can run immediately.
-- For long-running processes (dev servers, file watchers, long builds/tests you want to monitor), set runInBackground: true. This returns a shell id immediately; read its output later with shellOutput and stop it with killShell.`,
+- The default initial wait is 10 seconds. If the command is still running, the result includes a shell id; read new output with shellOutput or stop it with killShell.
+- Set tty: true for interactive programs. Continue the terminal with shellOutput chars, including terminal control input such as Ctrl+C.
+- Set yieldTimeMs: 0 or legacy runInBackground: true for an immediate background result.
+- timeout is an optional hard runtime limit. Omitting it leaves the process running until it exits or is explicitly stopped.`,
   inputSchema: z.object({
     command: z.string().describe('The command to execute'),
     timeout: z
       .number()
+      .int()
+      .positive()
+      .max(2_147_483_647)
       .optional()
-      .describe('Timeout in milliseconds (default: 30000). Ignored when runInBackground is true.'),
+      .describe('Optional hard runtime limit in milliseconds. Omit for no hard timeout.'),
+    yieldTimeMs: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Initial wait in milliseconds before returning a running shell id (default: 10000; 0: immediate).'),
+    cwd: z.string().optional().describe('Working directory, resolved relative to the session project directory.'),
+    maxOutputTokens: z.number().int().positive().optional().describe('Optional model-facing output budget in tokens.'),
+    tty: z
+      .boolean()
+      .optional()
+      .describe('Run the command in a PTY/ConPTY so it can accept interactive terminal input.'),
     runInBackground: z
       .boolean()
       .optional()
-      .describe(
-        'Run the command in the background and return a shell id immediately instead of waiting for it to finish. ' +
-          'Use for long-running processes (dev servers, watchers, long builds). ' +
-          'Read its output later with shellOutput and stop it with killShell.',
-      ),
+      .describe('Legacy compatibility flag. When true and yieldTimeMs is omitted, return a shell id immediately.'),
   }),
   // No execute — handled manually in agent loop for permission check + cross-platform shell + streaming
 })

@@ -1,10 +1,11 @@
 import esbuild from 'esbuild'
 
-import { rm } from 'node:fs/promises'
+import { cp, rm } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const OUT_DIR = fileURLToPath(new URL('./dist/', import.meta.url))
+const CORE_NATIVE_DIR = fileURLToPath(new URL('../core/dist/native/', import.meta.url))
 
 // ESM polyfills — provide __dirname, __filename, and require() for CJS compat
 const ESM_POLYFILLS = `
@@ -117,6 +118,7 @@ await esbuild.build({
     // Native addons that can't be bundled
     '@vscode/ripgrep',
     'fs-ext-extra-prebuilt',
+    'node-pty',
     '@fugood/whisper.node',
     '@fugood/node-whisper-darwin-arm64',
     '@fugood/node-whisper-darwin-x64',
@@ -129,3 +131,9 @@ await esbuild.build({
     '@fugood/node-whisper-wasm',
   ],
 })
+
+try {
+  await cp(CORE_NATIVE_DIR, fileURLToPath(new URL('./dist/native/', import.meta.url)), { recursive: true })
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error
+}

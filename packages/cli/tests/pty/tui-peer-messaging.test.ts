@@ -99,7 +99,7 @@ describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () =
       expect(beta.raw()).not.toContain('\u202e')
       beta.key('escape')
 
-      await beta.waitForText(/Payload: shell-command · \d+ original UTF-8 bytes/)
+      await beta.waitForText(/Payload: canonical-json · \d+ original UTF-8 bytes/)
       await beta.waitForText(/SHA-256: [a-f0-9]{64}/)
       await beta.waitForText('\\u001B[999;999H')
       await beta.waitForText('\\u001B]52;c;cGF5bG9hZA==\\u0007')

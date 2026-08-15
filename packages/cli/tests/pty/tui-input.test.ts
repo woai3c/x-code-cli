@@ -133,9 +133,9 @@ describe('TUI input and lifecycle', () => {
           expect(JSON.stringify(branch!.messages)).toContain('shared-answer')
           expect(JSON.stringify(branch!.messages)).not.toContain('generate document A')
         }
-        const screen = harness.screen().join('\n')
-        expect(screen).toContain('xc --resume "doc branch"')
-        expect(screen).toContain(`xc --resume ${unnamed!.sessionId}`)
+        await harness.waitForText(`xc --resume ${unnamed!.sessionId}`)
+        expect(harness.raw()).toContain('xc --resume "doc branch"')
+        expect(harness.raw()).toContain(`xc --resume ${unnamed!.sessionId}`)
 
         await exitTui(harness)
       },

@@ -267,6 +267,51 @@ describe('HookBus matcher behaviour', () => {
       }),
     ).resolves.toEqual([])
   })
+
+  it('keeps an immutable launch-time tool snapshot across registry replacement', async () => {
+    const oldPost: RegisteredHook = {
+      pluginId: 'old@local',
+      pluginDir: process.cwd(),
+      event: 'PostToolUse',
+      entry: { command: 'node -e "process.exit(0)"', matcher: '^shell$' },
+    }
+    const newPost: RegisteredHook = {
+      pluginId: 'new@local',
+      pluginDir: process.cwd(),
+      event: 'PostToolUse',
+      entry: { command: 'node -e "process.exit(0)"', matcher: '^shell$' },
+    }
+    const bus = new HookBus(new HookRegistry([oldPost]))
+    const launchSnapshot = bus.captureToolSnapshot('shell')
+
+    bus.replaceRegistry(new HookRegistry([newPost]))
+    const nextSnapshot = bus.captureToolSnapshot('shell')
+
+    expect(launchSnapshot.generation).toBe(0)
+    expect(launchSnapshot.postHooks).toEqual([oldPost])
+    expect(Object.isFrozen(launchSnapshot.postHooks)).toBe(true)
+    expect(nextSnapshot.generation).toBe(1)
+    expect(nextSnapshot.postHooks).toEqual([newPost])
+
+    const decisions = await bus.emitToolSnapshot(launchSnapshot, 'post', {
+      name: 'PostToolUse',
+      session: { cwd: process.cwd(), modelId: 'm' },
+      tool: { name: 'shell', args: { command: 'echo ok' }, callId: 'c', output: 'ok', isError: false },
+    })
+    expect(decisions).toHaveLength(1)
+  }, 15_000)
+
+  it('rejects events that do not match a captured tool snapshot', async () => {
+    const bus = new HookBus(new HookRegistry())
+    const snapshot = bus.captureToolSnapshot('shell')
+    await expect(
+      bus.emitToolSnapshot(snapshot, 'post', {
+        name: 'PostToolUse',
+        session: { cwd: process.cwd(), modelId: 'm' },
+        tool: { name: 'edit', args: {}, callId: 'c', output: '', isError: false },
+      }),
+    ).rejects.toThrow(/Hook snapshot mismatch/)
+  })
 })
 
 // ── executor (real subprocess) ─────────────────────────────────────────

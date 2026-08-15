@@ -363,7 +363,7 @@ describe('buildDeferredCatalog', () => {
     expect(tools).toHaveProperty('toolSearch')
   })
 
-  it('reduces the directly injected schema surface by at least fifteen percent', () => {
+  it('reduces the directly injected schema surface by at least ten percent', () => {
     const subAgentRegistry = {
       list: () => [{ name: 'reviewer', description: 'Review changes' }],
       names: () => ['reviewer'],
@@ -384,7 +384,11 @@ describe('buildDeferredCatalog', () => {
         0,
       )
 
-    expect(wireSize(standard)).toBeLessThan(wireSize(full) * 0.85)
+    // shellOutput and killShell intentionally stay direct as a static
+    // transport closure for auto-yielded shell sessions. Their always-loaded
+    // schemas reduce the relative percentage while preserving the same
+    // deferred task/web payload savings.
+    expect(wireSize(standard)).toBeLessThan(wireSize(full) * 0.9)
   })
 })
 

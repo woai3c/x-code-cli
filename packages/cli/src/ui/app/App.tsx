@@ -27,7 +27,9 @@ import {
 import type { AgentOptions, CacheMissSummary, DiffStats, LanguageModel, LoadedSession } from '@x-code-cli/core'
 import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-code-cli/core'
 
+import type { CliCleanupController } from '../../cleanup-controller.js'
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
+import { visibleBackgroundTerminals } from '../agent/shell-session-ui.js'
 import { useAgent } from '../agent/use-agent.js'
 import { usePeerInboxAdapter } from '../agent/use-peer-inbox-adapter.js'
 import { isSlashCommandAllowedWhileBusy } from '../busy-command.js'
@@ -48,6 +50,7 @@ import {
 import { formatCompactionResult, formatTokenCount, parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
 import { INIT_PROMPT, REVIEW_PROMPT, SLASH_COMMANDS, buildHelpText } from './command-content.js'
+import { formatBackgroundTerminals, formatStopResult } from './commands/background-terminal.js'
 import { createBrowserCommandHandler } from './commands/browser.js'
 import { createDoctorCommandHandler } from './commands/doctor.js'
 import { parseGoalCreateArgs, tokenizeArgs } from './commands/goal.js'
@@ -77,7 +80,7 @@ interface AppProps {
    *  `xc --resume` flag path. Once Ink is ready (so askQuestion can
    *  render), the same code path as `/resume` runs. */
   resumeIntent?: 'pick' | null
-  onCleanupReady?: (fn: () => Promise<void>) => void
+  onCleanupReady?: (controller: CliCleanupController) => void
   /** Hand the post-Ink resume hint a live snapshot of the session.
    *  Wired in app.tsx — the registered getter is called from
    *  index.ts's gracefulShutdown after the terminal is reset, so the
@@ -119,6 +122,9 @@ export function App({
     resolveQuestion,
     abort,
     cleanup,
+    cleanupShells,
+    listShellSessions,
+    stopShellSessions,
     fork,
     clear,
     clearPeerContext,
@@ -263,8 +269,8 @@ export function App({
 
   // Register cleanup function for graceful exit (SIGINT)
   useEffect(() => {
-    onCleanupReady?.(cleanup)
-  }, [cleanup]) // eslint-disable-line react-hooks/exhaustive-deps
+    onCleanupReady?.({ terminateShells: cleanupShells, drain: cleanup })
+  }, [cleanup, cleanupShells]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Register the post-exit session-info getter. Index.ts uses it after
   // resetTerminal to print "Resume: xc --resume <id>" to the shell.
@@ -349,7 +355,13 @@ export function App({
       addInfoMessage(`Failed to load session at ${picked.filePath}. The file may be corrupted.`)
       return
     }
-    resume(loaded)
+    const resumed = await resume(loaded)
+    if (!resumed.ok) {
+      addInfoMessage(
+        `Resume was not completed: ${resumed.reason}.${resumed.result ? `\n\n${formatStopResult(resumed.result)}` : ''}`,
+      )
+      return
+    }
     const hint =
       compactionHintForResume(
         loaded.tokenUsage.inputTokens || null,
@@ -677,9 +689,32 @@ export function App({
           handlePlanToggle(text, arg)
           return
 
-        case 'clear':
+        case 'clear': {
           pendingSkillRef.current = null
-          clear(text)
+          const result = await clear(text)
+          if (!result.ok) {
+            addCommandMessage(
+              text,
+              `Clear was not completed: ${result.reason}.${result.result ? `\n${formatStopResult(result.result)}` : ''}`,
+            )
+          }
+          return
+        }
+
+        case 'ps':
+          echoCommand(text)
+          addCommandResult(formatBackgroundTerminals(listShellSessions()))
+          return
+
+        case 'stop':
+          echoCommand(text)
+          try {
+            addCommandResult(formatStopResult(await stopShellSessions(arg.trim() || undefined)))
+          } catch (error) {
+            addCommandResult(
+              `Unable to stop background terminal: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          }
           return
 
         case 'clear-peer-context': {
@@ -812,7 +847,6 @@ export function App({
           return
 
         case 'exit':
-          await cleanup()
           exit()
           return
 
@@ -1633,6 +1667,7 @@ export function App({
   const permissionRequest = state.permissionQueue[0]
   const authorityRequest = state.authorityRequest
   const selectActive = !!state.pendingQuestion
+  const visibleTerminals = visibleBackgroundTerminals(state.backgroundTerminals)
 
   return (
     <ChatInput
@@ -1701,6 +1736,11 @@ export function App({
           : renderModelLabel(state.modelId)
       }
       activeToolCalls={state.activeToolCalls}
+      shellWaitStreak={state.shellWaitStreak}
+      backgroundTerminalCount={visibleTerminals.length}
+      backgroundTerminalWarningCount={
+        visibleTerminals.filter((terminal) => terminal.status === 'termination-failed').length
+      }
       todos={state.todos}
       queuedMessages={state.queuedMessages}
       onPopQueued={popQueuedMessage}

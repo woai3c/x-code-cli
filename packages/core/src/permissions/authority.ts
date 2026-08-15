@@ -156,7 +156,11 @@ function classifyBuiltin(
     const capability = paths.some((candidate) => isSensitivePath(candidate, cwd)) ? 'sensitive-read' : 'content-read'
     return { capabilities: [capability], paths }
   }
-  if (toolName === 'shellOutput') return { capabilities: ['sensitive-read'] }
+  if (toolName === 'shellOutput') {
+    const mutatesTerminal =
+      (input.chars !== undefined && input.chars !== '') || input.cols !== undefined || input.rows !== undefined
+    return { capabilities: [mutatesTerminal ? 'local-mutation' : 'sensitive-read'] }
+  }
   if (toolName === 'memorySearch') return { capabilities: ['sensitive-read'] }
   if (toolName === 'webSearch') return { capabilities: ['network-egress'], destination: 'web-search-provider' }
   if (toolName === 'webFetch') {
@@ -226,9 +230,31 @@ function payloadFor(
   toolName: string,
   input: Record<string, unknown>,
   capabilities: readonly ToolCapability[],
+  cwd: string,
 ): { format: 'text' | 'canonical-json' | 'shell-command'; canonical: string } | undefined {
   if (toolName === 'shell') {
-    return { format: 'shell-command', canonical: typeof input.command === 'string' ? input.command : '' }
+    return {
+      format: 'canonical-json',
+      canonical: stableCanonicalJson({ command: typeof input.command === 'string' ? input.command : '', cwd }),
+    }
+  }
+  if (toolName === 'shellOutput' || toolName === 'killShell') {
+    return {
+      format: 'canonical-json',
+      canonical: stableCanonicalJson({
+        managerInstanceId: input._managerInstanceId,
+        shellId: input.shellId,
+        command: input._command,
+        cwd: input._effectiveCwd,
+        ...(toolName === 'shellOutput'
+          ? {
+              chars: input.chars ?? '',
+              ...(input.cols !== undefined ? { cols: input.cols } : {}),
+              ...(input.rows !== undefined ? { rows: input.rows } : {}),
+            }
+          : { terminationReason: 'kill-tool' }),
+      }),
+    }
   }
   if (!capabilities.some((capability) => ['network-egress', 'peer-egress', 'opaque-mcp'].includes(capability))) {
     return undefined
@@ -269,7 +295,7 @@ export function classifyToolCall(input: {
   let reason: string | undefined
   let outboundPayload: AuthorityApprovalPreview['outboundPayload']
   try {
-    const payload = payloadFor(input.toolName, input.input, classified.capabilities)
+    const payload = payloadFor(input.toolName, input.input, classified.capabilities, cwd)
     if (payload) {
       const byteLength = Buffer.byteLength(payload.canonical, 'utf8')
       outboundPayload = {
@@ -301,7 +327,7 @@ export function classifyToolCall(input: {
         toolName: input.toolName,
         ...(input.mcpServerId ? { serverId: input.mcpServerId } : {}),
         ...(classified.destination ? { destination: classified.destination } : {}),
-        input: input.input,
+        input: input.toolName === 'shell' ? { ...input.input, cwd } : input.input,
         authorityHash,
       }),
     )

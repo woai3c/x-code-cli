@@ -524,7 +524,7 @@ describe('processToolCalls rewind origin capture', () => {
     temporaryDirectories.push(dir)
     const filePath = path.join(dir, 'existing.txt')
     await fs.writeFile(filePath, 'original', 'utf8')
-    const state = createLoopState()
+    const state = createLoopState('default', { projectCwd: dir })
     const checkpoint = await createCheckpoint(state, 'rewrite existing', dir)
     const toolCallId = 'tc-write-rewind'
     const input = { filePath, content: 'changed' }
@@ -536,13 +536,7 @@ describe('processToolCalls rewind origin capture', () => {
       } as ModelMessage,
     )
 
-    const originalCwd = process.cwd()
-    process.chdir(dir)
-    try {
-      await processToolCalls([{ toolName: 'writeFile', toolCallId, input }], state, options, makeCallbacks(), stubModel)
-    } finally {
-      process.chdir(originalCwd)
-    }
+    await processToolCalls([{ toolName: 'writeFile', toolCallId, input }], state, options, makeCallbacks(), stubModel)
 
     expect(await fs.readFile(filePath, 'utf8')).toBe('changed')
     expect(state.filesModified).toEqual(new Set([filePath]))

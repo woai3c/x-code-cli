@@ -15,8 +15,80 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
+  native-windows:
+    name: Windows helper (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin
+
+      - name: Build strict Windows Job Object supervisor
+        run: >-
+          cargo xwin build --release --locked
+          --target ${{ matrix.target }}
+          --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-shell-supervisor-${{ matrix.arch }}
+          path: packages/core/native/windows-job-supervisor/target/${{ matrix.target }}/release/xc-shell-supervisor.exe
+          if-no-files-found: error
+
+  verify-windows-runtime:
+    name: Verify Windows helper runtime
+    needs: native-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-shell-supervisor-x64
+          path: packages/core/native/prebuilt/windows/x64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-shell-supervisor-arm64
+          path: packages/core/native/prebuilt/windows/arm64
+
+      - name: Generate native artifact hash manifest
+        run: node packages/core/scripts/write-native-manifest.mjs native/prebuilt/windows
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Exercise release x64 Job and ConPTY helpers
+        run: |
+          pnpm build
+          pnpm exec vitest run packages/core/tests/windows-job-provider.test.ts packages/core/tests/windows-supervisor-protocol.test.ts packages/core/tests/pty-provider.test.ts
+
+      - name: Check packaged Windows runtime
+        run: pnpm check:package
+
   release:
     name: Release
+    needs: [native-windows, verify-windows-runtime]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +104,19 @@ jobs:
           node-version: 22.22.2
           cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-shell-supervisor-x64
+          path: packages/core/native/prebuilt/windows/x64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-shell-supervisor-arm64
+          path: packages/core/native/prebuilt/windows/arm64
+
+      - name: Generate native artifact hash manifest
+        run: node packages/core/scripts/write-native-manifest.mjs native/prebuilt/windows
 
       - run: pnpm install --frozen-lockfile
 
@@ -58,13 +143,21 @@ jobs:
         shell: bash
         run: |
           cli_tgz="$(find "$GITHUB_WORKSPACE/release-packages" -name 'x-code-cli-cli-*.tgz' -print -quit)"
+          core_tgz="$(find "$GITHUB_WORKSPACE/release-packages" -name 'x-code-cli-core-*.tgz' -print -quit)"
           test -n "$cli_tgz"
+          test -n "$core_tgz"
+          for tgz in "$cli_tgz" "$core_tgz"; do
+            tar -tzf "$tgz" | grep -q 'package/dist/native/windows/manifest.json'
+            tar -tzf "$tgz" | grep -q 'package/dist/native/windows/x64/xc-shell-supervisor.exe'
+            tar -tzf "$tgz" | grep -q 'package/dist/native/windows/arm64/xc-shell-supervisor.exe'
+          done
           smoke_dir="$(mktemp -d)"
           trap 'rm -rf "$smoke_dir"' EXIT
           npm install --prefix "$smoke_dir" "$cli_tgz"
           "$smoke_dir/node_modules/.bin/xc" --version
           "$smoke_dir/node_modules/.bin/x-code" --help >/dev/null
           (cd "$smoke_dir" && node -e "require.resolve('undici')")
+          (cd "$smoke_dir" && node -e "require.resolve('node-pty')")
 
       - name: Publish to npm
         run: |

@@ -43,6 +43,16 @@ function approvalFor(preview: AuthorityApprovalPreview): AuthorityApproval {
   }
 }
 
+function shellPayload(command: string) {
+  const canonical = canonicalizeToolInput({ command, cwd: CWD })
+  return {
+    format: 'canonical-json',
+    canonical,
+    byteLength: Buffer.byteLength(canonical, 'utf8'),
+    sha256: sha256Text(canonical),
+  }
+}
+
 describe('peer tool capability classification', () => {
   it.each([
     ['askUser', {}, ['pure-compute']],
@@ -56,6 +66,9 @@ describe('peer tool capability classification', () => {
       ['peer-egress'],
     ],
     ['writeFile', { filePath: path.join(CWD, 'out.txt'), content: 'value' }, ['local-mutation']],
+    ['shellOutput', { shellId: 'bg_1', chars: '' }, ['sensitive-read']],
+    ['shellOutput', { shellId: 'bg_1', chars: 'status\r' }, ['local-mutation']],
+    ['shellOutput', { shellId: 'bg_1', chars: '', cols: 120, rows: 40 }, ['local-mutation']],
     ['enterPlanMode', {}, ['configuration-change']],
     ['unregisteredBuiltin', {}, ['unknown']],
   ] as const)('classifies %s as %j', (toolName, input, capabilities) => {
@@ -83,12 +96,7 @@ describe('peer tool capability classification', () => {
     const result = classify('shell', { command })
 
     expect(result.capabilities).toContain('network-egress')
-    expect(result.approvalPreview.outboundPayload).toMatchObject({
-      format: 'shell-command',
-      canonical: command,
-      byteLength: Buffer.byteLength(command, 'utf8'),
-      sha256: sha256Text(command),
-    })
+    expect(result.approvalPreview.outboundPayload).toMatchObject(shellPayload(command))
     expect(result.approvalPreview).toMatchObject({ complete: false, approvable: false })
   })
 
@@ -106,12 +114,7 @@ describe('peer tool capability classification', () => {
     })
 
     expect(classified.capabilities).toEqual(capabilities)
-    expect(classified.approvalPreview.outboundPayload).toMatchObject({
-      format: 'shell-command',
-      canonical: command,
-      byteLength: Buffer.byteLength(command, 'utf8'),
-      sha256: sha256Text(command),
-    })
+    expect(classified.approvalPreview.outboundPayload).toMatchObject(shellPayload(command))
     expect(classified.approvalPreview).toMatchObject({ complete: false, approvable: false })
     expect(decision).toMatchObject({ kind: 'deny' })
   })
@@ -124,7 +127,7 @@ describe('peer tool capability classification', () => {
     expect(result.approvalPreview).toMatchObject({
       complete: true,
       approvable: true,
-      outboundPayload: { format: 'shell-command', canonical: command },
+      outboundPayload: shellPayload(command),
     })
     expect(
       evaluateToolAuthority({ toolName: 'shell', input: { command }, authority: PEER_AUTHORITY, cwd: CWD }),
@@ -136,12 +139,7 @@ describe('peer tool capability classification', () => {
     const result = classify('shell', { command })
 
     expect(result.capabilities).toEqual(['content-read'])
-    expect(result.approvalPreview.outboundPayload).toMatchObject({
-      format: 'shell-command',
-      canonical: command,
-      byteLength: Buffer.byteLength(command, 'utf8'),
-      sha256: sha256Text(command),
-    })
+    expect(result.approvalPreview.outboundPayload).toMatchObject(shellPayload(command))
   })
 
   it.each([true, 'true'])(
@@ -170,7 +168,7 @@ describe('peer tool capability classification', () => {
       expect(classified.approvalPreview).toMatchObject({
         complete: false,
         approvable: false,
-        outboundPayload: { format: 'shell-command', canonical: command },
+        outboundPayload: shellPayload(command),
       })
       expect(
         evaluateToolAuthority({ toolName: 'shell', input: { command }, authority: PEER_AUTHORITY, cwd: CWD }),
@@ -350,7 +348,7 @@ describe('canonical outbound approval payloads', () => {
     expect(classified.approvalPreview).toMatchObject({
       complete: false,
       approvable: false,
-      outboundPayload: { format: 'shell-command', canonical: command },
+      outboundPayload: shellPayload(command),
     })
     expect(decision).toMatchObject({ kind: 'deny', reason: expect.stringContaining('Network shell is disabled') })
   })

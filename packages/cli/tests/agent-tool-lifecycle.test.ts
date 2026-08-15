@@ -35,6 +35,8 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
     goalRunnerActive: false,
     goalVerificationActive: false,
     stepStats: [],
+    backgroundTerminals: [],
+    shellWaitStreak: null,
     ...overrides,
   }
 }
@@ -118,6 +120,33 @@ describe('createToolLifecycleCallbacks', () => {
     test.callbacks.onToolResult('search-1', 'loaded')
     expect(test.getState().messages).toEqual([])
     expect(test.pendingToolsRef.current.size).toBe(0)
+  })
+
+  it('keeps passive shellOutput waits out of generic tool rows and scrollback', () => {
+    const test = setup()
+
+    test.callbacks.onToolCall('wait-1', 'shellOutput', { shellId: 'bg_1', chars: '' })
+    expect(test.getState().activeToolCalls).toEqual([])
+    expect(test.pendingToolsRef.current.has('wait-1')).toBe(true)
+
+    test.callbacks.onToolResult('wait-1', '[shell bg_1 running]')
+    expect(test.getState().messages).toEqual([])
+    expect(test.pendingToolsRef.current.size).toBe(0)
+  })
+
+  it('keeps PTY input and resize visible as mutating shellOutput tool rows', () => {
+    const test = setup()
+
+    test.callbacks.onToolCall('input-1', 'shellOutput', {
+      shellId: 'bg_1',
+      chars: 'status\r',
+      cols: 100,
+      rows: 35,
+    })
+
+    expect(test.getState().activeToolCalls).toEqual([
+      expect.objectContaining({ id: 'input-1', toolName: 'shellOutput' }),
+    ])
   })
 
   it('breaks a read chain when a non-collapsible tool starts', () => {

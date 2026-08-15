@@ -121,23 +121,24 @@ export async function checkPermission(
     input: PermissionInput
   }) => Promise<'yes' | 'always' | 'no'>,
   permissionMode: PermissionMode = 'default',
-  cwd?: string,
+  projectCwd?: string,
+  executionCwd?: string,
 ): Promise<boolean> {
   const level = getPermissionLevel(toolCall.toolName, toolCall.input)
   if (level === 'always-allow' || trustMode) return true
   if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
     const filePath = (toolCall.input.filePath as string) ?? ''
-    const projectDir = cwd ?? process.cwd()
+    const projectDir = projectCwd ?? process.cwd()
     if (filePath && isPathWithinProject(filePath, projectDir) && !isSensitivePath(filePath)) {
       return true
     }
     // Path outside project or targeting sensitive file — fall through to ask
   }
-  if (sessionRulesMatch(toolCall.toolName, toolCall.input)) return true
+  if (sessionRulesMatch(toolCall.toolName, toolCall.input, executionCwd)) return true
 
   const decision = await onAskPermission(toolCall)
   if (decision === 'always') {
-    const result = buildAllowRule(toolCall.toolName, toolCall.input)
+    const result = buildAllowRule(toolCall.toolName, toolCall.input, executionCwd)
     if (result) {
       // buildAllowRule may return >1 rule for compound shells like
       // `git commit && git push` — the user-visible label
@@ -145,7 +146,7 @@ export async function checkPermission(
       // here so the next compound invocation auto-approves.
       for (const rule of result.rules) {
         addSessionAllowRule(rule)
-        if (result.persist && cwd) persistRule(cwd, rule)
+        if (result.persist && projectCwd) persistRule(projectCwd, rule)
       }
     }
     return true

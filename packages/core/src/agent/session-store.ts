@@ -1748,9 +1748,12 @@ export async function pickLatestSession(cwd: string = process.cwd()): Promise<Se
  *  `persistedMessageCount` is set to the loaded length
  *  so the very first flush after the next user submit only appends NEW
  *  messages — the loaded tail is already on disk. */
-export function hydrateLoopState(loaded: LoadedSession, initialMode: PermissionMode = 'default'): LoopState {
-  const state = createLoopState(initialMode)
-  state.sessionId = loaded.sessionId
+export function hydrateLoopState(
+  loaded: LoadedSession,
+  initialMode: PermissionMode = 'default',
+  projectCwd: string = process.cwd(),
+): LoopState {
+  const state = createLoopState(initialMode, { ownerSessionId: loaded.sessionId, projectCwd })
   state.sessionFilePath = loaded.filePath
   state.taskSlug = loaded.taskSlug
   state.startedAt = loaded.startedAt

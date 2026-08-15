@@ -31,12 +31,21 @@ export interface EmitOptions extends ExecuteHookOptions {
   parallel?: boolean
 }
 
+export interface ToolHookSnapshot {
+  readonly generation: number
+  readonly toolName: string
+  readonly preHooks: readonly RegisteredHook[]
+  readonly postHooks: readonly RegisteredHook[]
+}
+
 export class HookBus {
   // Mutable so /plugin refresh can swap in a fresh registry without
   // forcing callers to re-capture the bus reference. New incoming
   // event emissions then see the new hooks; any in-flight executeHook
   // calls finish against the old registry (deliberate — finishing the
   // hook is cheaper than coordinating shutdown).
+  private registryGeneration = 0
+
   constructor(private registry: HookRegistry) {}
 
   has(event: HookEvent['name']): boolean {
@@ -47,6 +56,40 @@ export class HookBus {
    *  rescan to pick up newly-installed / removed plugin hooks. */
   replaceRegistry(registry: HookRegistry): void {
     this.registry = registry
+    this.registryGeneration++
+  }
+
+  captureToolSnapshot(toolName: string): ToolHookSnapshot {
+    return Object.freeze({
+      generation: this.registryGeneration,
+      toolName,
+      preHooks: Object.freeze(
+        this.registry
+          .get('PreToolUse')
+          .filter((hook) => matchesTool(hook, toolName))
+          .slice(),
+      ),
+      postHooks: Object.freeze(
+        this.registry
+          .get('PostToolUse')
+          .filter((hook) => matchesTool(hook, toolName))
+          .slice(),
+      ),
+    })
+  }
+
+  async emitToolSnapshot(
+    snapshot: ToolHookSnapshot,
+    phase: 'pre' | 'post',
+    event: Extract<HookEvent, { name: 'PreToolUse' | 'PostToolUse' }>,
+    opts: EmitOptions = {},
+  ): Promise<HookDecision[]> {
+    const expectedName = phase === 'pre' ? 'PreToolUse' : 'PostToolUse'
+    if (event.name !== expectedName || event.tool.name !== snapshot.toolName) {
+      throw new Error(`Hook snapshot mismatch: expected ${expectedName} for ${snapshot.toolName}`)
+    }
+    if ('authority' in event && (event.authority?.peerTainted || event.authority?.source === 'peer')) return []
+    return this.emitHooks(phase === 'pre' ? snapshot.preHooks : snapshot.postHooks, event, opts)
   }
 
   /** Emit an event. Returns the per-hook decisions in run order — empty
@@ -61,6 +104,14 @@ export class HookBus {
     const applicable = hooks.filter((h) => matches(h, event))
     if (applicable.length === 0) return []
 
+    return this.emitHooks(applicable, event, opts)
+  }
+
+  private async emitHooks(
+    applicable: readonly RegisteredHook[],
+    event: HookEvent,
+    opts: EmitOptions,
+  ): Promise<HookDecision[]> {
     const isDecisionEvent =
       event.name === 'UserPromptSubmit' || event.name === 'PreToolUse' || event.name === 'PostToolUse'
     const parallel = opts.parallel ?? !isDecisionEvent
@@ -110,9 +161,13 @@ export function emptyHookBus(): HookBus {
 
 function matches(hook: RegisteredHook, event: HookEvent): boolean {
   if (event.name !== 'PreToolUse' && event.name !== 'PostToolUse') return true
+  return matchesTool(hook, event.tool.name)
+}
+
+function matchesTool(hook: RegisteredHook, toolName: string): boolean {
   if (!hook.entry.matcher) return true
   try {
-    return new RegExp(hook.entry.matcher).test(event.tool.name)
+    return new RegExp(hook.entry.matcher).test(toolName)
   } catch (err) {
     // Bad regex shouldn't silently disable the hook — degrade to
     // "matches every tool" but log so support can spot the bad pattern.

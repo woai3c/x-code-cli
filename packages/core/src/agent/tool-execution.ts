@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { ModelMessage } from 'ai'
 
 import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
+import type { ToolHookSnapshot } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import type { PreparedPeerSend } from '../peers/service.js'
 import { evaluateToolAuthority, verifyAuthorityApproval } from '../permissions/index.js'
@@ -15,11 +16,24 @@ import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js
 import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
-import { getShellProvider } from '../tools/shell-provider.js'
+import { formatShellExecutionResult } from '../tools/shell-session/format.js'
+import {
+  normalizeHardTimeout,
+  normalizeInitialWait,
+  normalizeInteractWait,
+  normalizeMaxOutputTokens,
+  normalizeTerminalResize,
+  resolveShellCwd,
+} from '../tools/shell-session/request.js'
+import type {
+  FinalObservationLease,
+  PreparedShellRequest,
+  ShellHookOrigin,
+  ShellObservation,
+} from '../tools/shell-session/types.js'
 import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
 import { debugLog, isAbortError } from '../utils.js'
-import { foldShellErrorNoise } from '../utils/shell-error.js'
 import { runBrowserVisualCheck } from './browser/visual-check.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
 import { computeEditDiff } from './diff.js'
@@ -234,88 +248,6 @@ async function executeWriteTool(
   return toolErrorString('unknown write tool')
 }
 
-/** Execute a shell command with streaming. */
-async function executeShell(
-  command: string,
-  timeout: number,
-  signal: AbortSignal | undefined,
-  callbacks: AgentCallbacks,
-  toolCallId: string,
-  notifyUi = true,
-): Promise<{ output: string; isError: boolean }> {
-  const proc = getShellProvider().spawn(command, { timeout, signal })
-
-  reportProgress(toolCallId, 'Running command...')
-
-  // Throttle the live progress message to at most one update per 50ms.
-  // Why: PowerShell `Format-Table` and similar table-rendering commands
-  // emit many lines in a single ~1ms burst, each as its own `data` event
-  // here. Without throttling we'd fire reportProgress 5-10× per millisec,
-  // each one becoming a setState → ChatInput render → deferred stdout
-  // write. The deferred queue absorbs most of the burst into one frame,
-  // but if the deferred-fire timer happens to land ~1ms before the
-  // tool-result commit arrives, the user sees a visible "progress text
-  // flashes, then result block scrolls in" pair. Throttling at the
-  // source cuts the storm to ≤20 updates/sec — fast enough to feel
-  // live, slow enough to dramatically reduce the chance that any
-  // deferred-fire collides with the upcoming tool-result commit.
-  // The model still sees full output via the `result` field; this only
-  // throttles the live progress display, not what reaches the LLM.
-  let lastProgressTime = 0
-  const PROGRESS_THROTTLE_MS = 50
-
-  const onChunk = (chunk: Buffer) => {
-    const s = chunk.toString()
-    if (notifyUi) callbacks.onShellOutput(s)
-    const now = Date.now()
-    if (now - lastProgressTime < PROGRESS_THROTTLE_MS) return
-    // Take the last non-empty line of the chunk as the progress message.
-    // Long-running commands (tsc, test suites) stream many lines; showing
-    // the most recent is a natural "what's happening right now" signal.
-    const lines = s.split(/\r?\n/).filter((l) => l.trim().length > 0)
-    const last = lines[lines.length - 1]
-    if (last) {
-      lastProgressTime = now
-      const trimmed = last.length > 120 ? last.slice(0, 117) + '...' : last
-      reportProgress(toolCallId, trimmed)
-    }
-  }
-
-  proc.stdout?.on('data', onChunk)
-  proc.stderr?.on('data', onChunk)
-
-  const result = await proc
-  // Fold PowerShell/cmd multi-line error blocks to a single line before they
-  // reach the model. A misquoted command on Windows emits 5–10 lines per
-  // attempt; across a loop of failed retries those stacks accumulate faster
-  // than the actual diagnostic signal. execa's stdout/stderr are typed as
-  // `string | unknown[] | Uint8Array` — we spawn with default string mode, so
-  // a cast is safe, but keep a defensive fallback for non-string just in case.
-  const toStr = (v: unknown): string => (typeof v === 'string' ? v : '')
-  let stdout = foldShellErrorNoise(toStr(result.stdout))
-  let stderr = foldShellErrorNoise(toStr(result.stderr))
-
-  // When execa kills the child for exceeding maxBuffer, the partial
-  // output is still available in stdout/stderr. Surface a clear
-  // truncation notice so the model doesn't silently lose context.
-  const isMaxBuffer = result.isMaxBuffer ?? false
-  if (isMaxBuffer) {
-    const INLINE_CAP = 30_000
-    if (stdout.length > INLINE_CAP)
-      stdout = stdout.slice(0, INLINE_CAP) + '\n... [stdout truncated — exceeded buffer limit]'
-    if (stderr.length > INLINE_CAP)
-      stderr = stderr.slice(0, INLINE_CAP) + '\n... [stderr truncated — exceeded buffer limit]'
-  }
-
-  const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-  if (result.exitCode !== 0 || isMaxBuffer) {
-    const suffix = isMaxBuffer ? ' (output exceeded buffer limit)' : ''
-    const text = output ? `${output}\nExit code ${result.exitCode}${suffix}` : `Exit code ${result.exitCode}${suffix}`
-    return { output: text, isError: true }
-  }
-  return { output: output || 'Done', isError: false }
-}
-
 /** Push a tool result to state and notify the UI. `images` (base64 + media
  *  type) ride along only for MCP tools that return image content — they become
  *  media parts in the tool_result so a vision model can see them; the UI
@@ -358,6 +290,154 @@ interface HandlerCtx {
   control: ToolExecutionControl
   authorityApprovedOnce?: boolean
   preparedPeerSend?: PreparedPeerSend
+  effectiveCwd?: string
+  preparedShell?: PreparedShellRequest
+  shellHookSnapshot?: ToolHookSnapshot
+  shellPreToolUse?: ShellHookOrigin['preToolUse']
+}
+
+const SHELL_OUTPUT_MAX_BYTES = 1024 * 1024
+
+function emptyToolHookSnapshot(toolName: string): ToolHookSnapshot {
+  return Object.freeze({
+    generation: 0,
+    toolName,
+    preHooks: Object.freeze([]),
+    postHooks: Object.freeze([]),
+  })
+}
+
+function canonicalCwdEquals(left: string, right: string): boolean {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+
+function validateShellInput(input: Record<string, unknown>): {
+  command: string
+  requestedCwd?: string
+  initialWait: PreparedShellRequest['initialWait']
+  hardTimeoutMs?: number
+  maxOutputTokens?: number
+  tty: boolean
+} {
+  if (typeof input.command !== 'string') throw new TypeError('shell.command must be a string')
+  if (input.cwd !== undefined && typeof input.cwd !== 'string') throw new TypeError('shell.cwd must be a string')
+  if (input.runInBackground !== undefined && typeof input.runInBackground !== 'boolean') {
+    throw new TypeError('shell.runInBackground must be a boolean')
+  }
+  if (input.tty !== undefined && typeof input.tty !== 'boolean') throw new TypeError('shell.tty must be a boolean')
+  return {
+    command: input.command,
+    requestedCwd: input.cwd as string | undefined,
+    initialWait: normalizeInitialWait({
+      yieldTimeMs: input.yieldTimeMs as number | undefined,
+      runInBackground: input.runInBackground as boolean | undefined,
+    }),
+    hardTimeoutMs: normalizeHardTimeout(input.timeout as number | undefined),
+    maxOutputTokens: normalizeMaxOutputTokens(input.maxOutputTokens as number | undefined),
+    tty: input.tty === true,
+  }
+}
+
+async function prepareShellRequest(ctx: HandlerCtx): Promise<boolean> {
+  const raw = validateShellInput(ctx.input)
+  const preliminaryCwd = await resolveShellCwd(ctx.state.projectCwd, raw.requestedCwd)
+  const authority = effectiveExecutionAuthority(ctx.state.executionAuthority, ctx.state.contextSecurity)
+  ctx.state.executionAuthority = authority
+  const snapshot = ctx.options.hookBus?.captureToolSnapshot('shell') ?? emptyToolHookSnapshot('shell')
+  ctx.shellHookSnapshot = snapshot
+  ctx.shellPreToolUse = authority.peerTainted
+    ? 'skipped-peer-tainted'
+    : snapshot.preHooks.length
+      ? 'executed'
+      : 'not-configured'
+  ctx.input = {
+    ...ctx.input,
+    cwd: preliminaryCwd,
+    ...(raw.requestedCwd !== undefined ? { requestedCwd: raw.requestedCwd } : {}),
+  }
+
+  if (!authority.peerTainted && snapshot.preHooks.length > 0 && ctx.options.hookBus) {
+    try {
+      const decisions = await ctx.options.hookBus.emitToolSnapshot(
+        snapshot,
+        'pre',
+        {
+          name: 'PreToolUse',
+          session: { cwd: preliminaryCwd, modelId: ctx.options.modelId },
+          tool: { name: 'shell', args: ctx.input, callId: ctx.toolCallId },
+          authority,
+        },
+        { signal: ctx.options.abortSignal },
+      )
+      const effect = aggregatePreToolUse(decisions)
+      if (effect.decision === 'deny') {
+        pushToolResult(
+          ctx.state,
+          ctx.callbacks,
+          ctx.toolCallId,
+          ctx.toolName,
+          toolErrorString(`Tool denied by plugin hook: ${effect.reason ?? 'blocked by plugin hook'}`),
+          true,
+        )
+        return false
+      }
+      if (effect.args && typeof effect.args === 'object' && !Array.isArray(effect.args)) {
+        ctx.input = effect.args as Record<string, unknown>
+      }
+    } catch (error) {
+      if (ctx.options.abortSignal?.aborted) {
+        pushToolResult(
+          ctx.state,
+          ctx.callbacks,
+          ctx.toolCallId,
+          ctx.toolName,
+          '[Tool execution interrupted by user]',
+          true,
+        )
+        return false
+      }
+      debugLog('agent.hook-pre-tool-error', String(error))
+    }
+  }
+
+  const effective = validateShellInput(ctx.input)
+  const finalCwd = await resolveShellCwd(ctx.state.projectCwd, effective.requestedCwd)
+  if (!canonicalCwdEquals(preliminaryCwd, finalCwd)) {
+    throw new Error('A PreToolUse hook attempted to change shell.cwd; the command was not started')
+  }
+  ctx.effectiveCwd = finalCwd
+  ctx.input = {
+    ...ctx.input,
+    command: effective.command,
+    cwd: finalCwd,
+    ...(raw.requestedCwd !== undefined ? { requestedCwd: raw.requestedCwd } : {}),
+  }
+  ctx.preparedShell = {
+    command: effective.command,
+    requestedCwd: raw.requestedCwd,
+    effectiveCwd: finalCwd,
+    projectCwd: ctx.state.projectCwd,
+    initialWait: effective.initialWait,
+    hardTimeoutMs: effective.hardTimeoutMs,
+    tty: effective.tty,
+    maxOutputBytes: SHELL_OUTPUT_MAX_BYTES,
+    hookInput: Object.freeze({ ...ctx.input }),
+  }
+  return true
+}
+
+function enrichShellTransportInput(ctx: HandlerCtx): void {
+  if (ctx.toolName !== 'shellOutput' && ctx.toolName !== 'killShell') return
+  const shellId = typeof ctx.input.shellId === 'string' ? ctx.input.shellId : ''
+  const metadata = ctx.state.shellSessions.getSessionMetadata(shellId)
+  if (!metadata) return
+  ctx.effectiveCwd = metadata.effectiveCwd
+  ctx.input = {
+    ...ctx.input,
+    _managerInstanceId: metadata.managerInstanceId,
+    _command: metadata.command,
+    _effectiveCwd: metadata.effectiveCwd,
+  }
 }
 
 async function checkCentralAuthority(ctx: HandlerCtx): Promise<boolean> {
@@ -369,7 +449,7 @@ async function checkCentralAuthority(ctx: HandlerCtx): Promise<boolean> {
     input: ctx.input,
     authority,
     trustMode: ctx.options.trustMode,
-    cwd: process.cwd(),
+    cwd: ctx.effectiveCwd ?? ctx.state.projectCwd,
     isMcpTool: Boolean(mcpEntry),
     mcpServerId: mcpEntry?.serverName,
   })
@@ -417,7 +497,7 @@ async function checkCentralAuthority(ctx: HandlerCtx): Promise<boolean> {
     input: ctx.input,
     authority: currentAuthority,
     trustMode: ctx.options.trustMode,
-    cwd: process.cwd(),
+    cwd: ctx.effectiveCwd ?? ctx.state.projectCwd,
     isMcpTool: Boolean(mcpEntry),
     mcpServerId: mcpEntry?.serverName,
   })
@@ -453,13 +533,26 @@ async function pushSuccessfulToolResult(
   isError: boolean,
   images?: readonly ToolImage[],
 ): Promise<void> {
+  if (ctx.toolName === 'shell' && ctx.preparedShell && ctx.shellHookSnapshot && ctx.shellPreToolUse) {
+    const origin = createShellHookOrigin(ctx)
+    const baseOutput = truncateShellResult(ctx, output)
+    let effectiveOutput = baseOutput
+    try {
+      effectiveOutput = await runOriginalShellPost(ctx, origin, baseOutput, isError)
+    } catch (error) {
+      if (!isAbortError(error, ctx.options.abortSignal)) throw error
+      debugLog('agent.shell-post-aborted', ctx.toolCallId)
+    }
+    appendAndNotifyShellResult(ctx, effectiveOutput, isError)
+    return
+  }
   let effectiveOutput = output
   if (!ctx.state.executionAuthority.peerTainted && ctx.options.hookBus?.has('PostToolUse')) {
     try {
       const decisions = await ctx.options.hookBus.emit(
         {
           name: 'PostToolUse',
-          session: { cwd: process.cwd(), modelId: ctx.options.modelId },
+          session: { cwd: ctx.effectiveCwd ?? ctx.state.projectCwd, modelId: ctx.options.modelId },
           tool: { name: ctx.toolName, args: ctx.input, callId: ctx.toolCallId, output, isError },
         },
         { signal: ctx.options.abortSignal },
@@ -481,6 +574,117 @@ async function pushSuccessfulToolResult(
     images,
     !isManagedMemoryAccess(ctx.toolName, ctx.input, ctx.options.memoryService?.memoryRoot),
   )
+}
+
+function createShellHookOrigin(ctx: HandlerCtx): ShellHookOrigin {
+  if (!ctx.preparedShell || !ctx.shellHookSnapshot || !ctx.shellPreToolUse || !ctx.effectiveCwd) {
+    throw new Error('Shell request was not safely prepared')
+  }
+  return Object.freeze({
+    toolCallId: ctx.toolCallId,
+    toolName: 'shell' as const,
+    effectiveArgs: ctx.preparedShell.hookInput,
+    effectiveCwd: ctx.effectiveCwd,
+    modelId: ctx.options.modelId,
+    authority: structuredClone(ctx.state.executionAuthority),
+    authorityApprovedOnce: ctx.authorityApprovedOnce ?? false,
+    preToolUse: ctx.shellPreToolUse,
+    hookRegistryGeneration: ctx.shellHookSnapshot.generation,
+    hookSnapshot: ctx.shellHookSnapshot,
+  })
+}
+
+function truncateShellResult(ctx: HandlerCtx, output: string): string {
+  const normalized = normalizeMaxOutputTokens(ctx.input.maxOutputTokens as number | undefined)
+  if (normalized === undefined) return truncateToolResult(output)
+  const maxBytes = Math.max(1, Math.min(SHELL_OUTPUT_MAX_BYTES, normalized * 4))
+  return truncateToolResult(output, { maxBytes })
+}
+
+async function runOriginalShellPost(
+  ctx: HandlerCtx,
+  origin: ShellHookOrigin,
+  output: string,
+  isError: boolean,
+  fallbackOutput = output,
+): Promise<string> {
+  if (
+    origin.preToolUse === 'skipped-peer-tainted' ||
+    origin.hookSnapshot.postHooks.length === 0 ||
+    !ctx.options.hookBus
+  ) {
+    return fallbackOutput
+  }
+  const decisions = await ctx.options.hookBus.emitToolSnapshot(
+    origin.hookSnapshot,
+    'post',
+    {
+      name: 'PostToolUse',
+      session: { cwd: origin.effectiveCwd, modelId: origin.modelId },
+      tool: {
+        name: origin.toolName,
+        args: origin.effectiveArgs,
+        callId: origin.toolCallId,
+        output,
+        isError,
+      },
+      authority: origin.authority,
+    },
+    { signal: ctx.options.abortSignal },
+  )
+  return aggregatePostToolUse(decisions).output ?? fallbackOutput
+}
+
+function notifyShellResultNoThrow(ctx: HandlerCtx, output: string, isError: boolean): void {
+  try {
+    ctx.callbacks.onToolResult(ctx.toolCallId, output, isError)
+  } catch (error) {
+    debugLog('agent.shell-result-notify-error', `${ctx.toolCallId} ${String(error)}`)
+  }
+}
+
+function appendAndNotifyShellResult(
+  ctx: HandlerCtx,
+  output: string,
+  isError: boolean,
+  lease?: FinalObservationLease,
+): void {
+  appendTrackedMessage(ctx.state, toolResultMessage(ctx.toolCallId, ctx.toolName, output, undefined, isError))
+  clearProgressReporter(ctx.toolCallId)
+  lease?.ack()
+  if (!isManagedMemoryAccess(ctx.toolName, ctx.input, ctx.options.memoryService?.memoryRoot)) {
+    notifyShellResultNoThrow(ctx, output, isError)
+  }
+}
+
+async function commitShellObservation(ctx: HandlerCtx, observation: ShellObservation): Promise<void> {
+  const canonicalOutput = formatShellExecutionResult(observation.result)
+  const baseOutput = truncateShellResult(ctx, canonicalOutput)
+  if (observation.kind === 'running') {
+    appendAndNotifyShellResult(ctx, baseOutput, observation.result.isError)
+    return
+  }
+
+  let settled = false
+  try {
+    let output = baseOutput
+    try {
+      output = await runOriginalShellPost(
+        ctx,
+        observation.lease.origin,
+        truncateToolResult(canonicalOutput),
+        observation.lease.post.isError,
+        baseOutput,
+      )
+    } catch (error) {
+      if (!isAbortError(error, ctx.options.abortSignal)) throw error
+      debugLog('agent.shell-post-aborted', observation.lease.claimId)
+    }
+    appendAndNotifyShellResult(ctx, output, observation.result.isError, observation.lease)
+    settled = true
+  } finally {
+    if (!settled) observation.lease.release()
+  }
 }
 
 type ToolHandler = (ctx: HandlerCtx) => Promise<void>
@@ -525,7 +729,14 @@ async function handleTask(ctx: HandlerCtx): Promise<void> {
   )
 
   const statsLine = `<task_stats tool_calls="${result.toolCallCount}" tokens="${result.tokenUsage.totalTokens}" duration_ms="${result.durationMs}" />`
-  pushToolResult(state, callbacks, toolCallId, toolName, `${result.resultText}\n${statsLine}`)
+  pushToolResult(
+    state,
+    callbacks,
+    toolCallId,
+    toolName,
+    `${result.resultText}\n${statsLine}`,
+    result.cleanupFailed === true,
+  )
 }
 
 /** ── listMcpResources ──
@@ -598,55 +809,42 @@ async function handleReadMcpResource(ctx: HandlerCtx): Promise<void> {
   }
 }
 
-/** ── shellOutput ──
- *  Reads output produced since the last poll from a background shell on this
- *  agent's LoopState. `block: true` waits for the shell to exit (polling its
- *  status), interruptible via the turn's abortSignal. Bypasses the loop guard
- *  because polling the same shell repeatedly is the normal usage pattern. */
+/** ── shellOutput ── */
 async function handleShellOutput(ctx: HandlerCtx): Promise<void> {
-  const { input, toolCallId, toolName, state, options, callbacks } = ctx
-  const id = (input.shellId as string | undefined) ?? ''
-  const entry = state.bgShells.get(id)
-  if (!entry) {
-    const ids = state.bgShells.list().map((s) => s.id)
-    const hint = ids.length ? ` Active background shells: ${ids.join(', ')}.` : ' No background shells are running.'
-    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString(`No background shell "${id}".${hint}`), true)
-    return
+  if (ctx.input.chars !== undefined && typeof ctx.input.chars !== 'string') {
+    throw new TypeError('shellOutput.chars must be a string')
   }
-  if (((input.block as boolean | undefined) ?? false) && entry.status === 'running') {
-    const deadline = Date.now() + ((input.timeout as number | undefined) ?? 30000)
-    while (entry.status === 'running' && Date.now() < deadline) {
-      if (options.abortSignal?.aborted) break
-      await new Promise<void>((resolve) => setTimeout(resolve, 200))
-    }
-  }
-  const fresh = state.bgShells.drain(id).trimEnd()
-  // A killed shell has a null exit code — render "[shell bg_1 exited]" rather
-  // than a bare "code null". The drain can be up to the 1 MB ring cap, so
-  // truncate the body (never the short status line) before it hits state.messages.
-  const statusLine =
-    entry.status === 'exited'
-      ? `[shell ${id} exited${entry.exitCode != null ? `, code ${entry.exitCode}` : ''}]`
-      : `[shell ${id} running]`
-  pushToolResult(
-    state,
-    callbacks,
-    toolCallId,
-    toolName,
-    fresh ? `${statusLine}\n${truncateToolResult(fresh)}` : `${statusLine}\n(no new output)`,
-  )
+  const chars = typeof ctx.input.chars === 'string' ? ctx.input.chars : ''
+  const resize = normalizeTerminalResize(ctx.input.cols, ctx.input.rows)
+  const hasInput = chars !== '' || resize !== undefined
+  const observation = await ctx.state.shellSessions.interact({
+    shellId: typeof ctx.input.shellId === 'string' ? ctx.input.shellId : '',
+    toolCallId: ctx.toolCallId,
+    chars,
+    resize,
+    wait: normalizeInteractWait(
+      {
+        yieldTimeMs: ctx.input.yieldTimeMs as number | undefined,
+        block: ctx.input.block as boolean | undefined,
+        timeout: ctx.input.timeout as number | undefined,
+      },
+      hasInput,
+    ),
+    maxOutputBytes: SHELL_OUTPUT_MAX_BYTES,
+    turnAbortSignal: ctx.options.abortSignal,
+  })
+  await commitShellObservation(ctx, observation)
 }
 
-/** ── killShell ──
- *  Terminates a background shell on this agent's LoopState. */
+/** ── killShell ── */
 async function handleKillShell(ctx: HandlerCtx): Promise<void> {
-  const { input, toolCallId, toolName, state, callbacks } = ctx
-  const id = (input.shellId as string | undefined) ?? ''
-  if (!state.bgShells.kill(id)) {
-    pushToolResult(state, callbacks, toolCallId, toolName, toolErrorString(`No background shell "${id}".`), true)
-    return
-  }
-  pushToolResult(state, callbacks, toolCallId, toolName, `Killed background shell ${id}.`)
+  const observation = await ctx.state.shellSessions.terminateAndObserve({
+    shellId: typeof ctx.input.shellId === 'string' ? ctx.input.shellId : '',
+    observerToolCallId: ctx.toolCallId,
+    reason: 'kill-tool',
+    turnAbortSignal: ctx.options.abortSignal,
+  })
+  await commitShellObservation(ctx, observation)
 }
 
 /** ── toolSearch ──
@@ -954,7 +1152,8 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
     options.trustMode,
     callbacks.onAskPermission,
     state.permissionMode,
-    process.cwd(),
+    state.projectCwd,
+    toolName === 'shell' ? ctx.preparedShell?.effectiveCwd : undefined,
   )
   if (options.abortSignal?.aborted) {
     pushToolResult(state, callbacks, toolCallId, toolName, '[Tool execution interrupted by user]', true)
@@ -977,16 +1176,19 @@ function findDeniedShellKeyword(command: string, restrictions: readonly string[]
  *  Auto-executed tools return early because the AI SDK has already produced
  *  their result. Returns the post-execution { output, isError } pair, or
  *  null when there's nothing to push (auto-executed). */
-async function executeWriteOrShell(
-  ctx: HandlerCtx,
-): Promise<{ output: string; isError: boolean; structuredOutput?: unknown } | null> {
+async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
+  output: string
+  isError: boolean
+  structuredOutput?: unknown
+  shellObservation?: ShellObservation
+} | null> {
   const { toolName, input, toolCallId, state, options, callbacks } = ctx
   try {
     if (toolName === 'writeFile' || toolName === 'edit') {
       let trackedPath: string | null = null
       const beforeWrite = async (filePath: string) => {
-        const absPath = path.resolve(filePath)
-        await captureFileBeforeMutation(state, absPath, process.cwd(), options.abortSignal)
+        const absPath = path.resolve(state.projectCwd, filePath)
+        await captureFileBeforeMutation(state, absPath, state.projectCwd, options.abortSignal)
         state.filesModified.add(absPath)
         state.checkpointFileCache.delete(absPath)
         trackedPath = absPath
@@ -1003,55 +1205,42 @@ async function executeWriteOrShell(
       return { output, isError }
     }
     if (toolName === 'shell') {
-      // Background mode: spawn detached, register on LoopState, return an id
-      // immediately. The model polls via shellOutput / stops via killShell.
-      if ((input.runInBackground as boolean | undefined) ?? false) {
-        const command = input.command as string
-        const id = state.bgShells.start(command)
-        return {
-          output:
-            `Started background shell \`${id}\`: ${command}\n` +
-            `Read its output with shellOutput({ shellId: "${id}" }) or stop it with killShell({ shellId: "${id}" }).`,
-          isError: false,
-        }
-      }
+      if (!ctx.preparedShell) throw new Error('Shell request was not safely prepared')
       // Intercept sed -i: simulate the edit in-process so the modified
       // file enters filesModified and is covered by /rewind checkpoints.
       // Falls through to real shell execution on parse failure or IO error.
-      const command = input.command as string
+      const command = ctx.preparedShell.command
       const { parseSedEditCommand, applySedSubstitution } = await import('../tools/sed-edit-parser.js')
       const sedInfo = parseSedEditCommand(command)
       if (sedInfo) {
         const absPath = path.isAbsolute(sedInfo.filePath)
           ? sedInfo.filePath
-          : path.join(process.cwd(), sedInfo.filePath)
+          : path.join(ctx.preparedShell.effectiveCwd, sedInfo.filePath)
         try {
           const original = await fs.readFile(absPath, { encoding: 'utf-8', signal: options.abortSignal })
           const newContent = applySedSubstitution(original, sedInfo)
           if (original !== newContent) {
-            await captureFileBeforeMutation(state, absPath, process.cwd(), options.abortSignal)
+            await captureFileBeforeMutation(state, absPath, state.projectCwd, options.abortSignal)
             state.filesModified.add(absPath)
             state.checkpointFileCache.delete(absPath)
             await fs.writeFile(absPath, newContent, { encoding: 'utf-8', signal: options.abortSignal })
             state.turnFilesModified.add(absPath)
             state.visualCheckCallsSinceMutation = 0
           }
-          return { output: '', isError: false }
+          return { output: 'Done', isError: false }
         } catch {
           // File unreadable or unwritable — fall through to real sed
         }
       }
 
-      const timeout = (input.timeout as number) ?? 30000
-      const shellResult = await executeShell(
-        command,
-        timeout,
-        options.abortSignal,
-        callbacks,
-        toolCallId,
-        !isManagedMemoryAccess(toolName, input, options.memoryService?.memoryRoot),
-      )
-      return { output: shellResult.output, isError: shellResult.isError }
+      reportProgress(toolCallId, 'Running command...')
+      const shellObservation = await state.shellSessions.start({
+        prepared: ctx.preparedShell,
+        originToolCallId: toolCallId,
+        hookOrigin: createShellHookOrigin(ctx),
+        turnAbortSignal: options.abortSignal,
+      })
+      return { output: '', isError: shellObservation.result.isError, shellObservation }
     }
     const manualExecutor = state.manualToolExecutors.get(toolName)
     if (manualExecutor) {
@@ -1114,13 +1303,21 @@ async function handleToolCall(
   // record (mutated in-place on ctx.input so downstream handlers and
   // the loop guard see the post-modification args).
   try {
-    if (!ctx.state.executionAuthority.peerTainted && ctx.options.hookBus?.has('PreToolUse')) {
+    if (ctx.toolName === 'shell') {
+      if (!(await prepareShellRequest(ctx))) return
+    } else if (
+      ctx.toolName !== 'shellOutput' &&
+      ctx.toolName !== 'killShell' &&
+      !ctx.state.executionAuthority.peerTainted &&
+      ctx.options.hookBus?.has('PreToolUse')
+    ) {
       try {
         const decisions = await ctx.options.hookBus.emit(
           {
             name: 'PreToolUse',
-            session: { cwd: process.cwd(), modelId: ctx.options.modelId },
+            session: { cwd: ctx.state.projectCwd, modelId: ctx.options.modelId },
             tool: { name: ctx.toolName, args: ctx.input, callId: ctx.toolCallId },
+            authority: ctx.state.executionAuthority,
           },
           { signal: ctx.options.abortSignal },
         )
@@ -1141,10 +1338,15 @@ async function handleToolCall(
           ctx.input = effect.args as Record<string, unknown>
         }
       } catch (err) {
-        if (ctx.options.abortSignal?.aborted) return
+        if (ctx.options.abortSignal?.aborted) {
+          pushToolResult(state, callbacks, ctx.toolCallId, ctx.toolName, '[Tool execution interrupted by user]', true)
+          return
+        }
         debugLog('agent.hook-pre-tool-error', String(err))
       }
     }
+
+    enrichShellTransportInput(ctx)
 
     if (ctx.toolName === 'edit') {
       try {
@@ -1218,6 +1420,11 @@ async function handleToolCall(
 
     const result = await executeWriteOrShell(ctx)
     if (result == null) return
+
+    if (result.shellObservation) {
+      await commitShellObservation(ctx, result.shellObservation)
+      return
+    }
 
     if (result.structuredOutput !== undefined) {
       appendTrackedMessage(state, structuredToolResultMessage(ctx.toolCallId, ctx.toolName, result.structuredOutput))
@@ -1693,8 +1900,8 @@ export async function processToolCalls(
   const batches = partitionToolCalls(liveCalls)
   let dispatched = 0
   for (const batch of batches) {
-    // User pressed Esc / Ctrl+C. The currently running tool (if any) has
-    // already been SIGKILL'd via the shell provider's cancelSignal. For
+    // User pressed Esc / Ctrl+C. A managed shell that reached ready remains
+    // available as a background session; other tools receive the abort. For
     // every remaining tool_call we still need to push a synthetic
     // tool_result — orphan tool_calls without a matching result would
     // make the next API request fail with "tool_use without tool_result"

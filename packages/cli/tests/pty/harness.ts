@@ -5,7 +5,6 @@ import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
 import { CLI_BIN, isolatedCliEnv, waitFor } from '../fixtures/cli-test-helpers.js'
 import type { TestWorkspace } from '../fixtures/cli-test-helpers.js'
 import type { FakeProvider } from '../fixtures/fake-provider-server.js'
@@ -106,7 +105,13 @@ export async function createTuiHarness(options: {
   let columns = options.columns ?? 100
   let rows = options.rows ?? 32
   const terminal = new Terminal({ cols: columns, rows, allowProposedApi: true, scrollback: 5000 })
-  const env = stringEnv(isolatedCliEnv(options.workspace, options.provider, options.env))
+  const env = stringEnv(
+    isolatedCliEnv(options.workspace, options.provider, {
+      TERM_PROGRAM: process.env.TERM_PROGRAM,
+      WT_SESSION: process.env.WT_SESSION,
+      ...options.env,
+    }),
+  )
   const isWindows = process.platform === 'win32'
   const shell = isWindows ? 'powershell.exe' : '/bin/sh'
   const shellArgs = isWindows ? ['-NoLogo', '-NoProfile', '-NoExit'] : ['-f', '-i']
@@ -172,14 +177,14 @@ export async function createTuiHarness(options: {
   const waitForInputReady = async (): Promise<void> => {
     const probe = 'q'
     const deadline = Date.now() + 5000
-    while (!screenText(terminal).includes(`${GLYPH_PROMPT_ARROW} ${probe}`)) {
+    while (!promptLine().endsWith(` ${probe}`)) {
       if (Date.now() >= deadline) throw new Error('Timed out waiting for interactive stdin listener')
       processUnderTest.write(probe)
       await waitForRendered()
       await waitFor(
         async () => {
           await waitForRendered()
-          return screenText(terminal).includes(`${GLYPH_PROMPT_ARROW} ${probe}`)
+          return promptLine().endsWith(` ${probe}`)
         },
         'one input readiness probe attempt',
         100,

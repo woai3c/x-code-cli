@@ -1,0 +1,3 @@
+packages/core/native/windows-job-supervisor/** text eol=lf
+packages/core/native/prebuilt/**/*.json text eol=lf
+packages/core/native/prebuilt/**/*.exe binary

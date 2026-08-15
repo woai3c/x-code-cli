@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -19,7 +20,6 @@ interface TarEntry {
   data: Buffer
 }
 
-const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 let suiteRoot = ''
@@ -62,6 +62,7 @@ function command(
       cwd: options.cwd,
       env: options.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     })
     let stdout = ''
     let stderr = ''
@@ -109,12 +110,20 @@ beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(process.env.TMPDIR ?? process.env.TEMP ?? '/tmp', 'xc-package-smoke-'))
   packDir = path.join(suiteRoot, 'packed artifacts')
   installPrefix = path.join(suiteRoot, 'npm prefix')
+  const packageStage = path.join(suiteRoot, 'package source')
   await fs.mkdir(packDir, { recursive: true })
+  await fs.mkdir(packageStage, { recursive: true })
 
-  const packed = await command(packageManager, ['pack', '--pack-destination', packDir], {
-    cwd: path.join(REPO_ROOT, 'packages', 'cli'),
+  const cliPackageRoot = path.join(REPO_ROOT, 'packages', 'cli')
+  await Promise.all([
+    fs.copyFile(path.join(cliPackageRoot, 'package.json'), path.join(packageStage, 'package.json')),
+    fs.cp(path.join(cliPackageRoot, 'dist'), path.join(packageStage, 'dist'), { recursive: true }),
+  ])
+
+  const packed = await command(npmCommand, ['pack', '--ignore-scripts', '--pack-destination', packDir], {
+    cwd: packageStage,
   })
-  if (packed.exitCode !== 0) throw new Error(`pnpm pack failed\n${packed.stdout}\n${packed.stderr}`)
+  if (packed.exitCode !== 0) throw new Error(`npm pack failed\n${packed.stdout}\n${packed.stderr}`)
   const tarballs = (await fs.readdir(packDir)).filter((name) => name.endsWith('.tgz'))
   if (tarballs.length !== 1) throw new Error(`Expected one CLI tarball, found: ${tarballs.join(', ')}`)
   tarballPath = path.join(packDir, tarballs[0]!)
@@ -151,8 +160,29 @@ describe('published CLI tarball', () => {
       entries.find((entry) => entry.name === 'package/package.json')!.data.toString('utf-8'),
     ) as {
       files?: string[]
+      dependencies?: Record<string, string>
     }
     expect(manifest.files).toEqual(['dist'])
+    expect(manifest.dependencies?.['node-pty']).toBe('^1.1.0')
+  })
+
+  it('contains hash-verified Windows helpers for x64 and arm64', async () => {
+    const entries = readTarEntries(await fs.readFile(tarballPath))
+    const byName = new Map(entries.map((entry) => [entry.name, entry.data]))
+    const manifestBytes = byName.get('package/dist/native/windows/manifest.json')
+    expect(manifestBytes).toBeDefined()
+    const manifest = JSON.parse(manifestBytes!.toString('utf-8')) as {
+      protocolVersion: number
+      artifacts: Record<string, { file: string; sha256: string }>
+    }
+
+    expect(manifest.protocolVersion).toBe(2)
+    for (const arch of ['x64', 'arm64']) {
+      const artifact = manifest.artifacts[arch]!
+      const bytes = byName.get(`package/dist/native/windows/${artifact.file}`)
+      expect(bytes, `missing ${arch} Windows helper`).toBeDefined()
+      expect(createHash('sha256').update(bytes!).digest('hex')).toBe(artifact.sha256)
+    }
   })
 
   it('installs both bin aliases and runs version/help outside the repository', async () => {
@@ -177,6 +207,19 @@ describe('published CLI tarball', () => {
     expect(help.stderr).not.toMatch(/API key/i)
   })
 
+  it('installs and loads the native PTY dependency outside the repository', async () => {
+    const script = `
+      const { createRequire } = require('node:module')
+      const load = createRequire(${JSON.stringify(installedCliJs)})
+      const pty = load('node-pty')
+      if (typeof pty.spawn !== 'function') process.exit(1)
+      process.stdout.write('package-pty-loaded')
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 20_000 })
+
+    expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('package-pty-loaded') })
+  })
+
   it('runs a fake-provider print task from the installed package', async () => {
     const provider = await startFakeProvider([{ type: 'completion', text: 'installed-package-ok' }])
     const workspace = await createTestWorkspace('xc-installed-task-')
@@ -189,6 +232,32 @@ describe('published CLI tarball', () => {
       expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('installed-package-ok') })
       expect(provider.requests()).toHaveLength(1)
       expect(provider.requests()[0]).toMatchObject({ model: 'test-model', authorizationPresent: true })
+    } finally {
+      await provider.close()
+      await workspace.cleanup()
+    }
+  })
+
+  it('executes a tty shell tool through the bundled provider', async () => {
+    const provider = await startFakeProvider([
+      { type: 'tool-call', name: 'shell', input: { command: 'node --version', tty: true } },
+      { type: 'completion', text: 'installed-pty-tool-ok' },
+    ])
+    const workspace = await createTestWorkspace('xc-installed-pty-tool-')
+    try {
+      const result = await command(
+        process.execPath,
+        [installedCliJs, '--print', '--trust', '--no-plugins', '--no-hooks', '--max-turns', '3', 'run a tty command'],
+        { cwd: workspace.cwd, env: isolatedCliEnv(workspace, provider), timeoutMs: 30_000 },
+      )
+      expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('installed-pty-tool-ok') })
+      const requests = provider.mainRequests()
+      expect(requests).toHaveLength(2)
+      const observedToolResult = JSON.stringify(requests[1]!.messages)
+      expect(observedToolResult).toContain(process.version)
+      expect(observedToolResult).toContain('Chunk ID:')
+      expect(observedToolResult).toContain('Process exited with code 0')
+      expect(observedToolResult).not.toMatch(/supervisor artifact|protocol (?:error|mismatch)/i)
     } finally {
       await provider.close()
       await workspace.cleanup()
