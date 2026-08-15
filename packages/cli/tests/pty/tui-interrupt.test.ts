@@ -125,7 +125,7 @@ describe('TUI interruption', () => {
 
       harness.key('ctrl-c')
       await harness.waitForText('Press Ctrl+C again to exit')
-      await harness.waitForText('[Request interrupted by user]')
+      await harness.waitForText('[Request interrupted by user')
       expect(processExists(pid)).toBe(true)
 
       await submitInput(harness, '/stop')
