@@ -9,7 +9,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { parseFrontmatter } from '../frontmatter.js'
-import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { XCODE_DIR, errorMessage, userXcodeDir } from '../utils.js'
 import type { CommandDefinition } from './types.js'
 
 async function loadCommandsFromDir(
@@ -53,7 +53,7 @@ async function loadCommandsFromDir(
       if (pluginRoot) cmd.pluginRoot = pluginRoot
       out.push(cmd)
     } catch (err) {
-      console.error(`[commands] Skipping ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`[commands] Skipping ${filePath}: ${errorMessage(err)}`)
     }
   }
   return out

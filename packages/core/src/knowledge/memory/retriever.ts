@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 
-import { estimateTextTokens } from '../../utils.js'
+import { estimateTextTokenCount } from '../../agent/context-window.js'
 import { LruCache } from '../../utils/lru-cache.js'
 import { extractText } from '../../utils/message-helpers.js'
 import {
@@ -287,12 +287,12 @@ export class MemoryRetriever {
       const rendered: string[] = [`## ${topic.metadata.id}`, topic.metadata.description]
       const factIds: string[] = []
       const factHashes: Record<string, string> = {}
-      let topicTokens = estimateTextTokens(rendered.join('\n'))
+      let topicTokens = estimateTextTokenCount(rendered.join('\n'))
       for (const { section, score } of sections) {
         if (score <= 0 && rendered.length > 2) continue
         const content = renderSection(section)
         if (!content) continue
-        const tokens = estimateTextTokens(content)
+        const tokens = estimateTextTokenCount(content)
         const candidateContent = [...rendered, content].join('\n\n')
         if (
           topicTokens + tokens > this.options.maxTokensPerTopic ||
@@ -311,7 +311,7 @@ export class MemoryRetriever {
       }
       if (rendered.length <= 2) continue
       const renderedContent = rendered.join('\n\n')
-      const actualTokens = estimateTextTokens(renderedContent)
+      const actualTokens = estimateTextTokenCount(renderedContent)
       if (totalTokens + actualTokens > this.options.maxTokensPerTurn) continue
       packed.push({
         topicId: topic.metadata.id,

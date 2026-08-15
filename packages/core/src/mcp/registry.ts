@@ -20,7 +20,7 @@
 // useAgent.
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 
-import { debugLog } from '../utils.js'
+import { debugLog, errorMessage } from '../utils.js'
 import { McpClient } from './client.js'
 import { UnsafeEnvError, assertSafeEnv } from './env-safety.js'
 import { EnvExpansionError, expandEnvDeep } from './expand-env.js'
@@ -207,7 +207,7 @@ export class McpRegistry {
         debugLog('mcp.connectAll-failed', `${name}: ${String(err)}`)
         const existing = this.servers.get(name)
         if (existing) {
-          existing.status = { kind: 'failed', error: err instanceof Error ? err.message : String(err) }
+          existing.status = { kind: 'failed', error: errorMessage(err) }
         }
       }
     })
@@ -478,7 +478,7 @@ export async function connectOneServer(
       resources: client.resources(),
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errorMessage(err)
     const needsAuth = /unauth|401|UnauthorizedError/i.test(msg) && isHttpConfig(expanded)
     const status: RegisteredServer['status'] = needsAuth ? { kind: 'needs_auth' } : { kind: 'failed', error: msg }
     return {

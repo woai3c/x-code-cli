@@ -111,15 +111,10 @@ export interface CompressionResult {
   modelId?: string
 }
 
-export async function compressMessagesWithUsage(
-  messages: ModelMessage[],
-  model: LanguageModel,
-  previousSummary?: string,
-  filesTracked?: { modified: string[]; read: string[] },
-  abortSignal?: AbortSignal,
-): Promise<CompressionResult> {
-  // Walk from newest to oldest accumulating estimated tokens until we
-  // hit KEEP_RECENT_TOKENS. This replaces the old fixed-count slice.
+/** Walk messages from newest to oldest, accumulating estimated tokens until
+ *  the budget is reached. Returns the number of messages to keep (the "recent"
+ *  tail), ensuring it never starts with an orphaned tool result. */
+function computeKeepCount(messages: ModelMessage[]): number {
   let keepCount = 0
   let tokenBudget = 0
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -128,12 +123,20 @@ export async function compressMessagesWithUsage(
     tokenBudget += msgTokens
     keepCount++
   }
-
-  // Ensure the slice doesn't start with an orphaned tool result —
-  // providers reject tool messages lacking a preceding assistant.
   while (keepCount < messages.length && messages[messages.length - keepCount]?.role === 'tool') {
     keepCount++
   }
+  return keepCount
+}
+
+export async function compressMessagesWithUsage(
+  messages: ModelMessage[],
+  model: LanguageModel,
+  previousSummary?: string,
+  filesTracked?: { modified: string[]; read: string[] },
+  abortSignal?: AbortSignal,
+): Promise<CompressionResult> {
+  const keepCount = computeKeepCount(messages)
 
   const recent = messages.slice(-keepCount)
   const old = messages.slice(0, -keepCount)
@@ -196,15 +199,7 @@ export async function compressTrackedMessagesWithUsage(
   abortSignal?: AbortSignal,
 ): Promise<TrackedCompressionResult> {
   const messages = entries.map((entry) => entry.message)
-  let keepCount = 0
-  let tokenBudget = 0
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msgTokens = estimateMessageTokenCount(messages[i])
-    if (tokenBudget + msgTokens > KEEP_RECENT_TOKENS && keepCount >= MIN_KEEP_MESSAGES) break
-    tokenBudget += msgTokens
-    keepCount++
-  }
-  while (keepCount < messages.length && messages[messages.length - keepCount]?.role === 'tool') keepCount++
+  const keepCount = computeKeepCount(messages)
   const recentEntries = entries.slice(-keepCount)
   const oldEntries = entries.slice(0, -keepCount)
   if (oldEntries.length === 0) {

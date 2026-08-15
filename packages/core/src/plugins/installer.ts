@@ -31,7 +31,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { debugLog } from '../utils.js'
+import { debugLog, errorMessage } from '../utils.js'
 import { type ConsentPreview, buildConsentPreview, probePluginRoot } from './consent.js'
 import { ManifestParseError, discoverManifest, parseManifest } from './manifest.js'
 import { RESERVED_MARKETPLACE_NAMES, readKnownMarketplaces, resolveCloneUrl } from './marketplace.js'
@@ -236,7 +236,7 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
       /* nothing useful to do */
     })
     if (err instanceof InstallError || err instanceof ManifestParseError) throw err
-    throw new InstallError(err instanceof Error ? err.message : String(err))
+    throw new InstallError(errorMessage(err))
   }
 }
 
@@ -278,7 +278,7 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
       await execa('git', args, { signal, stdio: 'pipe' })
     } catch (err) {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
-      throw new InstallError(`git clone failed: ${err instanceof Error ? err.message : String(err)}`)
+      throw new InstallError(`git clone failed: ${errorMessage(err)}`)
     }
 
     // Integrity check: when the marketplace.json pinned a `sha`, verify
@@ -317,9 +317,7 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
         // rev-parse failed (shouldn't happen on a fresh clone) — treat
         // as integrity failure so we don't silently install unchecked.
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
-        throw new InstallError(
-          `failed to verify sha for ${cloneUrl}: ${err instanceof Error ? err.message : String(err)}`,
-        )
+        throw new InstallError(`failed to verify sha for ${cloneUrl}: ${errorMessage(err)}`)
       }
     }
 
@@ -346,7 +344,7 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
       } catch (err) {
         await fs.rm(subdirTemp, { recursive: true, force: true }).catch(() => {})
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
-        throw new InstallError(`failed to extract subdir: ${err instanceof Error ? err.message : String(err)}`)
+        throw new InstallError(`failed to extract subdir: ${errorMessage(err)}`)
       }
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
       return subdirTemp

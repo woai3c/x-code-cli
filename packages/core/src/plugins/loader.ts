@@ -28,7 +28,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { isDir, isFile } from '../utils.js'
+import { errorMessage, isDir, isFile } from '../utils.js'
 import { EnableState } from './enable-state.js'
 import { listInstalledPlugins } from './installer.js'
 import { ManifestParseError, discoverManifest, parseManifest } from './manifest.js'
@@ -208,7 +208,7 @@ async function loadOnePlugin(args: LoadOneArgs): Promise<void> {
     args.errors.push({
       id: args.fallbackId,
       path: args.rootDir,
-      message: err instanceof Error ? err.message : String(err),
+      message: errorMessage(err),
     })
   }
 }

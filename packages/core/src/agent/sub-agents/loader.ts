@@ -9,7 +9,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { parseFrontmatter } from '../../frontmatter.js'
-import { XCODE_DIR, userXcodeDir } from '../../utils.js'
+import { XCODE_DIR, errorMessage, userXcodeDir } from '../../utils.js'
 import type { SubAgentDefinition } from './types.js'
 
 const frontmatterSchema = z.object({
@@ -70,7 +70,7 @@ async function loadAgentsFromDir(
         ...(pluginId ? { pluginId } : {}),
       })
     } catch (err) {
-      console.error(`[sub-agents] Skipping ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`[sub-agents] Skipping ${filePath}: ${errorMessage(err)}`)
     }
   }
 

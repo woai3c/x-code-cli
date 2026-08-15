@@ -23,8 +23,7 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { debugLog } from '../utils.js'
-import { userXcodeDir } from '../utils.js'
+import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
 import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage, formatBytes } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { formatTranscription, transcribeAudio } from './audio-transcribe.js'
@@ -296,7 +295,7 @@ export async function extractOfficeText(filePath: string): Promise<string> {
     const ast = await OfficeParser.parseOffice(filePath)
     return ast.toText()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errorMessage(err)
     return `[Failed to extract text from ${path.basename(filePath)}: ${msg}]`
   }
 }
@@ -347,7 +346,7 @@ export async function ocrImage(input: string | Buffer): Promise<string> {
     const { data } = await worker.recognize(input)
     return data.text ?? ''
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errorMessage(err)
     return `[OCR failed: ${msg}]`
   }
 }
@@ -376,7 +375,7 @@ async function ocrPdf(filePath: string): Promise<string> {
     }
     return out.join('\n\n')
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errorMessage(err)
     return `[PDF OCR failed: ${msg}]`
   }
 }
@@ -412,7 +411,7 @@ export async function ingestFile(
     stats = await fs.stat(ref.absolutePath)
     kind = await classifyFile(ref.absolutePath)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errorMessage(err)
     return [{ type: 'text', text: `[Cannot read ${ref.raw}: ${msg}]` }]
   }
 
@@ -428,7 +427,7 @@ export async function ingestFile(
       const body = await readTextFile(ref.absolutePath)
       return [{ type: 'text', text: `<<file path="${ref.absolutePath}">>\n${body}\n<</file>>` }]
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       return [{ type: 'text', text: `[Failed to read ${ref.raw}: ${msg}]` }]
     }
   }
@@ -473,7 +472,7 @@ export async function ingestFile(
           },
         ]
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = errorMessage(err)
         return [{ type: 'text', text: `[Failed to attach PDF ${ref.raw}: ${msg}]` }]
       }
     }
@@ -515,7 +514,7 @@ export async function ingestFile(
           },
         ]
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = errorMessage(err)
         return [{ type: 'text', text: `[Failed to attach audio ${ref.raw}: ${msg}]` }]
       }
     }
@@ -585,7 +584,7 @@ export async function ingestFile(
       }
       return parts
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       return [{ type: 'text', text: `[Failed to attach image ${ref.raw}: ${msg}]` }]
     }
   }
@@ -606,7 +605,7 @@ export async function ingestFile(
         },
       ]
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       onNotice?.(`Vision sub-agent (${sub.label}) failed: ${msg} — falling back to OCR`)
       // fall through to OCR
     }

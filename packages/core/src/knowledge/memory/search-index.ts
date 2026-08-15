@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { estimateTextTokens } from '../../utils.js'
+import { estimateTextTokenCount } from '../../agent/context-window.js'
 import type { MemoryFact, MemoryTopic } from './types.js'
 
 const WORD_RE = /[\p{L}\p{M}\p{N}]+/gu
@@ -250,7 +250,7 @@ export class MemoryIndex {
       for (const fact of topic.facts.filter((item) => isMemoryFactActive(item))) {
         const summary = fact.content.replace(/\s+/g, ' ').slice(0, 180)
         const line = `${fact.metadata.id}\t${topic.metadata.id}\t${topic.metadata.type}\t${summary}`
-        const lineTokens = estimateTextTokens(line)
+        const lineTokens = estimateTextTokenCount(line)
         if (tokens + lineTokens > maxTokens) return lines.join('\n')
         lines.push(line)
         tokens += lineTokens

@@ -34,7 +34,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { debugLog } from '../utils.js'
+import { debugLog, errorMessage } from '../utils.js'
 import { knownMarketplacesPath, marketplaceDir, marketplaceIndexPath } from './paths.js'
 import type { KnownMarketplace, KnownMarketplaces, Marketplace, MarketplaceEntry, PluginSource } from './types.js'
 
@@ -240,7 +240,7 @@ export function parseMarketplace(raw: string, sourceLabel: string, ctx: ParseMar
   try {
     json = JSON.parse(raw)
   } catch (err) {
-    throw new MarketplaceParseError(`not valid JSON: ${err instanceof Error ? err.message : String(err)}`, sourceLabel)
+    throw new MarketplaceParseError(`not valid JSON: ${errorMessage(err)}`, sourceLabel)
   }
   const result = wireMarketplaceSchema.safeParse(json)
   if (!result.success) {
@@ -268,7 +268,7 @@ export function parseMarketplace(raw: string, sourceLabel: string, ctx: ParseMar
       // One bad plugin entry doesn't kill the marketplace — most users
       // care about other plugins in the catalog. Collect and surface in
       // a single error AFTER trying every entry.
-      sourceErrors.push(`plugins.${i} (${entry.name}): ${err instanceof Error ? err.message : String(err)}`)
+      sourceErrors.push(`plugins.${i} (${entry.name}): ${errorMessage(err)}`)
     }
   }
   if (normalised.length === 0 && sourceErrors.length > 0) {

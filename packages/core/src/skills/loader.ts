@@ -14,7 +14,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { parseFrontmatter } from '../frontmatter.js'
-import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { XCODE_DIR, errorMessage, userXcodeDir } from '../utils.js'
 import type { SkillDefinition } from './registry.js'
 
 const SKILL_FILENAME = 'SKILL.md'
@@ -135,7 +135,7 @@ async function loadSkillsFromDir(
         ...(pluginId ? { pluginId } : {}),
       })
     } catch (err) {
-      console.error(`[skills] Skipping ${skillFile}: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`[skills] Skipping ${skillFile}: ${errorMessage(err)}`)
     }
   }
 

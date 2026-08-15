@@ -13,7 +13,7 @@ import { tokenizeMemoryText } from '../../knowledge/memory/search-index.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
 import type { ShellSessionController } from '../../tools/shell-session/types.js'
 import type { AgentCallbacks, AgentOptions, ExecutionAuthority, TokenUsage } from '../../types/index.js'
-import { debugLog, isAbortError } from '../../utils.js'
+import { debugLog, errorMessage, isAbortError } from '../../utils.js'
 import { withBrowserOperation } from '../browser/operation-lock.js'
 import { type BrowserMcp, PLAYWRIGHT_MCP_PACKAGE, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
@@ -485,7 +485,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
       })
     }
 
-    const message = err instanceof Error ? err.message : String(err)
+    const message = errorMessage(err)
     debugLog('sub-agent.crash', `${agentName}: ${message}`)
     const toolUseCount = countToolCalls(subState.messages)
 

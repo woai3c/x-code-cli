@@ -19,7 +19,7 @@ import { closeSync, openSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { debugLog, userXcodeDir } from '../utils.js'
+import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
 
 // ── stderr suppression ───────────────────────────────────────────────────
 // whisper.cpp's C layer (and ggml_metal) writes directly to fd 2 via
@@ -474,7 +474,7 @@ export async function transcribeAudio(
     if (err instanceof DOMException && err.name === 'AbortError') {
       return '[Audio transcription was cancelled.]'
     }
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errorMessage(err)
     debugLog('audio-transcribe', `error: ${msg}`)
     return `[Audio transcription failed: ${msg}]`
   }

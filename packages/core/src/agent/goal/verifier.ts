@@ -7,7 +7,7 @@ import { checkPermission } from '../../permissions/index.js'
 import { truncateToolResult } from '../../tools/index.js'
 import { getShellProvider } from '../../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions } from '../../types/index.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils.js'
 import type { LoopState } from '../loop-state.js'
 import { runSubAgent } from '../sub-agents/runner.js'
 import { recordVerificationResult } from './state.js'
@@ -393,5 +393,5 @@ function makeResult(input: {
 }
 
 function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+  return errorMessage(err)
 }

@@ -19,7 +19,7 @@ import { buildCallableName } from '../../mcp/name-mangling.js'
 import { McpPermissionStore } from '../../mcp/permissions.js'
 import { McpRegistry, connectOneServer } from '../../mcp/registry.js'
 import type { McpServerConfig, McpToolEntry } from '../../mcp/types.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils.js'
 import { sanitizeBrowserDiagnostic } from './diagnostics.js'
 import { acquireBrowserProfileLease } from './profile-lease.js'
 
@@ -270,7 +270,7 @@ export async function getBrowserMcp(abortSignal?: AbortSignal): Promise<BrowserM
         if (value.ok) cached = value
         return value
       })
-      .catch((err) => browserFailure(err instanceof Error ? err.message : String(err)))
+      .catch((err) => browserFailure(errorMessage(err)))
       .finally(() => {
         if (connecting === created) connecting = null
       })

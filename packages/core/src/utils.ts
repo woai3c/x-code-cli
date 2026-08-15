@@ -199,6 +199,11 @@ export function isAbortError(err: unknown, signal: AbortSignal | undefined): boo
   return false
 }
 
+/** Extract a human-readable message from an unknown thrown value. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 /** Check if a file exists */
 export async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -247,12 +252,6 @@ export function generateTimestampId(now: Date = new Date()): string {
     `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}` +
     `-${pad(now.getMilliseconds(), 3)}`
   )
-}
-
-/** Rough byte-based token estimate (~3 bytes/token) shared by the memory
- *  budgeting code. Matches the context-window heuristic. */
-export function estimateTextTokens(text: string): number {
-  return Math.ceil(Buffer.byteLength(text, 'utf-8') / 3)
 }
 
 /** Truncate to at most `maxBytes` UTF-8 bytes without splitting a codepoint. */

@@ -41,7 +41,7 @@ import type { HookConfig } from '../hooks/types.js'
 import { parseServersBlock } from '../mcp/config-schema.js'
 import { isStdioConfig } from '../mcp/types.js'
 import type { McpServerConfig } from '../mcp/types.js'
-import { debugLog } from '../utils.js'
+import { debugLog, errorMessage } from '../utils.js'
 import { loadAllPlugins } from './loader.js'
 import type { LoadResult, ResolvedContributions } from './loader.js'
 import { extractMcpServersBlock } from './mcp-contributions.js'
@@ -154,7 +154,7 @@ async function resolvePluginHooks(
     } catch (err) {
       out.hookErrors.push({
         pluginId: plugin.id,
-        message: `failed to read hooks file ${contrib.path}: ${err instanceof Error ? err.message : String(err)}`,
+        message: `failed to read hooks file ${contrib.path}: ${errorMessage(err)}`,
       })
       return null
     }
@@ -186,7 +186,7 @@ async function resolvePluginMcpServers(
     } catch (err) {
       out.mcpErrors.push({
         pluginId: plugin.id,
-        message: `failed to read mcpServers file ${contrib.path}: ${err instanceof Error ? err.message : String(err)}`,
+        message: `failed to read mcpServers file ${contrib.path}: ${errorMessage(err)}`,
       })
       return {}
     }

@@ -8,7 +8,7 @@ import type { LoopState } from '../../agent/loop-state.js'
 import { appendMemoryRecall, appendMemoryRecallDelete } from '../../agent/session-store.js'
 import { resolveMemoryConfig } from '../../config/index.js'
 import type { MemoryConfig } from '../../config/index.js'
-import { debugLog, userXcodeDir } from '../../utils.js'
+import { debugLog, errorMessage, userXcodeDir } from '../../utils.js'
 import { MemoryJobStore } from './job-store.js'
 import { addMemoryRecallAttachment, addMemoryRecallTombstone } from './recall-state.js'
 import { FORGET_INTENT_RE, HISTORY_INTENT_RE, MemoryRetriever } from './retriever.js'
@@ -134,7 +134,7 @@ export class MemoryService {
       this.worker.wake()
     } catch (error) {
       this.initialized = true
-      this.initializationError = error instanceof Error ? error.message : String(error)
+      this.initializationError = errorMessage(error)
       debugLog('memory.initialize-error', this.initializationError)
     }
   }
@@ -505,7 +505,7 @@ export class MemoryService {
       })
       return { attempted: true, ids }
     } catch (error) {
-      debugLog(input.failureLogTag, error instanceof Error ? error.message : String(error))
+      debugLog(input.failureLogTag, errorMessage(error))
       return { attempted: true, ids: null }
     }
   }

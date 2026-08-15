@@ -18,7 +18,7 @@
 import { execa } from 'execa'
 
 import { getPluginUserConfigEnv } from '../plugins/user-config.js'
-import { debugLog } from '../utils.js'
+import { debugLog, errorMessage } from '../utils.js'
 import type { HookConfigEntry, HookDecision, HookEvent, RegisteredHook } from './types.js'
 import { buildVariableContext, expandVariables } from './variables.js'
 
@@ -124,7 +124,7 @@ export async function executeHook(
   } catch (err) {
     if (opts.signal?.aborted) throw err
     debugLog('hooks.exec-error', `${hook.pluginId} ${event.name}: ${String(err)}`)
-    return failurePolicyDecision(hook, `hook crashed: ${err instanceof Error ? err.message : String(err)}`)
+    return failurePolicyDecision(hook, `hook crashed: ${errorMessage(err)}`)
   }
 }
 

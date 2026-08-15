@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai'
 
 import type { AgentCallbacks, AgentOptions } from '../../types/index.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils.js'
 import type { LoopState } from '../loop-state.js'
 import type { AgentLoopResult } from '../loop.js'
 import { appendGoalInput, appendGoalState, appendGoalVerification } from '../session-store.js'
@@ -78,7 +78,7 @@ export async function runGoalLoop(input: RunGoalLoopInput): Promise<GoalRunSumma
       result = await input.runAgentTurn(goalInput.content, { silent: true })
     } catch (err) {
       finish = signal?.aborted || input.options.abortSignal?.aborted ? 'aborted' : 'error'
-      debugLog('goal.runner.turn-error', err instanceof Error ? err.message : String(err))
+      debugLog('goal.runner.turn-error', errorMessage(err))
     }
 
     const attempt: GoalAttempt = {

@@ -16,7 +16,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { fileExists } from '../utils.js'
+import { errorMessage, fileExists } from '../utils.js'
 import { GEMINI_MANIFEST_REL, MANIFEST_CANDIDATES } from './paths.js'
 import type { ManifestFormat, PluginManifest } from './types.js'
 
@@ -130,20 +130,14 @@ export async function parseManifest(manifestPath: string): Promise<PluginManifes
   try {
     raw = await fs.readFile(manifestPath, 'utf-8')
   } catch (err) {
-    throw new ManifestParseError(
-      `failed to read manifest: ${err instanceof Error ? err.message : String(err)}`,
-      manifestPath,
-    )
+    throw new ManifestParseError(`failed to read manifest: ${errorMessage(err)}`, manifestPath)
   }
 
   let json: unknown
   try {
     json = JSON.parse(raw)
   } catch (err) {
-    throw new ManifestParseError(
-      `manifest is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-      manifestPath,
-    )
+    throw new ManifestParseError(`manifest is not valid JSON: ${errorMessage(err)}`, manifestPath)
   }
 
   const result = manifestSchema.safeParse(json)

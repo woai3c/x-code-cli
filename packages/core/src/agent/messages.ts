@@ -1,6 +1,8 @@
 // @x-code-cli/core — Message types and helpers
 import type { ModelMessage } from 'ai'
 
+import { errorMessage } from '../utils.js'
+
 export interface ToolImage {
   data: string
   mediaType: string
@@ -80,7 +82,7 @@ export function toolErrorString(message: string): string {
 
 /** Wrap a thrown / unknown value into the standard tool-error string. */
 export function toolErrorFromUnknown(err: unknown): string {
-  return toolErrorString(err instanceof Error ? err.message : String(err))
+  return toolErrorString(errorMessage(err))
 }
 
 /** Match the result-string prefix produced by toolErrorString. */

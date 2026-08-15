@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai'
 
 import type { MemoryReasoningMode } from '../../config/index.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils.js'
 import { extractMemoryOperations } from './extractor.js'
 import type { MemoryJobStore } from './job-store.js'
 import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from './search-index.js'
@@ -49,21 +49,18 @@ export class MemoryWorker {
     if (this.stopped || this.runningPromise) return
     this.runningPromise = this.run()
       .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = errorMessage(error)
         debugLog('memory-worker.run-error', message)
         try {
           this.options.onNotice({ action: 'failed', error: message })
         } catch (noticeError) {
-          debugLog(
-            'memory-worker.notice-error',
-            noticeError instanceof Error ? noticeError.message : String(noticeError),
-          )
+          debugLog('memory-worker.notice-error', errorMessage(noticeError))
         }
       })
       .finally(() => {
         this.runningPromise = null
         void this.schedulePending().catch((error) => {
-          debugLog('memory-worker.schedule-error', error instanceof Error ? error.message : String(error))
+          debugLog('memory-worker.schedule-error', errorMessage(error))
         })
       })
   }
@@ -191,7 +188,7 @@ export class MemoryWorker {
       for (const notice of committed.notices) this.options.onNotice(notice)
     } catch (error) {
       const retry = await this.options.jobStore.retry(job, this.options.maxAttempts())
-      const message = error instanceof Error ? error.message : String(error)
+      const message = errorMessage(error)
       debugLog('memory-worker.error', `${job.jobId}: ${message}`)
       if (retry === 'failed') {
         await this.options.jobStore.appendRun({

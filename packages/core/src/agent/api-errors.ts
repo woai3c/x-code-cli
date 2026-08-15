@@ -1,4 +1,5 @@
 // @x-code-cli/core — API error classification & pattern detection
+import { errorMessage } from '../utils.js'
 
 /** Substrings that signal the request exceeded the model's context window. */
 const CONTEXT_TOO_LONG_PATTERNS = [
@@ -35,7 +36,7 @@ function extractErrorStatus(err: unknown, depth = 0): number {
  *  Also matches HTTP 413, which `permanentErrorFetch` rewrites context-overflow
  *  responses to so the SDK marks them non-retryable. */
 export function isContextTooLongError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err)
+  const msg = errorMessage(err)
   if (extractHttpStatus(msg) === 413) return true
   for (const pattern of CONTEXT_TOO_LONG_PATTERNS) {
     if (msg.includes(pattern)) return true
@@ -67,7 +68,7 @@ const IMAGE_DATA_PATTERNS = [
  *  agent loop uses this to strip binary parts from history and retry once —
  *  without it the rejected part poisons every subsequent request. */
 export function isImageDataError(err: unknown): boolean {
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  const msg = errorMessage(err).toLowerCase()
   return IMAGE_DATA_PATTERNS.some((pattern) => msg.includes(pattern))
 }
 

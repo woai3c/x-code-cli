@@ -7,6 +7,7 @@
 // are rejected before we try to spawn anything.
 import { z } from 'zod'
 
+import { errorMessage } from '../utils.js'
 import type { McpServerConfig } from './types.js'
 
 /** Single permissive schema covering both transports. Field presence
@@ -87,7 +88,7 @@ export function parseServersBlock(raw: unknown): {
     try {
       servers[name] = parseServerConfig(name, entry)
     } catch (err) {
-      errors.push({ name, message: err instanceof Error ? err.message : String(err) })
+      errors.push({ name, message: errorMessage(err) })
     }
   }
 

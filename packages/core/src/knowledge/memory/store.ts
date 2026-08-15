@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { estimateTextTokenCount } from '../../agent/context-window.js'
 import { parseFrontmatter } from '../../frontmatter.js'
-import { estimateTextTokens, fileExists, truncateUtf8 } from '../../utils.js'
+import { errorMessage, fileExists, truncateUtf8 } from '../../utils.js'
 import { atomicWriteFile } from '../../utils/atomic-file.js'
 import { redactMemoryText } from './redaction.js'
 import { MemoryTransactionStore, memoryContentHash } from './transaction-store.js'
@@ -208,7 +209,7 @@ function parseSections(body: string, facts: MemoryFact[]) {
         headingPath: [],
         content: canonicalText(body),
         facts: [...facts],
-        estimatedTokens: estimateTextTokens(body),
+        estimatedTokens: estimateTextTokenCount(body),
       },
     ]
   }
@@ -221,7 +222,7 @@ function parseSections(body: string, facts: MemoryFact[]) {
       headingPath: [],
       content: preamble,
       facts: preambleFacts,
-      estimatedTokens: estimateTextTokens(preamble),
+      estimatedTokens: estimateTextTokenCount(preamble),
     })
   }
   for (const [index, heading] of headings.entries()) {
@@ -238,7 +239,7 @@ function parseSections(body: string, facts: MemoryFact[]) {
       headingPath,
       content,
       facts: facts.filter((fact) => fact.start >= heading.index && fact.start < end),
-      estimatedTokens: estimateTextTokens(content),
+      estimatedTokens: estimateTextTokenCount(content),
     })
   }
   return sections
@@ -273,7 +274,7 @@ export function parseMemoryTopic(raw: string, filePath: string): MemoryTopic {
   if (pinned && type !== 'user' && type !== 'portfolio' && type !== 'feedback') {
     throw new Error(`Only stable user, portfolio, or feedback topics may be pinned`)
   }
-  if (estimateTextTokens(summary) > 120) throw new Error('Topic summary exceeds 120 tokens')
+  if (estimateTextTokenCount(summary) > 120) throw new Error('Topic summary exceeds 120 tokens')
   const metadata: MemoryTopicMetadata = {
     id,
     type,
@@ -536,7 +537,7 @@ export function renderCoreProfile(topics: readonly MemoryTopic[]): string {
   let coreTokens = 0
   for (const topic of sorted.filter((item) => item.metadata.pinned)) {
     const line = `- ${topic.metadata.summary}`
-    const tokens = estimateTextTokens(line)
+    const tokens = estimateTextTokenCount(line)
     if (coreTokens + tokens > 800) break
     lines.push(line)
     coreTokens += tokens
@@ -547,7 +548,7 @@ export function renderCoreProfile(topics: readonly MemoryTopic[]): string {
     const aliases = topic.metadata.aliases.length ? `; aliases: ${topic.metadata.aliases.join(', ')}` : ''
     const line = `- ${topic.metadata.id} — ${topic.metadata.description}${aliases}`
     const candidate = [...lines, line].join('\n')
-    if (lines.length >= 199 || estimateTextTokens(candidate) > 1500) break
+    if (lines.length >= 199 || estimateTextTokenCount(candidate) > 1500) break
     lines.push(line)
   }
   return lines.join('\n').trimEnd() + '\n'
@@ -598,23 +599,7 @@ export class MemoryStore {
   }
 
   async load(): Promise<MemoryLoadResult> {
-    const { value, generation } = await this.transactionStore.readConsistent(async () => {
-      const entries = (await fs.readdir(this.topicsDir, { withFileTypes: true }).catch(() => []))
-        .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
-        .sort((a, b) => a.name.localeCompare(b.name))
-      const topics: MemoryTopic[] = []
-      const invalidTopics: Array<{ path: string; error: string }> = []
-      for (const entry of entries) {
-        const filePath = path.join(this.topicsDir, entry.name)
-        try {
-          const topic = parseMemoryTopic(await fs.readFile(filePath, 'utf-8'), filePath)
-          topics.push(topic)
-        } catch (error) {
-          invalidTopics.push({ path: filePath, error: error instanceof Error ? error.message : String(error) })
-        }
-      }
-      return { topics: isolateInvalidTopics(topics, invalidTopics), invalidTopics }
-    })
+    const { value, generation } = await this.transactionStore.readConsistent(() => this.readTopicsFromDisk())
     return { ...value, generation }
   }
 
@@ -1039,6 +1024,18 @@ export class MemoryStore {
   }
 
   private async loadWithoutReaderProtocol(): Promise<MemoryLoadResult> {
+    const { topics, invalidTopics } = await this.readTopicsFromDisk()
+    return {
+      topics,
+      invalidTopics,
+      generation: (await this.transactionStore.readSchema()).generation,
+    }
+  }
+
+  private async readTopicsFromDisk(): Promise<{
+    topics: MemoryTopic[]
+    invalidTopics: Array<{ path: string; error: string }>
+  }> {
     const entries = (await fs.readdir(this.topicsDir, { withFileTypes: true }).catch(() => []))
       .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
       .sort((a, b) => a.name.localeCompare(b.name))
@@ -1049,13 +1046,9 @@ export class MemoryStore {
       try {
         topics.push(parseMemoryTopic(await fs.readFile(filePath, 'utf-8'), filePath))
       } catch (error) {
-        invalidTopics.push({ path: filePath, error: error instanceof Error ? error.message : String(error) })
+        invalidTopics.push({ path: filePath, error: errorMessage(error) })
       }
     }
-    return {
-      topics: isolateInvalidTopics(topics, invalidTopics),
-      invalidTopics,
-      generation: (await this.transactionStore.readSchema()).generation,
-    }
+    return { topics: isolateInvalidTopics(topics, invalidTopics), invalidTopics }
   }
 }

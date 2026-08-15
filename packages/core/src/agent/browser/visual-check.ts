@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { McpToolEntry } from '../../mcp/types.js'
+import { errorMessage } from '../../utils.js'
 import type { ToolImage } from '../messages.js'
 import { sanitizeBrowserDiagnostic } from './diagnostics.js'
 import { withBrowserOperation } from './operation-lock.js'
@@ -286,7 +287,7 @@ export async function runBrowserVisualCheck(
             : compactDiagnostic(consoleResult.text)
         } catch (err) {
           if (options.abortSignal?.aborted) throw err
-          consoleSummary = `(console diagnostics failed: ${compactDiagnostic(err instanceof Error ? err.message : String(err), 1_000)})`
+          consoleSummary = `(console diagnostics failed: ${compactDiagnostic(errorMessage(err), 1_000)})`
         }
       }
 
