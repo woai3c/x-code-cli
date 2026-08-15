@@ -7,6 +7,8 @@ import {
   resolvePeerMessagingConfig,
 } from '@x-code-cli/core'
 
+import { errorMessage } from '../../core/src/utils.js'
+
 export interface CliPeerStartupOptions {
   userConfig?: unknown
   printMode: boolean
@@ -38,13 +40,13 @@ export async function startCliPeerService(
       getPermissionClass: options.getPermissionClass,
     })
   } catch (error) {
-    debugLog('peer.start-failed', error instanceof Error ? error.message : String(error))
+    debugLog('peer.start-failed', errorMessage(error))
     return null
   }
   try {
     await service.start()
   } catch (error) {
-    debugLog('peer.start-failed', error instanceof Error ? error.message : String(error))
+    debugLog('peer.start-failed', errorMessage(error))
   }
   return service
 }

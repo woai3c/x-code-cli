@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { stripTerminalControls } from '../../peers/terminal-sanitize.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils.js'
 import { ShellSessionEventHub } from './event-hub.js'
 import type { ShellOutputSnapshot } from './output-buffer.js'
 import type { ManagedProcessFrame, ManagedShellProvider, ManagedSpawnAttempt } from './provider.js'
@@ -1410,7 +1410,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   }
 
   private failure(code: ShellFailureCode, error: unknown): ShellFailure {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorMessage(error)
     return { code, message }
   }
 }

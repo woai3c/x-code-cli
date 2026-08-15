@@ -3,6 +3,7 @@ import type { IDisposable, IPty } from 'node-pty'
 import { randomBytes } from 'node:crypto'
 import { type Server, type Socket, createServer } from 'node:net'
 
+import { errorMessage } from '../../../utils.js'
 import type {
   ManagedExitStatus,
   ManagedProcess,
@@ -534,7 +535,7 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
   }
 
   private failProtocol(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorMessage(error)
     this.handle.observeProtocolFailure(message)
     this.readyState.reject(new Error(message))
     this.frames.push({ kind: 'failure', message })

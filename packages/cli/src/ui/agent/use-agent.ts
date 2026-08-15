@@ -89,6 +89,7 @@ import type {
   VisionUsageEvent,
 } from '@x-code-cli/core'
 
+import { errorMessage } from '../../../../core/src/utils.js'
 import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from './agent-tool-lifecycle.js'
 import { invalidateModelDependentState, invalidateToolSurfaceState } from './model-switch-state.js'
 import {
@@ -748,7 +749,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       } catch (error) {
         activeForkBoundaryRef.current = {
           snapshot: null,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         }
       }
 
@@ -1357,7 +1358,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       }))
       return { ok: true, removed }
     } catch (error) {
-      return { ok: false, removed: 0, reason: error instanceof Error ? error.message : String(error) }
+      return { ok: false, removed: 0, reason: errorMessage(error) }
     } finally {
       lease.release()
     }
@@ -1895,7 +1896,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       try {
         snapshot = captureSessionForkSnapshot(loopStateRef.current)
       } catch (error) {
-        return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }
+        return { ok: false as const, reason: errorMessage(error) }
       }
     }
     if (!snapshot || snapshot.trackedMessages.length === 0) {
@@ -1912,7 +1913,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       const result = await operation
       return { ok: true as const, ...result, excludedActiveTurn: boundary !== null }
     } catch (error) {
-      return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }
+      return { ok: false as const, reason: errorMessage(error) }
     } finally {
       pendingForksRef.current.delete(operation)
     }

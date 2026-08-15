@@ -27,6 +27,7 @@ import {
 import type { AgentOptions, CacheMissSummary, DiffStats, LanguageModel, LoadedSession } from '@x-code-cli/core'
 import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-code-cli/core'
 
+import { errorMessage } from '../../../../core/src/utils.js'
 import type { CliCleanupController } from '../../cleanup-controller.js'
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
 import { visibleBackgroundTerminals } from '../agent/shell-session-ui.js'
@@ -711,9 +712,7 @@ export function App({
           try {
             addCommandResult(formatStopResult(await stopShellSessions(arg.trim() || undefined)))
           } catch (error) {
-            addCommandResult(
-              `Unable to stop background terminal: ${error instanceof Error ? error.message : String(error)}`,
-            )
+            addCommandResult(`Unable to stop background terminal: ${errorMessage(error)}`)
           }
           return
 
@@ -757,7 +756,7 @@ export function App({
                     .join('\n')}${partial ? '\nResults may be partial because discovery reached its deadline.' : ''}`,
             )
           } catch (error) {
-            addCommandResult(`Unable to list agents: ${error instanceof Error ? error.message : String(error)}`)
+            addCommandResult(`Unable to list agents: ${errorMessage(error)}`)
           }
           return
         }
@@ -1548,7 +1547,7 @@ export function App({
           `Memory reloaded — generation ${status.generation}, ${status.topics} topics, ${status.invalidTopics.length} invalid.`,
         )
       } catch (error) {
-        addInfoMessage(`Memory reload failed: ${error instanceof Error ? error.message : String(error)}`)
+        addInfoMessage(`Memory reload failed: ${errorMessage(error)}`)
       }
       return
     }
@@ -1600,7 +1599,7 @@ export function App({
             .join('\n'),
         )
       } catch (error) {
-        addInfoMessage(`Memory search failed: ${error instanceof Error ? error.message : String(error)}`)
+        addInfoMessage(`Memory search failed: ${errorMessage(error)}`)
       }
       return
     }

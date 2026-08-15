@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import { type PeerMessagingConfig, resolvePeerMessagingConfig } from '../config/index.js'
 import { sha256Text } from '../permissions/authority.js'
 import type { PublicPeer } from '../types/index.js'
-import { debugLog } from '../utils.js'
+import { debugLog, errorMessage } from '../utils.js'
 import { createPeerIdentity, isUuid, normalizePeerName } from './identity.js'
 import { decideInboundDisposition } from './inbound-policy.js'
 import type {
@@ -146,7 +146,7 @@ function assertOutboundMessageFrameFits(frame: Extract<PeerFrameV1, { type: 'mes
   try {
     encodePeerFrame(frame)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorMessage(error)
     if (message === 'PEER_FRAME_TOO_LARGE' || message.startsWith('Invalid peer ')) {
       throw serviceError('PEER_MESSAGE_TOO_LARGE', 'Message cannot fit in a complete peer protocol frame')
     }
@@ -386,7 +386,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
         v: 1,
         type: 'error',
         code: error instanceof Error ? error.name : 'PEER_INTERNAL',
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       }
     }
   }
@@ -579,7 +579,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
             registrationWriteGeneration++
             await registrationWriteTail.catch(() => {})
             if (identity) await registry.removeOwn(identity.instanceId).catch(() => false)
-            unavailableReason = error instanceof Error ? error.message : String(error)
+            unavailableReason = errorMessage(error)
             unavailableCode = 'PEER_IO_ERROR'
             debugLog('peer.start-failed', unavailableReason)
           }
@@ -755,7 +755,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
         return {
           success: false,
           code: error instanceof Error ? error.name : 'PEER_MESSAGE_TOO_LARGE',
-          reason: stripTerminalControls(error instanceof Error ? error.message : String(error)),
+          reason: stripTerminalControls(errorMessage(error)),
           ...(prepared.messageId ? { messageId: prepared.messageId } : {}),
         }
       }
@@ -823,7 +823,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
           messageId,
         }
       } catch (error) {
-        const reason = stripTerminalControls(error instanceof Error ? error.message : String(error))
+        const reason = stripTerminalControls(errorMessage(error))
         inbox.transitionOutbound(messageId, {
           state: 'delivery-unknown',
           reason,
@@ -844,7 +844,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
         return {
           success: false,
           code: error instanceof Error ? error.name : 'PEER_INTERNAL',
-          reason: stripTerminalControls(error instanceof Error ? error.message : String(error)),
+          reason: stripTerminalControls(errorMessage(error)),
           ...(messageId ? { messageId } : {}),
         }
       }

@@ -1,3 +1,4 @@
+import { errorMessage } from '../../utils.js'
 import type { ManagedProcess } from './provider.js'
 import type { EmergencyTerminationResult, ShellFailure, TerminationReason } from './types.js'
 
@@ -49,7 +50,7 @@ export function forceTerminateManagedShellsSync(
     } catch (error) {
       const failure: ShellFailure = {
         code: 'termination-failed',
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       }
       results.push({
         managerInstanceId: target.managerInstanceId,

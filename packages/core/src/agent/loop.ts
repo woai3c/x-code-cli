@@ -33,7 +33,7 @@ import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
 import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions, MessageProvenance, PeerOrigin, QueuedAgentInput } from '../types/index.js'
-import { debugLog, isAbortError } from '../utils.js'
+import { debugLog, errorMessage, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
 import { appendProviderTurnUsage, consumeExpectedCacheMissReasons, createProviderTurnUsage } from './cache-stats.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
@@ -971,7 +971,7 @@ export async function agentLoop(
   // sub-agent signal (runner.ts always passes one).
   const memoryService = options.toolFilter || invocationPeerTainted ? undefined : options.memoryService
   const logMemoryFailure = (tag: string) => (error: unknown) => {
-    debugLog(tag, error instanceof Error ? error.message : String(error))
+    debugLog(tag, errorMessage(error))
     return null
   }
 
@@ -1462,7 +1462,7 @@ export async function agentLoop(
         repositoryId: process.cwd(),
       })
       await memoryService.enqueuePostTurnJob(job).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = errorMessage(error)
         debugLog('memory.enqueue-error', message)
         callbacks.onMemoryWrite?.({ action: 'failed', error: message })
         return 'skipped' as const

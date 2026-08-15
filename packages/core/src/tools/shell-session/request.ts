@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { errorMessage } from '../../utils.js'
 import type { InitialWaitPolicy, WaitPolicy } from './types.js'
 
 export const INITIAL_YIELD_MS = 10_000
@@ -98,7 +99,7 @@ export async function resolveShellCwd(projectCwd: string, requestedCwd: string |
     if (!stat.isDirectory()) throw new Error('path is not a directory')
     await fs.access(canonical)
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
+    const reason = errorMessage(error)
     throw new Error(`Invalid shell cwd "${requestedCwd ?? projectCwd}": ${reason}`)
   }
   return canonical

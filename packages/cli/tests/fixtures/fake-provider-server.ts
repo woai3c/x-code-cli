@@ -1,6 +1,8 @@
 import http from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
 
+import { errorMessage } from '../../../core/dist/utils.js'
+
 export interface CapturedProviderRequest {
   sequence: number
   receivedAt: number
@@ -247,7 +249,7 @@ export async function startFakeProvider(initialResponses: ScriptedResponse[] = [
         response.destroy(error instanceof Error ? error : new Error(String(error)))
       } else {
         response.writeHead(500, { 'content-type': 'application/json' })
-        response.end(responseBody(500, error instanceof Error ? error.message : String(error)))
+        response.end(responseBody(500, errorMessage(error)))
       }
     })
   })

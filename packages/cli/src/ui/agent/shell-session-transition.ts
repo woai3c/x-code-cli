@@ -1,5 +1,7 @@
 import type { ShellSessionController, TerminateAllResult } from '@x-code-cli/core'
 
+import { errorMessage } from '../../../../core/src/utils.js'
+
 export type ShellSessionTransitionResult =
   | { ok: true; result: TerminateAllResult }
   | { ok: false; reason: string; result?: TerminateAllResult }
@@ -12,7 +14,7 @@ export async function disposeShellSessionsForTransition(
   try {
     result = await manager.dispose(reason)
   } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+    return { ok: false, reason: errorMessage(error) }
   }
 
   if (result.results.some((entry) => !entry.treeConfirmedExited)) {

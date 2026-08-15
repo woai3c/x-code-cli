@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
+import { errorMessage } from '../utils.js'
 import { NdjsonFrameDecoder, type PeerFrameV1, encodePeerFrame } from './protocol.js'
 import type { PeerTransport, PeerTransportServer } from './transport.js'
 
@@ -195,7 +196,7 @@ export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocke
                 socket.end()
               }
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error)
+              const message = errorMessage(error)
               if (!socket.destroyed) {
                 await writeFrame(socket, errorFrame(message, 'Invalid peer frame')).catch(() => {})
                 socket.end()
