@@ -162,39 +162,46 @@ describe('PTY shell provider', () => {
     }
   }, 20_000)
 
-  it('does not confirm a PTY tree when the root exits before a detached descendant', async () => {
-    const provider = new PtyShellProvider()
-    const attempt = provider.spawnManaged(managedTreeCommand('root-exit'), {
-      cwd: process.cwd(),
-      buffer: false,
-      isolatedProcessTree: true,
-      tty: true,
-    })
-    const frames: ManagedProcessFrame[] = []
-    await withTimeout(attempt.ready)
-    attempt.activate((frame) => frames.push(frame))
-
-    try {
-      const output = await waitForOutput(frames, /DESCENDANT:\d+/)
-      const descendantPid = Number(output.match(/DESCENDANT:(\d+)/)?.[1])
-      expect(descendantPid).toBeGreaterThan(0)
-
-      await withTimeout(attempt.handle.waitForRootExit())
-      expect(await attempt.handle.probeTree()).toBe('live')
-
-      const result = await attempt.handle.terminateTree('root-exited-residual', {
-        gracefulMs: 300,
-        forceMs: 2_000,
-        confirmMs: 1_000,
+  // A Windows Job must keep tracking descendants after the ConPTY root exits.
+  // POSIX PTYs instead use a process-group boundary and terminal close may reap
+  // that group with SIGHUP, so the equivalent contract is covered above.
+  it.runIf(process.platform === 'win32')(
+    'does not confirm a PTY tree when the root exits before a detached descendant',
+    async () => {
+      const provider = new PtyShellProvider()
+      const attempt = provider.spawnManaged(managedTreeCommand('root-exit'), {
+        cwd: process.cwd(),
+        buffer: false,
+        isolatedProcessTree: true,
+        tty: true,
       })
+      const frames: ManagedProcessFrame[] = []
+      await withTimeout(attempt.ready)
+      attempt.activate((frame) => frames.push(frame))
 
-      expect(result.treeConfirmedExited).toBe(true)
-      await withTimeout(attempt.handle.waitForTreeExit())
-      await expectPidGone(descendantPid)
-      const kinds = frames.map((frame) => frame.kind)
-      expect(kinds.indexOf('root-exit')).toBeLessThan(kinds.indexOf('tree-exit'))
-    } finally {
-      attempt.handle.forceTreeSync(performance.now() + 1_000)
-    }
-  }, 20_000)
+      try {
+        const output = await waitForOutput(frames, /DESCENDANT:\d+/)
+        const descendantPid = Number(output.match(/DESCENDANT:(\d+)/)?.[1])
+        expect(descendantPid).toBeGreaterThan(0)
+
+        await withTimeout(attempt.handle.waitForRootExit())
+        expect(await attempt.handle.probeTree()).toBe('live')
+
+        const result = await attempt.handle.terminateTree('root-exited-residual', {
+          gracefulMs: 300,
+          forceMs: 2_000,
+          confirmMs: 1_000,
+        })
+
+        expect(result.treeConfirmedExited).toBe(true)
+        await withTimeout(attempt.handle.waitForTreeExit())
+        await expectPidGone(descendantPid)
+        const kinds = frames.map((frame) => frame.kind)
+        expect(kinds.indexOf('root-exit')).toBeLessThan(kinds.indexOf('tree-exit'))
+      } finally {
+        attempt.handle.forceTreeSync(performance.now() + 1_000)
+      }
+    },
+    20_000,
+  )
 })

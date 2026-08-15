@@ -1885,8 +1885,8 @@ export async function processToolCalls(
   const batches = partitionToolCalls(liveCalls)
   let dispatched = 0
   for (const batch of batches) {
-    // User pressed Esc / Ctrl+C. The currently running tool (if any) has
-    // already been SIGKILL'd via the shell provider's cancelSignal. For
+    // User pressed Esc / Ctrl+C. A managed shell that reached ready remains
+    // available as a background session; other tools receive the abort. For
     // every remaining tool_call we still need to push a synthetic
     // tool_result — orphan tool_calls without a matching result would
     // make the next API request fail with "tool_use without tool_result"
