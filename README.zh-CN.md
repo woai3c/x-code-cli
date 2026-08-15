@@ -44,7 +44,7 @@ pnpm add -g @x-code-cli/cli
 
 > **X-Code CLI 不内置免费模型，须配置至少一个厂商的 API Key。**
 >
-> **推荐 [DeepSeek](https://platform.deepseek.com/)**：价格低、国内访问稳定、注册赠送初始额度，适合首次试用。
+> **推荐 [DeepSeek](https://platform.deepseek.com/)**：价格低、国内访问稳定，适合首次试用。赠送额度与价格可能变化，请以官方控制台为准。
 
 | 环境变量                       | 厂商                | 注册地址                                                                    |
 | ------------------------------ | ------------------- | --------------------------------------------------------------------------- |
@@ -100,7 +100,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 > 临时使用：`export X=...`（bash）或 `$env:X = '...'`（PowerShell），终端关闭后失效。
 >
-> 项目级配置：在项目根目录放置 `.env` 文件，`xc` 会从当前目录向上逐层加载。
+> 项目级配置：放置 `.env` 文件后，`xc` 会从当前目录向上查找并只加载找到的第一个文件。
 
 </details>
 
@@ -109,10 +109,10 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 启用 `webSearch` 工具需任选一项配置，两家均提供免费额度：
 
-| 环境变量         | 提供方                                        | 免费额度                  | 注册门槛         |
-| ---------------- | --------------------------------------------- | ------------------------- | ---------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | 每月 ~1,000 次            | 邮箱，无需信用卡 |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | 每月 ~1,000 次（$5 额度） | 需绑定信用卡     |
+| 环境变量         | 提供方                                        | 当前免费额度                          | 注册门槛         |
+| ---------------- | --------------------------------------------- | ------------------------------------- | ---------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | 每月 1,000 API credits                | 邮箱，无需信用卡 |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | 每月 $5 credits（Search 约 1,000 次） | 需绑定信用卡     |
 
 > 推荐首次配 Tavily：注册简便，返回格式针对 LLM 优化。同时配置时优先 Tavily，未配时自动回退 Brave。
 
@@ -159,15 +159,15 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 
 - **知识库系统** — 分层加载 `AGENTS.md`（兼容 `CLAUDE.md`），子包可覆盖根级约定
 - **自动记忆** — 每次根 Agent 完整结束后提取长期事实，并在相关请求中按需召回
-- **会话恢复** — `--continue` 恢复最近会话，`--resume` 打开选择器或按 ID 直达
-- **会话分叉** — `/fork` 把已完成的上下文复制成独立对话，当前请求运行中也可执行；分叉后仍共享同一个工作区
+- **会话恢复** — `--continue` 恢复最近会话，`--resume` 打开选择器或按 ID / 分叉名称直达
+- **会话分叉** — `/fork [名称]` 把已完成的上下文复制成独立对话，当前请求运行中也可执行；分叉后仍共享同一个工作区
 - **上下文压缩** — 长对话自动压缩；loop-guard 检测循环调用；prompt cache 复用前缀
-- **三级权限模型** — 默认安全，写操作前请求确认；`--trust` 跳过
+- **三级权限模型** — 默认安全，按工具与命令风险请求确认；`--trust` 跳过普通工具确认，也适用于 Peer 触发的工作
 
 ### 扩展生态
 
 - **MCP 集成** — 支持 stdio + HTTP（含 OAuth），`/mcp` 管理，服务器工具自动并入 Agent 工具集
-- **插件系统** — skill / sub-agent / MCP / hooks 打包分发；与 Claude Code 插件格式兼容
+- **插件系统** — skill / sub-agent / 命令 / MCP / hooks 打包分发；与 Claude Code 插件格式兼容
 - **Skills** — `SKILL.md` 描述可复用工作流模板，`/<skill-name>` 触发
 - **自定义斜杠命令** — markdown 文件放进 `~/.x-code/commands/` 或项目级目录，`/<name>` 直接使用
 - **Hooks** — 10 个生命周期事件回调，用 shell 命令拦截/改写 Agent 行为
@@ -182,6 +182,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **历史回溯** — 空输入框时 `↑`/`↓` 召回已提交的提示词
 - **中途转向（steering）** — Agent 运行中也能继续输入：消息先排队显示在 spinner 上方，在下一个工具边界自动注入
 - **实时页脚** — 输入框下方常驻当前模型与上下文用量（如 `Kimi K3 · 6.6k / 200k · 3%`）
+- **后台终端** — 长命令自动转为可管理的 Shell Session；`/ps` 查看，`/stop [shell-id]` 停止（详见[文档](./docs/shell-sessions.md)）
 - **跨平台** — Windows、macOS、Linux
 
 ## 命令行参数
@@ -190,12 +191,12 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 xc [options] [prompt]
 
 --model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-5.6-sol）
---trust, -t           信任模式：跳过写操作确认
+--trust, -t           信任模式：跳过普通工具确认（含 Peer 触发的工作）
 --print, -p           非交互模式：输出结果后退出
 --plan                Plan 模式（只读探索，批准后才执行）
 --name <名称>         为交互式 Session 命名并启用本机跨会话消息
 --continue, -c        恢复最近一次会话
---resume, -r [id]     恢复会话：无参数打开选择器，指定 ID 直达
+--resume, -r [id|名称] 恢复会话：无参数打开选择器，指定 ID 或分叉名称直达
 --max-turns <n>       Agent 循环轮次上限（默认无上限）
 --no-plugins          禁用插件系统（排障用）
 --no-hooks            跳过所有 hook 执行
@@ -225,11 +226,13 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/usage`              | 查看 Token 用量：上下文构成分解、分步明细、归因与缓存命中                           |
 | `/usage-history`      | 列出历史会话用量                                                                    |
 | `/clear`              | 清空当前会话                                                                        |
+| `/ps`                 | 列出正在运行的后台终端及最近输出                                                    |
+| `/stop [shell-id]`    | 停止指定后台终端；不带 ID 时停止全部                                                |
 | `/clear-peer-context` | 确认后删除受 Peer 影响的对话后缀                                                    |
 | `/list-agents`        | 列出可访问的命名 X-Code Session                                                     |
 | `/compact`            | 手动压缩上下文                                                                      |
 | `/resume`             | 从历史会话中选择恢复                                                                |
-| `/fork`               | 分叉已完成的上下文（仍共享当前工作区）                                              |
+| `/fork [名称]`        | 分叉已完成的上下文，可选命名（仍共享当前工作区）                                    |
 | `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
 | `/init`               | 分析代码库后创建或更新 `AGENTS.md`                                                  |
 | `/review [PR号]`      | 评审 GitHub PR（需本地装好 `gh`）                                                   |
@@ -250,6 +253,7 @@ README 是入门视图，每个功能的完整用法在 [`docs/`](./docs/) 下�
 | [`docs/skills.md`](./docs/skills.md)                     | 可复用工作流模板                     |
 | [`docs/goal.md`](./docs/goal.md)                         | 持续目标循环（`/goal`）              |
 | [`docs/peer-messaging.md`](./docs/peer-messaging.md)     | 跨会话 Agent 消息                    |
+| [`docs/shell-sessions.md`](./docs/shell-sessions.md)     | 后台 Shell Session 与交互式终端      |
 | [`docs/sub-agents.md`](./docs/sub-agents.md)             | 内置 / 自定义子 Agent（`task` 工具） |
 | [`docs/mcp.md`](./docs/mcp.md)                           | MCP 服务器配置                       |
 | [`docs/knowledge.md`](./docs/knowledge.md)               | 分层知识库与自动记忆                 |
@@ -279,6 +283,8 @@ set DEBUG_STDOUT=1 && xc
 日志路径：`~/.x-code/logs/debug.log`（Windows: `%USERPROFILE%\.x-code\logs\debug.log`），单文件 10 MB，滚动备份 ~20 MB。
 
 ## 从源码运行
+
+需要 Node.js 22+ 和 pnpm 10.x。
 
 ```bash
 git clone https://github.com/woai3c/x-code-cli.git

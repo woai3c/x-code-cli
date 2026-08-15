@@ -36,9 +36,10 @@ runtime — just spawns a child, pipes JSON, reads the answer.
 | `TurnComplete`     | After each round of LLM streaming completes                                                           | no                                | notifications, metrics                            |
 | `SessionEnd`       | On CLI shutdown                                                                                       | no                                | flush logs, post a "session done" message         |
 
-`SessionEnd` is fire-and-forget — the CLI exits without waiting for
-hooks to complete. Don't put critical operations there; use
-`TurnComplete` if you need guaranteed delivery.
+`SessionEnd` runs as best-effort shutdown cleanup. Ordinary cleanup gets up
+to 1.5 seconds and the complete shutdown path has a 4-second hard cap.
+Keep it to short flushes or notifications; use `TurnComplete` for work that
+must finish reliably.
 
 `PostToolUse` does not yet cover every tool-result path. It currently fires
 for completed `writeFile` / `edit` / `shell`, `browserVisualCheck`, and MCP
@@ -52,6 +53,10 @@ created by permission denial, interruption, or a thrown execution error.
 
 In your plugin's `plugin.json` (either inline or via a `hooks.json`
 path):
+
+> `plugin.json` and an external `hooks.json` are parsed as strict JSON; comments
+> and trailing commas are not accepted. The annotated `jsonc` below explains
+> the schema and must be cleaned before copying it into a file.
 
 ```jsonc
 {
@@ -87,7 +92,7 @@ that only work on your dev machine.
 
 Or pull it into a separate file:
 
-```jsonc
+```json
 { "hooks": "./hooks/hooks.json" }
 ```
 
@@ -174,6 +179,9 @@ Every hook receives a single JSON line on stdin. Top-level shape:
   "outcome": "completed", // SubagentStop only: completed / aborted / failed
 }
 ```
+
+`session.modelId` is normally the active model ID. `SessionEnd` fires during
+shutdown and currently sends an empty string.
 
 ---
 
@@ -263,9 +271,8 @@ matcher regex doesn't match the tool name (tools are camelCase, e.g.
 ## Abort behaviour
 
 Esc / Ctrl+C during a slow hook propagates via `AbortSignal` through
-execa's `cancelSignal` and SIGKILLs the child process. Same machinery
-the shell tool uses. Hooks don't need to do anything special — they
-just get killed.
+execa's `cancelSignal` and terminates the child process. Hooks need no special
+handling; the exact termination mechanism depends on the operating system.
 
 ---
 
@@ -298,13 +305,13 @@ try {
 
 Manifest:
 
-```jsonc
+```json
 {
   "name": "ts-lint-gate",
   "version": "0.1.0",
   "hooks": {
-    "PreToolUse": [{ "matcher": "writeFile|edit", "command": "node ${pluginDir}/hooks/lint.js" }],
-  },
+    "PreToolUse": [{ "matcher": "writeFile|edit", "command": "node ${pluginDir}/hooks/lint.js" }]
+  }
 }
 ```
 
@@ -321,6 +328,10 @@ Sub-agents inherit the parent's `HookBus`, so `PreToolUse` /
 intentional — plugin authors wanting to audit ALL model behaviour can
 do so. `SessionStart` / `SessionEnd` only fire for the outer session,
 not per sub-agent.
+
+Peer-influenced events are a security exception: the `HookBus` skips them even
+when the receiving session runs with `--trust`. See
+[peer-messaging.en.md](./peer-messaging.en.md).
 
 Beware recursion: if a hook itself invokes `xc` or another agent, its
 own tool calls will also fire `PreToolUse`. Keep hook logic narrow,

@@ -44,7 +44,7 @@ After installation, launch with the `xc` or `x-code` command.
 
 > **X-Code CLI does not bundle a free model. At least one provider API key must be configured.**
 >
-> **Recommended: [DeepSeek](https://platform.deepseek.com/)** — affordable, free credits on signup, sufficient coding capability for everyday use.
+> **Recommended: [DeepSeek](https://platform.deepseek.com/)** — affordable and capable enough for everyday coding. Promotional credits and prices can change; check the official console for current terms.
 
 | Variable                       | Provider           | Sign up                                                                     |
 | ------------------------------ | ------------------ | --------------------------------------------------------------------------- |
@@ -100,7 +100,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 > For temporary use: `export X=...` (bash) or `$env:X = '...'` (PowerShell); discarded when the terminal closes.
 >
-> Per-project: place a `.env` file in the project root. `xc` walks up from the current directory.
+> Per-project: place a `.env` file in or above the launch directory. `xc` walks upward and loads only the first file it finds.
 
 </details>
 
@@ -109,10 +109,10 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 To enable the `webSearch` tool, configure either of the following. Both offer a free tier:
 
-| Variable         | Provider                                      | Free quota         | Signup         |
-| ---------------- | --------------------------------------------- | ------------------ | -------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | ~1,000 requests/mo | Email, no card |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | ~1,000 requests/mo | Card required  |
+| Variable         | Provider                                      | Current free quota                        | Signup         |
+| ---------------- | --------------------------------------------- | ----------------------------------------- | -------------- |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | 1,000 API credits/month                   | Email, no card |
+| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | $5 credits/month (~1,000 Search requests) | Card required  |
 
 > Tavily is recommended for first-time setup: simpler signup, LLM-optimized responses. When both are set, Tavily is preferred and Brave serves as fallback.
 
@@ -159,10 +159,10 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 
 - **Knowledge system** — layered `AGENTS.md` loading (compatible with `CLAUDE.md`), subpackages override root
 - **Auto-memory** — durable facts are extracted after each completed root-agent turn and recalled on demand
-- **Session resumption** — `--continue` resumes the last session, `--resume` opens a picker or jumps by ID
-- **Session branching** — `/fork` copies completed context into an independent conversation, even while the current request is running; branches still share the same working tree
+- **Session resumption** — `--continue` resumes the last session, `--resume` opens a picker or jumps by ID / fork name
+- **Session branching** — `/fork [name]` copies completed context into an independent conversation, even while the current request is running; branches still share the same working tree
 - **Context compression** — long conversations auto-compress; loop-guard detects cycles; prompt cache reuses prefixes
-- **3-level permission model** — safe by default, prompts before writes; `--trust` bypasses
+- **3-level permission model** — safe by default, prompts according to tool and command risk; `--trust` skips ordinary tool confirmations, including peer-triggered work
 
 ### Extension Ecosystem
 
@@ -182,6 +182,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Input history** — `↑`/`↓` on empty prompt recalls previous messages
 - **Mid-turn steering** — keep typing while the agent is working: your message is queued above the spinner and injected at the next tool boundary
 - **Live footer** — the active model and current context usage (e.g. `Kimi K3 · 6.6k / 200k · 3%`) are always visible under the input
+- **Background terminals** — long commands become manageable shell sessions; inspect them with `/ps` and stop them with `/stop [shell-id]` (see the [guide](./docs/shell-sessions.en.md))
 - **Cross-platform** — Windows, macOS, Linux
 
 ## CLI Options
@@ -190,12 +191,12 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 xc [options] [prompt]
 
 --model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-5.6-sol)
---trust, -t           Trust mode: skip write-operation confirmations
+--trust, -t           Trust mode: skip ordinary tool confirmations, including peer-triggered work
 --print, -p           Non-interactive mode: print result and exit
 --plan                Start in plan mode (read-only; user approves before edits)
 --name <name>         Name this interactive session and enable local peer messaging
 --continue, -c        Resume the most recent session (no picker)
---resume, -r [id]     Resume a session: no argument opens the picker
+--resume, -r [id|name] Resume a session: picker, session ID, or fork name
 --max-turns <n>       Agent loop turn cap per submit (default: unlimited)
 --no-plugins          Disable the plugin system (built-in only; for triage)
 --no-hooks            Skip all hook execution
@@ -225,11 +226,13 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/usage`               | Token usage: context split, per-step detail, attribution, cache hits |
 | `/usage-history`       | List past session usage                                              |
 | `/clear`               | Clear the current conversation                                       |
+| `/ps`                  | List running background terminals and recent output                  |
+| `/stop [shell-id]`     | Stop one background terminal, or all when no ID is given             |
 | `/clear-peer-context`  | Remove the peer-influenced conversation suffix after confirmation    |
 | `/list-agents`         | List reachable named X-Code sessions                                 |
 | `/compact`             | Manually compress context                                            |
 | `/resume`              | Pick a past session to resume                                        |
-| `/fork`                | Branch completed context (the working tree remains shared)           |
+| `/fork [name]`         | Branch completed context with an optional name (working tree shared) |
 | `/rewind`              | Roll back to a previous message (restores files + truncates history) |
 | `/init`                | Create or update `AGENTS.md` at project root                         |
 | `/review [PR#]`        | Review a GitHub PR (requires `gh`)                                   |
@@ -250,6 +253,7 @@ This README is the entry view. Each feature has a focused doc under [`docs/`](./
 | [`docs/skills.en.md`](./docs/skills.en.md)                     | Reusable workflow templates  |
 | [`docs/goal.en.md`](./docs/goal.en.md)                         | Durable goal loops (`/goal`) |
 | [`docs/peer-messaging.en.md`](./docs/peer-messaging.en.md)     | Cross-session messaging      |
+| [`docs/shell-sessions.en.md`](./docs/shell-sessions.en.md)     | Background shell sessions    |
 | [`docs/sub-agents.en.md`](./docs/sub-agents.en.md)             | Built-in / custom sub-agents |
 | [`docs/mcp.en.md`](./docs/mcp.en.md)                           | MCP server configuration     |
 | [`docs/knowledge.en.md`](./docs/knowledge.en.md)               | Knowledge base & auto-memory |
@@ -279,6 +283,8 @@ set DEBUG_STDOUT=1 && xc
 Log path: `~/.x-code/logs/debug.log` (Windows: `%USERPROFILE%\.x-code\logs\debug.log`), 10 MB per file, ~20 MB total with rotation.
 
 ## Build From Source
+
+Requires Node.js 22+ and pnpm 10.x.
 
 ```bash
 git clone https://github.com/woai3c/x-code-cli.git

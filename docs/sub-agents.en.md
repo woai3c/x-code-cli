@@ -271,6 +271,11 @@ The full set of tool names (**must be camelCase**, matches the
 guard), and `memorySearch` is registered for the root agent only — sub-agents
 never receive it.
 
+When `shell` is allowed, the runner automatically adds `shellOutput` and
+`killShell` so background commands remain manageable. A definition that
+denies either companion through `disallowedTools` is rejected. See
+[shell-sessions.en.md](./shell-sessions.en.md).
+
 ---
 
 ## When to write a sub-agent — and when not to

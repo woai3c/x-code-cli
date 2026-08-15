@@ -15,7 +15,7 @@ X-Code CLI 同时使用人工维护的项目知识和全局长期记忆。项目
 4. <cwd>/AGENTS.local.md                # xc 启动目录下的私人偏好
 ```
 
-在每层中优先读取 `AGENTS.md`，不存在时回退到 `CLAUDE.md`。`/init` 只创建或更新 `AGENTS.md`。
+用户级目录和项目目录链中的每一层都优先读取 `AGENTS.md`，不存在时回退到只读兼容的 `CLAUDE.md`。`AGENTS.local.md` 没有 `CLAUDE.local.md` fallback；`/init` 也只创建或更新 `AGENTS.md`。
 
 Windows 上的 `~/.x-code` 对应 `%USERPROFILE%\.x-code`。设置 `X_CODE_HOME` 可以覆盖用户目录，适合隔离测试。
 
@@ -43,7 +43,7 @@ Memory v2 是一个跨仓库共享的用户级记忆系统。所有仓库使用�
   topics/*.md               # 完整记忆正文，唯一真源
   .state/
     schema.json
-    jobs/{pending,running,failed}/
+    jobs/{pending,running,failed,applied}/
     transactions/
     changes/
     locks/

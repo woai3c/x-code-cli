@@ -18,10 +18,10 @@ my-plugin/
     └── plugin.json
 ```
 
-```jsonc
+```json
 {
   "name": "my-plugin",
-  "version": "0.1.0",
+  "version": "0.1.0"
 }
 ```
 
@@ -55,6 +55,10 @@ Only `name` is required. If `version` is omitted, X-Code uses `0.0.0` for
 installation records and cache paths. Unknown top-level fields are silently
 dropped, so unsupported contributions such as `output-styles` or `lspServers`
 do not activate.
+
+> Manifests and referenced JSON files are parsed as strict JSON; comments and
+> trailing commas are not accepted. The `jsonc` block below is an annotated
+> field reference and must be cleaned before copying it into `plugin.json`.
 
 ```jsonc
 {
@@ -182,7 +186,7 @@ my-plugin/
 ├── skills/
 │   └── search/
 │       ├── SKILL.md            # YAML frontmatter + body
-│       └── references/         # bundled files surfaced in skill activation
+│       └── references/         # bundled files indexed when the registry loads
 │           └── api.md
 ├── agents/
 │   └── triage.md               # sub-agent definition

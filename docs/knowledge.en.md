@@ -15,7 +15,7 @@ Knowledge is merged in this order at startup. Later project files have higher pr
 4. <cwd>/AGENTS.local.md                # private preferences for the launch directory
 ```
 
-At each manual layer, `AGENTS.md` is preferred and `CLAUDE.md` is used as a read-only compatibility fallback. `/init` only creates or updates `AGENTS.md`.
+At the user scope and each directory in the project chain, `AGENTS.md` is preferred and `CLAUDE.md` is used as a read-only compatibility fallback. `AGENTS.local.md` has no `CLAUDE.local.md` fallback, and `/init` only creates or updates `AGENTS.md`.
 
 On Windows, `~/.x-code` maps to `%USERPROFILE%\.x-code`. Set `X_CODE_HOME` to override the user directory, which is useful for isolated testing.
 
@@ -43,7 +43,7 @@ Memory v2 is a user-level memory system shared across repositories. Every reposi
   topics/*.md               # complete memory text and sole source of truth
   .state/
     schema.json
-    jobs/{pending,running,failed}/
+    jobs/{pending,running,failed,applied}/
     transactions/
     changes/
     locks/

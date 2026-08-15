@@ -99,6 +99,10 @@ preferred path inside a repo is **`.claude-plugin/marketplace.json`**;
 Reference real-world examples: `anthropics/claude-code` and
 `anthropics/claude-plugins-official`.
 
+> `marketplace.json` is parsed as strict JSON; comments and trailing commas are
+> not accepted. The annotated `jsonc` block below explains the schema and must
+> be cleaned before publishing a real index.
+
 ```jsonc
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
@@ -197,9 +201,10 @@ The CLI fetches via `fetch()`. Useful for internal corporate
 marketplaces — you can serve different indexes to different VPNs,
 require TLS, etc.
 
-Both forms cache the parsed index under
-`~/.x-code/plugins/marketplaces/<name>/marketplace.json` so offline
-use works after the first refresh.
+Both forms validate the index and then cache its original JSON under
+`~/.x-code/plugins/marketplaces/<name>/marketplace.json`. After the first
+refresh, the cached index can be browsed offline; installing a remote plugin
+may still require access to its source.
 
 ---
 

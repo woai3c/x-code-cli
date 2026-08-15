@@ -12,17 +12,17 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 
 在 `~/.x-code/config.json` 加 `mcpServers` 字段（文件不存在就新建），然后重启 `xc`：
 
-```jsonc
+```json
 {
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed-dir"],
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed-dir"]
     },
     "github": {
-      "url": "https://api.githubcopilot.com/mcp/",
-    },
-  },
+      "url": "https://api.githubcopilot.com/mcp/"
+    }
+  }
 }
 ```
 
@@ -40,6 +40,8 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 两个 scope 合并：项目级覆盖同名用户级。**项目级配置首次出现时弹"是否信任"对话框**（同 Claude Code 的安全模型），用户拒绝则跳过项目级。信任决定持久化到 `~/.x-code/trusted-projects.json`。
 
 > **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`，下文不再重复。
+
+> **JSON 格式**：配置文件按严格 JSON 解析，不支持注释或尾随逗号。下面标为 `jsonc` 的 schema 示例只用于解释字段，复制时必须移除注释和尾随逗号。
 
 ---
 
@@ -91,12 +93,12 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 
 任何字符串字段里的 `${VAR}` 会在启动时从 `process.env` 展开；`${VAR:-fallback}` 可以提供字面 fallback。没有 fallback 的变量不存在时，该 server 会标记为 `failed`（不影响其他 server）。`${env:VAR}` 只属于 Hook 变量语法，在 MCP 配置中不会展开。
 
-```jsonc
+```json
 {
   "github": {
     "url": "${GITHUB_MCP_URL}",
-    "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" },
-  },
+    "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" }
+  }
 }
 ```
 
@@ -143,14 +145,14 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
 
 ### 示例 1：filesystem server（官方提供）
 
-```jsonc
+```json
 {
   "mcpServers": {
     "fs": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/work"],
-    },
-  },
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/work"]
+    }
+  }
 }
 ```
 
@@ -158,7 +160,7 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
 
 ### 示例 2：自建 stdio server
 
-```jsonc
+```json
 {
   "mcpServers": {
     "company": {
@@ -166,23 +168,23 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
       "args": ["D:/tools/company-mcp/index.js"],
       "env": {
         "API_KEY": "${COMPANY_API_KEY}",
-        "ENDPOINT": "https://internal.corp/api",
+        "ENDPOINT": "https://internal.corp/api"
       },
-      "cwd": "D:/tools/company-mcp",
-    },
-  },
+      "cwd": "D:/tools/company-mcp"
+    }
+  }
 }
 ```
 
 ### 示例 3：HTTP server + OAuth
 
-```jsonc
+```json
 {
   "mcpServers": {
     "linear": {
-      "url": "https://mcp.linear.app/mcp",
-    },
-  },
+      "url": "https://mcp.linear.app/mcp"
+    }
+  }
 }
 ```
 

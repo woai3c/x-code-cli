@@ -62,9 +62,9 @@ The frontmatter requires two fields; unknown extra fields are ignored:
 - `description` (required) — one-line summary; the agent reads it to decide
   when to activate the skill on its own
 
-**Bundled files**: at activation time the CLI lists every non-hidden file in
-the skill directory (capped at 50) and hands the list to the agent, which
-can then read any of them by relative path:
+**Bundled files**: at startup or `/skill refresh`, the CLI records every
+non-hidden file in the skill directory (capped at 50). Activation hands that
+cached list to the agent, which can then read any file by relative path:
 
 ```markdown
 Walk through the checklist in references/checklist.md and apply each item.

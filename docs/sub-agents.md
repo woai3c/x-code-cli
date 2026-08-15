@@ -184,6 +184,8 @@ shellRestrictions: [rm, sudo, npm publish, git push]
 
 可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`enterPlanMode`、`exitPlanMode`、`todoWrite`、`shellOutput`、`killShell`。**`task` 工具永远禁用**（防递归），`memorySearch` 只注册给根 Agent，子 agent 拿不到。
 
+允许 `shell` 时，运行器会自动补上 `shellOutput` 和 `killShell`，确保后台命令可继续读取和终止。因此不能在 `disallowedTools` 中禁用任一配套工具；这种定义会被拒绝。详见 [shell-sessions.md](./shell-sessions.md)。
+
 ---
 
 ## 何时该写子 agent？什么时候不该？

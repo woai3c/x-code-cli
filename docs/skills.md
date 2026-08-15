@@ -59,7 +59,7 @@ frontmatter 必须包含下面两个字段；其他未知字段会被忽略：
 - `name`（必需）：与目录名一致；激活命令就是 `/<name>`
 - `description`（必需）：一句话描述，agent 会读它来决定是否在合适场景主动激活
 
-**bundled 文件**：激活时，CLI 自动列出 `SKILL.md` 同级及子目录的所有文件（限 50 个）给 agent 看，agent 可以按相对路径读它们：
+**bundled 文件**：CLI 在启动或 `/skill refresh` 重载 registry 时，自动列出 `SKILL.md` 同级及子目录的所有文件（限 50 个）。激活 skill 时，这份缓存列表会交给 agent，agent 可以按相对路径读取文件：
 
 ```markdown
 请按 references/checklist.md 中列的要点审查

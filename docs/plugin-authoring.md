@@ -16,10 +16,10 @@ my-plugin/
     └── plugin.json
 ```
 
-```jsonc
+```json
 {
   "name": "my-plugin",
-  "version": "0.1.0",
+  "version": "0.1.0"
 }
 ```
 
@@ -46,6 +46,8 @@ xc plugin install ./my-plugin
 ## Manifest 字段参考
 
 只有 `name` 必需；不写 `version` 时，X-Code 会用 `0.0.0` 作为安装记录和缓存路径版本。未知顶层字段会静默 drop，`output-styles`、`lspServers` 等不受支持的贡献不会激活。
+
+> Manifest 和它引用的 JSON 文件都按严格 JSON 解析，不支持注释或尾随逗号。下面的 `jsonc` 是带注释的字段参考，复制到 `plugin.json` 前必须清理。
 
 ```jsonc
 {
@@ -146,7 +148,7 @@ my-plugin/
 ├── skills/
 │   └── search/
 │       ├── SKILL.md            # YAML frontmatter + body
-│       └── references/         # bundled 文件，激活时一并通知 agent
+│       └── references/         # bundled 文件，registry 加载时建立列表
 │           └── api.md
 ├── agents/
 │   └── triage.md               # sub-agent 定义

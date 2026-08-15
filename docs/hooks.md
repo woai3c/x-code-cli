@@ -27,7 +27,7 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 | `TurnComplete`     | 每轮 LLM 流式输出结束                                                        | ❌                               | 通知、统计                                |
 | `SessionEnd`       | CLI 退出时                                                                   | ❌                               | flush 日志、发"会话结束"提示              |
 
-`SessionEnd` 是 fire-and-forget——CLI 不等 hook 完成就退。重要操作放 `TurnComplete`。
+`SessionEnd` 在退出清理阶段以 best-effort 方式执行：普通清理最多等待约 1.5 秒，整个退出流程有 4 秒硬上限。它适合短小的 flush / 通知；需要可靠完成的操作仍应放在 `TurnComplete`。
 
 `PostToolUse` 目前还没有覆盖所有 tool result 路径。它会在 `writeFile` / `edit` / `shell`、`browserVisualCheck` 和 MCP 调用完成后触发；SDK 自动执行的读取/搜索工具、`askUser` / `task` / MCP resource 等 bypass handler，以及权限拒绝、中断或抛异常后生成的合成结果暂不触发。
 
@@ -36,6 +36,8 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 ## Manifest 里怎么声明
 
 插件 `plugin.json` 里（inline 或者引到外部文件）：
+
+> `plugin.json` 和外部 `hooks.json` 都按严格 JSON 解析，不支持注释或尾随逗号。下面的 `jsonc` 只用于给 schema 加说明，复制后必须移除这些内容。
 
 ```jsonc
 {
@@ -64,7 +66,7 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 
 或者引到独立文件：
 
-```jsonc
+```json
 { "hooks": "./hooks/hooks.json" }
 ```
 
@@ -144,6 +146,8 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 }
 ```
 
+`session.modelId` 通常是当前模型 ID；`SessionEnd` 在 shutdown 阶段触发，当前发送空字符串。
+
 ---
 
 ## Stdout 决策
@@ -207,7 +211,7 @@ Hook 子进程的 `stdout` 被 `execa` 当成决策 JSON 解析，`stderr` 也�
 
 ## Abort 行为
 
-用户 Esc / Ctrl+C 时，AbortSignal 通过 execa 的 `cancelSignal` 一路传到 hook 子进程，SIGKILL。Hook 不用做任何特殊处理——会被直接干掉。
+用户 Esc / Ctrl+C 时，AbortSignal 通过 execa 的 `cancelSignal` 一路传到 hook 子进程并终止它。Hook 不用做特殊处理；具体终止机制由当前操作系统决定。
 
 ---
 
@@ -240,13 +244,13 @@ try {
 
 Manifest：
 
-```jsonc
+```json
 {
   "name": "ts-lint-gate",
   "version": "0.1.0",
   "hooks": {
-    "PreToolUse": [{ "matcher": "writeFile|edit", "command": "node ${pluginDir}/hooks/lint.js" }],
-  },
+    "PreToolUse": [{ "matcher": "writeFile|edit", "command": "node ${pluginDir}/hooks/lint.js" }]
+  }
 }
 ```
 
@@ -257,6 +261,8 @@ Manifest：
 ## Sub-agent 行为
 
 Sub-agent 继承父 session 的 HookBus，所以 sub-agent 里的工具调用也会触发 `PreToolUse` / `PostToolUse`。这是刻意的——想审计模型所有行为的 plugin 必须这样才能看全。`SessionStart` / `SessionEnd` 只对外层 session 触发，sub-agent 没有。
+
+受 Peer 影响的事件是安全例外：HookBus 会跳过它们，即使接收 Session 以 `--trust` 启动也一样。详见 [peer-messaging.md](./peer-messaging.md)。
 
 **注意递归**：hook 自己又调 `xc` 或起 agent 时，那些工具调用也会触发 `PreToolUse`。hook 逻辑要紧凑，多用 `matcher` 正则约束触发的 tool。
 

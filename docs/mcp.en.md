@@ -16,17 +16,17 @@ capable) transports are supported.
 Add an `mcpServers` field to `~/.x-code/config.json` (create the file if
 needed), then restart `xc`:
 
-```jsonc
+```json
 {
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed-dir"],
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed-dir"]
     },
     "github": {
-      "url": "https://api.githubcopilot.com/mcp/",
-    },
-  },
+      "url": "https://api.githubcopilot.com/mcp/"
+    }
+  }
 }
 ```
 
@@ -50,6 +50,10 @@ project servers for that session. The trust decision persists at
 
 > **Windows paths**: `~/.x-code` maps to `%USERPROFILE%\.x-code` on
 > Windows. Not repeated below.
+
+> **JSON format**: configuration files are parsed as strict JSON; comments and
+> trailing commas are not accepted. Blocks marked `jsonc` below annotate the
+> schema and must be cleaned before copying them into a file.
 
 ---
 
@@ -109,12 +113,12 @@ without a fallback raises an error and marks that server `failed` (the other
 servers still load). The hook-only `${env:VAR}` form is not MCP syntax and is
 left literal.
 
-```jsonc
+```json
 {
   "github": {
     "url": "${GITHUB_MCP_URL}",
-    "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" },
-  },
+    "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" }
+  }
 }
 ```
 
@@ -166,14 +170,14 @@ names still collide, the second gets a hash suffix (for example,
 
 ### Example 1: official filesystem server
 
-```jsonc
+```json
 {
   "mcpServers": {
     "fs": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/work"],
-    },
-  },
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/work"]
+    }
+  }
 }
 ```
 
@@ -182,7 +186,7 @@ After startup the agent gains `fs__read_file`, `fs__write_file`,
 
 ### Example 2: a custom stdio server
 
-```jsonc
+```json
 {
   "mcpServers": {
     "company": {
@@ -190,23 +194,23 @@ After startup the agent gains `fs__read_file`, `fs__write_file`,
       "args": ["D:/tools/company-mcp/index.js"],
       "env": {
         "API_KEY": "${COMPANY_API_KEY}",
-        "ENDPOINT": "https://internal.corp/api",
+        "ENDPOINT": "https://internal.corp/api"
       },
-      "cwd": "D:/tools/company-mcp",
-    },
-  },
+      "cwd": "D:/tools/company-mcp"
+    }
+  }
 }
 ```
 
 ### Example 3: HTTP server + OAuth
 
-```jsonc
+```json
 {
   "mcpServers": {
     "linear": {
-      "url": "https://mcp.linear.app/mcp",
-    },
-  },
+      "url": "https://mcp.linear.app/mcp"
+    }
+  }
 }
 ```
 

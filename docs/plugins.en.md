@@ -150,12 +150,15 @@ skills (see `packages/core/src/skills/settings.ts`):
 
 The shape inside each file:
 
-```jsonc
+These settings files, like plugin manifests, are parsed as strict JSON and do
+not accept comments or trailing commas.
+
+```json
 {
   "enabledPlugins": {
     "linear@anthropic-marketplace": true,
-    "k8s-debug@local": false,
-  },
+    "k8s-debug@local": false
+  }
 }
 ```
 
@@ -278,7 +281,7 @@ commands and hooks fold back into their registries.
 A plugin's manifest can declare what user-supplied configuration it
 needs (API keys, account ids, base URLs, …):
 
-```jsonc
+```json
 {
   "userConfig": [
     {
@@ -286,10 +289,10 @@ needs (API keys, account ids, base URLs, …):
       "type": "string",
       "sensitive": true,
       "prompt": "Enter your Linear API key",
-      "required": true,
+      "required": true
     },
-    { "key": "BASE_URL", "type": "string", "default": "https://api.example.com" },
-  ],
+    { "key": "BASE_URL", "type": "string", "default": "https://api.example.com" }
+  ]
 }
 ```
 

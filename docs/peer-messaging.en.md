@@ -76,6 +76,7 @@ A peer message is data, not user authority:
 - In the default prompted mode, audited operations require a local, allow-once authority decision that shows the complete canonical payload. Unclassified or incompletely displayable operations fail closed.
 - Configuration changes, long-term memory search, goal updates, and sub-agent dispatch are denied for peer-influenced work in prompted mode.
 - Starting the receiving session with `--trust` is an explicit local decision to authorize peer-triggered tools without those prompts. Use it only when every reachable local peer is trusted.
+- Peer-influenced events do not invoke plugin hooks. This isolation remains in effect even when the receiving session uses `--trust`.
 - `/clear-peer-context` can delete the first peer-influenced message and every derived response after it, then restore normal authority. It refuses to run while peer messages are still queued.
 
 Peer transport is local-only: it uses a runtime registry and Unix-domain sockets under the X-Code user directory, not a network listener. Authentication tokens and delivery ledgers are implementation details and are never model-visible.

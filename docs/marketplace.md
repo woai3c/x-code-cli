@@ -86,6 +86,8 @@ x-code 遵循常见的公开 Claude Code marketplace 结构。repo 内首选 **`
 
 参考真实文件：`anthropics/claude-code` 与 `anthropics/claude-plugins-official`。
 
+> `marketplace.json` 按严格 JSON 解析，不支持注释或尾随逗号。下面的 `jsonc` 是带说明的 schema 示例，复制成真实索引前必须清理。
+
 ```jsonc
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
@@ -169,7 +171,7 @@ xc plugin marketplace add <name> https://example.com/marketplace.json
 
 CLI 用 `fetch()` 拉取。适合企业内部 marketplace——可按 VPN 服务不同索引、强制 TLS 等。
 
-两种形态都会把解析后的索引缓存到 `~/.x-code/plugins/marketplaces/<name>/marketplace.json`，首次 refresh 之后就能离线用了。
+两种形态都会先验证索引，再把原始 JSON 缓存到 `~/.x-code/plugins/marketplaces/<name>/marketplace.json`。首次 refresh 后可以离线浏览缓存的索引；安装远程插件仍可能需要访问它的 source。
 
 ---
 

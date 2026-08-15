@@ -131,12 +131,14 @@ xc plugin enable linear@anthropic-marketplace --scope=user
 
 文件格式：
 
-```jsonc
+这些设置文件和插件 manifest 一样按严格 JSON 解析，不支持注释或尾随逗号。
+
+```json
 {
   "enabledPlugins": {
     "linear@anthropic-marketplace": true,
-    "k8s-debug@local": false,
-  },
+    "k8s-debug@local": false
+  }
 }
 ```
 
@@ -232,7 +234,7 @@ slash 形式 `/plugin update <id|--all>` 同语义。升完跑 `/plugin refresh`
 
 插件 manifest 可以声明它需要哪些用户提供的配置（API key、账号 ID、URL 等）：
 
-```jsonc
+```json
 {
   "userConfig": [
     {
@@ -240,10 +242,10 @@ slash 形式 `/plugin update <id|--all>` 同语义。升完跑 `/plugin refresh`
       "type": "string",
       "sensitive": true,
       "prompt": "Enter your Linear API key",
-      "required": true,
+      "required": true
     },
-    { "key": "BASE_URL", "type": "string", "default": "https://api.example.com" },
-  ],
+    { "key": "BASE_URL", "type": "string", "default": "https://api.example.com" }
+  ]
 }
 ```
 
