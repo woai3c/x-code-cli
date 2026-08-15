@@ -37,7 +37,7 @@ import { debugLog, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
 import { appendProviderTurnUsage, consumeExpectedCacheMissReasons, createProviderTurnUsage } from './cache-stats.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
-import { getCompressionThreshold, getContextWindow, getMaxOutputTokens } from './context-window.js'
+import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
 import { toolErrorString } from './messages.js'
@@ -521,7 +521,7 @@ function classifyTurnFailure(
  *     down. They never get a deferredCatalog.
  *
  *  Computed once per session — the base set is stable within a session. */
-export function buildTools(options: AgentOptions, state: LoopState, contextWindow = getContextWindow(options.modelId)) {
+export function buildTools(options: AgentOptions, state: LoopState) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = { ...toolRegistry }
 
@@ -579,18 +579,18 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
     state.deferredCatalog = undefined
   }
   if (deferralActive) {
-    const catalog = state.deferredCatalog ?? buildDeferredCatalog(options, contextWindow, tools)
-    state.deferredCatalog = catalog
+    const catalog = state.deferredCatalog ?? buildDeferredCatalog(options, tools)
+    state.deferredCatalog = catalog.length > 0 ? catalog : undefined
 
     if (catalog.length > 0) {
-      // alwaysLoad MCP tools deliberately stay out of the deferred catalog,
-      // so register them before this branch returns. Otherwise they would be
-      // absent from both the direct tool map and toolSearch results.
-      if (options.mcpRegistry) {
+      const deferredNames = new Set(catalog.map((entry) => entry.name))
+      // Register MCP candidates that fit the direct budget. alwaysLoad entries
+      // are never catalog candidates and therefore always land here too.
+      if (options.mcpRegistry?.hasModelCapabilities()) {
+        if (!deferredNames.has('listMcpResources')) tools.listMcpResources = listMcpResources
+        if (!deferredNames.has('readMcpResource')) tools.readMcpResource = readMcpResource
         for (const entry of options.mcpRegistry.list()) {
-          if (entry.annotations?.alwaysLoad === true) {
-            tools[entry.callableName] = bridgeMcpTool(entry)
-          }
+          if (!deferredNames.has(entry.callableName)) tools[entry.callableName] = bridgeMcpTool(entry)
         }
       }
       // Deferral enabled: strip non-core built-ins (they're in the catalog)
@@ -602,15 +602,14 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
       return tools
     }
 
-    // Deferral disabled (weak model / below threshold): fall through to the
-    // full-injection path below so all MCP tools get loaded directly.
+    // Everything fits the fixed direct budget: fall through to full injection.
   }
 
   // ── Sub-agent path: full injection + toolFilter (unchanged behavior) ──
   // MCP tools: declared without `execute` so the AI SDK leaves them in
   // `result.toolCalls` for processToolCalls to hand-dispatch through the
   // permission / loop-guard / abortSignal pipeline.
-  if (options.mcpRegistry) {
+  if (options.mcpRegistry?.hasModelCapabilities()) {
     // Two universal MCP-aware built-ins. Only registered when MCP is
     // active so a model without any MCP context doesn't see them and
     // start hallucinating resource URIs.
@@ -1192,11 +1191,21 @@ export async function agentLoop(
           .map((s) => s.name)
         debugLog('agent.skills.system-prompt', `enabled=[${enabled.join(',')}] disabled=[${disabled.join(',')}]`)
       }
+      const activeMcpRegistry = options.mcpRegistry?.hasModelCapabilities() ? options.mcpRegistry : undefined
+      const planMode = state.permissionMode === 'plan'
+      const promptSkills = planMode ? undefined : options.skillRegistry?.list()
+      const promptDeferredTools = planMode
+        ? undefined
+        : state.deferredCatalog?.map((e) => ({
+            name: e.name,
+            serverName: e.serverName,
+            source: e.source,
+          }))
       state.systemPromptCache = buildSystemPrompt({
         knowledgeContext: fullKnowledgeContext ?? '',
         modelId: options.modelId,
         isGitRepo,
-        planMode: state.permissionMode === 'plan',
+        planMode,
         planFilePath: state.currentPlanPath ?? undefined,
         // When deferral is active (top-level agent), MCP tools + non-core
         // built-ins are in the catalog, listed by NAME under `## Deferred
@@ -1207,17 +1216,24 @@ export async function agentLoop(
         // Sub-agents (no catalog) keep the old `## MCP Tools` block. Empty /
         // absent registry → both placeholders resolve to "" and the prompt is
         // byte-identical to the pre-MCP shape.
-        deferredTools: state.deferredCatalog?.map((e) => ({
-          name: e.name,
-          serverName: e.serverName,
-          source: e.source,
-        })),
-        mcpTools: state.deferredCatalog
-          ? undefined
-          : options.mcpRegistry
-            ? toSystemPromptEntries(options.mcpRegistry.list())
-            : undefined,
-        skills: options.skillRegistry ? options.skillRegistry.list() : undefined,
+        deferredTools: promptDeferredTools,
+        mcpTools:
+          planMode || state.deferredCatalog
+            ? undefined
+            : activeMcpRegistry
+              ? toSystemPromptEntries(activeMcpRegistry.list())
+              : undefined,
+        skills: promptSkills,
+        hasBrowserVisualCheck: !planMode && Object.hasOwn(baseTools, BROWSER_VISUAL_CHECK_TOOL_NAME),
+        hasPeerTools: !planMode && (Object.hasOwn(baseTools, 'listAgents') || Object.hasOwn(baseTools, 'sendMessage')),
+        hasTaskTool:
+          !planMode &&
+          (Object.hasOwn(baseTools, 'task') || Boolean(state.deferredCatalog?.some((entry) => entry.name === 'task'))),
+        hasTodoTool:
+          !planMode &&
+          (Object.hasOwn(baseTools, 'todoWrite') ||
+            Boolean(state.deferredCatalog?.some((entry) => entry.name === 'todoWrite'))),
+        hasMemoryService: !planMode && Boolean(memoryService),
       })
       // Snapshot the exact capability blocks embedded in the prompt above.
       // The context-composition estimator subtracts these strings from the
@@ -1227,16 +1243,12 @@ export async function agentLoop(
       // to the real reported input).
       state.systemPromptBlocks = {
         knowledge: fullKnowledgeContext ?? '',
-        skill: formatSkillCapabilities(options.skillRegistry ? options.skillRegistry.list() : undefined),
-        mcpDeferred: state.deferredCatalog
-          ? formatDeferredCapabilities(
-              state.deferredCatalog.map((e) => ({
-                name: e.name,
-                serverName: e.serverName,
-                source: e.source,
-              })),
-            )
-          : formatMcpCapabilities(options.mcpRegistry ? toSystemPromptEntries(options.mcpRegistry.list()) : undefined),
+        skill: formatSkillCapabilities(promptSkills),
+        mcpDeferred: promptDeferredTools
+          ? formatDeferredCapabilities(promptDeferredTools)
+          : formatMcpCapabilities(
+              !planMode && activeMcpRegistry ? toSystemPromptEntries(activeMcpRegistry.list()) : undefined,
+            ),
       }
     }
     const systemPrompt = state.systemPromptCache

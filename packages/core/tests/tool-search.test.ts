@@ -4,16 +4,19 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createLoopState } from '../src/agent/loop-state.js'
 import { buildTools } from '../src/agent/loop.js'
+import { buildSystemPrompt } from '../src/agent/system-prompt.js'
+import { estimateToolSetTokens } from '../src/agent/tool-schema.js'
 import {
   DEFERRED_BUILTIN_TOOLS,
+  DIRECT_TOOL_TOKEN_BUDGET,
   type DeferredToolEntry,
   buildDeferredCatalog,
   composeTurnTools,
-  isWeakModel,
   resolveEffectiveToolProfile,
 } from '../src/agent/tool-search/catalog.js'
 import { runToolSearch } from '../src/agent/tool-search/resolve.js'
 import { searchDeferredTools } from '../src/agent/tool-search/search.js'
+import { emptyRegistry } from '../src/mcp/registry.js'
 
 // catalog.ts imports toolRegistry, which transitively pulls webFetch →
 // cheerio + turndown. Mock them so the import doesn't fail in the test env.
@@ -179,12 +182,22 @@ describe('composeTurnTools', () => {
     ])
     expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'plan'))).toEqual(['readFile', 'exitPlanMode'])
   })
+
+  it('restores planning-safe web tools from the deferred catalog and hides other deferred tools', () => {
+    const base = { readFile: { id: 'read' }, writeFile: { id: 'write' }, exitPlanMode: { id: 'exit' } }
+    const catalog = [
+      entry('webSearch', 'Search the web', 'builtin'),
+      entry('todoWrite', 'Track tasks', 'builtin'),
+      entry('mcp__db__write', 'Mutate database', 'mcp', 'db'),
+    ]
+    const tools = composeTurnTools(base, catalog, new Set(), 'plan')
+
+    expect(Object.keys(tools)).toEqual(['readFile', 'writeFile', 'exitPlanMode', 'webSearch'])
+  })
 })
 
 describe('buildDeferredCatalog', () => {
-  // Use a tiny context window (100) to ensure catalog EXCEEDS the 10% threshold
-  // (even the built-in entries add up to more than 10 tokens).
-  const LARGE_CTX = 100
+  const oversizedSchemaDescription = 'schema padding '.repeat(2_000)
 
   const mcpTools = [
     {
@@ -192,14 +205,23 @@ describe('buildDeferredCatalog', () => {
       rawName: 'query_rows',
       serverName: 'db',
       description: 'Run a SQL query',
-      inputSchema: { type: 'object', properties: { sql: { type: 'string' }, limit: { type: 'number' } } },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sql: { type: 'string' },
+          limit: { type: 'number' },
+          payload: { type: 'string', description: oversizedSchemaDescription },
+        },
+      },
     },
   ]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const options = { mcpRegistry: { list: () => mcpTools } } as any
+  const options = {
+    mcpRegistry: { list: () => mcpTools, listResources: () => [], hasModelCapabilities: () => true },
+  } as any
 
   it('defers the non-core built-ins plus the MCP resource tools', () => {
-    const catalog = buildDeferredCatalog(options, LARGE_CTX)
+    const catalog = buildDeferredCatalog(options)
     const names = catalog.map((e) => e.name)
     for (const name of DEFERRED_BUILTIN_TOOLS) expect(names).toContain(name)
     expect(names).not.toContain('browserVisualCheck')
@@ -209,14 +231,13 @@ describe('buildDeferredCatalog', () => {
 
   it('loads the root visual-check tool directly, supports opt-out, and never exposes it to sub-agents', () => {
     const rootState = createLoopState()
-    const rootTools = buildTools({ modelId: 'test:model' } as any, rootState, LARGE_CTX)
-    expect(rootState.deferredCatalog?.map((entry) => entry.name)).not.toContain('browserVisualCheck')
+    const rootTools = buildTools({ modelId: 'test:model' } as any, rootState)
+    expect((rootState.deferredCatalog ?? []).map((entry) => entry.name)).not.toContain('browserVisualCheck')
     expect(rootTools).toHaveProperty('browserVisualCheck')
 
     const disabledTools = buildTools(
       { modelId: 'test:model', browserVisualCheckEnabled: false } as any,
       createLoopState(),
-      LARGE_CTX,
     )
     expect(disabledTools).not.toHaveProperty('browserVisualCheck')
 
@@ -226,13 +247,12 @@ describe('buildDeferredCatalog', () => {
         toolFilter: { deny: [] },
       } as any,
       createLoopState(),
-      LARGE_CTX,
     )
     expect(childTools).not.toHaveProperty('browserVisualCheck')
   })
 
   it('includes MCP tools and folds their schema property names into searchText', () => {
-    const catalog = buildDeferredCatalog(options, LARGE_CTX)
+    const catalog = buildDeferredCatalog(options)
     const dbTool = catalog.find((e) => e.name === 'mcp__db__query_rows')
     expect(dbTool).toBeDefined()
     expect(dbTool!.source).toBe('mcp')
@@ -243,25 +263,51 @@ describe('buildDeferredCatalog', () => {
     expect(searchDeferredTools('sql', catalog, 5)).toContain('mcp__db__query_rows')
   })
 
-  it('omits the MCP resource tools when no registry is configured', () => {
+  it('injects the complete tool set directly when it fits the fixed budget', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const catalog = buildDeferredCatalog({} as any, LARGE_CTX)
-    const names = catalog.map((e) => e.name)
-    expect(names).not.toContain('listMcpResources')
-    expect(names).toContain('webSearch')
-  })
-
-  it('returns empty catalog for weak models (threshold gate)', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const weakOpts = { ...options, modelId: 'anthropic:claude-haiku-4-5' } as any
-    const catalog = buildDeferredCatalog(weakOpts, LARGE_CTX)
+    const catalog = buildDeferredCatalog({} as any)
     expect(catalog).toEqual([])
   })
 
-  it('returns empty catalog when schema weight is below threshold', () => {
-    // A context window of 10M means 10% = 1M tokens threshold — our tiny
-    // catalog will never reach that.
-    const catalog = buildDeferredCatalog(options, 10_000_000)
+  it('treats an empty registry as no model-facing MCP capability', () => {
+    const state = createLoopState()
+    const emptyMcpRegistry = emptyRegistry()
+    const tools = buildTools({ modelId: 'test:model', mcpRegistry: emptyMcpRegistry } as any, state)
+
+    expect(state.deferredCatalog).toBeUndefined()
+    expect(tools).not.toHaveProperty('toolSearch')
+    expect(tools).not.toHaveProperty('listMcpResources')
+    expect(tools).not.toHaveProperty('readMcpResource')
+    expect(
+      buildSystemPrompt({
+        modelId: 'test:model',
+        deferredTools: state.deferredCatalog?.map((entry) => ({
+          name: entry.name,
+          serverName: entry.serverName,
+          source: entry.source,
+        })),
+      }),
+    ).not.toContain('## Deferred Tools')
+  })
+
+  it('applies the same deferral policy to every model id', () => {
+    const haiku = buildDeferredCatalog({ ...options, modelId: 'anthropic:claude-haiku-4-5' })
+    const unknown = buildDeferredCatalog({ ...options, modelId: 'custom:anything' })
+    expect(haiku.map((entry) => entry.name)).toEqual(unknown.map((entry) => entry.name))
+    expect(haiku.length).toBeGreaterThan(0)
+  })
+
+  it('returns an empty catalog for a small MCP surface regardless of context-window size', () => {
+    const smallMcpTools = [
+      {
+        ...mcpTools[0],
+        inputSchema: { type: 'object', properties: { sql: { type: 'string' } } },
+      },
+    ]
+    const smallOptions = {
+      mcpRegistry: { list: () => smallMcpTools, listResources: () => [], hasModelCapabilities: () => true },
+    }
+    const catalog = buildDeferredCatalog(smallOptions as any)
     expect(catalog).toEqual([])
   })
 
@@ -278,8 +324,10 @@ describe('buildDeferredCatalog', () => {
       },
     ]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const opts = { mcpRegistry: { list: () => toolsWithAlwaysLoad } } as any
-    const catalog = buildDeferredCatalog(opts, LARGE_CTX)
+    const opts = {
+      mcpRegistry: { list: () => toolsWithAlwaysLoad, listResources: () => [], hasModelCapabilities: () => true },
+    } as any
+    const catalog = buildDeferredCatalog(opts)
     const names = catalog.map((e) => e.name)
     expect(names).not.toContain('mcp__db__always_tool')
     expect(names).toContain('mcp__db__query_rows')
@@ -297,9 +345,13 @@ describe('buildDeferredCatalog', () => {
         annotations: { alwaysLoad: true },
       },
     ]
-    const mcpRegistry = { list: () => toolsWithAlwaysLoad }
+    const mcpRegistry = {
+      list: () => toolsWithAlwaysLoad,
+      listResources: () => [],
+      hasModelCapabilities: () => true,
+    }
     const state = createLoopState()
-    const tools = buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+    const tools = buildTools({ modelId: 'test:model', mcpRegistry } as any, state)
 
     expect(state.deferredCatalog?.some((entry) => entry.name === 'mcp__db__query_rows')).toBe(true)
     expect(tools).toHaveProperty('mcp__db__always_tool')
@@ -307,18 +359,18 @@ describe('buildDeferredCatalog', () => {
   })
 
   it('reuses the deferred catalog until the tool surface is invalidated', () => {
-    const mcpRegistry = { list: () => mcpTools }
+    const mcpRegistry = { list: () => mcpTools, listResources: () => [], hasModelCapabilities: () => true }
     const state = createLoopState()
 
-    buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+    buildTools({ modelId: 'test:model', mcpRegistry } as any, state)
     const firstCatalog = state.deferredCatalog
-    buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+    buildTools({ modelId: 'test:model', mcpRegistry } as any, state)
 
     expect(firstCatalog).toBeDefined()
     expect(state.deferredCatalog).toBe(firstCatalog)
 
     state.deferredCatalog = undefined
-    buildTools({ modelId: 'test:model', mcpRegistry } as any, state, LARGE_CTX)
+    buildTools({ modelId: 'test:model', mcpRegistry } as any, state)
     expect(state.deferredCatalog).not.toBe(firstCatalog)
   })
 
@@ -329,19 +381,24 @@ describe('buildDeferredCatalog', () => {
         rawName: 'put_object',
         serverName: 's3',
         description: 'Upload to S3',
-        inputSchema: { type: 'object', properties: { key: { type: 'string' } } },
+        inputSchema: {
+          type: 'object',
+          properties: { key: { type: 'string' }, payload: { type: 'string', description: oversizedSchemaDescription } },
+        },
         annotations: { searchHint: 'upload file to cloud storage' },
       },
     ]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const opts = { mcpRegistry: { list: () => toolsWithHint } } as any
-    const catalog = buildDeferredCatalog(opts, LARGE_CTX)
+    const opts = {
+      mcpRegistry: { list: () => toolsWithHint, listResources: () => [], hasModelCapabilities: () => true },
+    } as any
+    const catalog = buildDeferredCatalog(opts)
     const s3Tool = catalog.find((e) => e.name === 'mcp__s3__put_object')
     expect(s3Tool!.searchText).toContain('upload file to cloud storage')
     expect(searchDeferredTools('upload cloud', catalog, 5)).toContain('mcp__s3__put_object')
   })
 
-  it('defers task but keeps todo direct only for an explicit supported standard profile', () => {
+  it('defers task but keeps todo direct for an explicit standard profile when the budget is exceeded', () => {
     const subAgentRegistry = {
       list: () => [{ name: 'reviewer', description: 'Review changes' }],
       names: () => ['reviewer'],
@@ -352,9 +409,9 @@ describe('buildDeferredCatalog', () => {
         modelId: 'anthropic:claude-sonnet-5',
         toolProfile: 'standard',
         subAgentRegistry,
+        mcpRegistry: options.mcpRegistry,
       } as any,
       state,
-      1_000_000,
     )
 
     expect(state.deferredCatalog?.map((entry) => entry.name)).toContain('task')
@@ -363,61 +420,30 @@ describe('buildDeferredCatalog', () => {
     expect(tools).toHaveProperty('toolSearch')
   })
 
-  it('reduces the directly injected schema surface by at least ten percent', () => {
+  it('keeps the initial direct schema surface within the fixed token budget', () => {
     const subAgentRegistry = {
       list: () => [{ name: 'reviewer', description: 'Review changes' }],
       names: () => ['reviewer'],
     }
-    const full = buildTools(
-      { modelId: 'anthropic:claude-sonnet-5', toolProfile: 'full', subAgentRegistry } as any,
-      createLoopState(),
-      1_000_000,
-    )
-    const standard = buildTools(
-      { modelId: 'anthropic:claude-sonnet-5', toolProfile: 'standard', subAgentRegistry } as any,
-      createLoopState(),
-      1_000_000,
-    )
-    const wireSize = (tools: Record<string, unknown>) =>
-      Object.entries(tools).reduce(
-        (sum, [name, definition]) => sum + name.length + JSON.stringify(definition).length,
-        0,
-      )
-
-    // shellOutput and killShell intentionally stay direct as a static
-    // transport closure for auto-yielded shell sessions. Their always-loaded
-    // schemas reduce the relative percentage while preserving the same
-    // deferred task/web payload savings.
-    expect(wireSize(standard)).toBeLessThan(wireSize(full) * 0.9)
-  })
-})
-
-describe('isWeakModel', () => {
-  it('detects haiku as weak', () => {
-    expect(isWeakModel('anthropic:claude-haiku-4-5')).toBe(true)
-  })
-  it('detects nano as weak', () => {
-    expect(isWeakModel('openai:gpt-5.4-nano')).toBe(true)
-  })
-  it('does not flag strong models', () => {
-    expect(isWeakModel('anthropic:claude-sonnet-5')).toBe(false)
-    expect(isWeakModel('openai:gpt-5.6-sol')).toBe(false)
-    expect(isWeakModel('deepseek:deepseek-v4-pro')).toBe(false)
+    for (const toolProfile of ['full', 'standard'] as const) {
+      for (const modelId of ['anthropic:claude-haiku-4-5', 'anthropic:claude-sonnet-5', 'custom:anything']) {
+        const state = createLoopState()
+        const base = buildTools(
+          { modelId, toolProfile, subAgentRegistry, mcpRegistry: options.mcpRegistry } as any,
+          state,
+        )
+        const direct = composeTurnTools(base, state.deferredCatalog, state.activatedTools, 'default')
+        expect(estimateToolSetTokens(direct)).toBeLessThanOrEqual(DIRECT_TOOL_TOKEN_BUDGET)
+      }
+    }
   })
 })
 
 describe('resolveEffectiveToolProfile', () => {
-  it('defaults to full and honors standard only for allowlisted strong models', () => {
-    expect(resolveEffectiveToolProfile(undefined, 'anthropic:claude-sonnet-5')).toBe('full')
-    expect(resolveEffectiveToolProfile('full', 'anthropic:claude-sonnet-5')).toBe('full')
-    expect(resolveEffectiveToolProfile('standard', 'anthropic:claude-sonnet-5')).toBe('standard')
-    expect(resolveEffectiveToolProfile('standard', 'openai:gpt-5.6-sol')).toBe('standard')
-  })
-
-  it('falls back to full for weak, unknown, and custom models', () => {
-    expect(resolveEffectiveToolProfile('standard', 'anthropic:claude-haiku-4-5')).toBe('full')
-    expect(resolveEffectiveToolProfile('standard', 'custom:anything')).toBe('full')
-    expect(resolveEffectiveToolProfile('standard', 'future:unknown')).toBe('full')
+  it('defaults to full and honors standard for every model', () => {
+    expect(resolveEffectiveToolProfile(undefined)).toBe('full')
+    expect(resolveEffectiveToolProfile('full')).toBe('full')
+    expect(resolveEffectiveToolProfile('standard')).toBe('standard')
   })
 })
 

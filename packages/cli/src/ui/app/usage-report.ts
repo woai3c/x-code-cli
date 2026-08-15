@@ -45,6 +45,14 @@ export function formatUsageReport(
       for (const category of calibrated) {
         lines.push(`- ${category.label.padEnd(labelWidth)}  ${formatTokenCount(category.tokens).padStart(9)}`)
       }
+      if ((contextEstimate.details?.length ?? 0) > 0) {
+        const scale = usage.currentContextTokens / contextEstimate.estimatedTotal
+        lines.push('', '**Initialization detail** (estimated):')
+        for (const detail of contextEstimate.details ?? []) {
+          lines.push(`- ${detail.label}: ~${formatTokenCount(Math.round(detail.estimatedTokens * scale))}`)
+        }
+      }
+      for (const warning of contextEstimate.warnings ?? []) lines.push(`- Warning: ${warning}`)
     }
   }
 

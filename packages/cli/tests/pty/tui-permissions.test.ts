@@ -111,7 +111,7 @@ describe('TUI permissions', () => {
     })
   })
 
-  it('keeps workspace writes gated in plan mode', async () => {
+  it('rejects workspace writes before approval in plan mode', async () => {
     await withTui(
       'permissions-plan-mode',
       [],
@@ -126,10 +126,9 @@ describe('TUI permissions', () => {
 
         expect(harness.text()).toContain('plan mode')
         await submitInput(harness, 'attempt a workspace write while planning')
-        await harness.waitForText('X-Code wants to write a file')
-        expect(harness.text()).toContain('not-the-plan.txt')
-        harness.write('n')
+        await harness.waitForText('plan mode may only modify the current session plan file')
         await harness.waitForText('plan-write-denied')
+        expect(harness.text()).not.toContain('X-Code wants to write a file')
         expect(await pathExists(target)).toBe(false)
       },
       { args: ['--plan'] },

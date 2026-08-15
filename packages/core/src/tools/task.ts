@@ -19,18 +19,16 @@ function buildTaskToolDescription(registry: SubAgentRegistry): string {
   const agents = registry.list()
   const agentList = agents.map((a) => `  - ${a.name}: ${a.description}`).join('\n')
 
-  return `Launch an isolated sub-agent for extensive multi-step work. It receives a fresh context and returns only its final conclusion, so delegation has meaningful prompt and latency overhead.
+  return `Launch an isolated sub-agent for broad investigation or review. It receives a fresh context and returns only its final conclusion.
 
 Available sub-agents:
 ${agentList}
 
-Use it for broad exploration requiring more than 3-4 searches across many directories, structured code review, planning that requires 5+ files, or an investigation where only the conclusion belongs in the parent context. Do not use it for a known-symbol search, 1-3 specific files, single-file edits, direct questions, or work that fits in roughly three direct tool calls.
+Use it when a directed search is insufficient. Do not delegate known-symbol searches, a few specific files, or direct questions.
 
 Prompt contract:
-- Select a valid subagent_type and give a 3-5 word description.
-- The prompt must stand alone: explain the goal and why it matters, exact paths or symbols, known findings, constraints, whether writes are allowed, and the desired output.
-- Ask for concrete snippets, types, file:line references, or a concise length when those details matter. Do not delegate synthesis with vague instructions such as "use your findings to fix it."
-- Trust a complete result and summarize it for the user; request a targeted follow-up only when specific facts are missing.
+- Give a valid subagent_type, a 3-5 word description, and a self-contained prompt with the goal, paths or symbols, known facts, constraints, write permission, and required output.
+- Ask for concrete snippets or file:line references when needed, and trust a complete result instead of repeating its exploration.
 
 Independent read-only agents may run concurrently in one assistant message. Never run concurrent agents that can write the same files or resources.`
 }

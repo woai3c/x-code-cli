@@ -464,11 +464,11 @@ describe('agent loop', () => {
   })
 
   it('keeps memory-only requests and persistence details out of the general tool workflow', () => {
-    const prompt = buildSystemPrompt({ modelId: 'test:model' })
+    const prompt = buildSystemPrompt({ modelId: 'test:model', hasMemoryService: true })
 
-    expect(prompt).toContain('do not call tools solely for that request')
-    expect(prompt).toContain('Never modify the managed memory store with writeFile, edit, or shell')
-    expect(prompt).toContain('do not narrate memory extraction, queues, internal paths')
+    expect(prompt).toContain('do not call tools solely to persist them')
+    expect(prompt).toContain('Never access the managed memory store with general file or shell tools')
+    expect(prompt).toContain('Do not narrate internal memory processing')
   })
 
   it('classifies managed-memory mutations while preserving read-only diagnostics', () => {

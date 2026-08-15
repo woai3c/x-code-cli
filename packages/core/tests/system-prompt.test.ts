@@ -7,26 +7,41 @@ import { todoWrite } from '../src/tools/todo-write.js'
 
 describe('system prompt budget and stability', () => {
   it('keeps the default prompt compact without dropping safety boundaries', () => {
-    const prompt = buildSystemPrompt({ modelId: 'test:model', isGitRepo: true })
+    const prompt = buildSystemPrompt({
+      modelId: 'test:model',
+      isGitRepo: true,
+      hasBrowserVisualCheck: true,
+      hasPeerTools: true,
+      hasTaskTool: true,
+      hasTodoTool: true,
+      hasMemoryService: true,
+    })
 
     expect(prompt.length).toBeLessThan(5_000)
     expect(prompt).not.toContain('## Capabilities')
     expect(prompt).not.toContain('## Skills')
     expect(prompt).not.toMatch(/curl|PowerShell|Invoke-WebRequest/)
-    expect(prompt).toContain('`/skill install`')
-    expect(prompt).toContain('shell may download the raw file directly')
-    expect(prompt).toContain('never reconstruct `SKILL.md` with `webFetch + writeFile`')
-    expect(prompt).toContain('run `/skill refresh` or restart `xc`')
+    expect(prompt).not.toContain('`/skill install`')
     expect(prompt).toContain('Read a file before modifying it')
-    expect(prompt).toContain('Try direct tools first')
-    expect(prompt).toContain('independent read-only task calls in the same assistant turn')
-    expect(prompt).toContain('Never run concurrent writers against the same files')
-    expect(prompt).toContain('Never modify the managed memory store')
+    expect(prompt).toContain('Use direct tools for focused work')
+    expect(prompt).toContain('never run concurrent writers against the same files')
+    expect(prompt).toContain('Never access the managed memory store')
     expect(prompt).toContain('If a tool result starts with [Truncated:]')
-    expect(prompt).toContain('proactively call browserVisualCheck once')
+    expect(prompt).toContain('call browserVisualCheck once before finishing')
     expect(prompt).toContain('decide from task and repo state whether to use ordinary `git worktree` commands')
     expect(prompt).toContain('remove only the worktree and branch you created')
     expect(prompt).not.toContain('select worktree isolation for the shell call')
+  })
+
+  it('omits instructions for unavailable optional capabilities', () => {
+    const prompt = buildSystemPrompt({ modelId: 'test:model', isGitRepo: false })
+
+    expect(prompt).not.toContain('browserVisualCheck')
+    expect(prompt).not.toContain('<peer_message>')
+    expect(prompt).not.toContain('## Delegation')
+    expect(prompt).not.toContain('## Task Management')
+    expect(prompt).not.toContain('## Long-term Memory')
+    expect(prompt).not.toContain('/skill install')
   })
 
   it('lists enabled skills once and keeps identical options byte-stable', () => {
@@ -45,6 +60,7 @@ describe('system prompt budget and stability', () => {
     expect(first).toContain('## Available Skills')
     expect(first.match(/review: Review a patch/g)).toHaveLength(1)
     expect(first.match(/docs: Write documentation/g)).toHaveLength(1)
+    expect(first).toContain('`/skill install`')
   })
 
   it('keeps default and plan prompts independently stable', () => {
@@ -115,7 +131,7 @@ describe('heavy tool description budgets', () => {
     const description = todoWrite.description ?? ''
 
     expect(description.length).toBeLessThan(2_000)
-    expect(description).toContain('Every call replaces the entire list')
+    expect(description).toContain('Replace the complete live checklist')
     expect(description).toContain('exactly one item in_progress')
     expect(description).toContain('automatically cleared')
   })

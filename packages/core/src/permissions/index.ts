@@ -105,10 +105,8 @@ function isSensitivePath(filePath: string): boolean {
  *      back to `ask` so the user must explicitly consent. Shell still
  *      goes through normal classification so destructive commands stay
  *      gated, and `deny`-level results still deny.
- *    - 'plan': pure prompt-based enforcement (mirrors Claude Code) —
- *      no permission-layer change. The system-prompt overlay tells the
- *      model not to write; if it ignores that, the regular `ask`
- *      prompt still fires.
+ *    - 'plan': the agent dispatcher exposes a read/plan-only allowlist and
+ *      rejects writes outside currentPlanPath before this function runs.
  *
  *  Trust mode is the global override and beats everything except an
  *  explicit `deny`. */

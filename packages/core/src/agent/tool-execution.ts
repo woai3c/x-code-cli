@@ -1119,6 +1119,10 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
     return false
   }
 
+  // The dispatcher has already proved this path equals currentPlanPath.
+  // Plan-file edits are part of planning itself and need no second dialog.
+  if (state.permissionMode === 'plan' && (toolName === 'writeFile' || toolName === 'edit')) return true
+
   if (toolName === 'shell') {
     const command = typeof input.command === 'string' ? input.command : ''
     const shellCommands = splitShellCommands(command)
@@ -1295,6 +1299,8 @@ async function handleToolCall(
     control,
   }
 
+  if (!enforcePlanModeBoundary(ctx)) return
+
   // ── Plugin hook: PreToolUse ──
   // Fires before bypass-handler routing and before MCP dispatch so the
   // hook sees EVERY tool the model attempts (including askUser, task,
@@ -1444,6 +1450,59 @@ async function handleToolCall(
       true,
     )
   }
+}
+
+const PLAN_MODE_EXECUTABLE_TOOLS = new Set([
+  'readFile',
+  'glob',
+  'grep',
+  'listDir',
+  'webSearch',
+  'webFetch',
+  'askUser',
+  'writeFile',
+  'edit',
+  'exitPlanMode',
+])
+
+function sameResolvedPath(left: string, right: string): boolean {
+  const a = path.normalize(path.resolve(left))
+  const b = path.normalize(path.resolve(right))
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** Defense in depth for stale history, plugin calls, and direct dispatcher use.
+ *  Tool visibility is the primary Plan boundary; this check makes it a runtime
+ *  invariant even if a hidden call reaches the dispatcher. */
+function enforcePlanModeBoundary(ctx: HandlerCtx): boolean {
+  if (ctx.state.permissionMode !== 'plan') return true
+  if (!PLAN_MODE_EXECUTABLE_TOOLS.has(ctx.toolName)) {
+    pushToolResult(
+      ctx.state,
+      ctx.callbacks,
+      ctx.toolCallId,
+      ctx.toolName,
+      toolErrorString(`tool ${ctx.toolName} is unavailable in plan mode`),
+      true,
+    )
+    return false
+  }
+  if (ctx.toolName !== 'writeFile' && ctx.toolName !== 'edit') return true
+
+  const target = typeof ctx.input.filePath === 'string' ? ctx.input.filePath : ''
+  const planPath = ctx.state.currentPlanPath
+  if (!target || !planPath || !sameResolvedPath(path.resolve(ctx.state.projectCwd, target), planPath)) {
+    pushToolResult(
+      ctx.state,
+      ctx.callbacks,
+      ctx.toolCallId,
+      ctx.toolName,
+      toolErrorString('plan mode may only modify the current session plan file'),
+      true,
+    )
+    return false
+  }
+  return true
 }
 
 /** Caption prompt for MCP screenshots. Unlike the pasted-image default it

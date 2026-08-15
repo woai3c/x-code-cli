@@ -112,6 +112,13 @@ export class McpRegistry {
     return [...this.entries.values()]
   }
 
+  /** Whether this registry exposes anything the model can use. A registry
+   *  object also exists for the zero-config case, so object presence alone
+   *  must not advertise MCP tools or resource helpers. */
+  hasModelCapabilities(): boolean {
+    return this.entries.size > 0 || this.resources.size > 0
+  }
+
   get(callableName: string): McpToolEntry | undefined {
     return this.entries.get(callableName)
   }

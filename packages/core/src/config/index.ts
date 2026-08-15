@@ -348,7 +348,7 @@ export function resolveStreamConfig(config: UserConfig = loadUserConfig()): Stre
 export interface UserConfig {
   model?: string
   thinking?: boolean
-  /** Explicit opt-in only. Unknown/custom/weak models still fall back to full. */
+  /** Explicit opt-in for the smaller standard tool surface. */
   experimentalToolProfile?: 'full' | 'standard'
   /** Persisted UI theme name. Drives both diff bg colors and the
    *  associated syntax-highlight palette. Validated at load time by

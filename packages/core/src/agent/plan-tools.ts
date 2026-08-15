@@ -50,6 +50,15 @@ export async function handleTodoWrite(
     })
   }
   const allDone = normalized.length > 0 && normalized.every((t) => t.status === 'completed')
+  const activeCount = normalized.filter((t) => t.status === 'in_progress').length
+  if (normalized.length === 0 || (!allDone && activeCount !== 1)) {
+    const reason =
+      normalized.length === 0
+        ? 'the checklist must contain at least one item'
+        : `an active checklist must contain exactly one in_progress item; received ${activeCount}`
+    pushToolResult(state, callbacks, toolCallId, 'todoWrite', toolErrorString(reason), true)
+    return
+  }
   state.todos = allDone ? [] : normalized
   callbacks.onTodosUpdate(state.todos)
   const dropped = raw.length - normalized.length
@@ -85,7 +94,7 @@ export async function handleTodoWrite(
     'todoWrite',
     allDone
       ? `All todos completed (${normalized.length} items). Checklist cleared.${explanationNote}${verifyNote}${droppedNote}`
-      : `Todo list updated (${counts.in_progress} in_progress, ${counts.pending} pending, ${counts.completed} completed).${explanationNote} Continue using todoWrite to track your progress — mark each task completed IMMEDIATELY when done (do not batch), and ensure exactly one item is in_progress at all times.${droppedNote}`,
+      : `Todo list updated (${counts.in_progress} in_progress, ${counts.pending} pending, ${counts.completed} completed).${explanationNote}${droppedNote}`,
   )
 }
 

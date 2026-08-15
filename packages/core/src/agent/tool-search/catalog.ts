@@ -20,29 +20,12 @@
 // see buildTools in loop.ts.
 import { listMcpResources, readMcpResource } from '../../mcp/resources.js'
 import { bridgeMcpTool, truncateDescription } from '../../mcp/tool-bridge.js'
-import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../../tools/browser-visual-check.js'
 import { toolRegistry } from '../../tools/index.js'
+import { toolSearch } from '../../tools/tool-search.js'
 import type { AgentOptions, PermissionMode } from '../../types/index.js'
+import { estimateToolDefinitionTokens } from '../tool-schema.js'
 
-/** Approximate chars-per-token for catalog size estimation. Conservative
- *  (lower = over-counts) so the threshold errs toward enabling deferral. */
-const CHARS_PER_TOKEN = 3.0
-
-/** Percentage of context window below which we skip deferral entirely.
- *  Mirrors Claude Code's `tst-auto` DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE.
- *  When catalog total token weight is below this fraction, the overhead
- *  of one extra toolSearch round-trip outweighs the token savings. */
-const DEFERRAL_THRESHOLD_PERCENT = 0.1
-
-/** Model patterns whose instruction-following is too weak to reliably
- *  call toolSearch unprompted. These fall back to full injection. Patterns
- *  are matched case-insensitively against the full `provider:model` id. */
-const WEAK_MODEL_PATTERNS = [
-  'haiku', // Claude Haiku — limited tool_reference support
-  'nano', // GPT-5.4-nano
-  'glm-4v', // Zhipu vision-only captioners (glm-4v-*, glm-4.6v)
-  'glm-5v', // Zhipu vision-only captioners (glm-5v-*)
-] as const
+export const DIRECT_TOOL_TOKEN_BUDGET = 10_000
 
 /** Non-core built-in tools that are deferred (name-only until toolSearch loads
  *  them). The core editing / search / exec tools (readFile, writeFile, edit,
@@ -58,19 +41,23 @@ export const DEFERRED_BUILTIN_TOOLS = ['webSearch', 'webFetch', 'todoWrite'] as 
 
 const STANDARD_DEFERRED_BUILTIN_TOOLS = ['task', 'webSearch', 'webFetch'] as const
 
+const PLAN_MODE_TOOL_NAMES = new Set([
+  'readFile',
+  'glob',
+  'grep',
+  'listDir',
+  'webSearch',
+  'webFetch',
+  'askUser',
+  'writeFile',
+  'edit',
+  'exitPlanMode',
+])
+
 export type ToolProfile = 'full' | 'standard'
 
-const STANDARD_MODEL_PATTERNS = [
-  'anthropic:claude-sonnet-',
-  'anthropic:claude-opus-',
-  'openai:gpt-5.6-sol',
-  'openai:gpt-5.6-terra',
-] as const
-
-export function resolveEffectiveToolProfile(requested: ToolProfile | undefined, modelId: string): ToolProfile {
-  if (requested !== 'standard') return 'full'
-  const normalized = modelId.toLowerCase()
-  return STANDARD_MODEL_PATTERNS.some((pattern) => normalized.startsWith(pattern)) ? 'standard' : 'full'
+export function resolveEffectiveToolProfile(requested: ToolProfile | undefined): ToolProfile {
+  return requested === 'standard' ? 'standard' : 'full'
 }
 
 export interface DeferredToolEntry {
@@ -133,30 +120,18 @@ function builtinEntry(name: string, def: unknown): DeferredToolEntry {
   return { name, description: truncateDescription(raw), searchText, source: 'builtin', def }
 }
 
-/** True when the model is too weak to reliably invoke toolSearch. */
-export function isWeakModel(modelId: string): boolean {
-  const lower = modelId.toLowerCase()
-  return WEAK_MODEL_PATTERNS.some((p) => lower.includes(p))
-}
-
-/** Build the full deferred-tool catalog for the current session. Returns an
- *  empty array (= deferral disabled) when:
- *  - the model is in WEAK_MODEL_PATTERNS (can't reliably drive toolSearch), or
- *  - the total catalog weight is below DEFERRAL_THRESHOLD_PERCENT of context.
+/** Build the deferred-tool catalog for the current session. The catalog holds
+ *  the lowest-priority candidates needed to keep the initial direct tool
+ *  surface within DIRECT_TOOL_TOKEN_BUDGET. Returns [] when everything fits.
  *
  *  Order is stable (built-ins first, then MCP grouped by server in registry
  *  order) so the system-prompt listing and any cache prefix stay byte-stable. */
 export function buildDeferredCatalog(
   options: AgentOptions,
-  contextWindow: number,
   availableTools: Record<string, unknown> = toolRegistry,
 ): DeferredToolEntry[] {
-  // Gate 1: weak models fall back to full injection — they may not call
-  // toolSearch unprompted and the user loses access to deferred tools.
-  if (options.modelId && isWeakModel(options.modelId)) return []
-
   const entries: DeferredToolEntry[] = []
-  const profile = resolveEffectiveToolProfile(options.toolProfile, options.modelId)
+  const profile = resolveEffectiveToolProfile(options.toolProfile)
   const deferredBuiltins = profile === 'standard' ? STANDARD_DEFERRED_BUILTIN_TOOLS : DEFERRED_BUILTIN_TOOLS
 
   for (const name of deferredBuiltins) {
@@ -164,7 +139,7 @@ export function buildDeferredCatalog(
     if (def) entries.push(builtinEntry(name, def))
   }
 
-  if (options.mcpRegistry) {
+  if (options.mcpRegistry?.hasModelCapabilities()) {
     entries.push(builtinEntry('listMcpResources', listMcpResources))
     entries.push(builtinEntry('readMcpResource', readMcpResource))
 
@@ -191,22 +166,32 @@ export function buildDeferredCatalog(
     }
   }
 
-  // Gate 2: if the total catalog schema weight is below the threshold
-  // fraction of context, deferral isn't worth the extra round-trip.
-  // Estimate using the full tool definition's serialised size (name +
-  // description + JSON Schema) — NOT the searchText haystack, which is
-  // much smaller than the actual wire payload sent to the API.
-  if (profile === 'full' && entries.length > 0) {
-    const totalChars = entries.reduce((sum, e) => {
-      const defStr = typeof e.def === 'object' ? JSON.stringify(e.def) : ''
-      return sum + e.name.length + defStr.length
-    }, 0)
-    const estimatedTokens = Math.ceil(totalChars / CHARS_PER_TOKEN)
-    const threshold = Math.floor(contextWindow * DEFERRAL_THRESHOLD_PERCENT)
-    if (estimatedTokens < threshold) return []
-  }
+  if (entries.length === 0) return []
 
-  return entries
+  const candidateBuiltinNames = new Set(
+    entries.filter((entry) => entry.source === 'builtin').map((entry) => entry.name),
+  )
+  let directTokens = Object.entries(availableTools).reduce(
+    (sum, [name, def]) => (candidateBuiltinNames.has(name) ? sum : sum + estimateToolDefinitionTokens(name, def)),
+    0,
+  )
+  for (const entry of options.mcpRegistry?.list() ?? []) {
+    if (entry.annotations?.alwaysLoad === true) {
+      directTokens += estimateToolDefinitionTokens(entry.callableName, bridgeMcpTool(entry))
+    }
+  }
+  for (const entry of entries) directTokens += estimateToolDefinitionTokens(entry.name, entry.def)
+
+  if (directTokens <= DIRECT_TOOL_TOKEN_BUDGET) return []
+
+  directTokens += estimateToolDefinitionTokens('toolSearch', toolSearch)
+  const deferred: DeferredToolEntry[] = []
+  for (const entry of entries) {
+    if (directTokens <= DIRECT_TOOL_TOKEN_BUDGET) break
+    deferred.push(entry)
+    directTokens -= estimateToolDefinitionTokens(entry.name, entry.def)
+  }
+  return deferred
 }
 
 /** Splice every activated deferred tool's definition into the base tool set
@@ -234,8 +219,12 @@ export function composeTurnTools(
   if (permissionMode === undefined) return tools
   if (tools === base) tools = { ...base }
   if (permissionMode === 'plan') {
-    delete tools.enterPlanMode
-    delete tools[BROWSER_VISUAL_CHECK_TOOL_NAME]
+    for (const entry of catalog ?? []) {
+      if (PLAN_MODE_TOOL_NAMES.has(entry.name)) tools[entry.name] = entry.def
+    }
+    for (const name of Object.keys(tools)) {
+      if (!PLAN_MODE_TOOL_NAMES.has(name)) delete tools[name]
+    }
   } else {
     delete tools.exitPlanMode
   }

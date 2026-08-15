@@ -111,7 +111,7 @@ describe('handleTodoWrite', () => {
     const state = createLoopState()
     const callbacks = makeCallbacks()
     const todos = [
-      { content: 'good', activeForm: 'good', status: 'pending' },
+      { content: 'good', activeForm: 'good', status: 'in_progress' },
       { content: '', activeForm: '', status: 'pending' },
       { status: 'pending' },
     ]
@@ -123,12 +123,12 @@ describe('handleTodoWrite', () => {
   it('falls back to activeForm when only one of the two text fields is provided', async () => {
     const state = createLoopState()
     const callbacks = makeCallbacks()
-    const todos = [{ activeForm: 'Doing thing', status: 'pending' }]
+    const todos = [{ activeForm: 'Doing thing', status: 'in_progress' }]
     await handleTodoWrite({ todos }, 'tc1', state, callbacks, recordPushToolResult)
     expect(state.todos[0]).toEqual({
       content: 'Doing thing',
       activeForm: 'Doing thing',
-      status: 'pending',
+      status: 'in_progress',
     })
   })
 
@@ -156,12 +156,47 @@ describe('handleTodoWrite', () => {
     expect(captured[0].output).not.toMatch(/verify your work/i)
   })
 
-  it('defaults missing status to "pending"', async () => {
+  it('rejects a non-final checklist without exactly one in_progress item', async () => {
     const state = createLoopState()
+    state.todos = [{ content: 'Existing', activeForm: 'Doing existing', status: 'in_progress' }]
     const callbacks = makeCallbacks()
     const todos = [{ content: 'Do thing', activeForm: 'Doing thing' }]
     await handleTodoWrite({ todos }, 'tc1', state, callbacks, recordPushToolResult)
-    expect(state.todos[0].status).toBe('pending')
+    expect(state.todos).toEqual([{ content: 'Existing', activeForm: 'Doing existing', status: 'in_progress' }])
+    expect(callbacks.onTodosUpdate).not.toHaveBeenCalled()
+    expect(captured[0]).toMatchObject({ isError: true })
+    expect(captured[0].output).toContain('exactly one in_progress')
+  })
+
+  it('rejects multiple in_progress items without replacing the old list', async () => {
+    const state = createLoopState()
+    state.todos = [{ content: 'Existing', activeForm: 'Doing existing', status: 'in_progress' }]
+    const callbacks = makeCallbacks()
+    await handleTodoWrite(
+      {
+        todos: [
+          { content: 'A', activeForm: 'Doing A', status: 'in_progress' },
+          { content: 'B', activeForm: 'Doing B', status: 'in_progress' },
+        ],
+      },
+      'tc1',
+      state,
+      callbacks,
+      recordPushToolResult,
+    )
+    expect(state.todos).toEqual([{ content: 'Existing', activeForm: 'Doing existing', status: 'in_progress' }])
+    expect(callbacks.onTodosUpdate).not.toHaveBeenCalled()
+    expect(captured[0]).toMatchObject({ isError: true })
+  })
+
+  it('rejects an empty replacement without clearing an active checklist', async () => {
+    const state = createLoopState()
+    state.todos = [{ content: 'Existing', activeForm: 'Doing existing', status: 'in_progress' }]
+    const callbacks = makeCallbacks()
+    await handleTodoWrite({ todos: [] }, 'tc1', state, callbacks, recordPushToolResult)
+    expect(state.todos).toHaveLength(1)
+    expect(callbacks.onTodosUpdate).not.toHaveBeenCalled()
+    expect(captured[0]).toMatchObject({ isError: true })
   })
 })
 

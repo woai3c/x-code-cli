@@ -11,15 +11,8 @@ const replacementSchema = z.object({
 })
 
 export const edit = tool({
-  description: `Perform exact string replacements in files.
-
-Usage:
-- You must use readFile at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
-- When editing text from readFile output, ensure you preserve the exact indentation (tabs/spaces) as it appears in the file content. Never include line number prefixes in oldString or newString.
-- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
-- For multiple independent changes in one file, prefer one edits array. Every oldString is matched uniquely against the original file and all replacements are applied atomically.
-- The edit will FAIL if oldString is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use replaceAll to change every instance.
-- Use replaceAll for replacing and renaming strings across the file (e.g. renaming a variable).`,
+  description:
+    'Apply exact replacements to a file after reading it. Preserve exact whitespace and omit readFile line-number prefixes. Batch independent replacements in edits; each oldString must be unique unless replaceAll is true.',
   inputSchema: z.object({
     filePath: z.string().describe('Absolute path to the file'),
     edits: z

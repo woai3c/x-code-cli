@@ -30,10 +30,11 @@ const KNOWLEDGE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
 
 /** Read whichever of AGENTS.md / CLAUDE.md exists in `dir`, preferring
  *  the former. Returns null when neither is present. */
-async function readKnowledgeFile(dir: string): Promise<{ fileName: string; content: string } | null> {
+async function readKnowledgeFile(dir: string): Promise<{ fileName: string; filePath: string; content: string } | null> {
   for (const fileName of KNOWLEDGE_FILENAMES) {
-    const content = await readFileSafe(path.join(dir, fileName))
-    if (content) return { fileName, content }
+    const filePath = path.join(dir, fileName)
+    const content = await readFileSafe(filePath)
+    if (content) return { fileName, filePath, content }
   }
   return null
 }
@@ -51,7 +52,7 @@ async function readKnowledgeFile(dir: string): Promise<{ fileName: string; conte
  */
 async function collectProjectKnowledgeChain(
   startDir: string,
-): Promise<Array<{ dir: string; fileName: string; content: string }>> {
+): Promise<Array<{ dir: string; fileName: string; filePath: string; content: string }>> {
   const dirs: string[] = []
   let dir = path.resolve(startDir)
   const fsRoot = path.parse(dir).root
@@ -65,10 +66,10 @@ async function collectProjectKnowledgeChain(
     dir = parent
   }
 
-  const entries: Array<{ dir: string; fileName: string; content: string }> = []
+  const entries: Array<{ dir: string; fileName: string; filePath: string; content: string }> = []
   for (const d of dirs.reverse()) {
     const found = await readKnowledgeFile(d)
-    if (found) entries.push({ dir: d, fileName: found.fileName, content: found.content })
+    if (found) entries.push({ dir: d, ...found })
   }
   return entries
 }
@@ -80,6 +81,16 @@ export async function buildKnowledgeContext(options?: {
   cwd?: string
 }): Promise<string> {
   const sections: string[] = []
+  const seenPaths = new Set<string>()
+  const seenContents = new Set<string>()
+  const pushUniqueSection = (heading: string, content: string, filePath?: string): void => {
+    const resolvedPath = filePath ? path.resolve(filePath).replace(/\\/g, '/') : undefined
+    const normalizedPath = resolvedPath && process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath
+    if ((normalizedPath && seenPaths.has(normalizedPath)) || seenContents.has(content)) return
+    if (normalizedPath) seenPaths.add(normalizedPath)
+    seenContents.add(content)
+    sections.push(`${heading}\n${content}`)
+  }
 
   // User-scope human-written prefs: AGENTS.md preferred; fall back to
   // CLAUDE.md so users with an existing `~/.x-code/CLAUDE.md` (or one
@@ -87,24 +98,28 @@ export async function buildKnowledgeContext(options?: {
   // having to rename.
   const userKnowledge = await readKnowledgeFile(userXcodeDir())
   if (userKnowledge) {
-    sections.push(`### User Preferences (~/.x-code/${userKnowledge.fileName})\n${userKnowledge.content}`)
+    pushUniqueSection(
+      `### User Preferences (~/.x-code/${userKnowledge.fileName})`,
+      userKnowledge.content,
+      userKnowledge.filePath,
+    )
   }
 
   const userMemoryContent = options?.memoryService?.getCoreProfile().trim()
   if (userMemoryContent) {
-    sections.push('### User Auto Memory\n' + userMemoryContent)
+    pushUniqueSection('### User Auto Memory', userMemoryContent)
   }
 
   const cwd = options?.cwd ?? process.cwd()
   const projectKnowledge = await collectProjectKnowledgeChain(cwd)
   for (const entry of projectKnowledge) {
     const relPath = path.relative(cwd, entry.dir) || '.'
-    sections.push(`### Project ${entry.fileName} (${relPath})\n${entry.content}`)
+    pushUniqueSection(`### Project ${entry.fileName} (${relPath})`, entry.content, entry.filePath)
   }
 
   const localPrefs = await readFileSafe(path.join(cwd, 'AGENTS.local.md'))
   if (localPrefs) {
-    sections.push('### Local Preferences (AGENTS.local.md)\n' + localPrefs)
+    pushUniqueSection('### Local Preferences (AGENTS.local.md)', localPrefs, path.join(cwd, 'AGENTS.local.md'))
   }
 
   if (options?.sessionContext) {

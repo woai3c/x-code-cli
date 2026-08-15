@@ -246,6 +246,90 @@ describe('processToolCalls ghost-call skip', () => {
   })
 })
 
+describe('processToolCalls plan-mode boundary', () => {
+  function recordCall(state: ReturnType<typeof createLoopState>, toolName: string, toolCallId: string, input: unknown) {
+    state.messages.push(
+      { role: 'user', content: 'plan the change' } as ModelMessage,
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId, toolName, input }] } as ModelMessage,
+    )
+  }
+
+  it('rejects writes outside the current plan file without prompting', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-plan-boundary-'))
+    temporaryDirectories.push(dir)
+    const planPath = path.join(dir, 'plan.md')
+    const businessPath = path.join(dir, 'business.ts')
+    const state = createLoopState('plan', { projectCwd: dir })
+    state.currentPlanPath = planPath
+    const input = { filePath: businessPath, content: 'changed' }
+    recordCall(state, 'writeFile', 'tc-plan-deny', input)
+    const callbacks = makeCallbacks()
+
+    await processToolCalls(
+      [{ toolName: 'writeFile', toolCallId: 'tc-plan-deny', input }],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+
+    await expect(fs.access(businessPath)).rejects.toThrow()
+    expect(callbacks.onAskPermission).not.toHaveBeenCalled()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      'tc-plan-deny',
+      expect.stringContaining('only modify the current session plan file'),
+      true,
+    )
+  })
+
+  it('writes the current plan file without a second permission dialog', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-plan-write-'))
+    temporaryDirectories.push(dir)
+    const planPath = path.join(dir, 'plan.md')
+    const state = createLoopState('plan', { projectCwd: dir })
+    state.currentPlanPath = planPath
+    const input = { filePath: planPath, content: '# Plan\n' }
+    recordCall(state, 'writeFile', 'tc-plan-write', input)
+    const callbacks = makeCallbacks()
+
+    await processToolCalls(
+      [{ toolName: 'writeFile', toolCallId: 'tc-plan-write', input }],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+
+    expect(await fs.readFile(planPath, 'utf8')).toBe('# Plan\n')
+    expect(callbacks.onAskPermission).not.toHaveBeenCalled()
+  })
+
+  it('rejects shell calls even when trust mode is enabled', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-plan-shell-'))
+    temporaryDirectories.push(dir)
+    const state = createLoopState('plan', { projectCwd: dir })
+    state.currentPlanPath = path.join(dir, 'plan.md')
+    const input = { command: 'node --version' }
+    recordCall(state, 'shell', 'tc-plan-shell', input)
+    const callbacks = makeCallbacks()
+
+    await processToolCalls(
+      [{ toolName: 'shell', toolCallId: 'tc-plan-shell', input }],
+      state,
+      { ...options, trustMode: true },
+      callbacks,
+      stubModel,
+    )
+
+    expect(callbacks.onAskPermission).not.toHaveBeenCalled()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      'tc-plan-shell',
+      expect.stringContaining('unavailable in plan mode'),
+      true,
+    )
+  })
+})
+
 describe('processToolCalls edit validation', () => {
   async function runInvalidEdit(oldString: string, newString: string) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-edit-validation-'))

@@ -340,8 +340,7 @@ export interface AgentOptions {
    *  Persisted in `~/.x-code/config.json` as `thinking: boolean`,
    *  toggled at runtime via `/thinking on|off`. Defaults to false. */
   thinking?: boolean
-  /** Experimental tool-surface policy. Defaults to full; standard is honored
-   *  only for an explicit allowlist of validated strong models. */
+  /** Experimental tool-surface policy. Defaults to full. */
   toolProfile?: 'full' | 'standard'
   /** Whether the root agent may run one-shot local browser visual checks.
    *  Defaults true and is independent from the interactive browser sub-agent. */

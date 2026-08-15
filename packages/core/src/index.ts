@@ -120,6 +120,7 @@ export type {
   CalibratedContextCategory,
   ContextBreakdown,
   ContextBreakdownInput,
+  ContextDetailEstimate,
   ContextCategoryEstimate,
   ContextCategoryKey,
 } from './agent/context-usage.js'

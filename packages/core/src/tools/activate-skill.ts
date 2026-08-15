@@ -16,10 +16,8 @@ import type { SkillRegistry } from '../skills/registry.js'
 import { wrapActivatedSkill } from '../skills/registry.js'
 
 export function createActivateSkillTool(registry: SkillRegistry) {
-  const nameList = registry.names().join(', ')
-
   return tool({
-    description: `Activate a skill to inject its instructions into the conversation. Available skills: ${nameList}. Call this when the current task clearly matches one of those skill descriptions.`,
+    description: 'Activate one of the skills listed in the system prompt and inject its instructions.',
     inputSchema: z.object({
       name: z.string().describe('Name of the skill to activate'),
     }),

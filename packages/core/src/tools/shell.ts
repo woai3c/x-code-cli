@@ -6,23 +6,16 @@ import { z } from 'zod'
 export const shell = tool({
   description: `Execute a shell command and return stdout/stderr. Commands that are still running after the initial wait automatically continue as background shell sessions.
 
-IMPORTANT: Avoid using this tool to run grep, rg, cat, head, tail, sed, or awk commands. Instead, use the appropriate dedicated tool — they provide a better user experience:
-- File search: Use glob (NOT find or ls)
-- Content search: Use grep tool (NOT grep/rg command)
-- Read files: Use readFile (NOT cat/head/tail)
-- Edit files: Use edit (NOT sed/awk)
-- Write files: Use writeFile (NOT echo >/cat <<EOF)
+Use glob, grep, listDir, readFile, edit, and writeFile for their matching file operations. Use shell when no dedicated tool fits.
 
 Instructions:
-- If your command will create new directories or files, first run ls to verify the parent directory exists and is the correct location.
+- Before a shell command creates files or directories, verify the parent with listDir.
 - Always quote file paths that contain spaces with double quotes.
-- When issuing multiple commands: if they are independent, make multiple shell tool calls in a single message for parallelism. If they depend on each other, use '&&' to chain them. Use ';' only when you need sequential execution but don't care if earlier commands fail. Do NOT use newlines to separate commands.
+- Run independent commands in separate parallel tool calls; chain dependent commands using syntax valid for the current shell.
 - For git commands: prefer creating a new commit rather than amending. Never skip hooks (--no-verify) unless the user explicitly asks. Before running destructive operations (git reset --hard, git push --force), consider safer alternatives.
-- Do not sleep between commands that can run immediately.
 - The default initial wait is 10 seconds. If the command is still running, the result includes a shell id; read new output with shellOutput or stop it with killShell.
 - Set tty: true for interactive programs. Continue the terminal with shellOutput chars, including terminal control input such as Ctrl+C.
-- Set yieldTimeMs: 0 or legacy runInBackground: true for an immediate background result.
-- timeout is an optional hard runtime limit. Omitting it leaves the process running until it exits or is explicitly stopped.`,
+- Set yieldTimeMs: 0 for an immediate background result. timeout is an optional hard runtime limit.`,
   inputSchema: z.object({
     command: z.string().describe('The command to execute'),
     timeout: z

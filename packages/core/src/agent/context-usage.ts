@@ -19,15 +19,14 @@
 //   - conversation:  everything else in the message history
 import type { ModelMessage } from 'ai'
 
-import { zodToJsonSchema } from 'zod-to-json-schema'
-
 import { toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import type { AgentOptions } from '../types/index.js'
 import { estimateMessageTokenCount, estimateTextTokenCount } from './context-window.js'
 import type { LoopState } from './loop-state.js'
 import { buildTools } from './loop.js'
 import { formatDeferredCapabilities, formatMcpCapabilities, formatSkillCapabilities } from './system-prompt.js'
-import { composeTurnTools } from './tool-search/catalog.js'
+import { estimateToolDefinitionTokens } from './tool-schema.js'
+import { DIRECT_TOOL_TOKEN_BUDGET, composeTurnTools } from './tool-search/catalog.js'
 
 export type ContextCategoryKey =
   | 'system'
@@ -49,7 +48,15 @@ export interface ContextCategoryEstimate {
 export interface ContextBreakdown {
   /** Non-zero categories in display order (mirrors Cursor's panel order). */
   categories: ContextCategoryEstimate[]
+  /** Non-overlapping initialization sub-parts for diagnosing prompt growth. */
+  details?: ContextDetailEstimate[]
+  warnings?: string[]
   estimatedTotal: number
+}
+
+export interface ContextDetailEstimate {
+  label: string
+  estimatedTokens: number
 }
 
 export interface CalibratedContextCategory extends ContextCategoryEstimate {
@@ -73,6 +80,10 @@ export interface ContextBreakdownInput {
   /** Names of tools that are MCP-backed (or dynamically activated), counted
    *  under the mcp category instead of tools. */
   mcpToolNames?: ReadonlySet<string>
+  /** Full catalog and activated set let /usage distinguish schemas sent now
+   *  from name-only deferred metadata. */
+  deferredTools?: readonly { name: string; source: 'builtin' | 'mcp' }[]
+  activatedToolNames?: ReadonlySet<string>
 }
 
 // Must stay byte-identical to compression.ts's private constant — the
@@ -90,46 +101,33 @@ const CATEGORY_LABELS: Record<ContextCategoryKey, string> = {
   conversation: 'Conversation',
 }
 
-/** Estimate one AI SDK tool definition's wire cost. The SDK serializes a
- *  tool as `{ description, parameters: <JSON schema> }`, so we mirror that
- *  shape. Two inputSchema flavours exist in this codebase:
- *   - zod schemas (built-ins) → convert via zodToJsonSchema. A plain
- *     JSON.stringify of a zod schema would count Zod's internal object
- *     structure instead of the wire payload.
- *   - raw JSON Schema wrapped in `ai`'s jsonSchema() (MCP tools via
- *     bridgeMcpTool) → the wrapper exposes the raw schema via a getter;
- *     use it directly. Feeding the wrapper to zodToJsonSchema throws. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toolDefinitionTokens(def: any): number {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const t = def as any
-  const payload: Record<string, unknown> = {}
-  if (typeof t?.description === 'string') payload.description = t.description
-  const schema = t?.inputSchema
-  if (schema) {
-    try {
-      // ai's jsonSchema() wrapper: `{ [schemaSymbol]: true, get jsonSchema() {...} }`.
-      // Accessing the getter yields the raw JSON Schema; zod schemas have no
-      // such property and fall through to the zod conversion.
-      const rawJsonSchema =
-        typeof schema === 'object' && schema !== null ? (schema as { jsonSchema?: unknown }).jsonSchema : undefined
-      if (rawJsonSchema && typeof rawJsonSchema === 'object') {
-        payload.parameters = rawJsonSchema
-      } else {
-        payload.parameters = zodToJsonSchema(schema)
-      }
-    } catch {
-      // Unknown schema flavour (future SDK shape) — count its own serialized
-      // size rather than silently billing zero tokens.
-      try {
-        payload.parameters = JSON.stringify(schema)
-      } catch {
-        // Unstringifiable (circular) — leave parameters out.
-      }
+function removeOnce(text: string, fragment: string | undefined): string {
+  if (!fragment) return text
+  const index = text.indexOf(fragment)
+  return index < 0 ? text : text.slice(0, index) + text.slice(index + fragment.length)
+}
+
+function markdownSectionDetails(text: string, headingLevel: 2 | 3, labelPrefix: string): ContextDetailEstimate[] {
+  if (!text) return []
+  const marker = '#'.repeat(headingLevel) + ' '
+  const lines = text.split('\n')
+  const sections: Array<{ label: string; lines: string[] }> = []
+  let current = { label: `${labelPrefix} · Preamble`, lines: [] as string[] }
+  for (const line of lines) {
+    if (line.startsWith(marker) && !line.startsWith(marker + '#')) {
+      if (current.lines.some((item) => item.trim())) sections.push(current)
+      current = { label: `${labelPrefix} · ${line.slice(marker.length).trim()}`, lines: [line] }
+    } else {
+      current.lines.push(line)
     }
   }
-  const serialized = JSON.stringify(payload)
-  return serialized === undefined ? 0 : estimateTextTokenCount(serialized)
+  if (current.lines.some((item) => item.trim())) sections.push(current)
+  return sections
+    .map((section) => ({
+      label: section.label,
+      estimatedTokens: estimateTextTokenCount(section.lines.join('\n')),
+    }))
+    .filter((section) => section.estimatedTokens > 0)
 }
 
 /** Estimate the per-category token split of the next request's context.
@@ -147,14 +145,25 @@ export function estimateContextBreakdown(input: ContextBreakdownInput): ContextB
 
   let toolsTokens = 0
   let subagentsTokens = 0
+  let directSubagentTokens = 0
   let mcpToolTokens = 0
+  let directBuiltinTokens = 0
+  let activatedBuiltinTokens = 0
+  let directMcpTokens = 0
+  let activatedMcpTokens = 0
   for (const [name, def] of Object.entries(input.tools)) {
+    const tokens = estimateToolDefinitionTokens(name, def)
     if (name === 'task') {
-      subagentsTokens += toolDefinitionTokens(def)
+      subagentsTokens += tokens
+      if (!input.activatedToolNames?.has(name)) directSubagentTokens += tokens
     } else if (input.mcpToolNames?.has(name)) {
-      mcpToolTokens += toolDefinitionTokens(def)
+      mcpToolTokens += tokens
+      if (input.activatedToolNames?.has(name)) activatedMcpTokens += tokens
+      else directMcpTokens += tokens
     } else {
-      toolsTokens += toolDefinitionTokens(def)
+      toolsTokens += tokens
+      if (input.activatedToolNames?.has(name)) activatedBuiltinTokens += tokens
+      else directBuiltinTokens += tokens
     }
   }
 
@@ -181,9 +190,50 @@ export function estimateContextBreakdown(input: ContextBreakdownInput): ContextB
   ]
 
   const categories = rawEntries.filter((entry) => entry.estimatedTokens > 0)
+  let systemBase = input.systemPrompt
+  systemBase = removeOnce(systemBase, input.skillBlock)
+  systemBase = removeOnce(systemBase, input.mcpDeferredBlock)
+  systemBase = removeOnce(systemBase, input.knowledgeContext)
+  const details: ContextDetailEstimate[] = [
+    ...markdownSectionDetails(systemBase, 2, 'Prompt'),
+    ...markdownSectionDetails(input.knowledgeContext ?? '', 3, 'Rules'),
+    ...(skillTokens > 0 ? [{ label: 'Skills · Catalog and guidance', estimatedTokens: skillTokens }] : []),
+    ...(mcpBlockTokens > 0
+      ? [
+          {
+            label: input.deferredTools
+              ? `Deferred · ${input.deferredTools.length} name-only entries`
+              : 'MCP · Capability catalog',
+            estimatedTokens: mcpBlockTokens,
+          },
+        ]
+      : []),
+    ...(directBuiltinTokens > 0 ? [{ label: 'Tools · Direct built-ins', estimatedTokens: directBuiltinTokens }] : []),
+    ...(activatedBuiltinTokens > 0
+      ? [{ label: 'Tools · Activated built-ins', estimatedTokens: activatedBuiltinTokens }]
+      : []),
+    ...(directMcpTokens > 0 ? [{ label: 'Tools · Direct MCP', estimatedTokens: directMcpTokens }] : []),
+    ...(activatedMcpTokens > 0 ? [{ label: 'Tools · Activated MCP', estimatedTokens: activatedMcpTokens }] : []),
+    ...(subagentsTokens > 0 ? [{ label: 'Tools · Sub-agent registry', estimatedTokens: subagentsTokens }] : []),
+  ]
+  const warnings: string[] = []
+  const knowledgeBytes = Buffer.byteLength(input.knowledgeContext ?? '', 'utf8')
+  if (knowledgeBytes > 32 * 1024) {
+    warnings.push(
+      `Merged rule files use ${(knowledgeBytes / 1024).toFixed(1)} KiB before tokenization (recommended review threshold: 32 KiB).`,
+    )
+  }
+  const initialDirectToolTokens = directBuiltinTokens + directMcpTokens + directSubagentTokens
+  if (initialDirectToolTokens > DIRECT_TOOL_TOKEN_BUDGET) {
+    warnings.push(
+      `Initial direct tool schemas exceed the ${DIRECT_TOOL_TOKEN_BUDGET.toLocaleString('en-US')}-token target (${initialDirectToolTokens.toLocaleString('en-US')}); mandatory or alwaysLoad tools may be responsible.`,
+    )
+  }
 
   return {
     categories,
+    details,
+    warnings,
     estimatedTotal: categories.reduce((sum, entry) => sum + entry.estimatedTokens, 0),
   }
 }
@@ -221,12 +271,15 @@ export function buildContextBreakdownInput(options: AgentOptions, state: LoopSta
   // catalog, but a NEW reference). This is a read-only report path: snapshot
   // and restore so live session state is never mutated by it.
   const catalogBefore = state.deferredCatalog
+  const manualExecutorsBefore = new Map(state.manualToolExecutors)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let baseTools: Record<string, any>
   try {
     baseTools = buildTools(options, state)
   } finally {
     state.deferredCatalog = catalogBefore
+    state.manualToolExecutors.clear()
+    for (const [name, execute] of manualExecutorsBefore) state.manualToolExecutors.set(name, execute)
   }
   const tools = composeTurnTools(baseTools, state.deferredCatalog, state.activatedTools, state.permissionMode)
 
@@ -236,23 +289,28 @@ export function buildContextBreakdownInput(options: AgentOptions, state: LoopSta
   // systemPromptCache. Fall back to recomputing for states that never went
   // through the prompt build (tests, resumed sessions before the next turn).
   const blocks = state.systemPromptBlocks
-  const skillBlock = blocks?.skill ?? formatSkillCapabilities(options.skillRegistry?.list())
+  const skillBlock =
+    blocks?.skill ??
+    formatSkillCapabilities(state.permissionMode === 'plan' ? undefined : options.skillRegistry?.list())
+  const activeMcpRegistry = options.mcpRegistry?.hasModelCapabilities() ? options.mcpRegistry : undefined
   const mcpDeferredBlock =
     blocks?.mcpDeferred ??
-    (state.deferredCatalog
-      ? formatDeferredCapabilities(
-          state.deferredCatalog.map((entry) => ({
-            name: entry.name,
-            serverName: entry.serverName,
-            source: entry.source,
-          })),
-        )
-      : formatMcpCapabilities(options.mcpRegistry ? toSystemPromptEntries(options.mcpRegistry.list()) : undefined))
+    (state.permissionMode === 'plan'
+      ? ''
+      : state.deferredCatalog
+        ? formatDeferredCapabilities(
+            state.deferredCatalog.map((entry) => ({
+              name: entry.name,
+              serverName: entry.serverName,
+              source: entry.source,
+            })),
+          )
+        : formatMcpCapabilities(activeMcpRegistry ? toSystemPromptEntries(activeMcpRegistry.list()) : undefined))
 
   // MCP-backed tools: alwaysLoad entries are registered directly in
   // buildTools, the rest arrive via the deferred catalog. The registry list
-  // also covers the no-deferral fallback (weak model / tiny catalog) where
-  // every MCP tool is injected full.
+  // also covers the no-deferral fallback (tiny catalog) where every MCP tool
+  // is injected full.
   const mcpToolNames = new Set<string>()
   for (const entry of state.deferredCatalog ?? []) {
     if (entry.source === 'mcp') mcpToolNames.add(entry.name)
@@ -269,5 +327,7 @@ export function buildContextBreakdownInput(options: AgentOptions, state: LoopSta
     messages: state.messages,
     tools,
     mcpToolNames,
+    deferredTools: state.deferredCatalog?.map((entry) => ({ name: entry.name, source: entry.source })),
+    activatedToolNames: state.activatedTools,
   }
 }

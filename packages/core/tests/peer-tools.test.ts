@@ -159,11 +159,7 @@ describe('peer model tools', () => {
 
   it('exposes peer tools only to the root agent when the service is available', () => {
     const peerService = { enabled: true, isAvailable: () => true }
-    const rootTools = buildTools(
-      { modelId: 'test:model', peerService } as unknown as AgentOptions,
-      createLoopState(),
-      100,
-    )
+    const rootTools = buildTools({ modelId: 'test:model', peerService } as unknown as AgentOptions, createLoopState())
     expect(rootTools).toHaveProperty('listAgents')
     expect(rootTools).toHaveProperty('sendMessage')
 
@@ -174,7 +170,6 @@ describe('peer model tools', () => {
         toolFilter: { allow: ['listAgents', 'sendMessage'] },
       } as unknown as AgentOptions,
       createLoopState(),
-      100,
     )
     expect(subAgentTools).not.toHaveProperty('listAgents')
     expect(subAgentTools).not.toHaveProperty('sendMessage')

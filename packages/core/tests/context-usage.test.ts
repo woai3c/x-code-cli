@@ -61,6 +61,8 @@ describe('estimateContextBreakdown', () => {
     expect(byKey.get('skills')).toBe(estimateTextTokenCount(skills))
     expect(byKey.get('mcp')).toBe(estimateTextTokenCount(mcp))
     expect(breakdown.estimatedTotal).toBe(estimateTextTokenCount(systemPrompt))
+    expect(breakdown.details?.some((detail) => detail.label === 'Prompt · Working Rules')).toBe(true)
+    expect(breakdown.details?.some((detail) => detail.label.includes('Rules · Project AGENTS.md'))).toBe(true)
   })
 
   it('attributes the task tool to subagents and MCP-backed tools to mcp', () => {
@@ -104,11 +106,63 @@ describe('estimateContextBreakdown', () => {
     expect(mcpTokens).toBe(
       estimateTextTokenCount(
         JSON.stringify({
+          name: 'filesystem__read_file',
           description: 'Filesystem read',
           parameters: { type: 'object', properties: { path: { type: 'string' } } },
         }),
       ),
     )
+  })
+
+  it('distinguishes direct and activated built-in and MCP schemas', () => {
+    const breakdown = estimateContextBreakdown({
+      systemPrompt: 'base',
+      messages: [],
+      tools: {
+        readFile: makeTool('Read'),
+        webSearch: makeTool('Search'),
+        mcp__db__status: makeTool('Status'),
+        mcp__db__write: makeTool('Write'),
+      },
+      mcpToolNames: new Set(['mcp__db__status', 'mcp__db__write']),
+      activatedToolNames: new Set(['webSearch', 'mcp__db__write']),
+    })
+    const labels = new Set(breakdown.details?.map((detail) => detail.label))
+
+    expect(labels).toContain('Tools · Direct built-ins')
+    expect(labels).toContain('Tools · Activated built-ins')
+    expect(labels).toContain('Tools · Direct MCP')
+    expect(labels).toContain('Tools · Activated MCP')
+  })
+
+  it('warns when merged rule content exceeds 32 KiB', () => {
+    const knowledge = `## Project Knowledge\n\n### Project AGENTS.md (.)\n${'x'.repeat(33 * 1024)}`
+    const breakdown = estimateContextBreakdown({
+      systemPrompt: `base\n\n${knowledge}`,
+      knowledgeContext: knowledge,
+      messages: [],
+      tools: {},
+    })
+
+    expect(breakdown.warnings?.[0]).toContain('32 KiB')
+  })
+
+  it('does not count an activated task schema as part of the initial direct budget', () => {
+    const task = makeTool('x'.repeat(31_000))
+    const activated = estimateContextBreakdown({
+      systemPrompt: 'base',
+      messages: [],
+      tools: { task },
+      activatedToolNames: new Set(['task']),
+    })
+    const direct = estimateContextBreakdown({
+      systemPrompt: 'base',
+      messages: [],
+      tools: { task },
+    })
+
+    expect(activated.warnings).toEqual([])
+    expect(direct.warnings?.[0]).toContain('Initial direct tool schemas exceed')
   })
 
   it('separates the compaction summary message from the conversation', () => {
@@ -202,6 +256,7 @@ describe('buildContextBreakdownInput', () => {
     const input = buildContextBreakdownInput(options, state)!
     expect(input.systemPrompt).toBe('prompt')
     expect(input.mcpDeferredBlock).toBe(formatDeferredCapabilities([{ name: 'webSearch', source: 'builtin' }]))
+    expect(input.deferredTools).toEqual([{ name: 'webSearch', source: 'builtin' }])
     expect(input.messages).toBe(state.messages)
   })
 
@@ -229,8 +284,11 @@ describe('buildContextBreakdownInput', () => {
       },
     ]
     state.deferredCatalog = catalog
+    const executor = async () => 'ok'
+    state.manualToolExecutors.set('existing', executor)
     buildContextBreakdownInput({ modelId: 'deepseek:deepseek-v4-flash' } as any, state)
     expect(state.deferredCatalog).toBe(catalog)
+    expect([...state.manualToolExecutors]).toEqual([['existing', executor]])
   })
 
   it('rebuilds the effective tool map including activated tools', () => {
@@ -255,5 +313,6 @@ describe('buildContextBreakdownInput', () => {
     expect(input.tools.webSearch).toBe(def)
     expect('toolSearch' in input.tools).toBe(true)
     expect(input.mcpToolNames).toBeInstanceOf(Set)
+    expect(input.activatedToolNames).toBe(state.activatedTools)
   })
 })
