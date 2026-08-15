@@ -12,7 +12,17 @@ if (relativeDestination.startsWith('..') || path.isAbsolute(relativeDestination)
   throw new Error('Native artifact destination escaped the Core package')
 }
 
-await verifyWindowsNativeArtifacts(coreDir, sourceDir)
-await fs.rm(destinationDir, { recursive: true, force: true })
-await fs.mkdir(path.dirname(destinationDir), { recursive: true })
-await fs.cp(sourceDir, destinationDir, { recursive: true })
+const sourceManifest = await verifyWindowsNativeArtifacts(coreDir, sourceDir)
+let destinationIsCurrent = false
+try {
+  const destinationManifest = await verifyWindowsNativeArtifacts(coreDir, destinationDir)
+  destinationIsCurrent = JSON.stringify(destinationManifest) === JSON.stringify(sourceManifest)
+} catch {
+  // A missing, stale, or partial destination is replaced below.
+}
+
+if (!destinationIsCurrent) {
+  await fs.rm(destinationDir, { recursive: true, force: true })
+  await fs.mkdir(path.dirname(destinationDir), { recursive: true })
+  await fs.cp(sourceDir, destinationDir, { recursive: true })
+}

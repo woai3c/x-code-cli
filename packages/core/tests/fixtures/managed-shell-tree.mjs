@@ -12,7 +12,7 @@ if (role === 'descendant') {
   const descendant = spawn(
     process.execPath,
     [fixturePath, 'descendant', behavior === 'force' ? 'ignore-term' : 'graceful'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', windowsHide: true },
   )
   await new Promise((resolve, reject) => {
     descendant.once('error', reject)

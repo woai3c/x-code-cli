@@ -11,11 +11,13 @@ import type {
   FinalObservationLease,
   InteractShellRequest,
   ProcessTerminationResult,
+  ShellEventPayload,
   ShellExecutionResult,
   ShellFailure,
   ShellFailureCode,
   ShellObservation,
   ShellSessionController,
+  ShellSessionEvent,
   ShellSessionListener,
   ShellSessionSummary,
   ShellTerminationResult,
@@ -136,6 +138,8 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   readonly projectCwd: string
 
   private readonly sessions = new Map<string, ShellSession>()
+  private readonly adoptedManagers = new Map<string, { controller: ShellSessionController; unsubscribe: () => void }>()
+  private readonly adoptedShellOwners = new Map<string, string>()
   private readonly eventHub: ShellSessionEventHub
   private readonly now: () => number
   private readonly monotonicNow: () => number
@@ -281,6 +285,8 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   }
 
   async interact(request: InteractShellRequest): Promise<ShellObservation> {
+    const adopted = this.adoptedControllerFor(request.shellId)
+    if (adopted) return adopted.interact(request)
     const session = this.requireSession(request.shellId)
     if (!session.tty && request.resize) {
       throw new ShellSessionManagerError(
@@ -336,6 +342,8 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     reason: TerminationReason,
     budget: TerminationBudget = DEFAULT_TERMINATION_BUDGET,
   ): Promise<ShellTerminationResult> {
+    const adopted = this.adoptedControllerFor(shellId)
+    if (adopted) return adopted.terminate(shellId, reason, budget)
     const session = this.requireSession(shellId)
     if (session.treeConfirmedExited) return this.alreadyExitedTermination(session, reason)
     if (session.terminationFlight) return session.terminationFlight
@@ -350,6 +358,8 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   }
 
   async terminateAndObserve(request: TerminateAndObserveRequest): Promise<ShellObservation> {
+    const adopted = this.adoptedControllerFor(request.shellId)
+    if (adopted) return adopted.terminateAndObserve(request)
     const session = this.requireSession(request.shellId)
     const flight = this.terminate(request.shellId, request.reason, request.budget)
     const wake = abortWake(request.turnAbortSignal)
@@ -392,7 +402,60 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   }
 
   list(): ShellSessionSummary[] {
-    return [...this.sessions.values()].map((session) => this.summary(session))
+    const summaries = [...this.sessions.values()].map((session) => this.summary(session))
+    for (const { controller } of this.adoptedManagers.values()) {
+      for (const summary of controller.list()) {
+        if (this.adoptedShellOwners.get(summary.shellId) === controller.managerInstanceId) summaries.push(summary)
+      }
+    }
+    return summaries
+  }
+
+  getSessionMetadata(
+    shellId: string,
+  ): Readonly<{ managerInstanceId: string; shellId: string; command: string; effectiveCwd: string }> | undefined {
+    const session = this.sessions.get(shellId)
+    if (session) {
+      return {
+        managerInstanceId: this.managerInstanceId,
+        shellId: session.id,
+        command: session.command,
+        effectiveCwd: session.effectiveCwd,
+      }
+    }
+    return this.adoptedControllerFor(shellId)?.getSessionMetadata(shellId)
+  }
+
+  adoptResidualManager(manager: ShellSessionController, shellIds: readonly string[]): string[] {
+    if (manager === this) return []
+    let adopted = this.adoptedManagers.get(manager.managerInstanceId)
+    if (!adopted) {
+      adopted = {
+        controller: manager,
+        unsubscribe: manager.subscribe((event) => this.forwardAdoptedEvent(manager, event)),
+      }
+      this.adoptedManagers.set(manager.managerInstanceId, adopted)
+    } else if (adopted.controller !== manager) {
+      throw new Error(`Shell manager identity collision: ${manager.managerInstanceId}`)
+    }
+
+    const accepted: string[] = []
+    for (const shellId of new Set(shellIds)) {
+      if (!manager.getSessionMetadata(shellId)) continue
+      const existingOwner = this.adoptedShellOwners.get(shellId)
+      if (existingOwner && existingOwner !== manager.managerInstanceId) {
+        throw new Error(`Shell session identity collision: ${shellId}`)
+      }
+      this.adoptedShellOwners.set(shellId, manager.managerInstanceId)
+      accepted.push(shellId)
+    }
+    if (accepted.length === 0 && ![...this.adoptedShellOwners.values()].includes(manager.managerInstanceId)) {
+      adopted.unsubscribe()
+      this.adoptedManagers.delete(manager.managerInstanceId)
+      return []
+    }
+    this.eventHub.publish({ kind: 'snapshot', sessions: this.list() })
+    return accepted
   }
 
   async terminateAll(
@@ -400,7 +463,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     budget: TerminationBudget = DEFAULT_TERMINATION_BUDGET,
   ): Promise<TerminateAllResult> {
     const targets = [...this.sessions.values()].filter((session) => !session.treeConfirmedExited)
-    const results = await Promise.all(
+    const localResultsPromise = Promise.all(
       targets.map((session) =>
         this.terminate(session.id, reason, budget).catch((error): ShellTerminationResult => {
           const failure = this.failure('termination-failed', error)
@@ -422,10 +485,47 @@ export class UnifiedShellSessionManager implements ShellSessionController {
         }),
       ),
     )
+    const adoptedSummaries = new Map(
+      [...this.adoptedManagers].map(([managerInstanceId, { controller }]) => [
+        managerInstanceId,
+        new Map(controller.list().map((summary) => [summary.shellId, summary])),
+      ]),
+    )
+    const adoptedTargets = [...this.adoptedShellOwners].flatMap(([shellId, managerInstanceId]) => {
+      const controller = this.adoptedManagers.get(managerInstanceId)?.controller
+      const summary = adoptedSummaries.get(managerInstanceId)?.get(shellId)
+      return controller && summary && !summary.treeConfirmedExited ? [{ controller, summary }] : []
+    })
+    const adoptedResultsPromise = Promise.all(
+      adoptedTargets.map(async ({ controller, summary }): Promise<ShellTerminationResult> => {
+        try {
+          return await controller.terminate(summary.shellId, reason, budget)
+        } catch (error) {
+          return {
+            managerInstanceId: summary.managerInstanceId,
+            shellId: summary.shellId,
+            reason,
+            disposition: 'failed',
+            gracefulAttempted: false,
+            forceAttempted: false,
+            rootExited: summary.rootExited,
+            treeConfirmedExited: summary.treeConfirmedExited,
+            terminationConfirmed: false,
+            exitCode: summary.exitCode,
+            signal: summary.signal,
+            failure: this.failure('termination-failed', error),
+            output: summary.recentOutput,
+          }
+        }
+      }),
+    )
+    const [localResults, adoptedResults] = await Promise.all([localResultsPromise, adoptedResultsPromise])
+    const results = [...localResults, ...adoptedResults]
+    await this.closeConfirmedAdoptedManagers(reason, budget)
     return {
       managerInstanceId: this.managerInstanceId,
       reason,
-      requested: targets.length,
+      requested: targets.length + adoptedTargets.length,
       confirmed: results.filter((result) => result.disposition === 'terminated' && result.terminationConfirmed).length,
       alreadyExited: results.filter((result) => result.disposition === 'already-exited').length,
       results,
@@ -988,7 +1088,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       claimId,
       observerToolCallId,
       origin: session.hookOrigin,
-      post: { output: result.output, isError: originalIsError },
+      post: { isError: originalIsError },
       ack: () => {
         if (session.finalObservation.status !== 'claimed' || session.finalObservation.claimId !== claimId) return
         if (session.retentionTimer) clearTimeout(session.retentionTimer)
@@ -1179,7 +1279,6 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   }
 
   private summary(session: ShellSession): ShellSessionSummary {
-    const transcript = session.transcript.snapshot()
     return {
       managerInstanceId: this.managerInstanceId,
       ownerSessionId: this.ownerSessionId,
@@ -1208,14 +1307,55 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       terminationReason: session.terminationReason,
       terminationConfirmed: session.terminationConfirmed,
       exitedSeq: session.exitedSeq,
-      recentOutput: utf8Tail(stripTerminalControls(transcript.output), MAX_RECENT_OUTPUT_BYTES),
-      omittedBytes: transcript.omittedBytes,
+      recentOutput: this.recentOutput(session),
+      omittedBytes: session.transcript.omittedBytes,
       uiOmittedBytes: this.eventHub.omittedBytesFor(session.id),
     }
   }
 
   private recentOutput(session: ShellSession): string {
-    return utf8Tail(stripTerminalControls(session.transcript.snapshot().output), MAX_RECENT_OUTPUT_BYTES)
+    return utf8Tail(
+      stripTerminalControls(session.transcript.tailSnapshot(MAX_RECENT_OUTPUT_BYTES)),
+      MAX_RECENT_OUTPUT_BYTES,
+    )
+  }
+
+  private adoptedControllerFor(shellId: string): ShellSessionController | undefined {
+    const managerInstanceId = this.adoptedShellOwners.get(shellId)
+    return managerInstanceId ? this.adoptedManagers.get(managerInstanceId)?.controller : undefined
+  }
+
+  private forwardAdoptedEvent(manager: ShellSessionController, event: ShellSessionEvent): void {
+    if (event.kind === 'snapshot' || this.adoptedShellOwners.get(event.shellId) !== manager.managerInstanceId) return
+    const {
+      seq: _seq,
+      ownerSessionId: _ownerSessionId,
+      managerInstanceId: _managerInstanceId,
+      occurredAt: _occurredAt,
+      ...payload
+    } = event
+    this.eventHub.publish(payload as ShellEventPayload)
+  }
+
+  private async closeConfirmedAdoptedManagers(reason: TerminationReason, budget: TerminationBudget): Promise<void> {
+    for (const [managerInstanceId, adopted] of [...this.adoptedManagers]) {
+      const shellIds = [...this.adoptedShellOwners]
+        .filter(([, owner]) => owner === managerInstanceId)
+        .map(([shellId]) => shellId)
+      const summaries = new Map(adopted.controller.list().map((summary) => [summary.shellId, summary]))
+      if (shellIds.some((shellId) => summaries.get(shellId)?.treeConfirmedExited === false)) continue
+      let cleanup: TerminateAllResult
+      try {
+        cleanup = await adopted.controller.dispose(reason, budget)
+      } catch (error) {
+        debugLog('shell-session.adopted-manager-dispose-error', `${managerInstanceId} ${String(error)}`)
+        continue
+      }
+      if (cleanup.results.some((result) => !result.treeConfirmedExited)) continue
+      adopted.unsubscribe()
+      this.adoptedManagers.delete(managerInstanceId)
+      for (const shellId of shellIds) this.adoptedShellOwners.delete(shellId)
+    }
   }
 
   private requireSession(shellId: string): ShellSession {

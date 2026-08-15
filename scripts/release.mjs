@@ -10,12 +10,12 @@ const currentVersion = JSON.parse(readFileSync(resolve(rootDir, packages[0]), 'u
 function run(cmd, opts) {
   console.log(`\n> ${cmd}`)
   // Use shell: true for cross-platform compatibility (Windows needs this for some commands)
-  return execSync(cmd, { stdio: 'inherit', cwd: rootDir, shell: true, ...opts })
+  return execSync(cmd, { stdio: 'inherit', cwd: rootDir, shell: true, windowsHide: true, ...opts })
 }
 
 function runCapture(cmd) {
   // Use shell: true for cross-platform compatibility (Windows cmd.exe vs Unix sh)
-  return execSync(cmd, { cwd: rootDir, encoding: 'utf-8', shell: true }).trim()
+  return execSync(cmd, { cwd: rootDir, encoding: 'utf-8', shell: true, windowsHide: true }).trim()
 }
 
 function ask(question) {

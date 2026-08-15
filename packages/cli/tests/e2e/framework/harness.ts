@@ -43,6 +43,7 @@ export async function runCliInDir(
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
 
   let stdout = ''

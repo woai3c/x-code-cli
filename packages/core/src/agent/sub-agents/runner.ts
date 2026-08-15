@@ -11,6 +11,7 @@ import type { HookEvent } from '../../hooks/types.js'
 import { activeMemoryRecallAttachments } from '../../knowledge/memory/recall-state.js'
 import { tokenizeMemoryText } from '../../knowledge/memory/search-index.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
+import type { ShellSessionController } from '../../tools/shell-session/types.js'
 import type { AgentCallbacks, AgentOptions, ExecutionAuthority, TokenUsage } from '../../types/index.js'
 import { debugLog, isAbortError } from '../../utils.js'
 import { withBrowserOperation } from '../browser/operation-lock.js'
@@ -58,6 +59,45 @@ export interface RunSubAgentResult {
   toolCallCount: number
   durationMs: number
   aborted: boolean
+  cleanupFailed?: boolean
+}
+
+export interface SubAgentShellCleanupFailure {
+  shellIds: string[]
+  message: string
+}
+
+const SUBAGENT_CLEANUP_RETRY_BUDGET = { gracefulMs: 250, forceMs: 750, confirmMs: 250 } as const
+
+export async function cleanupSubAgentShellSessions(
+  parent: ShellSessionController,
+  child: ShellSessionController,
+  agentName: string,
+): Promise<SubAgentShellCleanupFailure | undefined> {
+  let shellIds: string[] = []
+  let cleanupError: unknown
+  try {
+    let cleanup = await child.dispose('subagent-finished')
+    if (cleanup.results.some((result) => !result.treeConfirmedExited)) {
+      cleanup = await child.dispose('subagent-finished', SUBAGENT_CLEANUP_RETRY_BUDGET)
+    }
+    shellIds = cleanup.results.filter((result) => !result.treeConfirmedExited).map((result) => result.shellId)
+  } catch (error) {
+    cleanupError = error
+    shellIds = child
+      .list()
+      .filter((session) => !session.treeConfirmedExited)
+      .map((session) => session.shellId)
+  }
+
+  if (shellIds.length === 0 && cleanupError === undefined) return undefined
+  const adopted = parent.adoptResidualManager(child, shellIds)
+  const visibleIds = adopted.length > 0 ? adopted : shellIds
+  const detail = cleanupError instanceof Error ? ` Cleanup error: ${cleanupError.message}` : ''
+  const idText = visibleIds.length > 0 ? visibleIds.join(', ') : '(unknown)'
+  const message = `managed shell cleanup could not be confirmed. Residual shell IDs: ${idText}. Use /ps to inspect and /stop to retry.${detail}`
+  debugLog('sub-agent.shell-cleanup-failed', `${agentName}: ${message}`)
+  return { shellIds: visibleIds, message }
 }
 
 /** Extract the last assistant text from a message array (skipping tool-call parts). */
@@ -97,7 +137,7 @@ function resolveSubModel(
   }
 }
 
-function buildToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: string) {
+export function buildSubAgentToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: string) {
   const deny = [...(agentDef.disallowedTools ?? []), 'task']
 
   // In plan mode, deny write tools for ALL sub-agents — not just
@@ -298,7 +338,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
   subState.executionAuthority = structuredClone(authority)
   subState.systemPromptCache = subSystemPrompt
 
-  const toolFilter = buildToolFilter(agentDef, parentState.permissionMode)
+  const toolFilter = buildSubAgentToolFilter(agentDef, parentState.permissionMode)
   if (browserMcp && !browserVision) {
     for (const entry of browserMcp.registry.list()) {
       if (entry.rawName === 'browser_take_screenshot' || entry.rawName.startsWith('browser_mouse_')) {
@@ -374,6 +414,9 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
     },
   }
 
+  let completedResult: RunSubAgentResult | undefined
+  let completionFinalText: string | undefined
+  let completionOutcome: 'completed' | 'aborted' | 'failed' = 'failed'
   try {
     const { state: finalSubState, turnCount } = await agentLoop(prompt, subModel, subOptions, subCallbacks, subState)
 
@@ -387,55 +430,31 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
     const durationMs = Date.now() - startTime
     const resultText = finalText || '[Sub-agent completed without producing a final response]'
 
-    callbacks.onSubAgentEvent?.({
-      kind: 'end',
-      toolCallId,
-      finalText: resultText,
-      tokenUsage: finalSubState.tokenUsage,
-      turnCount,
-      durationMs,
-      aborted: false,
-    })
-
-    emitSubAgentHook(
-      parentOptions.hookBus,
-      {
-        name: 'SubagentStop',
-        session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
-        agent: { name: agentName, description },
-        durationMs,
-        outcome: 'completed',
-        tokenUsage: {
-          inputTokens: finalSubState.tokenUsage.inputTokens,
-          outputTokens: finalSubState.tokenUsage.outputTokens,
-          totalTokens: finalSubState.tokenUsage.totalTokens,
-        },
-      },
-      parentOptions.abortSignal,
-    )
+    completionFinalText = resultText
+    completionOutcome = 'completed'
 
     if (turnCount >= agentDef.maxTurns && !finalText) {
       // finalText is guaranteed empty here (the !finalText branch) and the
       // messages array hasn't been mutated since line 246's call, so the
       // partial-output value can only ever be 'none' on this path.
-      return {
+      return (completedResult = {
         resultText: `[Sub-agent reached max turns (${agentDef.maxTurns}) without finishing. Partial output: none]`,
         tokenUsage: finalSubState.tokenUsage,
         turnCount,
         toolCallCount: toolUseCount,
         durationMs,
         aborted: false,
-      }
+      })
     }
 
-    return {
+    return (completedResult = {
       resultText: `<task_result>\n${resultText}\n</task_result>`,
       tokenUsage: finalSubState.tokenUsage,
       turnCount,
       toolCallCount: toolUseCount,
       durationMs,
       aborted: false,
-    }
+    })
   } catch (err) {
     const durationMs = Date.now() - startTime
 
@@ -453,80 +472,74 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
         : '[Sub-agent interrupted by user]'
       const toolUseCount = countToolCalls(subState.messages)
 
-      callbacks.onSubAgentEvent?.({
-        kind: 'end',
-        toolCallId,
-        finalText: text,
-        tokenUsage: subState.tokenUsage,
-        turnCount: fallbackTurnCount,
-        durationMs,
-        aborted: true,
-      })
+      completionFinalText = text
+      completionOutcome = 'aborted'
 
-      emitSubAgentHook(
-        parentOptions.hookBus,
-        {
-          name: 'SubagentStop',
-          session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
-          agent: { name: agentName, description },
-          durationMs,
-          outcome: 'aborted',
-        },
-        parentOptions.abortSignal,
-      )
-
-      return {
+      return (completedResult = {
         resultText: text,
         tokenUsage: subState.tokenUsage,
         turnCount: fallbackTurnCount,
         toolCallCount: toolUseCount,
         durationMs,
         aborted: true,
-      }
+      })
     }
 
     const message = err instanceof Error ? err.message : String(err)
     debugLog('sub-agent.crash', `${agentName}: ${message}`)
     const toolUseCount = countToolCalls(subState.messages)
 
-    callbacks.onSubAgentEvent?.({
-      kind: 'end',
-      toolCallId,
-      finalText: `[Sub-agent failed: ${message}]`,
-      tokenUsage: subState.tokenUsage,
-      turnCount: fallbackTurnCount,
-      durationMs,
-      aborted: false,
-    })
+    completionFinalText = `[Sub-agent failed: ${message}]`
+    completionOutcome = 'failed'
 
-    emitSubAgentHook(
-      parentOptions.hookBus,
-      {
-        name: 'SubagentStop',
-        session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
-        agent: { name: agentName, description },
-        durationMs,
-        outcome: 'failed',
-      },
-      parentOptions.abortSignal,
-    )
-
-    return {
+    return (completedResult = {
       resultText: `[Sub-agent failed: ${message}]`,
       tokenUsage: subState.tokenUsage,
       turnCount: fallbackTurnCount,
       toolCallCount: toolUseCount,
       durationMs,
       aborted: false,
-    }
+    })
   } finally {
-    const cleanup = await subState.shellSessions.dispose('subagent-finished')
-    const unresolved = cleanup.results.filter((result) => !result.treeConfirmedExited)
-    if (unresolved.length > 0) {
-      debugLog(
-        'sub-agent.shell-cleanup-failed',
-        `${agentName}: ${unresolved.map((result) => result.shellId).join(',')}`,
-      )
+    const cleanupFailure = await cleanupSubAgentShellSessions(
+      parentState.shellSessions,
+      subState.shellSessions,
+      agentName,
+    )
+    if (cleanupFailure) {
+      if (!completedResult) throw new Error(cleanupFailure.message)
+      completedResult.cleanupFailed = true
+      completedResult.resultText = `[Sub-agent failed: ${cleanupFailure.message}]\n\nPartial sub-agent outcome:\n${completedResult.resultText}`
+      completionFinalText = completedResult.resultText
+      completionOutcome = 'failed'
+    }
+    if (completedResult) {
+      callbacks.onSubAgentEvent?.({
+        kind: 'end',
+        toolCallId,
+        finalText: completionFinalText ?? completedResult.resultText,
+        tokenUsage: completedResult.tokenUsage,
+        turnCount: completedResult.turnCount,
+        durationMs: completedResult.durationMs,
+        aborted: completedResult.aborted,
+      })
+      const stopEvent = {
+        name: 'SubagentStop' as const,
+        session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
+        agent: { name: agentName, description },
+        durationMs: completedResult.durationMs,
+        outcome: completionOutcome,
+        ...(completionOutcome === 'completed'
+          ? {
+              tokenUsage: {
+                inputTokens: completedResult.tokenUsage.inputTokens,
+                outputTokens: completedResult.tokenUsage.outputTokens,
+                totalTokens: completedResult.tokenUsage.totalTokens,
+              },
+            }
+          : {}),
+      }
+      emitSubAgentHook(parentOptions.hookBus, stopEvent, parentOptions.abortSignal)
     }
   }
 }

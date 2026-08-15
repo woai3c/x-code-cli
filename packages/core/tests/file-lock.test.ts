@@ -20,13 +20,11 @@ async function runLockContender(lockPath: string, holdMs: number): Promise<{ sta
     await lease.release()
     process.stdout.write(JSON.stringify({ start, end }))
   `
-  const result = await execFileAsync(process.execPath, [
-    '--input-type=module',
-    '--eval',
-    script,
-    lockPath,
-    String(holdMs),
-  ])
+  const result = await execFileAsync(
+    process.execPath,
+    ['--input-type=module', '--eval', script, lockPath, String(holdMs)],
+    { windowsHide: true },
+  )
   return JSON.parse(result.stdout) as { start: number; end: number }
 }
 

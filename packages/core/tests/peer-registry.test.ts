@@ -52,6 +52,7 @@ async function runChild(script: string): Promise<void> {
       cwd: process.cwd(),
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     })
     let stderr = ''
     child.stderr.on('data', (chunk) => (stderr += chunk.toString()))

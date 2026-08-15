@@ -286,7 +286,7 @@ async function openInBrowser(url: string): Promise<void> {
 /** Fire a child process, detach, walk away. Used on Windows/macOS where
  *  the command is known-good — failure-detection is just a debug log. */
 function spawnDetached(cmd: string, args: string[]): void {
-  const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true })
   child.unref()
   child.on('error', (err) => debugLog('mcp.browser-open-failed', String(err)))
 }
@@ -307,7 +307,7 @@ function trySpawnOpener(cmd: string, args: string[]): Promise<boolean> {
     }
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+      child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true })
     } catch {
       settle(false)
       return

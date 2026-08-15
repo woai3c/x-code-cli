@@ -159,12 +159,17 @@ function startRequest(policy: WaitPolicy, signal?: AbortSignal, tty = false): St
 
 function manager(
   provider: FakeProvider,
-  options: { maxActiveSessions?: number; trailingOutputGraceMs?: number; completedRetentionMs?: number } = {},
+  options: {
+    managerInstanceId?: string
+    maxActiveSessions?: number
+    trailingOutputGraceMs?: number
+    completedRetentionMs?: number
+  } = {},
 ) {
   return new UnifiedShellSessionManager({
     ownerSessionId: 'owner',
     projectCwd: process.cwd(),
-    managerInstanceId: MANAGER_ID,
+    managerInstanceId: options.managerInstanceId ?? MANAGER_ID,
     provider,
     completedRetentionMs: options.completedRetentionMs ?? 60_000,
     trailingOutputGraceMs: options.trailingOutputGraceMs ?? 5,
@@ -187,6 +192,64 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<v
 }
 
 describe('UnifiedShellSessionManager', () => {
+  it('transfers an unconfirmed child manager so the parent can list and retry its residual shell', async () => {
+    const childProvider = new FakeProvider()
+    const child = manager(childProvider, {
+      managerInstanceId: '11111111111111111111111111111111',
+      trailingOutputGraceMs: 0,
+    })
+    const started = await child.start(startRequest({ kind: 'immediate' }))
+    const shellId = started.result.shellId!
+    childProvider.attempts[0]!.handle.terminationResult = {
+      gracefulAttempted: true,
+      forceAttempted: true,
+      rootExited: false,
+      treeConfirmedExited: false,
+      failure: { code: 'termination-unconfirmed', message: 'fixture remains live' },
+    }
+    const cleanup = await child.dispose('subagent-finished', { gracefulMs: 1, forceMs: 1, confirmMs: 1 })
+    expect(cleanup.results[0]?.treeConfirmedExited).toBe(false)
+
+    const parent = manager(new FakeProvider(), { managerInstanceId: '22222222222222222222222222222222' })
+    const events: string[] = []
+    parent.subscribe((event) => events.push(event.kind))
+    expect(parent.adoptResidualManager(child, [shellId])).toEqual([shellId])
+    expect(parent.getSessionMetadata(shellId)).toMatchObject({
+      managerInstanceId: child.managerInstanceId,
+      shellId,
+    })
+    expect(parent.list().map((session) => session.shellId)).toContain(shellId)
+
+    childProvider.attempts[0]!.handle.terminationResult = CONFIRMED_TERMINATION
+    const stopped = await parent.terminate(shellId, 'stop-command', { gracefulMs: 1, forceMs: 1, confirmMs: 1 })
+    expect(stopped.treeConfirmedExited).toBe(true)
+    await flushEvents()
+    expect(events).toContain('snapshot')
+    expect(events).toContain('exited')
+
+    const disposed = await parent.dispose('manager-dispose', { gracefulMs: 1, forceMs: 1, confirmMs: 1 })
+    expect(disposed.results.every((result) => result.treeConfirmedExited)).toBe(true)
+  })
+
+  it('returns transport metadata by shell id without building session summaries', async () => {
+    const provider = new FakeProvider()
+    const shellManager = manager(provider)
+    const observation = await shellManager.start(startRequest({ kind: 'immediate' }))
+    const shellId = observation.result.shellId!
+    const summaries = vi.spyOn(shellManager, 'list')
+
+    expect(shellManager.getSessionMetadata(shellId)).toEqual({
+      managerInstanceId: MANAGER_ID,
+      shellId,
+      command: 'node task.js',
+      effectiveCwd: process.cwd(),
+    })
+    expect(shellManager.getSessionMetadata('missing')).toBeUndefined()
+    expect(summaries).not.toHaveBeenCalled()
+
+    await shellManager.dispose('manager-dispose', { gracefulMs: 5, forceMs: 5, confirmMs: 5 })
+  })
+
   it('returns a terminal lease without a shell id when a command exits inside the initial wait', async () => {
     const provider = new FakeProvider()
     provider.nextAttempt = new FakeAttempt({

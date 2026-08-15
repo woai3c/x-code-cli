@@ -20,7 +20,6 @@ interface TarEntry {
   data: Buffer
 }
 
-const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 let suiteRoot = ''
@@ -63,6 +62,7 @@ function command(
       cwd: options.cwd,
       env: options.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     })
     let stdout = ''
     let stderr = ''
@@ -110,12 +110,20 @@ beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(process.env.TMPDIR ?? process.env.TEMP ?? '/tmp', 'xc-package-smoke-'))
   packDir = path.join(suiteRoot, 'packed artifacts')
   installPrefix = path.join(suiteRoot, 'npm prefix')
+  const packageStage = path.join(suiteRoot, 'package source')
   await fs.mkdir(packDir, { recursive: true })
+  await fs.mkdir(packageStage, { recursive: true })
 
-  const packed = await command(packageManager, ['pack', '--pack-destination', packDir], {
-    cwd: path.join(REPO_ROOT, 'packages', 'cli'),
+  const cliPackageRoot = path.join(REPO_ROOT, 'packages', 'cli')
+  await Promise.all([
+    fs.copyFile(path.join(cliPackageRoot, 'package.json'), path.join(packageStage, 'package.json')),
+    fs.cp(path.join(cliPackageRoot, 'dist'), path.join(packageStage, 'dist'), { recursive: true }),
+  ])
+
+  const packed = await command(npmCommand, ['pack', '--ignore-scripts', '--pack-destination', packDir], {
+    cwd: packageStage,
   })
-  if (packed.exitCode !== 0) throw new Error(`pnpm pack failed\n${packed.stdout}\n${packed.stderr}`)
+  if (packed.exitCode !== 0) throw new Error(`npm pack failed\n${packed.stdout}\n${packed.stderr}`)
   const tarballs = (await fs.readdir(packDir)).filter((name) => name.endsWith('.tgz'))
   if (tarballs.length !== 1) throw new Error(`Expected one CLI tarball, found: ${tarballs.join(', ')}`)
   tarballPath = path.join(packDir, tarballs[0]!)
@@ -243,7 +251,13 @@ describe('published CLI tarball', () => {
         { cwd: workspace.cwd, env: isolatedCliEnv(workspace, provider), timeoutMs: 30_000 },
       )
       expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('installed-pty-tool-ok') })
-      expect(provider.mainRequests()).toHaveLength(2)
+      const requests = provider.mainRequests()
+      expect(requests).toHaveLength(2)
+      const observedToolResult = JSON.stringify(requests[1]!.messages)
+      expect(observedToolResult).toContain(process.version)
+      expect(observedToolResult).toContain('Chunk ID:')
+      expect(observedToolResult).toContain('Process exited with code 0')
+      expect(observedToolResult).not.toMatch(/supervisor artifact|protocol (?:error|mismatch)/i)
     } finally {
       await provider.close()
       await workspace.cleanup()

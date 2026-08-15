@@ -6,7 +6,7 @@ export interface SubAgentDefinition {
   description: string
   /** Markdown body = system prompt for the sub-agent */
   prompt: string
-  /** Allowed tools. Omit = default read-only set */
+  /** Allowed tools. Omit or `['*']` = every available tool except `task`. */
   tools?: string[]
   /** Tools to explicitly deny (applied after `tools`) */
   disallowedTools?: string[]

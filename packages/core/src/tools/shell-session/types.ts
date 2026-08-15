@@ -153,7 +153,7 @@ export interface FinalObservationLease {
   readonly claimId: string
   readonly observerToolCallId: string
   readonly origin: ShellHookOrigin
-  readonly post: { output: string; isError: boolean }
+  readonly post: { isError: boolean }
   ack(): void
   release(): void
 }
@@ -313,6 +313,10 @@ export interface ShellSessionController extends ShellSessionEventSource {
   interact(request: InteractShellRequest): Promise<ShellObservation>
   terminate(shellId: string, reason: TerminationReason, budget?: TerminationBudget): Promise<ShellTerminationResult>
   terminateAndObserve(request: TerminateAndObserveRequest): Promise<ShellObservation>
+  getSessionMetadata(
+    shellId: string,
+  ): Readonly<{ managerInstanceId: string; shellId: string; command: string; effectiveCwd: string }> | undefined
+  adoptResidualManager(manager: ShellSessionController, shellIds: readonly string[]): string[]
   list(): ShellSessionSummary[]
   terminateAll(reason: TerminationReason, budget?: TerminationBudget): Promise<TerminateAllResult>
   dispose(reason: TerminationReason, budget?: TerminationBudget): Promise<TerminateAllResult>

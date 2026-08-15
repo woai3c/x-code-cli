@@ -47,6 +47,26 @@ describe('HeadTailOutputBuffer', () => {
     }
   })
 
+  it('reads a bounded recent tail without concatenating the retained transcript', () => {
+    const buffer = new HeadTailOutputBuffer(1024 * 1024)
+    buffer.append(Buffer.alloc(1024 * 1024, 97))
+    buffer.append('recent-output')
+    const concat = vi.spyOn(Buffer, 'concat')
+    try {
+      expect(buffer.tailSnapshot(13)).toBe('recent-output')
+      expect(concat).not.toHaveBeenCalled()
+    } finally {
+      concat.mockRestore()
+    }
+  })
+
+  it('keeps recent tail snapshots on UTF-8 character boundaries', () => {
+    const buffer = new HeadTailOutputBuffer(64)
+    buffer.append(`prefix-${'界'.repeat(40)}-end`)
+    expect(buffer.tailSnapshot(12)).toBe('界界-end')
+    expect(buffer.tailSnapshot(11)).not.toContain('\uFFFD')
+  })
+
   it('never slices a multibyte character into a replacement glyph', () => {
     const value = '开头-中间-结尾'
     const buffer = new HeadTailOutputBuffer(13)
@@ -81,5 +101,6 @@ describe('HeadTailOutputBuffer', () => {
   it('rejects invalid byte budgets', () => {
     expect(() => new HeadTailOutputBuffer(-1)).toThrow(/non-negative safe integer/)
     expect(() => new HeadTailOutputBuffer(1.5)).toThrow(/non-negative safe integer/)
+    expect(() => new HeadTailOutputBuffer().tailSnapshot(-1)).toThrow(/non-negative safe integer/)
   })
 })

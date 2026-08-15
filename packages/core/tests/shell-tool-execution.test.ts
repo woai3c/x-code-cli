@@ -176,6 +176,8 @@ describe('PTY shell tool transport', () => {
       stubModel,
     )
     const shellId = state.shellSessions.list()[0]!.shellId
+    const listSessions = vi.spyOn(state.shellSessions, 'list')
+    listSessions.mockClear()
 
     await processToolCalls(
       [
@@ -194,6 +196,7 @@ describe('PTY shell tool transport', () => {
     expect(provider.spawnOptions[0]?.tty).toBe(true)
     expect(provider.attempts[0]!.handle.resizes).toEqual([{ cols: 100, rows: 35 }])
     expect(provider.attempts[0]!.handle.writes).toEqual(['你好\r'])
+    expect(listSessions).not.toHaveBeenCalled()
     await state.shellSessions.dispose('manager-dispose', { gracefulMs: 5, forceMs: 5, confirmMs: 5 })
   })
 
@@ -274,6 +277,7 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
     const hookBus = new HookBus(new HookRegistry())
     const capture = vi.spyOn(hookBus, 'captureToolSnapshot').mockImplementation(() => currentSnapshot)
     const emitCurrent = vi.spyOn(hookBus, 'emit')
+    let canonicalPostOutput = ''
     const emitSnapshot = vi.spyOn(hookBus, 'emitToolSnapshot').mockImplementation(async (captured, phase, event) => {
       if (phase === 'pre') {
         return [
@@ -284,7 +288,8 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
         ]
       }
       expect(captured).toBe(oldSnapshot)
-      return [{ decision: 'modify', output: 'post-processed-output' }]
+      canonicalPostOutput = 'output' in event.tool ? event.tool.output : ''
+      return [{ decision: 'modify', output: `${canonicalPostOutput}\nAudit: checked` }]
     })
     const options: AgentOptions = {
       modelId: 'launch-model',
@@ -334,9 +339,9 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
 
     const observerResult = resultPart(state, observerCallId)
     expect(observerResult?.toolName).toBe(transportTool)
-    expect(observerResult?.output).toEqual({ type: 'text', value: 'post-processed-output' })
+    expect(observerResult?.output).toEqual({ type: 'text', value: `${canonicalPostOutput}\nAudit: checked` })
     expect(state.shellSessions.list()).toEqual([])
-    expect(onToolResult).toHaveBeenCalledWith(observerCallId, 'post-processed-output', false)
+    expect(onToolResult).toHaveBeenCalledWith(observerCallId, `${canonicalPostOutput}\nAudit: checked`, false)
 
     await processToolCalls(
       [{ toolName: transportTool, toolCallId: 'call-repeat', input: { shellId, block: false } }],
@@ -354,9 +359,11 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
       name: 'shell',
       callId: 'call-shell',
       args: { command: 'hook-modified-command', cwd: process.cwd(), runInBackground: true },
-      output: 'done\n',
+      output: expect.stringContaining('Process exited with code 0'),
       isError: false,
     })
+    expect(canonicalPostOutput).toContain('Chunk ID:')
+    expect(canonicalPostOutput).toContain('Output:\ndone')
     expect(capture).toHaveBeenCalledTimes(1)
     expect(emitCurrent).not.toHaveBeenCalled()
     expect(resultPart(state, 'call-repeat')?.output).toMatchObject({ type: 'error-text' })

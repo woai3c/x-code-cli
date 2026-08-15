@@ -94,6 +94,30 @@ export class HeadTailOutputBuffer {
     return { output, originalBytes: this.totalBytes, omittedBytes }
   }
 
+  /** Returns a bounded suffix without materializing the whole retained buffer. */
+  tailSnapshot(maxBytes: number): string {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      throw new RangeError('maxBytes must be a non-negative safe integer')
+    }
+    const length = Math.min(maxBytes, this.truncated ? this.tailLength : this.totalBytes)
+    if (length === 0) return ''
+
+    const result = Buffer.allocUnsafe(length)
+    if (!this.truncated) {
+      this.copyBlockRange(this.totalBytes - length, length, result, 0)
+    } else {
+      const logicalStart = this.tailLength === this.tailLimit ? this.tailWrite : 0
+      const sourceStart = (logicalStart + this.tailLength - length) % this.tailLimit
+      const first = Math.min(length, this.tailLimit - sourceStart)
+      this.tailRing.copy(result, 0, sourceStart, sourceStart + first)
+      if (first < length) this.tailRing.copy(result, first, 0, length - first)
+    }
+
+    let start = 0
+    while (start < result.length && (result[start]! & 0xc0) === 0x80) start++
+    return result.subarray(start).toString('utf8')
+  }
+
   drain(): ShellOutputSnapshot {
     const snapshot = this.snapshot()
     this.clear()

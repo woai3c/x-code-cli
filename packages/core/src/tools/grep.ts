@@ -110,6 +110,7 @@ Usage:
         maxBuffer: RG_MAX_BUFFER,
         timeout: 30000,
         signal: abortSignal,
+        windowsHide: true,
       })
       const out = stdout.trim()
       if (!out) return 'No matches found.'

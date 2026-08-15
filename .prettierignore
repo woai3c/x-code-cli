@@ -2,3 +2,4 @@ node_modules
 dist
 coverage
 pnpm-lock.yaml
+packages/core/native/windows-job-supervisor/target

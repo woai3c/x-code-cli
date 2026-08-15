@@ -56,7 +56,11 @@ function timeoutWake(ms: number): { promise: Promise<false>; dispose(): void } {
 export function resolveWindowsSupervisorNativeRoot(modulePath: string): string {
   const moduleDir = path.dirname(modulePath)
   if (!/^windows-job\.(?:[cm]?js|ts)$/.test(path.basename(modulePath))) {
-    return path.join(moduleDir, 'native', 'windows')
+    if (path.basename(moduleDir) === 'dist') return path.join(moduleDir, 'native', 'windows')
+    if (path.basename(moduleDir) === 'chunks' && path.basename(path.dirname(moduleDir)) === 'dist') {
+      return path.join(path.dirname(moduleDir), 'native', 'windows')
+    }
+    throw new Error(`Windows shell supervisor bundle has an unsupported package layout: ${modulePath}`)
   }
 
   const sourceRoot = path.dirname(path.dirname(path.dirname(moduleDir)))

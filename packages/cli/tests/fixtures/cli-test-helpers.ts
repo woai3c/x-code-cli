@@ -108,6 +108,7 @@ export function spawnCli(options: {
     cwd: options.cwd,
     env: options.env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
   let stdout = ''
   let stderr = ''

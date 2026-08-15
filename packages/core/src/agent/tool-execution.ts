@@ -429,14 +429,14 @@ async function prepareShellRequest(ctx: HandlerCtx): Promise<boolean> {
 function enrichShellTransportInput(ctx: HandlerCtx): void {
   if (ctx.toolName !== 'shellOutput' && ctx.toolName !== 'killShell') return
   const shellId = typeof ctx.input.shellId === 'string' ? ctx.input.shellId : ''
-  const summary = ctx.state.shellSessions.list().find((entry) => entry.shellId === shellId)
-  if (!summary) return
-  ctx.effectiveCwd = summary.effectiveCwd
+  const metadata = ctx.state.shellSessions.getSessionMetadata(shellId)
+  if (!metadata) return
+  ctx.effectiveCwd = metadata.effectiveCwd
   ctx.input = {
     ...ctx.input,
-    _managerInstanceId: summary.managerInstanceId,
-    _command: summary.command,
-    _effectiveCwd: summary.effectiveCwd,
+    _managerInstanceId: metadata.managerInstanceId,
+    _command: metadata.command,
+    _effectiveCwd: metadata.effectiveCwd,
   }
 }
 
@@ -658,7 +658,8 @@ function appendAndNotifyShellResult(
 }
 
 async function commitShellObservation(ctx: HandlerCtx, observation: ShellObservation): Promise<void> {
-  const baseOutput = truncateShellResult(ctx, formatShellExecutionResult(observation.result))
+  const canonicalOutput = formatShellExecutionResult(observation.result)
+  const baseOutput = truncateShellResult(ctx, canonicalOutput)
   if (observation.kind === 'running') {
     appendAndNotifyShellResult(ctx, baseOutput, observation.result.isError)
     return
@@ -671,7 +672,7 @@ async function commitShellObservation(ctx: HandlerCtx, observation: ShellObserva
       output = await runOriginalShellPost(
         ctx,
         observation.lease.origin,
-        observation.lease.post.output,
+        truncateToolResult(canonicalOutput),
         observation.lease.post.isError,
         baseOutput,
       )
@@ -728,7 +729,14 @@ async function handleTask(ctx: HandlerCtx): Promise<void> {
   )
 
   const statsLine = `<task_stats tool_calls="${result.toolCallCount}" tokens="${result.tokenUsage.totalTokens}" duration_ms="${result.durationMs}" />`
-  pushToolResult(state, callbacks, toolCallId, toolName, `${result.resultText}\n${statsLine}`)
+  pushToolResult(
+    state,
+    callbacks,
+    toolCallId,
+    toolName,
+    `${result.resultText}\n${statsLine}`,
+    result.cleanupFailed === true,
+  )
 }
 
 /** ── listMcpResources ──

@@ -34,6 +34,14 @@ describe('Windows supervisor artifact boundary', () => {
 
     const cliBundle = path.resolve('virtual', 'cli', 'dist', 'cli.js')
     expect(resolveWindowsSupervisorNativeRoot(cliBundle)).toBe(path.join(path.dirname(cliBundle), 'native', 'windows'))
+
+    const cliChunk = path.resolve('virtual', 'cli', 'dist', 'chunks', 'chunk-ABC123.js')
+    expect(resolveWindowsSupervisorNativeRoot(cliChunk)).toBe(
+      path.join(path.dirname(path.dirname(cliChunk)), 'native', 'windows'),
+    )
+    expect(() => resolveWindowsSupervisorNativeRoot(path.resolve('virtual', 'other', 'chunk.js'))).toThrow(
+      /unsupported package layout/,
+    )
   })
 
   it('does not report a pending artifact resolution as an absent process tree', async () => {
@@ -206,7 +214,7 @@ describe.skipIf(!isWindows)('Windows Job Object shell provider', () => {
   it('terminates a Job descendant after the PowerShell root exits', async () => {
     const provider = new WindowsJobObjectProvider({ artifact: await resolveWindowsSupervisorArtifact() })
     const command =
-      "$p = Start-Process powershell.exe -PassThru -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30'; Write-Output $p.Id"
+      "$p = Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30'; Write-Output $p.Id"
     const attempt = provider.spawnManaged(command, {
       cwd: process.cwd(),
       buffer: false,
@@ -257,7 +265,7 @@ describe.skipIf(!isWindows)('Windows Job Object shell provider', () => {
     const artifact = await resolveWindowsSupervisorArtifact()
     const executable = defaultWindowsPowerShellExecutable()
     const command =
-      "$p = Start-Process powershell.exe -PassThru -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30'; Write-Output $p.Id"
+      "$p = Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30'; Write-Output $p.Id"
     const helper: ChildProcessWithoutNullStreams = spawn(artifact.executablePath, [], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
