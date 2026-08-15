@@ -1,3 +1,22 @@
+## v0.5.0 (2026-08-15)
+
+### Features
+
+- implement unified shell sessions (#20) (e5fca26)
+- refine transcript message styling (86db057)
+- support named session forks (a9dcdd2)
+- let agents choose git worktrees (228434f)
+- add safe session branching (#19) (3908c7b)
+- add cross-session agent messaging (#18) (9ddeb16)
+- add lightweight local browser visual checks (e6b95f0)
+- add automatic local browser visual checks (29eab8d)
+- add resilient stream reconnection (b5536bc)
+- support shell-native input clearing shortcuts (e797490)
+
+### Bug Fixes
+
+- harden DeepSeek stream handling (eb45732)
+
 ## Unreleased
 
 ### Features
