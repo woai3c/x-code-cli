@@ -178,6 +178,25 @@ export { toolRegistry, truncateToolResult } from './tools/index.js'
 export { TOOL_SEARCH_TOOL_NAME } from './tools/tool-search.js'
 export { getShellProvider } from './tools/shell-provider.js'
 export type { ShellProvider, ShellType } from './tools/shell-provider.js'
+export { forceTerminateManagedShellsSync } from './tools/shell-session/shutdown-target-registry.js'
+export type {
+  EmergencyTerminationResult,
+  FinalObservationLease,
+  ProcessTerminationResult,
+  ShellExecutionResult,
+  ShellFailure,
+  ShellFailureCode,
+  ShellObservation,
+  ShellSessionController,
+  ShellSessionEvent,
+  ShellSessionEventSource,
+  ShellSessionListener,
+  ShellSessionSummary,
+  ShellTerminationResult,
+  TerminateAllResult,
+  TerminationBudget,
+  TerminationReason,
+} from './tools/shell-session/types.js'
 
 // Permissions
 export { checkPermission, getPermissionLevel } from './permissions/index.js'

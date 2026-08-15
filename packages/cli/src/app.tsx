@@ -10,17 +10,12 @@ import { render } from 'ink'
 
 import type { AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
 
+import { registerCleanupController } from './cleanup-controller.js'
 import { App } from './ui/app/App.js'
 import { printHeader } from './ui/app/AppHeader.js'
 import { registerSessionInfoGetter } from './ui/app/session-exit.js'
 
 /** Global cleanup ref — set by App component via onCleanupReady prop */
-let registeredCleanup: (() => Promise<void>) | null = null
-
-export function getCleanupFn(): (() => Promise<void>) | null {
-  return registeredCleanup
-}
-
 export interface StartAppOptions {
   /** Pre-loaded session from `--continue` (loaded synchronously in
    *  index.ts before Ink mounts). Hydrates the agent on first render. */
@@ -48,7 +43,7 @@ export function startApp(
       initialSession={startOpts.initialSession ?? null}
       resumeIntent={startOpts.resumeIntent ?? null}
       onCleanupReady={(fn) => {
-        registeredCleanup = fn
+        registerCleanupController(fn)
       }}
       onSessionInfoReady={(getter) => {
         registerSessionInfoGetter(getter)

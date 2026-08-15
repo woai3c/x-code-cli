@@ -7,6 +7,7 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
+    "build:native": "pnpm --filter @x-code-cli/core run build:native",
     "dev": "pnpm -r run build && pnpm --filter @x-code-cli/cli run dev",
     "test": "pnpm build && vitest run",
     "test:e2e": "pnpm build && tsx packages/cli/tests/e2e/runner.ts",

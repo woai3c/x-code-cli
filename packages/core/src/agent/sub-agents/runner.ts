@@ -261,7 +261,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
     parentOptions.hookBus,
     {
       name: 'SubagentStart',
-      session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+      session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
       agent: { name: agentName, description, prompt },
     },
     parentOptions.abortSignal,
@@ -294,7 +294,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
     isGitRepo,
   })
 
-  const subState = createLoopState('default')
+  const subState = createLoopState('default', { projectCwd: parentState.projectCwd })
   subState.executionAuthority = structuredClone(authority)
   subState.systemPromptCache = subSystemPrompt
 
@@ -401,7 +401,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
       parentOptions.hookBus,
       {
         name: 'SubagentStop',
-        session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+        session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
         agent: { name: agentName, description },
         durationMs,
         outcome: 'completed',
@@ -467,7 +467,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
         parentOptions.hookBus,
         {
           name: 'SubagentStop',
-          session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+          session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
           agent: { name: agentName, description },
           durationMs,
           outcome: 'aborted',
@@ -503,7 +503,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
       parentOptions.hookBus,
       {
         name: 'SubagentStop',
-        session: { cwd: process.cwd(), modelId: parentOptions.modelId },
+        session: { cwd: parentState.projectCwd, modelId: parentOptions.modelId },
         agent: { name: agentName, description },
         durationMs,
         outcome: 'failed',
@@ -518,6 +518,15 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
       toolCallCount: toolUseCount,
       durationMs,
       aborted: false,
+    }
+  } finally {
+    const cleanup = await subState.shellSessions.dispose('subagent-finished')
+    const unresolved = cleanup.results.filter((result) => !result.treeConfirmedExited)
+    if (unresolved.length > 0) {
+      debugLog(
+        'sub-agent.shell-cleanup-failed',
+        `${agentName}: ${unresolved.map((result) => result.shellId).join(',')}`,
+      )
     }
   }
 }

@@ -76,8 +76,13 @@ import type {
   PublicPeer,
   QueuedAgentInput,
   SessionForkSnapshot,
+  ShellSessionEvent,
+  ShellSessionSummary,
   StepStats,
   StreamRetryEvent,
+  TerminateAllResult,
+  TerminationBudget,
+  TerminationReason,
   TodoItem,
   TokenUsage,
   UsageBreakdown,
@@ -91,6 +96,15 @@ import {
   partitionQueuedInputsForDraft,
   takeFreshQueuedInput,
 } from './queued-agent-inputs.js'
+import { disposeShellSessionsForTransition } from './shell-session-transition.js'
+import {
+  type BackgroundTerminalView,
+  type ShellUiRuntime,
+  type ShellWaitStreak,
+  createShellUiRuntime,
+  flushCompletedShellWait,
+  reduceShellSessionEvent,
+} from './shell-session-ui.js'
 import { createTurnCoordinator } from './turn-coordinator.js'
 import type { TurnLease, TurnOwner } from './turn-coordinator.js'
 import { useAgentDisplayHelpers } from './use-agent-display-helpers.js'
@@ -229,6 +243,9 @@ export interface AgentState {
   stepStats: StepStats[]
   /** Persistent transcript-derived security indicator. */
   peerInfluenced?: boolean
+  /** Display-only state projected from the active LoopState shell event hub. */
+  backgroundTerminals: BackgroundTerminalView[]
+  shellWaitStreak: ShellWaitStreak | null
 }
 
 export interface RunGoalCommand {
@@ -301,6 +318,8 @@ const initialState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
   goalVerificationActive: false,
   stepStats: [],
   peerInfluenced: false,
+  backgroundTerminals: [],
+  shellWaitStreak: null,
 }
 
 export function useAgent(initialModel: LanguageModel, options: AgentOptions, initialSession?: LoadedSession | null) {
@@ -346,6 +365,12 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   // ~/.x-code/config.json on launch).
   const thinkingRef = useRef<boolean>(options.thinking ?? false)
   const loopStateRef = useRef<LoopState | null>(null)
+  const shellUiRuntimeRef = useRef<ShellUiRuntime | null>(null)
+  const shellEventSubscriptionRef = useRef<{
+    ownerSessionId: string
+    managerInstanceId: string
+    unsubscribe: () => void
+  } | null>(null)
   /** Detached point-in-time state used by `/fork` while an agentLoop is
    *  active. The outer object is also a sentinel for a first request with no
    *  completed context, where `snapshot` is null. */
@@ -397,6 +422,65 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  collides within the same millisecond (and `length` repeats after a
    *  pop), which breaks React keys, pop-by-id, and nonce comparisons. */
   const queueSeqRef = useRef(0)
+
+  const dispatchShellSessionEvent = useCallback((event: ShellSessionEvent) => {
+    const binding = shellEventSubscriptionRef.current
+    if (
+      !binding ||
+      event.ownerSessionId !== binding.ownerSessionId ||
+      event.managerInstanceId !== binding.managerInstanceId
+    ) {
+      return
+    }
+    const runtime = shellUiRuntimeRef.current
+    if (!runtime) return
+    const reduced = reduceShellSessionEvent(runtime, event)
+    if (reduced.runtime === runtime && reduced.notices.length === 0) return
+    shellUiRuntimeRef.current = reduced.runtime
+    setState((previous) => ({
+      ...previous,
+      backgroundTerminals: reduced.runtime.backgroundTerminals,
+      shellWaitStreak: reduced.runtime.shellWaitStreak,
+      messages: reduced.notices.length > 0 ? [...previous.messages, ...reduced.notices] : previous.messages,
+    }))
+  }, [])
+
+  const bindShellSessionEvents = useCallback(
+    (loopState: LoopState) => {
+      const managerInstanceId = loopState.shellSessions.managerInstanceId
+      if (shellEventSubscriptionRef.current?.managerInstanceId === managerInstanceId) return
+      shellEventSubscriptionRef.current?.unsubscribe()
+      shellUiRuntimeRef.current = createShellUiRuntime(managerInstanceId)
+      const unsubscribe = loopState.shellSessions.subscribe(dispatchShellSessionEvent, { replayCurrent: true })
+      shellEventSubscriptionRef.current = {
+        ownerSessionId: loopState.sessionId,
+        managerInstanceId,
+        unsubscribe,
+      }
+      setState((previous) => ({ ...previous, backgroundTerminals: [], shellWaitStreak: null }))
+    },
+    [dispatchShellSessionEvent],
+  )
+
+  const flushShellWaitUi = useCallback(() => {
+    const runtime = shellUiRuntimeRef.current
+    if (!runtime) return
+    const reduced = flushCompletedShellWait(runtime)
+    if (reduced.notices.length === 0) return
+    shellUiRuntimeRef.current = reduced.runtime
+    setState((previous) => ({
+      ...previous,
+      shellWaitStreak: reduced.runtime.shellWaitStreak,
+      messages: [...previous.messages, ...reduced.notices],
+    }))
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      shellEventSubscriptionRef.current?.unsubscribe()
+      shellEventSubscriptionRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     const service = options.peerService
@@ -549,13 +633,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const handleTextDelta = useCallback(
     (delta: string) => {
       if (delta) {
+        flushShellWaitUi()
         // Text generation ends any in-flight read chain. Avoid a state update
         // for subsequent chunks after the first one has restored "Thinking".
         setState((previous) => (previous.bufferingReads ? { ...previous, bufferingReads: false } : previous))
       }
       appendTextDelta(delta)
     },
-    [appendTextDelta],
+    [appendTextDelta, flushShellWaitUi],
   )
 
   const handleStreamRetry = useCallback((event: StreamRetryEvent | null) => {
@@ -582,7 +667,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   // continues the same conversation.
   useEffect(() => {
     if (initialSession && !loopStateRef.current) {
-      loopStateRef.current = hydrateLoopState(initialSession, options.permissionMode ?? 'default')
+      loopStateRef.current = hydrateLoopState(initialSession, options.permissionMode ?? 'default', process.cwd())
+      bindShellSessionEvents(loopStateRef.current)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -868,8 +954,10 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               (event) => pendingVisionUsage.push(event),
             )
 
-        const activeLoopState = loopStateRef.current ?? createLoopState(permissionModeRef.current)
+        const activeLoopState =
+          loopStateRef.current ?? createLoopState(permissionModeRef.current, { projectCwd: process.cwd() })
         loopStateRef.current = activeLoopState
+        bindShellSessionEvents(activeLoopState)
         for (const event of pendingVisionUsage) {
           accumulateUsage(activeLoopState, {
             source: 'vision',
@@ -938,6 +1026,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // the final text landed on `response.messages`), extract the last
         // assistant text from loopState so the user always sees a reply.
         flushBuffer()
+        flushShellWaitUi()
         if (!sawTextDelta && loopStateRef.current) {
           const fallback = extractLastAssistantText(loopStateRef.current.messages)
           if (fallback) {
@@ -1057,6 +1146,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       currentAuthority,
       queueMessage,
       dequeueFreshInput,
+      bindShellSessionEvents,
+      flushShellWaitUi,
     ],
   )
 
@@ -1346,10 +1437,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   const ensureLoopState = useCallback((): LoopState => {
     if (!loopStateRef.current) {
-      loopStateRef.current = createLoopState(permissionModeRef.current)
+      loopStateRef.current = createLoopState(permissionModeRef.current, { projectCwd: process.cwd() })
+      bindShellSessionEvents(loopStateRef.current)
     }
     return loopStateRef.current
-  }, [])
+  }, [bindShellSessionEvents])
 
   const prepareGoalSession = useCallback(async (ls: LoopState, firstPrompt: string) => {
     if (!ls.taskSlug) {
@@ -1671,6 +1763,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     // setState so the partial assistant reply lands BEFORE the interrupt
     // notice in scrollback order.
     flushBuffer()
+    flushShellWaitUi()
 
     const forToolUse = activeToolCallsLenRef.current > 0
     const noticeText = forToolUse ? '[Request interrupted by user for tool use]' : '[Request interrupted by user]'
@@ -1719,7 +1812,37 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     restoreQueueToDraft()
 
     controller.abort()
-  }, [drainPendingInteractions, flushBuffer, appendMessage, restoreQueueToDraft])
+  }, [drainPendingInteractions, flushBuffer, flushShellWaitUi, appendMessage, restoreQueueToDraft])
+
+  const cleanupShells = useCallback(
+    async (
+      reason: TerminationReason = 'cli-shutdown',
+      budget?: TerminationBudget,
+    ): Promise<TerminateAllResult | null> => {
+      const manager = loopStateRef.current?.shellSessions
+      return manager ? manager.dispose(reason, budget) : null
+    },
+    [],
+  )
+
+  const listShellSessions = useCallback((): ShellSessionSummary[] => {
+    return loopStateRef.current?.shellSessions.list() ?? []
+  }, [])
+
+  const stopShellSessions = useCallback(async (shellId?: string): Promise<TerminateAllResult | null> => {
+    const manager = loopStateRef.current?.shellSessions
+    if (!manager) return null
+    if (!shellId) return manager.terminateAll('stop-command')
+    const result = await manager.terminate(shellId, 'stop-command')
+    return {
+      managerInstanceId: manager.managerInstanceId,
+      reason: 'stop-command',
+      requested: 1,
+      confirmed: result.disposition === 'terminated' && result.terminationConfirmed ? 1 : 0,
+      alreadyExited: result.disposition === 'already-exited' ? 1 : 0,
+      results: [result],
+    }
+  }, [])
 
   /** Save session and cleanup */
   const cleanup = useCallback(async () => {
@@ -1797,14 +1920,26 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   /** Clear conversation while retaining a display-only command echo. */
   const clear = useCallback(
-    (commandText = '/clear') => {
+    async (commandText = '/clear') => {
       const lease = turnCoordinatorRef.current.tryAcquire('clear', currentAuthority())
-      if (!lease) return
+      if (!lease) return { ok: false as const, reason: 'another turn is active' }
       if (hasPendingPeerInput()) {
         lease.release()
-        return
+        return { ok: false as const, reason: 'peer input is waiting for review' }
       }
-      loopStateRef.current = null
+      const previous = loopStateRef.current
+      if (previous) {
+        const disposed = await disposeShellSessionsForTransition(previous.shellSessions, 'clear')
+        if (!disposed.ok) {
+          lease.release()
+          return { ok: false as const, reason: disposed.reason, result: disposed.result }
+        }
+      }
+      const nextState = createLoopState(permissionModeRef.current, {
+        projectCwd: previous?.projectCwd ?? process.cwd(),
+      })
+      loopStateRef.current = nextState
+      bindShellSessionEvents(nextState)
       pendingToolsRef.current.clear()
       permissionResolversRef.current = []
       pendingQuestionRef.current = null
@@ -1829,8 +1964,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         ],
       }))
       lease.release()
+      return { ok: true as const }
     },
-    [currentAuthority, hasPendingPeerInput, resetBuffer],
+    [bindShellSessionEvents, currentAuthority, hasPendingPeerInput, resetBuffer],
   )
 
   /** Mid-session resume: hot-swap the agent state to a previously-saved
@@ -1854,17 +1990,26 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  belongs to the OLD session and is reset — those tool calls /
    *  shells / checklists never ran for the loaded session. */
   const resume = useCallback(
-    (loaded: LoadedSession) => {
+    async (loaded: LoadedSession) => {
       const lease = turnCoordinatorRef.current.tryAcquire('resume', currentAuthority())
-      if (!lease) return
+      if (!lease) return { ok: false as const, reason: 'another turn is active' }
       if (hasPendingPeerInput()) {
         lease.release()
-        return
+        return { ok: false as const, reason: 'peer input is waiting for review' }
+      }
+      const previous = loopStateRef.current
+      if (previous) {
+        const disposed = await disposeShellSessionsForTransition(previous.shellSessions, 'resume')
+        if (!disposed.ok) {
+          lease.release()
+          return { ok: false as const, reason: disposed.reason, result: disposed.result }
+        }
       }
       pendingToolsRef.current.clear()
       queuedMessagesRef.current = []
       resetBuffer()
-      loopStateRef.current = hydrateLoopState(loaded, permissionModeRef.current)
+      loopStateRef.current = hydrateLoopState(loaded, permissionModeRef.current, previous?.projectCwd ?? process.cwd())
+      bindShellSessionEvents(loopStateRef.current)
       const converted = modelMessagesToDisplay(loaded.messages)
       setState((prev) => ({
         ...prev,
@@ -1887,8 +2032,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         peerInfluenced: loaded.contextSecurity.peerInfluenceActive,
       }))
       lease.release()
+      return { ok: true as const }
     },
-    [currentAuthority, hasPendingPeerInput, resetBuffer],
+    [bindShellSessionEvents, currentAuthority, hasPendingPeerInput, resetBuffer],
   )
 
   /** Read the live list of /rewind checkpoints for the current session.
@@ -2241,6 +2387,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     resolveQuestion,
     abort,
     cleanup,
+    cleanupShells,
+    listShellSessions,
+    stopShellSessions,
     fork,
     clear,
     clearPeerContext,

@@ -11,5 +11,6 @@ export function isSlashCommandAllowedWhileBusy(
   if (command === 'fork') {
     return hasStableForkBoundary && (activeOwner === 'user' || activeOwner === 'peer' || activeOwner === 'goal')
   }
+  if (command === 'ps' || command === 'stop') return true
   return command === 'goal' && ['pause', 'cancel', 'steer'].includes(subcommand)
 }

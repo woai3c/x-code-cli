@@ -11,6 +11,7 @@ export interface AllowRule {
   tool: string
   pattern: string
   type: 'exact' | 'prefix' | 'tool'
+  cwd?: string
 }
 
 // Env-var assignment prefix: VAR=value (unquoted, safe chars only).
@@ -557,12 +558,16 @@ export function suggestRuleLabel(toolName: string, input: Record<string, unknown
 export function buildAllowRule(
   toolName: string,
   input: Record<string, unknown>,
+  executionCwd?: string,
 ): { rules: AllowRule[]; persist: boolean } | null {
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''
     const rules = extractCompoundRules(cmd)
     if (rules && rules.length > 0) {
-      return { rules, persist: true }
+      return {
+        rules: rules.map((rule) => ({ ...rule, ...(executionCwd ? { cwd: executionCwd } : {}) })),
+        persist: true,
+      }
     }
     // Strip *safe* env-var prefixes only — same key the matcher compares
     // against (stripSafeEnvVars). Non-whitelisted assignments stay in the
@@ -570,7 +575,10 @@ export function buildAllowRule(
     // accidentally auto-allow `findstr …` on its own.
     const exact = stripSafeEnvVars(cmd)
     if (!exact) return null
-    return { rules: [{ tool: toolName, pattern: exact, type: 'exact' }], persist: true }
+    return {
+      rules: [{ tool: toolName, pattern: exact, type: 'exact', ...(executionCwd ? { cwd: executionCwd } : {}) }],
+      persist: true,
+    }
   }
   return { rules: [{ tool: toolName, pattern: '*', type: 'tool' }], persist: false }
 }
@@ -592,11 +600,13 @@ class SessionPermissionStore {
   private rules: AllowRule[] = []
 
   addRule(rule: AllowRule): void {
-    const exists = this.rules.some((r) => r.tool === rule.tool && r.pattern === rule.pattern && r.type === rule.type)
+    const exists = this.rules.some(
+      (r) => r.tool === rule.tool && r.pattern === rule.pattern && r.type === rule.type && r.cwd === rule.cwd,
+    )
     if (!exists) this.rules.push(rule)
   }
 
-  matches(toolName: string, input: Record<string, unknown>): boolean {
+  matches(toolName: string, input: Record<string, unknown>, executionCwd?: string): boolean {
     if (toolName !== 'shell') {
       // Non-shell tools: tool-wide allow is the only rule shape we
       // currently emit. Exact / prefix are shell-only.
@@ -614,6 +624,7 @@ class SessionPermissionStore {
     // exactly; we honour that.)
     for (const rule of this.rules) {
       if (rule.tool !== toolName) continue
+      if (rule.cwd !== executionCwd) continue
       if (rule.type === 'tool') return true
       if (rule.type === 'exact' && stripSafeEnvVars(cmd) === rule.pattern) return true
     }
@@ -639,6 +650,7 @@ class SessionPermissionStore {
       let segMatched = false
       for (const rule of this.rules) {
         if (rule.tool !== toolName) continue
+        if (rule.cwd !== executionCwd) continue
         if (rule.type === 'prefix' && segPrefix) {
           if (segPrefix === rule.pattern || segPrefix.startsWith(rule.pattern + ' ')) {
             segMatched = true
@@ -673,8 +685,8 @@ export function addSessionAllowRule(rule: AllowRule): void {
   store.addRule(rule)
 }
 
-export function sessionRulesMatch(toolName: string, input: Record<string, unknown>): boolean {
-  return store.matches(toolName, input)
+export function sessionRulesMatch(toolName: string, input: Record<string, unknown>, executionCwd?: string): boolean {
+  return store.matches(toolName, input, executionCwd)
 }
 
 export function clearSessionRules(): void {

@@ -19,6 +19,7 @@ import {
   debugLogIntegrationDiagnostics,
   emptyHookBus,
   ensureDefaultMarketplaces,
+  forceTerminateManagedShellsSync,
   getAvailableProviders,
   getEnvVarName,
   getTokenStorage,
@@ -33,20 +34,31 @@ import {
   setPluginDebugMirror,
   shutdownBrowserMcp,
 } from '@x-code-cli/core'
-import type { AgentOptions, HookBus, LoadedSession, McpRegistry, PeerService } from '@x-code-cli/core'
+import type {
+  AgentOptions,
+  HookBus,
+  LoadedSession,
+  McpRegistry,
+  PeerService,
+  TerminationReason,
+} from '@x-code-cli/core'
 
-import { getCleanupFn, startApp } from './app.js'
+import { startApp } from './app.js'
+import { getCleanupController } from './cleanup-controller.js'
 import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
 import { startCliPeerService } from './peer-lifecycle.js'
 import { runPluginCli } from './plugins/cli.js'
+import { runShutdownPhases } from './shutdown-coordinator.js'
 import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
+import { installTerminalStreamErrorGuards } from './terminal-stream-errors.js'
 import { getSessionExitInfo } from './ui/app/session-exit.js'
 import { rebuildPalette } from './ui/chat-input/palette.js'
 import { setSyntaxTheme } from './ui/render/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/render/theme.js'
 
 restoreInvocationCwd()
+installTerminalStreamErrorGuards([process.stdout, process.stderr])
 
 // Route AI SDK warnings to debugLog instead of letting them blast straight
 // to stderr. The default `console.warn` path bypasses ChatInput's
@@ -112,7 +124,6 @@ let peerServiceForShutdown: PeerService | null = null
 /** Plugin hook bus captured at startup so gracefulShutdown can fire
  *  `SessionEnd` to plugin hooks before the process exits. */
 let hookBusForShutdown: HookBus | null = null
-const SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500
 
 // Belt-and-suspenders terminal restore. Runs synchronously before exit so even
 // if Ink's unmount is partially broken (e.g. a useEffect cleanup threw, or the
@@ -132,30 +143,28 @@ function resetTerminal(): void {
   }
 }
 
-async function gracefulShutdown(exitCode: number): Promise<never> {
+async function gracefulShutdown(exitCode: number, reason: TerminationReason = 'cli-shutdown'): Promise<never> {
   if (shutdownInProgress) return undefined as never
   shutdownInProgress = true
 
-  const finalizers: Promise<unknown>[] = []
-  const cleanup = getCleanupFn()
-  if (cleanup) {
-    finalizers.push(cleanup())
-  } else if (memoryServiceForShutdown) {
-    finalizers.push(memoryServiceForShutdown.shutdown(memoryServiceForShutdown.getConfig().drainTimeoutMs))
+  const controller = getCleanupController()
+  const finalizers: Array<() => Promise<unknown>> = []
+  if (!controller && memoryServiceForShutdown) {
+    finalizers.push(() => memoryServiceForShutdown!.shutdown(memoryServiceForShutdown!.getConfig().drainTimeoutMs))
   }
 
   if (mcpRegistryForShutdown) {
-    finalizers.push(mcpRegistryForShutdown.shutdown())
+    finalizers.push(() => mcpRegistryForShutdown!.shutdown())
   }
   if (peerServiceForShutdown) {
-    finalizers.push(peerServiceForShutdown.shutdown())
+    finalizers.push(() => peerServiceForShutdown!.shutdown())
   }
-  finalizers.push(shutdownBrowserMcp())
+  finalizers.push(() => shutdownBrowserMcp())
 
   if (hookBusForShutdown?.has('SessionEnd')) {
     const peerInfluenced = getSessionExitInfo()?.peerInfluenced === true
-    finalizers.push(
-      hookBusForShutdown.emit({
+    finalizers.push(() =>
+      hookBusForShutdown!.emit({
         name: 'SessionEnd',
         session: { cwd: process.cwd(), modelId: '' },
         ...(peerInfluenced ? { authority: { source: 'peer', peerTainted: true } } : {}),
@@ -163,17 +172,12 @@ async function gracefulShutdown(exitCode: number): Promise<never> {
     )
   }
 
-  let drainTimer: ReturnType<typeof setTimeout> | undefined
-  try {
-    await Promise.race([
-      Promise.allSettled(finalizers),
-      new Promise<void>((resolve) => {
-        drainTimer = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS)
-      }),
-    ])
-  } finally {
-    if (drainTimer) clearTimeout(drainTimer)
-  }
+  const shutdown = await runShutdownPhases({
+    controller,
+    reason,
+    ordinaryFinalizers: finalizers,
+  })
+  if (exitCode === 0 && shutdown.emergency.requested > 0) exitCode = 1
 
   resetTerminal()
   // Print AFTER resetTerminal so the line lands cleanly above the
@@ -654,6 +658,7 @@ function readStdin(): Promise<string> {
 // uncaughtException handler suppresses Node's default exit and can leave the
 // process alive in an unknown state; the monitor observes without changing it.
 process.on('uncaughtExceptionMonitor', () => {
+  forceTerminateManagedShellsSync('fatal-exit', performance.now() + 500)
   resetTerminal()
 })
 
@@ -670,11 +675,23 @@ process.on('SIGINT', () => {
     // was already running from the first press) but ALWAYS restore the terminal
     // so the shell prompt is usable. Without this reset, raw mode / hidden
     // cursor / bracketed paste mode can leak into the shell.
+    const emergency = forceTerminateManagedShellsSync('double-sigint', performance.now() + 500)
     resetTerminal()
     printResumeHint()
-    process.exit(0)
+    process.exit(emergency.requested > 0 ? 1 : 0)
   }
+  void gracefulShutdown(0, 'cli-shutdown')
 })
+
+process.on('SIGTERM', () => {
+  void gracefulShutdown(0, 'cli-shutdown')
+})
+
+if (process.platform !== 'win32') {
+  process.on('SIGHUP', () => {
+    void gracefulShutdown(0, 'sighup')
+  })
+}
 
 main().catch((err) => {
   // If we're shutting down (Ctrl+C unmounted Ink, waitUntilExit rejected),
@@ -683,5 +700,5 @@ main().catch((err) => {
     return
   }
   console.error('Fatal error:', err)
-  process.exit(1)
+  void gracefulShutdown(1, 'fatal-exit')
 })

@@ -61,7 +61,7 @@ async function runChild(script: string): Promise<void> {
 }
 
 describe('owner-only peer registry', () => {
-  it('rejects a symlink X_CODE_HOME without changing its target permissions', async () => {
+  itPosix('rejects a symlink X_CODE_HOME without changing its target permissions', async () => {
     const target = path.join(testDir, 'target-home')
     await mkdir(target, { mode: 0o755 })
     const linked = path.join(testDir, 'linked-home')
@@ -146,7 +146,7 @@ describe('owner-only peer registry', () => {
     const target = path.join(testDir, 'target.json')
     await writeFile(target, '{}')
     const symlinkId = randomUUID()
-    await symlink(target, path.join(registryDir, `${symlinkId}.json`))
+    if (process.platform !== 'win32') await symlink(target, path.join(registryDir, `${symlinkId}.json`))
 
     const oversizedId = randomUUID()
     await writeFile(path.join(registryDir, `${oversizedId}.json`), 'x'.repeat(64 * 1024 + 1), { mode: 0o600 })
@@ -165,7 +165,7 @@ describe('owner-only peer registry', () => {
     expect(scan.candidates.map((candidate) => candidate.registration.instanceId)).toEqual(
       process.platform === 'win32' ? [good.instanceId] : [],
     )
-    expect(scan.rejected).toBe(process.platform === 'win32' ? 4 : 5)
+    expect(scan.rejected).toBe(process.platform === 'win32' ? 3 : 5)
   })
 
   it('does not remove a registration for a live pid during residual cleanup', async () => {

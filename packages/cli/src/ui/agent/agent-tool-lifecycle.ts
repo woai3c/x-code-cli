@@ -27,6 +27,15 @@ export type ToolLifecycleCallbacks = Pick<
 
 export type GoalToolLifecycleCallbacks = Pick<AgentCallbacks, 'onToolCall' | 'onToolProgress' | 'onToolResult'>
 
+function isPassiveShellWait(tool: Pick<PendingTool, 'toolName' | 'input'> | undefined): boolean {
+  return (
+    tool?.toolName === 'shellOutput' &&
+    (tool.input.chars === undefined || tool.input.chars === '') &&
+    tool.input.cols === undefined &&
+    tool.input.rows === undefined
+  )
+}
+
 function createToolProgressCallback(setState: ToolLifecycleDependencies['setState']): AgentCallbacks['onToolProgress'] {
   return (toolCallId, message) => {
     setState((previous) => {
@@ -82,7 +91,7 @@ export function createToolLifecycleCallbacks({
       // toolSearch is an internal deferred-tool loader. Keep it out of both
       // the live tool list and scrollback while retaining its pending record
       // so onToolResult can identify and discard the matching result.
-      if (toolName === TOOL_SEARCH_TOOL_NAME) return
+      if (toolName === TOOL_SEARCH_TOOL_NAME || isPassiveShellWait({ toolName, input })) return
 
       const isReadOnly = isCollapsibleReadOnlyTool(toolName)
       setState((previous) => ({
@@ -102,6 +111,15 @@ export function createToolLifecycleCallbacks({
       pendingEditDiffsRef.current.delete(toolCallId)
 
       if (pending?.toolName === TOOL_SEARCH_TOOL_NAME) return
+
+      if (isPassiveShellWait(pending)) {
+        setState((previous) => ({
+          ...previous,
+          activeToolCalls: previous.activeToolCalls.filter((tool) => tool.id !== toolCallId),
+          shellOutput: '',
+        }))
+        return
+      }
 
       const durationMs = pending ? now() - pending.startedAt : 0
       setState((previous) => {

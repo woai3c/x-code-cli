@@ -129,6 +129,9 @@ export function ChatInput({
   activeTurnOwner = null,
   hasStableForkBoundary = false,
   activeToolCalls,
+  shellWaitStreak,
+  backgroundTerminalCount = 0,
+  backgroundTerminalWarningCount = 0,
   todos,
   queuedMessages,
   onPopQueued,
@@ -1316,7 +1319,21 @@ export function ChatInput({
     // Mirrors Claude Code's AssistantToolUseMessage + renderToolUseProgress
     // flow. Elapsed/token meta moves onto the LAST progress line so the
     // block stays compact (no separate Thinking row competing for space).
-    if (spinner) {
+    if (spinner && shellWaitStreak?.waiting) {
+      const glyph = SPINNER_FRAMES[spinnerFrame]
+      const elapsedMs = Math.max(0, Date.now() - shellWaitStreak.startedAt)
+      const meta = elapsedMs >= 1_000 ? ` (${formatElapsed(elapsedMs)} · esc to interrupt)` : ' (esc to interrupt)'
+      frame.push([...textToCells(` ${glyph} Waiting for background terminal`, S_SPINNER), ...textToCells(meta, S_DIM)])
+      if (shellWaitStreak.command) {
+        frame.push([
+          ...textToCells('   ', S_NONE),
+          ...textToCells(GLYPH_RESULT_BRACKET, S_GRAY_90),
+          ...textToCells(` ${shellWaitStreak.command}`, S_DIM),
+        ])
+      }
+    }
+
+    if (spinner && !shellWaitStreak?.waiting) {
       const glyph = SPINNER_FRAMES[spinnerFrame]
       // Derive elapsed time at render time so we don't need a setState in
       // the spinner effect. The setSpinnerFrame tick is what drives the
@@ -1890,6 +1907,12 @@ export function ChatInput({
         }
         frame.push(cells)
       }
+    }
+
+    if (backgroundTerminalCount > 0) {
+      const label = `${backgroundTerminalCount} background terminal${backgroundTerminalCount === 1 ? '' : 's'} running · /ps to view · /stop to close`
+      const style = backgroundTerminalWarningCount > 0 ? S_WARNING_BOLD : S_DIM
+      frame.push([...textToCells(' ', S_NONE), ...textToCells(label, style)])
     }
 
     // Reserved padding left over from a permission dialog that just closed.

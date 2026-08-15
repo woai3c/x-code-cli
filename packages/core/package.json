@@ -20,8 +20,10 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc -b",
-    "dev": "tsc -b --watch"
+    "build": "tsc -b && node scripts/copy-native.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "dev": "node scripts/copy-native.mjs && tsc -b --watch",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "@ai-sdk/alibaba": "^2.0.0",
@@ -44,6 +46,7 @@
     "fs-ext-extra-prebuilt": "2.2.11",
     "jimp": "^1.6.1",
     "mammoth": "^1.12.0",
+    "node-pty": "^1.1.0",
     "officeparser": "^6.1.0",
     "pdf-parse": "^2.4.5",
     "tesseract.js": "^7.0.0",

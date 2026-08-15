@@ -15,6 +15,13 @@ import type { AgentCallbacks, AgentOptions, LanguageModel } from '../src/types/i
 
 const temporaryDirectories: string[] = []
 
+function nodeTouchCommand(filePath: string): string {
+  const encodedPath = Buffer.from(filePath, 'utf8').toString('base64')
+  const script = `require('node:fs').writeFileSync(Buffer.from('${encodedPath}', 'base64').toString('utf8'), '')`
+  const invoke = process.platform === 'win32' ? '& ' : ''
+  return `${invoke}${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
@@ -48,7 +55,7 @@ describe('peer model tools', () => {
     const call = {
       toolName: 'shell',
       toolCallId: 'trusted-shell',
-      input: { command: `touch ${JSON.stringify(marker)}` },
+      input: { command: nodeTouchCommand(marker) },
     }
     const state = createLoopState()
     state.executionAuthority = { source: 'peer', peerTainted: true }

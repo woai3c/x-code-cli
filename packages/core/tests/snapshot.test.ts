@@ -410,12 +410,12 @@ describe('snapshot: post-restore bookkeeping', () => {
     state.filesModified.add(file)
 
     const c1 = await createCheckpoint(state, 'm1', tempDir)
-    await writeFile(file, 'v2')
+    await writeFile(file, 'version-two')
     await createCheckpoint(state, 'm2', tempDir)
     expect(await lsHistory(state.sessionId, 'blobs')).toHaveLength(2)
 
     await restoreCheckpoint(state, c1!.ckptId, tempDir)
-    // v2's blob is now orphaned → GC unlinks it; only v1's blob remains.
+    // The second blob is now orphaned → GC unlinks it; only v1's blob remains.
     expect(await lsHistory(state.sessionId, 'blobs')).toHaveLength(1)
   })
 })

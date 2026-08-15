@@ -6,8 +6,11 @@
 // keeping the event loop alive until the user pressed a key or resized the
 // terminal — at which point the queued unmount finally ran. Keeping print
 // mode as a separate code path sidesteps every one of those landmines.
-import { agentLoop, hydrateLoopState, saveSession } from '@x-code-cli/core'
+import { agentLoop, createLoopState, hydrateLoopState, saveSession } from '@x-code-cli/core'
 import type { AgentCallbacks, AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
+
+import { registerCleanupController } from './cleanup-controller.js'
+import { SHELL_SHUTDOWN_BUDGET, runShutdownPhases } from './shutdown-coordinator.js'
 
 export async function runPrintMode(
   model: LanguageModel,
@@ -21,6 +24,18 @@ export async function runPrintMode(
   process.on('SIGINT', onSigint)
 
   let sawError = false
+  let exitCode = 0
+  let shouldSaveSession = false
+  const state = initialSession
+    ? hydrateLoopState(initialSession, options.permissionMode ?? 'default', process.cwd())
+    : createLoopState(options.permissionMode ?? 'default', { projectCwd: process.cwd() })
+
+  registerCleanupController({
+    terminateShells: (reason, budget = SHELL_SHUTDOWN_BUDGET) => state.shellSessions.dispose(reason, budget),
+    drain: async () => {
+      await options.memoryService?.shutdown(options.memoryService.getConfig().drainTimeoutMs)
+    },
+  })
 
   const callbacks: AgentCallbacks = {
     onTextDelta: (delta) => {
@@ -73,36 +88,31 @@ export async function runPrintMode(
     // but the agent starts a brand-new conversation here, silently dropping
     // the resume request. The Ink path threads this through useAgent →
     // hydrateLoopState; print mode just needed the same wiring.
-    const existingState = initialSession
-      ? hydrateLoopState(initialSession, options.permissionMode ?? 'default')
-      : undefined
-    const { state } = await agentLoop(
-      prompt,
-      model,
-      { ...options, abortSignal: controller.signal },
-      callbacks,
-      existingState,
-    )
+    await agentLoop(prompt, model, { ...options, abortSignal: controller.signal }, callbacks, state)
 
     // End on a newline when stdout is a TTY so the shell prompt lands on
     // a fresh line. When piped, trust the model's output verbatim.
     if (process.stdout.isTTY) process.stdout.write('\n')
 
-    // Await the session save: print mode is short-lived and the only thing
-    // standing between us and exit; an unawaited fire-and-forget loses the
-    // last turn's messages when process.exit races the jsonl flush. The few
-    // tens of ms cost here matters less than scripted callers / e2e tests
-    // reading a complete transcript. (Interactive Ink path can stay
-    // fire-and-forget because it exits via React unmount, not process.exit.)
-    await saveSession(state, model).catch(() => undefined)
-
-    return sawError ? 1 : 0
+    shouldSaveSession = true
+    exitCode = sawError ? 1 : 0
   } catch (err) {
     process.stderr.write(`\n[fatal] ${err instanceof Error ? err.message : String(err)}\n`)
-    return 1
+    exitCode = 1
   } finally {
     process.off('SIGINT', onSigint)
-    await options.memoryService?.shutdown(options.memoryService.getConfig().drainTimeoutMs).catch(() => undefined)
+    const shutdown = await runShutdownPhases({
+      controller: {
+        terminateShells: (reason, budget = SHELL_SHUTDOWN_BUDGET) => state.shellSessions.dispose(reason, budget),
+        drain: async () => {
+          await options.memoryService?.shutdown(options.memoryService.getConfig().drainTimeoutMs)
+        },
+      },
+      reason: 'print-exit',
+      ordinaryFinalizers: shouldSaveSession ? [() => saveSession(state, model).catch(() => undefined)] : [],
+    })
+    if (shutdown.emergency.requested > 0 && exitCode === 0) exitCode = 1
+    registerCleanupController(null)
     // Flush stdout/stderr before returning so the caller's process.exit()
     // doesn't race the pipe drain. On Windows, pipe writes are non-blocking —
     // without this, error messages written via process.stderr.write() can be
@@ -111,4 +121,5 @@ export async function runPrintMode(
       process.stdout.write('', () => process.stderr.write('', () => resolve()))
     })
   }
+  return exitCode
 }

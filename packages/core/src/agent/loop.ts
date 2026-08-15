@@ -625,6 +625,10 @@ export function buildTools(options: AgentOptions, state: LoopState, contextWindo
   if (filter) {
     if (filter.allow) {
       const allowSet = new Set(filter.allow)
+      if (allowSet.has('shell')) {
+        allowSet.add('shellOutput')
+        allowSet.add('killShell')
+      }
       for (const name of Object.keys(tools)) {
         if (!allowSet.has(name)) delete tools[name]
       }

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -151,8 +152,29 @@ describe('published CLI tarball', () => {
       entries.find((entry) => entry.name === 'package/package.json')!.data.toString('utf-8'),
     ) as {
       files?: string[]
+      dependencies?: Record<string, string>
     }
     expect(manifest.files).toEqual(['dist'])
+    expect(manifest.dependencies?.['node-pty']).toBe('^1.1.0')
+  })
+
+  it('contains hash-verified Windows helpers for x64 and arm64', async () => {
+    const entries = readTarEntries(await fs.readFile(tarballPath))
+    const byName = new Map(entries.map((entry) => [entry.name, entry.data]))
+    const manifestBytes = byName.get('package/dist/native/windows/manifest.json')
+    expect(manifestBytes).toBeDefined()
+    const manifest = JSON.parse(manifestBytes!.toString('utf-8')) as {
+      protocolVersion: number
+      artifacts: Record<string, { file: string; sha256: string }>
+    }
+
+    expect(manifest.protocolVersion).toBe(2)
+    for (const arch of ['x64', 'arm64']) {
+      const artifact = manifest.artifacts[arch]!
+      const bytes = byName.get(`package/dist/native/windows/${artifact.file}`)
+      expect(bytes, `missing ${arch} Windows helper`).toBeDefined()
+      expect(createHash('sha256').update(bytes!).digest('hex')).toBe(artifact.sha256)
+    }
   })
 
   it('installs both bin aliases and runs version/help outside the repository', async () => {
@@ -177,6 +199,44 @@ describe('published CLI tarball', () => {
     expect(help.stderr).not.toMatch(/API key/i)
   })
 
+  it('installs and starts the native PTY dependency outside the repository', async () => {
+    const script = `
+      const { createRequire } = require('node:module')
+      const load = createRequire(${JSON.stringify(installedCliJs)})
+      const pty = load('node-pty')
+      const isWindows = process.platform === 'win32'
+      const terminal = pty.spawn(
+        isWindows ? 'powershell.exe' : '/bin/sh',
+        isWindows
+          ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Write-Output package-pty-ok']
+          : ['-c', 'printf package-pty-ok'],
+        {
+          name: 'xterm-256color',
+          cols: 80,
+          rows: 24,
+          cwd: process.cwd(),
+          env: process.env,
+          ...(isWindows ? { useConpty: true, useConptyDll: true } : {}),
+        },
+      )
+      let output = ''
+      terminal.onData((chunk) => { output += chunk })
+      const timeout = setTimeout(() => {
+        terminal.kill()
+        console.error('packaged PTY timed out')
+        process.exit(1)
+      }, 15000)
+      terminal.onExit(() => {
+        clearTimeout(timeout)
+        process.stdout.write(output)
+        process.exit(output.includes('package-pty-ok') ? 0 : 1)
+      })
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 20_000 })
+
+    expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('package-pty-ok') })
+  })
+
   it('runs a fake-provider print task from the installed package', async () => {
     const provider = await startFakeProvider([{ type: 'completion', text: 'installed-package-ok' }])
     const workspace = await createTestWorkspace('xc-installed-task-')
@@ -189,6 +249,26 @@ describe('published CLI tarball', () => {
       expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('installed-package-ok') })
       expect(provider.requests()).toHaveLength(1)
       expect(provider.requests()[0]).toMatchObject({ model: 'test-model', authorizationPresent: true })
+    } finally {
+      await provider.close()
+      await workspace.cleanup()
+    }
+  })
+
+  it('executes a tty shell tool through the bundled provider', async () => {
+    const provider = await startFakeProvider([
+      { type: 'tool-call', name: 'shell', input: { command: 'node --version', tty: true } },
+      { type: 'completion', text: 'installed-pty-tool-ok' },
+    ])
+    const workspace = await createTestWorkspace('xc-installed-pty-tool-')
+    try {
+      const result = await command(
+        process.execPath,
+        [installedCliJs, '--print', '--trust', '--no-plugins', '--no-hooks', '--max-turns', '3', 'run a tty command'],
+        { cwd: workspace.cwd, env: isolatedCliEnv(workspace, provider), timeoutMs: 30_000 },
+      )
+      expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('installed-pty-tool-ok') })
+      expect(provider.mainRequests()).toHaveLength(2)
     } finally {
       await provider.close()
       await workspace.cleanup()

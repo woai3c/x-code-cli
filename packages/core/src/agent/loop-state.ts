@@ -2,8 +2,11 @@
 import type { ModelMessage } from 'ai'
 
 import type { MemoryRecallAttachment, MemoryRecallTombstone, MemoryRecallTrace } from '../knowledge/memory/types.js'
-import { BackgroundShellRegistry } from '../tools/background-shell.js'
 import type { ReadFileCache } from '../tools/read-file.js'
+import { UnifiedShellSessionManager } from '../tools/shell-session/manager.js'
+import type { ManagedShellProvider } from '../tools/shell-session/provider.js'
+import { getManagedShellProvider } from '../tools/shell-session/providers/index.js'
+import type { ShellSessionController } from '../tools/shell-session/types.js'
 import type {
   ContextSecurityState,
   ExecutionAuthority,
@@ -71,6 +74,8 @@ export interface LoopState {
   /** Real input-token count from the most recent API response, used to trigger compression. */
   lastInputTokens: number
   sessionId: string
+  /** CLI invocation cwd captured for this runtime. Shell cwd resolution and permission storage use this stable root. */
+  projectCwd: string
   /** Exact transcript path. Null for new sessions until appendHeader pins
    *  the timestamp-only path; hydrated legacy sessions preserve their
    *  original slug-prefixed path so resume keeps appending in place. */
@@ -183,10 +188,8 @@ export interface LoopState {
    *  own (fresh LoopState) so caches never cross agents. In-memory only. */
   readFileCache: ReadFileCache
 
-  /** Background shells started via shell({ runInBackground: true }). Per-agent
-   *  (sub-agents get a fresh LoopState). In-memory only; execa's default
-   *  cleanup kills any survivors when the CLI process exits. */
-  bgShells: BackgroundShellRegistry
+  /** Unified runtime-only shell manager. Its managerInstanceId is regenerated on every create/hydrate. */
+  shellSessions: ShellSessionController
 
   /** Session-scoped durable goal. Mutated by /goal and by getGoal/updateGoal
    *  tools. Dynamic goal details are intentionally kept out of the cached
@@ -234,7 +237,18 @@ export interface LoopState {
  *  matches plan-file naming so the two directory listings sort and
  *  scan the same way. */
 
-export function createLoopState(initialMode: PermissionMode = 'default'): LoopState {
+export interface CreateLoopStateOptions {
+  ownerSessionId?: string
+  projectCwd?: string
+  shellProvider?: ManagedShellProvider
+}
+
+export function createLoopState(
+  initialMode: PermissionMode = 'default',
+  options: CreateLoopStateOptions = {},
+): LoopState {
+  const sessionId = options.ownerSessionId ?? generateTimestampId()
+  const projectCwd = options.projectCwd ?? process.cwd()
   const state = {
     trackedMessages: [],
     messages: [] as ModelMessage[],
@@ -253,7 +267,8 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     },
     usageBreakdown: createUsageBreakdown(),
     lastInputTokens: 0,
-    sessionId: generateTimestampId(),
+    sessionId,
+    projectCwd,
     sessionFilePath: null,
     startedAt: new Date().toISOString(),
     filesModified: new Set(),
@@ -280,7 +295,11 @@ export function createLoopState(initialMode: PermissionMode = 'default'): LoopSt
     providerTurns: [],
     cacheMissSummary: createCacheMissSummary(),
     readFileCache: new Map(),
-    bgShells: new BackgroundShellRegistry(),
+    shellSessions: new UnifiedShellSessionManager({
+      ownerSessionId: sessionId,
+      projectCwd,
+      provider: options.shellProvider ?? getManagedShellProvider(),
+    }),
     goal: null,
     goalInputs: [],
     activatedTools: new Set(),

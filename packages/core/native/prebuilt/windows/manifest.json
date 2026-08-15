@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 2,
+  "sourceSha256": "5fa5990bade94702bf0d828a27e081d83657dcf770fc37af6674d78c20971c41",
+  "artifacts": {
+    "x64": {
+      "file": "x64/xc-shell-supervisor.exe",
+      "sha256": "e4a99d21759551712f4ea7e60bd11b5595a9b2442569f074ebcb671f05fa2cb2"
+    },
+    "arm64": {
+      "file": "arm64/xc-shell-supervisor.exe",
+      "sha256": "463eb57ccd64ffb438dff3f0a93548e403b6122e05431939f72f91f6427c2e3f"
+    }
+  }
+}
