@@ -17,7 +17,7 @@ import { z } from 'zod'
  *  notifying the UI) is handled manually in `processToolCalls`. Same
  *  pattern as askUser / enterPlanMode. */
 export const todoWrite = tool({
-  description: `Replace the complete live checklist for work with at least three milestones. Include unchanged items, update after each milestone, and keep exactly one item in_progress until every item is completed. Completed lists are automatically cleared. Skip for trivial work and pure research.`,
+  description: `Replace the complete live checklist for work with at least three milestones. Include unchanged items and keep exactly one item in_progress until every item is completed. Update IMMEDIATELY after each milestone — mark items completed as soon as their work finishes, never batch completions at the end of the turn; a stale checklist is a mistake. Completed lists are automatically cleared. Skip for trivial work and pure research.`,
   inputSchema: z.object({
     explanation: z.string().optional().describe('Optional reason for the update.'),
     todos: z

@@ -94,7 +94,7 @@ export async function handleTodoWrite(
     'todoWrite',
     allDone
       ? `All todos completed (${normalized.length} items). Checklist cleared.${explanationNote}${verifyNote}${droppedNote}`
-      : `Todo list updated (${counts.in_progress} in_progress, ${counts.pending} pending, ${counts.completed} completed).${explanationNote}${droppedNote}`,
+      : `Todo list updated (${counts.in_progress} in_progress, ${counts.pending} pending, ${counts.completed} completed).${explanationNote} Mark each item completed IMMEDIATELY when its work finishes — do not batch updates.${droppedNote}`,
   )
 }
 

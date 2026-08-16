@@ -44,7 +44,7 @@ Use direct tools for focused work. Delegate broad investigation with a self-cont
 const TASK_MANAGEMENT_RULES = `
 
 ## Task Management
-Use todoWrite for work with at least three milestones or an approved multi-step plan, and update it after each milestone. Skip it for trivial edits and research. If deferred, load it with toolSearch select:todoWrite.`
+Use todoWrite for work with at least three milestones or an approved multi-step plan, and update it IMMEDIATELY after each milestone — mark items completed as soon as their work finishes; never batch completions at the end of the turn. Skip it for trivial edits and research. If deferred, load it with toolSearch select:todoWrite.`
 
 const MEMORY_RULES = `
 
