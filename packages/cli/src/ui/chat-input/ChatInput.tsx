@@ -1147,22 +1147,16 @@ export function ChatInput({
         messages.length === 1 && messages[0]?.kind === 'command-echo' && messages[0].content.trim() === '/clear'
       const clearRows = stdout?.rows ?? 25
       const oldFrameTop = Math.max(1, lastFrameTopRef.current || clearRows - lastFrameHRef.current + 1)
-      if (retainedClearEcho) {
-        // Commit the canonical command echo at the bottom of the OLD
-        // viewport first. The writer's leading/trailing line breaks move
-        // it into position; the remaining LFs then make it the final row
-        // in scrollback. The new viewport therefore starts empty instead
-        // of showing `/clear` above the fresh input frame.
-        for (let row = oldFrameTop; row <= clearRows; row++) preBuf += `\x1b[${row};1H\x1b[K`
-        resetScrollbackSpacing()
-        preBuf += `\x1b[${clearRows};1H`
-        writeMessageToStdout((data) => (preBuf += data), messages[0]!)
-        preBuf += `${'\n'.repeat(Math.max(0, clearRows - 1))}\x1b[H`
-      } else {
-        for (let row = oldFrameTop; row <= clearRows; row++) preBuf += `\x1b[${row};1H\x1b[K`
-        preBuf += `\x1b[${clearRows};1H${'\n'.repeat(clearRows)}\x1b[H`
-      }
-      writtenMessageCountRef.current = messages.length
+      for (let row = oldFrameTop; row <= clearRows; row++) preBuf += `\x1b[${row};1H\x1b[K`
+      preBuf += `\x1b[${clearRows};1H${'\n'.repeat(clearRows)}\x1b[H`
+      // A retained /clear echo is NOT written into the old viewport here.
+      // Leaving writtenMessageCountRef at 0 lets the normal message loop +
+      // commit path below render it as the first content of the fresh
+      // viewport — the same padded card every other command echo gets.
+      // (Writing it at the old viewport's bottom pushed it into scrollback,
+      // hiding it entirely and dropping its bg padding rows on terminals
+      // that trim bg-only rows when they enter history.)
+      writtenMessageCountRef.current = retainedClearEcho ? 0 : messages.length
       prevFrameRef.current = []
       lastFrameHRef.current = 0
       lastFrameTopRef.current = 0
@@ -2309,7 +2303,12 @@ export function ChatInput({
     // row 1 with empty space below (the user's "fresh launch minus the
     // banner" expectation).
     if (justClearedRef.current) {
-      freeBlanksAboveFrameRef.current = Math.max(0, termRows - nextH)
+      // When the retained /clear echo rides this render as a commit, the
+      // fresh viewport is entirely blank and owned by us — seed the full
+      // row budget so the commit path writes the echo at row 1 and floats
+      // the frame directly below it. Otherwise reserve only the frame's
+      // rows so the empty frame anchors at the top.
+      freeBlanksAboveFrameRef.current = didCommitMessages ? termRows : Math.max(0, termRows - nextH)
       frameTop = computeFrameTop(freeBlanksAboveFrameRef.current)
       justClearedRef.current = false
     } else if (isFirstPaint && initialContentRows > 0) {

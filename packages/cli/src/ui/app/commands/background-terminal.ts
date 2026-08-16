@@ -16,7 +16,7 @@ export function formatBackgroundTerminals(sessions: readonly ShellSessionSummary
   const allLive = sessions.filter((session) => !session.treeConfirmedExited)
   const live = allLive.slice(0, 16)
   if (live.length === 0) return 'No running background terminals.'
-  const lines = ['Background terminals', '']
+  const lines = ['Background terminals']
   for (const session of live) {
     const state = session.cleanupResidual
       ? 'cleanup unconfirmed'

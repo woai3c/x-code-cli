@@ -466,15 +466,16 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
  *
  * Each line gets a subtle full-row background (padding painted INSIDE the
  * bg span) so questions read as solid blocks next to the assistant's
- * markdown — codex-rs does the same via `user_message_style`. Vertical
- * spacing comes from plain blank rows around the block (no bg-colored
- * padding rows), plus a one-cell inset left of the `❯`. On *-ansi themes
- * and under NO_COLOR `paintEchoBg()` returns null and we fall back to
- * bold text instead of forcing a hex bg onto the terminal's own palette.
+ * markdown — codex-rs does the same via `user_message_style`. The block
+ * gets breathing room beyond the text: one full-width bg row above and
+ * below as vertical padding, plus a one-cell inset left of the `❯`. On
+ * *-ansi themes and under NO_COLOR `paintEchoBg()` returns null and we
+ * fall back to bold text instead of forcing a hex bg onto the terminal's
+ * own palette.
  *
  * `compact` is set for slash-command echoes: we drop the trailing blank
- * line so the `  ⎿  result` line that follows sits flush under the echo,
- * matching Claude Code's 2-line command block.
+ * line so the `  ⎿  result` line that follows sits directly under the
+ * echo's bottom padding row, matching Claude Code's 2-line command block.
  */
 function writeUserMessage(write: InkWrite, content: string, compact = false): void {
   const bg = paintEchoBg()
@@ -504,7 +505,13 @@ function writeUserMessage(write: InkWrite, content: string, compact = false): vo
     const visible = isFirst ? ` ${bgArrow} ${echoText(text)}` : `   ${echoText(text)}`
     return bg(visible + pad)
   }
+  // Full-width blank bg rows as vertical padding. Skipped when the
+  // terminal width is unknown (piped output) — a 1-cell bg sliver in a
+  // log file is worse than no padding.
+  const padRow = cols > 0 ? bg(' '.repeat(cols)) : null
   const rows = [renderLine(first, true), ...rest.map((line) => renderLine(line, false))]
+  if (padRow !== null) rows.unshift(padRow)
+  if (padRow !== null) rows.push(padRow)
   const body = rows.join('\n')
   // Leading \n gives one blank row of margin-top so the echo doesn't
   // crowd against the previous assistant reply's last line of content.

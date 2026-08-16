@@ -44,8 +44,20 @@ describe('TUI /clear behavior', () => {
         const lines = harness.screen()
         expect(harness.text()).not.toContain('LINE-01')
         expect(harness.text()).not.toContain('done')
-        // The fresh frame anchors at the top of the viewport (row 1-4).
-        expect(lines[1] ?? '').toMatch(/^[❯>]\s*$/)
+        // The retained /clear echo renders as the first content of the
+        // fresh viewport — the same padded card every other command echo
+        // gets: blank row, full-width bg pad row, text row, bg pad row —
+        // with the fresh input frame directly below it.
+        const echoRow = lines.findIndex((line) => /[❯>] \/clear/.test(line))
+        expect(echoRow).toBeGreaterThanOrEqual(2)
+        expect((lines[echoRow - 1] ?? 'x').trim()).toBe('')
+        expect((lines[echoRow + 1] ?? 'x').trim()).toBe('')
+        expect(lines[echoRow + 2] ?? '').toMatch(/^─/)
+        // The card's bg rows must actually be emitted AFTER the clear's
+        // home-cursor jump (they used to be pushed into scrollback where
+        // some terminals drop bg-only rows from history).
+        const postClear = harness.raw().slice(harness.raw().lastIndexOf('\x1b[H'))
+        expect(postClear.split('\x1b[48;2;60;56;54m').length - 1).toBeGreaterThanOrEqual(3)
       },
       { columns: 80, rows: 40 },
     )
