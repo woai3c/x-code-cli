@@ -149,9 +149,10 @@ jobs:
           test -n "$cli_tgz"
           test -n "$core_tgz"
           for tgz in "$cli_tgz" "$core_tgz"; do
-            tar -tzf "$tgz" | grep -q 'package/dist/native/windows/manifest.json'
-            tar -tzf "$tgz" | grep -q 'package/dist/native/windows/x64/xc-shell-supervisor.exe'
-            tar -tzf "$tgz" | grep -q 'package/dist/native/windows/arm64/xc-shell-supervisor.exe'
+            listing="$(tar -tzf "$tgz")"
+            grep -q 'package/dist/native/windows/manifest.json' <<< "$listing"
+            grep -q 'package/dist/native/windows/x64/xc-shell-supervisor.exe' <<< "$listing"
+            grep -q 'package/dist/native/windows/arm64/xc-shell-supervisor.exe' <<< "$listing"
           done
           smoke_dir="$(mktemp -d)"
           trap 'rm -rf "$smoke_dir"' EXIT
