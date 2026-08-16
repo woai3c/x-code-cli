@@ -1133,7 +1133,16 @@ export function ChatInput({
     // viewport into real terminal scrollback before repainting an empty
     // viewport. CSI 3J must not be used here: unlike a shell `clear`, it
     // destroys history that the user expects to reach by scrolling up.
+    //
+    // `didClearScreen` forces the immediate-flush path below: the erase +
+    // scroll bytes built here are ONE-SHOT (the branch re-runs only when
+    // messages shrink again), so the cancellable deferred/throttle paths
+    // must never carry them — a superseded clear payload loses the bytes
+    // forever while justClearedRef still anchors the new frame at row 1,
+    // leaving the old conversation visible below it.
+    let didClearScreen = false
     if (messages.length < writtenMessageCountRef.current) {
+      didClearScreen = true
       const retainedClearEcho =
         messages.length === 1 && messages[0]?.kind === 'command-echo' && messages[0].content.trim() === '/clear'
       const clearRows = stdout?.rows ?? 25
@@ -3170,7 +3179,7 @@ export function ChatInput({
     // until the next read's grow overwrites it. Visible symptom users
     // reported: the `● Read` row "appears then disappears" between
     // consecutive read tools.
-    if (didCommitMessages || hasNewMessages) {
+    if (didCommitMessages || hasNewMessages || didClearScreen) {
       // Invalidate a deferred frame as soon as a commit is observed, not
       // only after the commit reaches stdout. Its timer may already have
       // queued a setImmediate and cleared deferredFlushRef; without this
@@ -3203,7 +3212,11 @@ export function ChatInput({
       // write puts it in a fresh paint cycle. 50ms = ~3 vsyncs, enough
       // headroom on terminals that buffer multiple frames.
       const MIN_COMMIT_GAP_MS = 50
-      if (lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
+      // The /clear payload is exempt from the gap throttle: its one-shot
+      // erase/scroll bytes cannot be re-collected by a later render, so
+      // deferring them risks supersession by a height-changed non-commit
+      // frame (which flushes its own clear-less payload immediately).
+      if (!didClearScreen && lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
         const delay = MIN_COMMIT_GAP_MS - dt
         const capturedGen = flushGenRef.current
         commitThrottleRef.current = setTimeout(() => {
