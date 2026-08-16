@@ -1681,7 +1681,7 @@ export function App({
       peerInfluenced={state.peerInfluenced}
       trustMode={options.trustMode}
       pendingPeerCount={peerInbox.accepted + peerInbox.held}
-      // Suppress the spinner's "Thinking" line while a select dialog is up,
+      // Suppress the spinner's "Working" line while a select dialog is up,
       // but keep ChatInput itself visible — the dialog is rendered INSIDE
       // its cell buffer now, not in Ink's top subtree.
       //
@@ -1695,10 +1695,10 @@ export function App({
               // While a chain of collapsible read tools is in flight the
               // per-tool live indicator is suppressed (would flash
               // "appear → vanish" on every fast read), and the generic
-              // "Thinking…" label leaves a multi-second read chain
+              // "Working…" label leaves a multi-second read chain
               // looking stuck. `bufferingReads` is sticky across the
               // 50-200ms gaps between consecutive reads — without it
-              // the label would flicker Reading-Thinking-Reading on
+              // the label would flicker Reading-Working-Reading on
               // every tool. Updated by useAgent on tool-call /
               // text-delta / loop-end / abort.
               label: state.reconnectLabel
@@ -1707,7 +1707,7 @@ export function App({
                   ? `Compressing — ${state.compressionLabel}`
                   : state.bufferingReads
                     ? 'Reading'
-                    : 'Thinking',
+                    : 'Working',
               mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
             }
           : null

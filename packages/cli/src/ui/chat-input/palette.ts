@@ -98,7 +98,7 @@ export const S_GRAY_90 = '\x1b[0m\x1b[90m'
 // whatever preceded it. That used to render rows like
 // `[' '(NONE)][glyph(BLUE)][' '(NONE)][T(BLUE)]…` with the trailing
 // NONE space inheriting the BLUE — and with non-atomic terminals the
-// user perceived the "Thinking" text flashing white→blue between
+// user perceived the "Working" text flashing white→blue between
 // frames as redundant SGR codes arrived just after the chars. Setting
 // S_NONE to the explicit DEC reset (`\x1b[0m`, same byte as S_RESET)
 // makes every NONE cell explicitly clear styling before its glyph,

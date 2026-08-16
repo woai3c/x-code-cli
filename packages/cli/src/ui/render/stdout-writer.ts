@@ -131,7 +131,7 @@ function formatToolCall(tc: DisplayToolCall): string {
  *  the line ended on, and the following cell-buffer repaint positions at
  *  col 1 via `\x1b[1G` — overwriting only the first few columns and
  *  leaving the tail of the just-written text visible "to the right of"
- *  the next row's content (looks like partial text next to Thinking). */
+ *  the next row's content (looks like partial text next to Working). */
 function toCRLF(s: string): string {
   return s.replace(/\r?\n/g, '\r\n')
 }

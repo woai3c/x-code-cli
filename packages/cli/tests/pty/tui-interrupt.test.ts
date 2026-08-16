@@ -35,12 +35,12 @@ describe('TUI interruption', () => {
       async ({ harness, provider }) => {
         await submitInput(harness, 'hi')
         await provider.waitForMainRequests(1)
-        await harness.waitForText('Thinking')
+        await harness.waitForText('Working')
         harness.key('ctrl-c')
         await harness.waitForText('Press Ctrl+C again to exit')
         await waitFor(() => provider.mainRequests()[0]?.cancelled === true, 'first-token request cancellation')
         await harness.waitForScreen(
-          (screen) => screen.includes('[Request interrupted by user]') && !screen.includes('Thinking'),
+          (screen) => screen.includes('[Request interrupted by user]') && !screen.includes('Working'),
           'idle prompt after first-token interrupt',
         )
 

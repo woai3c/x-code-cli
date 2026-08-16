@@ -98,12 +98,12 @@ describe('TUI provider error recovery', () => {
       async ({ harness, provider }) => {
         await submitInput(harness, 'hi')
         await provider.waitForMainRequests(1)
-        await harness.waitForText('Thinking')
+        await harness.waitForText('Working')
         harness.key('escape')
         await waitFor(() => provider.mainRequests()[0]?.cancelled === true, 'stalled TUI request cancellation')
         await waitFor(() => provider.openConnections() === 0, 'stalled TUI socket cleanup')
         await harness.waitForScreen(
-          (screen) => screen.includes('[Request interrupted by user]') && !screen.includes('Thinking'),
+          (screen) => screen.includes('[Request interrupted by user]') && !screen.includes('Working'),
           'idle input after stalled request',
         )
 

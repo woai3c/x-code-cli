@@ -1321,13 +1321,13 @@ export function ChatInput({
     // (below any permission dialog) so it always sits at the very bottom
     // of the dynamic area — matches Claude Code's layout.
     //
-    // When tools are running we replace the generic "Thinking..." line with
+    // When tools are running we replace the generic "Working..." line with
     // a live tool-status block, one 2-row group per in-flight tool call:
     //    ● ToolName(preview)
     //    ⎿ ⠋ progressText          (← replaced by onToolProgress stream)
     // Mirrors Claude Code's AssistantToolUseMessage + renderToolUseProgress
     // flow. Elapsed/token meta moves onto the LAST progress line so the
-    // block stays compact (no separate Thinking row competing for space).
+    // block stays compact (no separate Working row competing for space).
     if (spinner && shellWaitStreak?.waiting) {
       const glyph = SPINNER_FRAMES[spinnerFrame]
       const elapsedMs = Math.max(0, Date.now() - shellWaitStreak.startedAt)
@@ -1362,7 +1362,7 @@ export function ChatInput({
 
       // Top margin ONLY when the permission dialog sits immediately above
       // the spinner (they'd otherwise touch without breathing room).
-      // When Thinking sits directly below scrollback content, the last
+      // When Working sits directly below scrollback content, the last
       // message already ends with `\n\n` → one blank row is ALREADY
       // there, and adding another would make the gap look too large.
       if (permission) frame.push([])
@@ -1501,7 +1501,7 @@ export function ChatInput({
         // Why: each cell with a different style emits an SGR escape in the
         // diff loop, and on terminals that don't perfectly atomize DEC
         // 2026 sync-update those escapes arrive with visible spacing —
-        // the user perceives the "Thinking" label flashing default-color
+        // the user perceives the "Working" label flashing default-color
         // → blue → default → blue as the spaces in between trigger
         // resets. Keeping one continuous SGR run for the whole prefix
         // makes the row paint as one solid blue stripe.
@@ -2071,7 +2071,7 @@ export function ChatInput({
       // column. Under BSU/ESU sync mode on xterm.js (VS Code's terminal),
       // a frame whose bottom row is that wide leaks residual cells into
       // native scrollback every time a tool-result commit fires its LF
-      // auto-scroll — manifesting as ghost "Thinking…" rows piling up
+      // auto-scroll — manifesting as ghost "Working…" rows piling up
       // above the live frame. Keeping the row narrow stops the cursor
       // ever reaching the wrap column and the regression doesn't fire.
       //
@@ -2568,10 +2568,10 @@ export function ChatInput({
           // Erase old frame BEFORE the pre-scroll LFs. After the LFs push
           // N viewport rows into the terminal's real scrollback history,
           // those rows become permanent — no ANSI escape can clear them.
-          // If the old frame (with its Thinking/spinner line) sits at rows
+          // If the old frame (with its Working/spinner line) sits at rows
           // that will be pushed above startRow by the scroll, the post-
           // scroll erase loop can't reach them and they persist as ghost
-          // "Thinking..." lines in the user's scrollback. Erasing the
+          // "Working..." lines in the user's scrollback. Erasing the
           // old frame here ensures only blank rows enter scrollback history.
           for (let r = oldFrameTopForClear; r <= oldFrameBottomForClear; r++) {
             preBuf += `\x1b[${r};1H\x1b[K`
@@ -2888,9 +2888,9 @@ export function ChatInput({
       // prevFrameRef now and the deferred is cancelled, the ref stays
       // [] while the on-screen frame is still the OLD frame — causing
       // the next render's cell-diff to treat every row as "fresh",
-      // writing the full Thinking line at the NEW frameTop while the
-      // OLD Thinking remains on screen at the OLD position → two
-      // visible "Thinking…" lines.
+      // writing the full Working line at the NEW frameTop while the
+      // OLD Working remains on screen at the OLD position → two
+      // visible "Working…" lines.
       // Instead, use a local flag; doFlush (line below) sets
       // prevFrameRef = frame unconditionally after a successful write.
       forceFullRedraw = true
@@ -2935,7 +2935,7 @@ export function ChatInput({
         // redraw (prevRow empty) we keep emitting through end-of-row;
         // otherwise we cap at the last actual change so that, e.g., a
         // spinner tick rewrites just the glyph cell instead of the
-        // entire " glyph  Thinking… (5s · ↑ 2k tokens)" suffix every
+        // entire " glyph  Working… (5s · ↑ 2k tokens)" suffix every
         // 80ms. Less to write = fewer visible cells re-painting per
         // tick = no perceptible flash on terminals where DEC 2026
         // sync-update isn't perfectly atomic.

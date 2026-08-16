@@ -224,7 +224,7 @@ export interface AgentState {
    *  collapsible read-only tools (Read/Glob/Grep/ListDir). Drives the
    *  spinner's "Reading…" label across the brief 50-200ms gaps between
    *  one read finishing and the next starting — without it the label
-   *  flips back to "Thinking…" between every tool in the chain and
+   *  flips back to "Working…" between every tool in the chain and
    *  the visible state during a multi-second read flicker is
    *  unreadable. Set true on collapsible read tool-call, false when
    *  any non-read tool runs, the model emits text, the loop ends, or
@@ -232,9 +232,9 @@ export interface AgentState {
   bufferingReads: boolean
   /** Non-null while context compression is in progress. Drives the
    *  spinner label so the user sees which compression phase is active
-   *  instead of a generic "Thinking…". Cleared when compression ends. */
+   *  instead of a generic "Working…". Cleared when compression ends. */
   compressionLabel: string | null
-  /** Transient provider-stream recovery status shown in place of Thinking. */
+  /** Transient provider-stream recovery status shown in place of Working. */
   reconnectLabel: string | null
   goalStatus: GoalState | null
   goalRunnerActive: boolean
@@ -636,7 +636,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       if (delta) {
         flushShellWaitUi()
         // Text generation ends any in-flight read chain. Avoid a state update
-        // for subsequent chunks after the first one has restored "Thinking".
+        // for subsequent chunks after the first one has restored "Working".
         setState((previous) => (previous.bufferingReads ? { ...previous, bufferingReads: false } : previous))
       }
       appendTextDelta(delta)

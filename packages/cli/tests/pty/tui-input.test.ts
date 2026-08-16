@@ -105,7 +105,7 @@ describe('TUI input and lifecycle', () => {
 
         await submitInput(harness, 'generate document A')
         await provider.waitForMainRequests(2)
-        await harness.waitForText('Thinking')
+        await harness.waitForText('Working')
         // Named fork: multi-word name exercises the `/fork <name...>` arg
         // reassembly; unnamed fork right after covers the no-arg path.
         await submitInput(harness, '/fork doc branch')
