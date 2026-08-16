@@ -1,4 +1,4 @@
-## v0.5.0 (2026-08-15)
+## v0.5.0 (2026-08-16)
 
 ### Features
 
@@ -15,6 +15,11 @@
 
 ### Bug Fixes
 
+- hard-wrap user echo lines and keep committed rows off the wrap column (f6b015b)
+- unify command echo padding and tighten /ps output (b459161)
+- restore todoWrite immediate-update discipline in prompts (32f5b9c)
+- reduce echo padding and stop dropping one-shot /clear screen bytes (3492291)
+- install rust target for cargo xwin cross build (dee7c64)
 - harden DeepSeek stream handling (eb45732)
 
 ## Unreleased
