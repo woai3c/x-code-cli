@@ -36,7 +36,7 @@ import {
 import { renderEditDiff } from './render-diff.js'
 import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
 import { GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET, GLYPH_TOOL_BULLET } from './terminal-glyphs.js'
-import { visualWidth } from './text-width.js'
+import { sliceByWidth, visualWidth } from './text-width.js'
 import { chalk as c, paint, paintEchoArrow, paintEchoBg, paintEchoFg } from './tokens.js'
 
 /** Function that writes to stdout through Ink's log-update coordination. */
@@ -495,21 +495,58 @@ function writeUserMessage(write: InkWrite, content: string, compact = false): vo
   // dark card.
   const bgArrow = paintEchoArrow()(GLYPH_PROMPT_ARROW)
   const echoText = paintEchoFg()
-  const renderLine = (text: string, isFirst: boolean): string => {
-    const prefix = isFirst ? ` ${GLYPH_PROMPT_ARROW} ` : '   '
-    // Rows longer than the terminal wrap on their own; only pad short rows.
-    // Lines containing tabs skip padding entirely: charWidth counts `\t` as
-    // 1 cell but the terminal jumps to the next 8-col stop, so the computed
-    // pad would overshoot the width and wrap into a torn bg block.
-    const pad = cols > 0 && !text.includes('\t') ? ' '.repeat(Math.max(0, cols - visualWidth(prefix + text))) : ''
-    const visible = isFirst ? ` ${bgArrow} ${echoText(text)}` : `   ${echoText(text)}`
-    return bg(visible + pad)
+  // Both prefixes are 3 cells wide (` ❯ ` / three spaces), so wrapped
+  // continuation rows align under the first row's text.
+  const PREFIX_CELLS = 3
+  // Never let a PRINTABLE cell land in the terminal's last column: a row
+  // exactly `cols` wide enters delayed-wrap state, and conhost / Windows
+  // Terminal in some configurations count that as a real wrap, inserting a
+  // phantom row the scrollback geometry (countContentRows) doesn't know
+  // about — the live frame then drifts and tears into a duplicated input
+  // box above (render-diff.ts reserves the same 1-cell margin for its
+  // padded diff rows). Instead we pad to cols-1 and let `\x1b[K` — issued
+  // INSIDE the bg span, so BCE-capable terminals (xterm.js, WT, conhost)
+  // fill the last cell with the card color — carry the bg to the right
+  // edge. On a non-BCE terminal the card degrades to a uniform 1-cell
+  // margin, same look as the diff blocks.
+  const paintRow = (chunk: string, isFirst: boolean, pad: boolean): string => {
+    const visible = isFirst ? ` ${bgArrow} ${echoText(chunk)}` : `   ${echoText(chunk)}`
+    if (!pad) return bg(visible)
+    const fill = ' '.repeat(Math.max(0, cols - 1 - PREFIX_CELLS - visualWidth(chunk)))
+    return bg(visible + fill + '\x1b[K')
   }
-  // Full-width blank bg rows as vertical padding. Skipped when the
-  // terminal width is unknown (piped output) — a 1-cell bg sliver in a
-  // log file is worse than no padding.
-  const padRow = cols > 0 ? bg(' '.repeat(cols)) : null
-  const rows = [renderLine(first, true), ...rest.map((line) => renderLine(line, false))]
+  // Hard-wrap over-wide lines ourselves instead of leaving them to the
+  // terminal's auto-wrap: a wrapped row keeps the bg behind its text, but
+  // the final partial row gets no trailing pad and the card's right edge
+  // tears (the wrapped remainder sat on the terminal's default bg).
+  // Splitting at the same budget also keeps countContentRows' scrollback
+  // accounting exact — no reliance on the terminal wrapping where we think.
+  // Lines containing tabs skip wrapping/padding entirely: charWidth counts
+  // `\t` as 1 cell but the terminal jumps to the next 8-col stop, so any
+  // computed width would overshoot and wrap into a torn bg block.
+  const renderLine = (text: string, isFirst: boolean): string[] => {
+    if (cols <= 0 || text.includes('\t')) return [paintRow(text, isFirst, false)]
+    const budget = Math.max(1, cols - 1 - PREFIX_CELLS)
+    if (visualWidth(text) <= budget) return [paintRow(text, isFirst, true)]
+    const chunks: string[] = []
+    let remaining = text
+    while (visualWidth(remaining) > budget) {
+      const head = sliceByWidth(remaining, budget)
+      // budget >= 1 makes an empty head impossible for non-empty input;
+      // the break is pure insurance against an infinite loop.
+      if (head.length === 0) break
+      chunks.push(head)
+      remaining = remaining.slice(head.length)
+    }
+    chunks.push(remaining)
+    return chunks.map((chunk, i) => paintRow(chunk, isFirst && i === 0, true))
+  }
+  // Full-width blank bg rows as vertical padding (cols-1 printable cells +
+  // BCE erase — see paintRow for why the last column stays unwritten).
+  // Skipped when the terminal width is unknown (piped output) — a 1-cell
+  // bg sliver in a log file is worse than no padding.
+  const padRow = cols > 0 ? bg(' '.repeat(cols - 1) + '\x1b[K') : null
+  const rows = lines.flatMap((line, i) => renderLine(line, i === 0))
   if (padRow !== null) rows.unshift(padRow)
   if (padRow !== null) rows.push(padRow)
   const body = rows.join('\n')
