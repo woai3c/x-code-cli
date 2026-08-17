@@ -62,39 +62,39 @@ After installation, launch with the `xc` or `x-code` command.
 <details>
 <summary><b>Shell configuration examples</b> (click to expand)</summary>
 
-The examples below use `ANTHROPIC_API_KEY`; substitute your provider's variable name.
+The examples below use `DEEPSEEK_API_KEY`; substitute your provider's variable name.
 
 **bash (Linux / Git Bash / WSL)**
 
 ```bash
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc
+echo 'export DEEPSEEK_API_KEY=sk-...' >> ~/.bashrc
 source ~/.bashrc
 ```
 
 **zsh (macOS default)**
 
 ```bash
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc
+echo 'export DEEPSEEK_API_KEY=sk-...' >> ~/.zshrc
 source ~/.zshrc
 ```
 
 **fish**
 
 ```fish
-set -Ux ANTHROPIC_API_KEY sk-ant-...
+set -Ux DEEPSEEK_API_KEY sk-...
 ```
 
 **Windows PowerShell (user-level, persistent)**
 
 ```powershell
-[Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', 'sk-ant-...', 'User')
+[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY', 'sk-...', 'User')
 # Restart PowerShell to take effect
 ```
 
 **Windows CMD (user-level, persistent)**
 
 ```cmd
-setx ANTHROPIC_API_KEY "sk-ant-..."
+setx DEEPSEEK_API_KEY "sk-..."
 :: Restart CMD to take effect
 ```
 

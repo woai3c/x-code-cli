@@ -62,39 +62,39 @@ pnpm add -g @x-code-cli/cli
 <details>
 <summary><b>各 Shell 配置方式</b>（点击展开）</summary>
 
-以下示例使用 `ANTHROPIC_API_KEY`，请替换为实际厂商变量名。
+以下示例使用 `DEEPSEEK_API_KEY`，请替换为实际厂商变量名。
 
 **bash（Linux / Git Bash / WSL）**
 
 ```bash
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc
+echo 'export DEEPSEEK_API_KEY=sk-...' >> ~/.bashrc
 source ~/.bashrc
 ```
 
 **zsh（macOS 默认）**
 
 ```bash
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc
+echo 'export DEEPSEEK_API_KEY=sk-...' >> ~/.zshrc
 source ~/.zshrc
 ```
 
 **fish**
 
 ```fish
-set -Ux ANTHROPIC_API_KEY sk-ant-...
+set -Ux DEEPSEEK_API_KEY sk-...
 ```
 
 **Windows PowerShell（用户级，永久生效）**
 
 ```powershell
-[Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', 'sk-ant-...', 'User')
+[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY', 'sk-...', 'User')
 # 重启 PowerShell 后生效
 ```
 
 **Windows CMD（用户级，永久生效）**
 
 ```cmd
-setx ANTHROPIC_API_KEY "sk-ant-..."
+setx DEEPSEEK_API_KEY "sk-..."
 :: 重启 CMD 后生效
 ```
 
