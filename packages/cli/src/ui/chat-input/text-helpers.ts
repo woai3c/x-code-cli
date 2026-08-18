@@ -98,6 +98,41 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
 }
 
+/** Count frame-top rows that may have been physically overwritten by a
+ *  scrollback commit whose row count was under-estimated. The MINIMAL-WRITE
+ *  commit path writes content directly above the live frame; when the
+ *  terminal wraps a line one row later than countContentRows predicted, the
+ *  wrapped tail spills onto the frame's top rows. The cell-diff loop can't
+ *  see the spill — it diffs against the in-memory prevFrame, not the screen
+ *  — so it rewrites only cells that differ, leaving the spill's first
+ *  column and tail characters painted inside frame rows.
+ *
+ *  A line is a spill risk when its tail lands at or near the right edge:
+ *  an exact multiple of `termWidth` triggers the delayed-wrap corner some
+ *  terminals materialize as a real row (conhost / Windows Terminal — see
+ *  writeUserMessage's last-column guard), and a line ending within a few
+ *  cells of the edge wraps one row late on terminals whose wide/ambiguous
+ *  widths disagree with our table (the common CJK case). Tabs are always
+ *  risky: charWidth counts `\t` as 1 cell but the terminal jumps to the
+ *  next 8-col stop, so any computed wrap point is unreliable. */
+export function countSpillRiskRows(content: string, termWidth: number): number {
+  const clean = stripAnsi(content).replace(/\r\n/g, '\n').replace(/\r/g, '')
+  const w = Math.max(1, termWidth)
+  const margin = Math.min(4, w - 1)
+  let risk = 0
+  for (const line of clean.split('\n')) {
+    if (line.includes('\t')) {
+      risk++
+      continue
+    }
+    const width = visualWidth(line)
+    if (width === 0) continue
+    const rem = width % w
+    if (rem === 0 || rem >= w - margin) risk++
+  }
+  return risk
+}
+
 /** Count display rows that `content` will occupy when written at the top of
  *  a blank area. Accounts for line wrap at `termWidth` using visual (CJK-aware)
  *  widths. A trailing `\n` is not counted as a row (cursor just advances to

@@ -95,6 +95,7 @@ import { formatElapsed, permissionContentCells, permissionTitle } from './permis
 import { inputReducer } from './reducer.js'
 import {
   countContentRows,
+  countSpillRiskRows,
   skipByWidth,
   truncateCellRow,
   truncatePathFromStart,
@@ -2420,6 +2421,10 @@ export function ChatInput({
     // grow path may consume. See blankRowsAboveFrameRef for the why.
     let pendingBlankRowsAbove = blankRowsAboveFrameRef.current
     const scrollRows = didCommitMessages ? countContentRows(scrollbackContent, termWidth) : 0
+    // Top frame rows to force-repaint this render because the MINIMAL-WRITE
+    // commit below may have spilled content onto them (see the spill-heal
+    // assignment in that branch for the full rationale).
+    let healTopFrameRows = 0
     let handledCommitWithFrame = false
     let forceFullRedraw = false
     if (didCommitMessages && scrollRows > 0 && nextH > 0 && nextH < termRows) {
@@ -2652,6 +2657,21 @@ export function ChatInput({
           preBuf += `\x1b[${r};1H\x1b[K`
         }
         preBuf += `\x1b[${startRow};1H` + scrollbackContent
+        // Spill heal: the content just written occupies scrollRows rows in
+        // our geometry, but a line the terminal wraps later than predicted
+        // (CJK/ambiguous width disagreement, delayed-wrap phantom row) spills
+        // its tail onto the frame's top rows. The cell-diff below compares
+        // against prevFrameRef — which still holds the clean frame — so it
+        // would rewrite only differing cells and leave the spill's first
+        // column and tail painted ("I+ Waiting…interrupt)ke@example.com…").
+        // Rows that never change (the ⎿ command preview) wouldn't be
+        // rewritten at all, leaving the spilled row fully visible. Force the
+        // at-risk top rows through the fresh-redraw branch (full rewrite
+        // from col 0 + \x1b[K) so any spill is wiped in the same flush.
+        healTopFrameRows = Math.min(nextH, countSpillRiskRows(scrollbackContent, termWidth))
+        if (healTopFrameRows > 0) {
+          debugLog('chatinput.flush.spill-heal', `rows=${healTopFrameRows}`)
+        }
         // Always park cursor at frameTop after scrollback write.
         // The cell-diff loop uses absolute positioning per row, but
         // an explicit jump prevents any cursor-position mismatch
@@ -2919,7 +2939,10 @@ export function ChatInput({
     // the spinner cell, and the final cursor-anchor park. Unchanged
     // rows are SKIPPED — no jump to them, no `\x1b[K`, no advance.
     for (let row = 0; row < maxH; row++) {
-      const prevRow = row < prevH ? prevFrame[row] : []
+      // Rows flagged by the spill-heal get an empty prevRow so they take
+      // the fresh-redraw branch (col-0 rewrite + \x1b[K) regardless of
+      // whether their cells differ from prevFrameRef.
+      const prevRow = row < healTopFrameRows ? [] : row < prevH ? prevFrame[row] : []
       const nextRow = row < nextH ? frame[row] : []
       const absRow = frameTop + row
 
