@@ -166,6 +166,9 @@ describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () =
         if (decision === 'Accept') {
           const [request] = await betaProvider.waitForMainRequests(1, 10_000)
           expect(request?.rawBody).toContain('<peer_message')
+          // exitTui's first Ctrl+C must land on an idle beta — otherwise it
+          // interrupts the in-flight turn instead of arming the exit hint.
+          await beta.waitForText('accepted held payload')
         } else {
           await alpha.waitForText('denied by beta')
           expect(betaProvider.mainRequests()).toHaveLength(0)
