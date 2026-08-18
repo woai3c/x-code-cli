@@ -470,32 +470,46 @@ async function retainedMetadataLines(
   return lines
 }
 
-async function replaceWithSnapshot(filePath: string, lines: readonly string[]): Promise<void> {
-  await ensureProjectStorageDir(path.dirname(filePath))
-  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`)
+/** Write payload to a fresh temp file (0600, fsync'd) so a later rename/link
+ *  installs fully-persisted contents. Cleans up the temp file on failure. */
+async function writeTempSnapshot(tempPath: string, payload: string): Promise<void> {
   let handle: fs.FileHandle | undefined
   try {
     handle = await fs.open(tempPath, 'wx', 0o600)
     await handle.chmod(0o600)
-    await handle.writeFile(lines.join('\n') + '\n', 'utf-8')
+    await handle.writeFile(payload, 'utf-8')
     await handle.sync()
     await handle.close()
     handle = undefined
-    await fs.rename(tempPath, filePath)
-    // Windows cannot flush directory handles (fsync returns EPERM). The
-    // renamed file itself was already flushed above; keep the directory
-    // durability barrier on platforms that support it.
-    if (process.platform !== 'win32') {
-      const directory = await fs.open(path.dirname(filePath), 'r')
-      try {
-        await directory.sync()
-      } finally {
-        await directory.close()
-      }
-    }
-    chmodDone.add(filePath)
   } catch (error) {
     await handle?.close().catch(() => {})
+    await fs.unlink(tempPath).catch(() => {})
+    throw error
+  }
+}
+
+/** Windows cannot flush directory handles (fsync returns EPERM). The installed
+ *  file itself was already flushed; keep the directory durability barrier on
+ *  platforms that support it. */
+async function syncParentDirectory(filePath: string): Promise<void> {
+  if (process.platform === 'win32') return
+  const directory = await fs.open(path.dirname(filePath), 'r')
+  try {
+    await directory.sync()
+  } finally {
+    await directory.close()
+  }
+}
+
+async function replaceWithSnapshot(filePath: string, lines: readonly string[]): Promise<void> {
+  await ensureProjectStorageDir(path.dirname(filePath))
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`)
+  try {
+    await writeTempSnapshot(tempPath, lines.join('\n') + '\n')
+    await fs.rename(tempPath, filePath)
+    await syncParentDirectory(filePath)
+    chmodDone.add(filePath)
+  } catch (error) {
     await fs.unlink(tempPath).catch(() => {})
     throw error
   }
@@ -533,14 +547,8 @@ async function createWithSnapshot(filePath: string, lines: readonly string[]): P
   await ensureProjectStorageDir(path.dirname(filePath))
   const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`)
   const payload = lines.join('\n') + '\n'
-  let handle: fs.FileHandle | undefined
   try {
-    handle = await fs.open(tempPath, 'wx', 0o600)
-    await handle.chmod(0o600)
-    await handle.writeFile(payload, 'utf-8')
-    await handle.sync()
-    await handle.close()
-    handle = undefined
+    await writeTempSnapshot(tempPath, payload)
     try {
       await fs.link(tempPath, filePath)
     } catch (error) {
@@ -548,17 +556,9 @@ async function createWithSnapshot(filePath: string, lines: readonly string[]): P
       await writeSnapshotExclusively(filePath, payload)
     }
     await fs.unlink(tempPath)
-    if (process.platform !== 'win32') {
-      const directory = await fs.open(path.dirname(filePath), 'r')
-      try {
-        await directory.sync()
-      } finally {
-        await directory.close()
-      }
-    }
+    await syncParentDirectory(filePath)
     chmodDone.add(filePath)
   } catch (error) {
-    await handle?.close().catch(() => {})
     await fs.unlink(tempPath).catch(() => {})
     throw error
   }

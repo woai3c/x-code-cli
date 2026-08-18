@@ -204,16 +204,21 @@ async function executeWriteTool(
     const filePath = input.filePath as string
     const edits = input.edits
 
-    reportProgress(toolCallId, `Editing ${filePath}`)
-    const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
-    if (Array.isArray(edits)) {
-      const newContent = applyBatchEdits(content, edits)
+    // Shared edit tail: persist newContent, then emit the UI diff side channel.
+    const applyEdit = async (oldContent: string, newContent: string): Promise<void> => {
       if (signal?.aborted) throw signal.reason ?? new Error('Edit interrupted by user')
       await beforeWrite(filePath)
       await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
 
-      const payload = computeEditDiff(filePath, content, newContent)
+      const payload = computeEditDiff(filePath, oldContent, newContent)
       if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
+    }
+
+    reportProgress(toolCallId, `Editing ${filePath}`)
+    const content = await fs.readFile(filePath, { encoding: 'utf-8', signal })
+    if (Array.isArray(edits)) {
+      const newContent = applyBatchEdits(content, edits)
+      await applyEdit(content, newContent)
 
       return `File edited: ${filePath} (${edits.length} replacements)`
     }
@@ -235,12 +240,7 @@ async function executeWriteTool(
     }
 
     const newContent = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString)
-    if (signal?.aborted) throw signal.reason ?? new Error('Edit interrupted by user')
-    await beforeWrite(filePath)
-    await fs.writeFile(filePath, newContent, { encoding: 'utf-8', signal })
-
-    const payload = computeEditDiff(filePath, content, newContent)
-    if (payload && callbacks.onFileEdit) callbacks.onFileEdit(toolCallId, payload)
+    await applyEdit(content, newContent)
 
     return `File edited: ${filePath}`
   }

@@ -23,7 +23,7 @@ import {
   trustProject,
   writeServerToConfig,
 } from '@x-code-cli/core'
-import type { AgentOptions } from '@x-code-cli/core'
+import type { AgentOptions, ConfigScope, McpServerConfig } from '@x-code-cli/core'
 
 export interface McpCommandDeps {
   options: AgentOptions
@@ -39,6 +39,44 @@ export interface McpCommandDeps {
 
 export function createMcpCommandHandler(deps: McpCommandDeps) {
   const { options, addCommandMessage, addCommandResult, askQuestion, invalidateSystemPromptCache } = deps
+
+  /** Shared tail of /mcp add and /mcp add-json: persist the server config,
+   *  auto-trust on project scope, then announce. `firstLine` lets the two
+   *  subcommands keep their slightly different success headers. */
+  async function persistAndAnnounceNewServer(
+    text: string,
+    name: string,
+    config: McpServerConfig,
+    scope: ConfigScope,
+    firstLine: (path: string) => string,
+  ): Promise<void> {
+    let written: { path: string }
+    try {
+      written = await writeServerToConfig(name, config, scope, process.cwd())
+    } catch (err) {
+      addCommandMessage(text, `Failed to add "${name}": ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+
+    // For project scope, auto-trust this path so the user doesn't bump
+    // into their own consent dialog on next launch (non-fatal on failure —
+    // they'll just see the trust dialog then).
+    let autoTrusted = false
+    if (scope === 'project') {
+      try {
+        await trustProject(process.cwd())
+        autoTrusted = true
+      } catch {
+        // best-effort
+      }
+    }
+
+    const lines = [firstLine(written.path)]
+    if (autoTrusted) lines.push('Auto-trusted this project for future launches.')
+    if (scope === 'project') lines.push('Tip: commit `.x-code/config.json` to share with collaborators.')
+    lines.push('Run /mcp refresh to load it now, or restart xc.')
+    addCommandMessage(text, lines.join('\n'))
+  }
 
   /** /mcp add — write a new server to user (default) or project config.
    *
@@ -86,36 +124,14 @@ export function createMcpCommandHandler(deps: McpCommandDeps) {
       return
     }
 
-    let written: { path: string }
-    try {
-      written = await writeServerToConfig(name, config, scope, process.cwd())
-    } catch (err) {
-      addCommandMessage(text, `Failed to add "${name}": ${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
-
-    // For project scope, auto-trust this path so the user doesn't bump
-    // into their own consent dialog on next launch.
-    let autoTrusted = false
-    if (scope === 'project') {
-      try {
-        await trustProject(process.cwd())
-        autoTrusted = true
-      } catch {
-        // Non-fatal — they'll just see the trust dialog next launch.
-      }
-    }
-
     const transport = 'url' in config ? 'http' : 'stdio'
-    const lines = [`Added MCP server "${name}" (${transport}) to ${written.path}.`]
-    if (autoTrusted) {
-      lines.push('Auto-trusted this project for future launches.')
-    }
-    if (scope === 'project') {
-      lines.push('Tip: commit `.x-code/config.json` to share with collaborators.')
-    }
-    lines.push('Run /mcp refresh to load it now, or restart xc.')
-    addCommandMessage(text, lines.join('\n'))
+    await persistAndAnnounceNewServer(
+      text,
+      name,
+      config,
+      scope,
+      (path) => `Added MCP server "${name}" (${transport}) to ${path}.`,
+    )
   }
 
   /** /mcp add-json — same as /mcp add but takes a raw JSON object for the
@@ -137,29 +153,7 @@ export function createMcpCommandHandler(deps: McpCommandDeps) {
       return
     }
 
-    let written: { path: string }
-    try {
-      written = await writeServerToConfig(name, config, scope, process.cwd())
-    } catch (err) {
-      addCommandMessage(text, `Failed to add "${name}": ${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
-
-    let autoTrusted = false
-    if (scope === 'project') {
-      try {
-        await trustProject(process.cwd())
-        autoTrusted = true
-      } catch {
-        // best-effort
-      }
-    }
-
-    const lines = [`Added MCP server "${name}" to ${written.path}.`]
-    if (autoTrusted) lines.push('Auto-trusted this project for future launches.')
-    if (scope === 'project') lines.push('Tip: commit `.x-code/config.json` to share with collaborators.')
-    lines.push('Run /mcp refresh to load it now, or restart xc.')
-    addCommandMessage(text, lines.join('\n'))
+    await persistAndAnnounceNewServer(text, name, config, scope, (path) => `Added MCP server "${name}" to ${path}.`)
   }
 
   /** /mcp remove — delete a server from config.json. Asks y/N before doing

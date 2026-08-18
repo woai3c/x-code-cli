@@ -339,7 +339,9 @@ class InMemoryPeerInbox implements PeerInbox {
     }
   }
 
-  commitAcceptedClaim(claimId: string): InboxClaimResult {
+  /** Resolve a live claim or produce the failure result (not-found/expired),
+   *  performing the same cleanup the two public claim endpoints relied on. */
+  private requireLiveClaim(claimId: string): KeyClaim | InboxClaimResult {
     const claim = this.acceptedClaims.get(claimId)
     if (!claim) {
       this.sweep()
@@ -350,6 +352,13 @@ class InMemoryPeerInbox implements PeerInbox {
       this.changed()
       return { status: 'expired', count: 0 }
     }
+    return claim
+  }
+
+  commitAcceptedClaim(claimId: string): InboxClaimResult {
+    const resolved = this.requireLiveClaim(claimId)
+    if (!('keys' in resolved)) return resolved
+    const claim = resolved
     this.acceptedClaims.delete(claimId)
     let count = 0
     for (const key of claim.keys) {
@@ -363,17 +372,9 @@ class InMemoryPeerInbox implements PeerInbox {
   }
 
   releaseAcceptedClaim(claimId: string): InboxClaimResult {
-    const claim = this.acceptedClaims.get(claimId)
-    if (!claim) {
-      this.sweep()
-      return { status: 'not-found', count: 0 }
-    }
-    if (claim.expiresAtMs <= this.now()) {
-      this.releaseAcceptedClaimInternal(claim)
-      this.changed()
-      return { status: 'expired', count: 0 }
-    }
-    const count = this.releaseAcceptedClaimInternal(claim)
+    const resolved = this.requireLiveClaim(claimId)
+    if (!('keys' in resolved)) return resolved
+    const count = this.releaseAcceptedClaimInternal(resolved)
     this.changed()
     return { status: 'released', count }
   }

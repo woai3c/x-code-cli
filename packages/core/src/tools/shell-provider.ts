@@ -36,20 +36,24 @@ export interface ShellProvider {
   spawn(command: string, opts: ShellSpawnOptions): ResultPromise
 }
 
+function baseSpawnOptions(opts: ShellSpawnOptions) {
+  return {
+    timeout: opts.timeout,
+    maxBuffer: MAX_SHELL_BUFFER,
+    buffer: opts.buffer ?? true,
+    windowsHide: true,
+    cwd: opts.cwd,
+    reject: false,
+    cancelSignal: opts.signal,
+    env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
+  } as const
+}
+
 function createPosixProvider(executable: string, type: 'bash' | 'zsh'): ShellProvider {
   return {
     type,
     spawn(command, opts) {
-      return execa(executable, ['-c', command], {
-        timeout: opts.timeout,
-        maxBuffer: MAX_SHELL_BUFFER,
-        buffer: opts.buffer ?? true,
-        windowsHide: true,
-        cwd: opts.cwd,
-        reject: false,
-        cancelSignal: opts.signal,
-        env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
-      })
+      return execa(executable, ['-c', command], baseSpawnOptions(opts))
     },
   }
 }
@@ -85,16 +89,11 @@ function createPowerShellProvider(executable: string): ShellProvider {
         '$__ec = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }',
         'exit $__ec',
       ].join('\n')
-      return execa(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(wrapped)], {
-        timeout: opts.timeout,
-        maxBuffer: MAX_SHELL_BUFFER,
-        buffer: opts.buffer ?? true,
-        windowsHide: true,
-        cwd: opts.cwd,
-        reject: false,
-        cancelSignal: opts.signal,
-        env: { ...(opts.env ?? process.env), PYTHONIOENCODING: 'utf-8' },
-      })
+      return execa(
+        executable,
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(wrapped)],
+        baseSpawnOptions(opts),
+      )
     },
   }
 }

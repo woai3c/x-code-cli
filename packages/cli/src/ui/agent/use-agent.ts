@@ -188,6 +188,14 @@ export interface QueuedMessage {
   inject?: string
 }
 
+/** Project the internal mixed queue (user + peer entries) into the
+ *  display-side pending list — only user entries are shown. */
+function toQueuedUserMessages(queued: readonly QueuedAgentInput[]): QueuedMessage[] {
+  return queued
+    .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
+    .map((message) => ({ id: message.id, text: message.display, inject: message.content }))
+}
+
 export interface AgentState {
   messages: DisplayMessage[]
   isLoading: boolean
@@ -510,12 +518,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       content: inject ?? text,
     }
     queuedMessagesRef.current = [...queuedMessagesRef.current, entry]
-    setState((prev) => ({
-      ...prev,
-      queuedMessages: queuedMessagesRef.current
-        .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
-        .map((message) => ({ id: message.id, text: message.display, inject: message.content })),
-    }))
+    setState((prev) => ({ ...prev, queuedMessages: toQueuedUserMessages(queuedMessagesRef.current) }))
   }, [])
 
   /** Remove one queued message by id (ChatInput's ↑-to-pop-back editing). */
@@ -523,12 +526,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     queuedMessagesRef.current = queuedMessagesRef.current.filter(
       (message) => message.source === 'peer' || message.id !== id,
     )
-    setState((prev) => ({
-      ...prev,
-      queuedMessages: queuedMessagesRef.current
-        .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
-        .map((message) => ({ id: message.id, text: message.display, inject: message.content })),
-    }))
+    setState((prev) => ({ ...prev, queuedMessages: toQueuedUserMessages(queuedMessagesRef.current) }))
   }, [])
 
   /** Drain the queue: move every queued message into scrollback as a
@@ -571,9 +569,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     queuedMessagesRef.current = taken.remaining
     setState((prev) => ({
       ...prev,
-      queuedMessages: queuedMessagesRef.current
-        .filter((message): message is Extract<QueuedAgentInput, { source: 'user' }> => message.source === 'user')
-        .map((message) => ({ id: message.id, text: message.display, inject: message.content })),
+      queuedMessages: toQueuedUserMessages(queuedMessagesRef.current),
       messages: [
         ...prev.messages,
         {
@@ -1919,10 +1915,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     }
   }, [])
 
-  /** Clear conversation while retaining a display-only command echo. */
-  const clear = useCallback(
-    async (commandText = '/clear') => {
-      const lease = turnCoordinatorRef.current.tryAcquire('clear', currentAuthority())
+  /** Shared prologue for /clear and /resume: acquire the turn lease, refuse
+   *  while peer input awaits review, and tear down the old session's shells. */
+  const beginSessionTransition = useCallback(
+    async (operation: 'clear' | 'resume') => {
+      const lease = turnCoordinatorRef.current.tryAcquire(operation, currentAuthority())
       if (!lease) return { ok: false as const, reason: 'another turn is active' }
       if (hasPendingPeerInput()) {
         lease.release()
@@ -1930,12 +1927,23 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       }
       const previous = loopStateRef.current
       if (previous) {
-        const disposed = await disposeShellSessionsForTransition(previous.shellSessions, 'clear')
+        const disposed = await disposeShellSessionsForTransition(previous.shellSessions, operation)
         if (!disposed.ok) {
           lease.release()
           return { ok: false as const, reason: disposed.reason, result: disposed.result }
         }
       }
+      return { ok: true as const, lease, previous }
+    },
+    [currentAuthority, hasPendingPeerInput],
+  )
+
+  /** Clear conversation while retaining a display-only command echo. */
+  const clear = useCallback(
+    async (commandText = '/clear') => {
+      const transition = await beginSessionTransition('clear')
+      if (!transition.ok) return transition
+      const { lease, previous } = transition
       const nextState = createLoopState(permissionModeRef.current, {
         projectCwd: previous?.projectCwd ?? process.cwd(),
       })
@@ -1967,7 +1975,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       lease.release()
       return { ok: true as const }
     },
-    [bindShellSessionEvents, currentAuthority, hasPendingPeerInput, resetBuffer],
+    [beginSessionTransition, bindShellSessionEvents, resetBuffer],
   )
 
   /** Mid-session resume: hot-swap the agent state to a previously-saved
@@ -1992,20 +2000,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  shells / checklists never ran for the loaded session. */
   const resume = useCallback(
     async (loaded: LoadedSession) => {
-      const lease = turnCoordinatorRef.current.tryAcquire('resume', currentAuthority())
-      if (!lease) return { ok: false as const, reason: 'another turn is active' }
-      if (hasPendingPeerInput()) {
-        lease.release()
-        return { ok: false as const, reason: 'peer input is waiting for review' }
-      }
-      const previous = loopStateRef.current
-      if (previous) {
-        const disposed = await disposeShellSessionsForTransition(previous.shellSessions, 'resume')
-        if (!disposed.ok) {
-          lease.release()
-          return { ok: false as const, reason: disposed.reason, result: disposed.result }
-        }
-      }
+      const transition = await beginSessionTransition('resume')
+      if (!transition.ok) return transition
+      const { lease, previous } = transition
       pendingToolsRef.current.clear()
       queuedMessagesRef.current = []
       resetBuffer()
@@ -2035,7 +2032,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       lease.release()
       return { ok: true as const }
     },
-    [bindShellSessionEvents, currentAuthority, hasPendingPeerInput, resetBuffer],
+    [beginSessionTransition, bindShellSessionEvents, resetBuffer],
   )
 
   /** Read the live list of /rewind checkpoints for the current session.
