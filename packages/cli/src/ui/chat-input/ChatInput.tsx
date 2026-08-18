@@ -38,6 +38,7 @@ import {
   resetScrollbackSpacing,
   writeMessageToStdout,
 } from '../render/stdout-writer.js'
+import { highlightLine } from '../render/syntax-highlight.js'
 import {
   GLYPH_ACCEPT_EDITS,
   GLYPH_ELLIPSIS,
@@ -60,7 +61,13 @@ import {
   sliceByWidth,
   visualWidth,
 } from '../render/text-width.js'
-import { formatTokenCount, getToolInputPreview, getToolLabel, isCollapsibleReadOnlyTool } from '../utils.js'
+import {
+  formatTokenCount,
+  getToolInputPreview,
+  getToolLabel,
+  isCollapsibleReadOnlyTool,
+  isShellToolName,
+} from '../utils.js'
 import { authorityViewerLines, authorityVisibleText } from './authority-display.js'
 import { type Cell, ansiTextToCells, cellsEqual, renderRowToAnsi, textToCells } from './cells.js'
 import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank, useFileCompletion } from './file-completion.js'
@@ -69,6 +76,8 @@ import { useInputHistory } from './input-history.js'
 import {
   BSU,
   ESU_HIDE,
+  S_BADGE_PRIMARY,
+  S_BADGE_WARNING,
   S_BOLD,
   S_BORDER,
   S_BORDER_FOCUS,
@@ -110,6 +119,10 @@ const MAX_VISIBLE_LINES = 10
 // Shared by the render effect (frame layout) and Up/Down cursor movement
 // so both compute the soft-wrap viewport width identically.
 const PROMPT_WIDTH = 2
+// The rounded prompt box wraps each input row in `│ ` … ` │`, consuming 4
+// cells around the prompt+content run inside the `termWidth - 1` box.
+const BOX_INNER_PAD = 4
+const inputViewportWidth = (termWidth: number): number => Math.max(20, termWidth - PROMPT_WIDTH - BOX_INNER_PAD - 1)
 const MAX_AT_RESULTS = 50
 const MAX_VISIBLE_MENU_ITEMS = 8
 
@@ -629,7 +642,7 @@ export function ChatInput({
   const moveCursorVertically = (delta: number): boolean => {
     // Computed at keypress time from the live terminal width — a resize
     // re-wraps the input, and navigation must use the NEW geometry.
-    const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
+    const vpWidth = inputViewportWidth(termWidth)
     const newPos = moveCursorVisual(text, cursorRef.current, delta, vpWidth)
     if (newPos === null) return false
     dispatch({ type: 'SET_CURSOR', cursor: newPos })
@@ -1232,30 +1245,62 @@ export function ChatInput({
     // result and overwrites the reserved rows). A fresh permission also
     // clears the reservation — the new dialog owns the slot directly.
     //
-    // Only reserve when exactly ONE tool is pending. Two tools happen to
-    // produce the same frame height as the permission (2×2 + 3 input = 7 =
-    // 4 permission + 3 input) so no reservation is needed; three or more
-    // tools make the frame LARGER than the permission, which is a grow
-    // (handled correctly by the existing freeBlanks/preScroll path);
-    // zero tools means the approved tool was denied or hasn't produced an
-    // onToolCall yet — reserving blank rows there would just shift the
-    // gap around rather than eliminate it.
+    // Only reserve when one to three tools are pending. The boxed
+    // permission dialog is 7 rows (top rule + title + content + Yes +
+    // Always + No + bottom rule) + 3 input = 10; one running tool takes
+    // 2 rows so it needs 5 blanks to hold that height, two tools take 4
+    // rows and need 3, three take 6 and need 1. Four or more tools make
+    // the frame LARGER than the dialog, which is a grow (handled
+    // correctly by the existing freeBlanks/preScroll path); zero tools
+    // means the approved tool was denied or hasn't produced an onToolCall
+    // yet — reserving blank rows there would just shift the gap around
+    // rather than eliminate it.
+    //
+    // The 7-row figure is the COMMON case: suggestRuleLabel only returns
+    // null for enterPlanMode (which runs no tools on approval), so the
+    // Always row is effectively always present. Rare 6-row dialogs
+    // (unknown tool with no content row) over-reserve by one — a
+    // transient blank row, cheaper than the stale residue an
+    // under-reserved shrink leaves behind.
     const hadPermissionLastRender = prevHadPermissionRef.current
     const runningToolCount = activeToolCalls?.length ?? 0
     if (hasNewMessages || permission) {
       permissionSlotReserveRef.current = 0
-    } else if (hadPermissionLastRender && !permission && runningToolCount === 1) {
-      permissionSlotReserveRef.current = 2
+    } else if (hadPermissionLastRender && !permission && runningToolCount >= 1 && runningToolCount <= 3) {
+      permissionSlotReserveRef.current = 7 - runningToolCount * 2
     }
     prevHadPermissionRef.current = !!permission
 
-    const vpWidth = Math.max(20, termWidth - PROMPT_WIDTH - 1)
-    const sepChar = '─'
-    const sepText = sepChar.repeat(Math.max(0, termWidth - 1))
-    // Rule color follows the approval mode (CC's promptBorder state):
+    const vpWidth = inputViewportWidth(termWidth)
+    // Rounded prompt box (Crush-style): `╭╮╰╯` corners, `─` top/bottom
+    // rules, `│` side rails. All box-drawing chars sit in the CP437-safe
+    // U+2500–U+257F range, so legacy ConHost needs no glyph fallback.
+    const boxWidth = Math.max(2, termWidth - 1)
+    const boxRule = '─'.repeat(Math.max(0, boxWidth - 2))
+    // Frame color follows the approval mode (CC's promptBorder state):
     // plan → primary, acceptEdits → warning, default → border gray.
     const frameStyle =
       permissionMode === 'plan' ? S_BORDER_FOCUS : permissionMode === 'acceptEdits' ? S_WARNING : S_BORDER
+
+    // Wraps content cells in a full-width `│ … │` row: clips overflow,
+    // then pads with trailing spaces so the right rail lands on the box's
+    // last column. Rows this wide are safe mid-frame — only the frame's
+    // LAST row must stay narrow (xterm.js auto-wrap ghost-line issue,
+    // documented at the footer below).
+    const boxContentWidth = Math.max(10, boxWidth - BOX_INNER_PAD)
+    const boxedRow = (cells: Cell[], borderStyle: string): Cell[] => {
+      const clipped = truncateCellRow(cells, boxContentWidth)
+      const used = clipped.reduce((sum, cell) => sum + cell.width, 0)
+      const row: Cell[] = [
+        { char: '│', style: borderStyle, width: 1 },
+        { char: ' ', style: S_NONE, width: 1 },
+        ...clipped,
+      ]
+      for (let i = used; i < boxContentWidth; i++) row.push({ char: ' ', style: S_NONE, width: 1 })
+      row.push({ char: ' ', style: S_NONE, width: 1 })
+      row.push({ char: '│', style: borderStyle, width: 1 })
+      return row
+    }
 
     // ── Input display lines (with soft-wrap + viewport windowing) ──
     // Raw lines are split by explicit `\n` only. Each raw line is then
@@ -1441,7 +1486,18 @@ export function ChatInput({
             const maxPreviewLen = Math.max(40, termWidth - decoration - safetyMargin)
             const trimmed =
               preview.length > maxPreviewLen ? preview.slice(0, maxPreviewLen - 1) + GLYPH_ELLIPSIS : preview
-            row1.push(...textToCells(`(${trimmed})`, S_PRIMARY))
+            // Shell commands get codex-style syntax highlighting —
+            // mirrors the committed scrollback row in
+            // `stdout-writer.formatToolCall`, which must match this
+            // live row's coloring exactly (see the note above about
+            // the live→commit color-flash).
+            if (isShellToolName(tc.toolName)) {
+              row1.push(...textToCells('(', S_PRIMARY))
+              row1.push(...ansiTextToCells(highlightLine(trimmed, 'shell')))
+              row1.push(...textToCells(')', S_PRIMARY))
+            } else {
+              row1.push(...textToCells(`(${trimmed})`, S_PRIMARY))
+            }
           }
           frame.push(row1)
 
@@ -1529,15 +1585,19 @@ export function ChatInput({
     // and the input's top separator) so the input stays pinned at the
     // bottom of the screen regardless of dialog state.
     if (permission) {
+      // Boxed dialog (same `╭╮│╰╯` language as the prompt box) in the
+      // warning hue — the modal moment should read as a container, not
+      // as more scrolling text.
+      frame.push(textToCells(`╭${boxRule}╮`, S_WARNING))
       const titleText = permissionTitle(permission.toolName, permission.mcp)
       const titleCells: Cell[] = []
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push(...textToCells(titleText, S_WARNING_BOLD))
-      frame.push(truncateCellRow(titleCells, termWidth))
+      frame.push(boxedRow(titleCells, S_WARNING))
 
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
-      if (contentCells) frame.push(truncateCellRow(contentCells, termWidth))
+      if (contentCells) frame.push(boxedRow(contentCells, S_WARNING))
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
       // When no rule can be suggested (e.g. powershell -Command "...",
@@ -1553,7 +1613,7 @@ export function ChatInput({
         yesCells.push(...textToCells('      ', S_NONE))
         yesCells.push(...textToCells('Yes', S_DIM))
       }
-      frame.push(yesCells)
+      frame.push(boxedRow(yesCells, S_WARNING))
 
       if (ruleLabel) {
         const alwaysCells: Cell[] = []
@@ -1564,7 +1624,7 @@ export function ChatInput({
           alwaysCells.push(...textToCells('      ', S_NONE))
           alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_DIM))
         }
-        frame.push(truncateCellRow(alwaysCells, termWidth))
+        frame.push(boxedRow(alwaysCells, S_WARNING))
       }
 
       const noCells: Cell[] = []
@@ -1575,7 +1635,8 @@ export function ChatInput({
         noCells.push(...textToCells('      ', S_NONE))
         noCells.push(...textToCells('No', S_DIM))
       }
-      frame.push(noCells)
+      frame.push(boxedRow(noCells, S_WARNING))
+      frame.push(textToCells(`╰${boxRule}╯`, S_WARNING))
     }
 
     if (authorityRequest) {
@@ -1928,8 +1989,8 @@ export function ChatInput({
       frame.push([])
     }
 
-    // Top separator
-    frame.push(textToCells(sepText, frameStyle))
+    // Top box rule
+    frame.push(textToCells(`╭${boxRule}╮`, frameStyle))
 
     // Input lines. The terminal's hardware cursor is hidden for the
     // entire TUI lifetime; the visible "cursor" the user sees is just an
@@ -1940,12 +2001,13 @@ export function ChatInput({
       // Same `❯` glyph the committed echo uses (stdout-writer) — the
       // plain ASCII `>` reads pointier and out of place next to it.
       // U+276F is width-1 per text-width.ts, so the prompt keeps its
-      // two-cell footprint (arrow + space).
+      // two-cell footprint (arrow + space). The arrow takes the frame
+      // color so plan/acceptEdits modes tint it along with the box.
       const prompt = i === 0 ? `${GLYPH_PROMPT_ARROW} ` : '  '
       const showCursor = !disabled && i === cursorLine && cursorLine >= 0
       const cells: Cell[] = []
 
-      cells.push({ char: prompt[0], style: S_BORDER, width: 1 })
+      cells.push({ char: prompt[0], style: frameStyle, width: 1 })
       cells.push({ char: prompt[1], style: S_NONE, width: 1 })
 
       if (!showCursor) {
@@ -1978,11 +2040,11 @@ export function ChatInput({
           cells.push(...textToCells(va, S_RESET))
         }
       }
-      frame.push(cells)
+      frame.push(boxedRow(cells, frameStyle))
     }
 
-    // Bottom separator
-    frame.push(textToCells(sepText, frameStyle))
+    // Bottom box rule
+    frame.push(textToCells(`╰${boxRule}╯`, frameStyle))
 
     // Footer row — same layout pattern Claude Code / Codex / Gemini CLI
     // use: left text and right text on a SINGLE row, with the right
@@ -2032,18 +2094,18 @@ export function ChatInput({
       }
       leftCells = cells
     } else if (permissionMode === 'plan') {
-      // Kimi-style mode badge: the mode name takes the primary/warning
-      // hue at bold weight (matching the input frame's border state),
-      // the affordance hint stays on the dim rung.
+      // Filled pill badge (Crush/Kimi-style): mode color as background,
+      // dark bold text — the same hue the prompt box's frame takes, so
+      // border + badge read as one mode signal. Hint stays on the dim rung.
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`${GLYPH_PLAN_MODE} plan mode`, S_PRIMARY_BOLD))
-      cells.push(...textToCells('  ·  /plan to toggle', S_DIM))
+      cells.push(...textToCells(` ${GLYPH_PLAN_MODE} plan mode `, S_BADGE_PRIMARY))
+      cells.push(...textToCells('  /plan to toggle', S_DIM))
       leftCells = cells
     } else if (permissionMode === 'acceptEdits') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(`${GLYPH_ACCEPT_EDITS} accept edits`, S_WARNING_BOLD))
+      cells.push(...textToCells(` ${GLYPH_ACCEPT_EDITS} accept edits `, S_BADGE_WARNING))
       leftCells = cells
     }
 

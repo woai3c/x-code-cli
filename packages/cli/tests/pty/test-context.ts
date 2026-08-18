@@ -7,7 +7,7 @@ import { startFakeProvider } from '../fixtures/fake-provider-server.js'
 import type { FakeProvider, ScriptedResponse } from '../fixtures/fake-provider-server.js'
 import { createTuiHarness } from './harness.js'
 import type { TuiHarness } from './harness.js'
-import { lastPromptLine } from './screen.js'
+import { lastPromptLine, promptContent } from './screen.js'
 
 export interface TuiTestContext {
   harness: TuiHarness
@@ -76,10 +76,10 @@ export async function withTui(
 }
 
 export function inputLine(harness: TuiHarness): string {
-  // terminalScreen() trims trailing spaces, so an empty live prompt is
-  // represented as just the platform glyph. Requiring its trailing space made repeated prompts
-  // compare against the previous scrollback entry instead of the live input.
-  return lastPromptLine(harness.screen())
+  // promptContent() strips the input box's `│ …… │` rails and padding, so
+  // an empty live prompt reads as just the platform glyph and typed text
+  // compares without the frame around it.
+  return promptContent(lastPromptLine(harness.screen()))
 }
 
 export async function typeInput(harness: TuiHarness, text: string): Promise<void> {

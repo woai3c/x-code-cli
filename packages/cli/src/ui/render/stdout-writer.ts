@@ -31,10 +31,12 @@ import {
   getToolLabel,
   getToolResultSummary,
   isCollapsibleReadOnlyTool,
+  isShellToolName,
   normalizeLineEndings,
 } from '../utils.js'
 import { renderEditDiff } from './render-diff.js'
 import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
+import { highlightLine } from './syntax-highlight.js'
 import { GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET, GLYPH_TOOL_BULLET } from './terminal-glyphs.js'
 import { sliceByWidth, visualWidth } from './text-width.js'
 import { chalk as c, paint, paintEchoArrow, paintEchoBg, paintEchoFg } from './tokens.js'
@@ -73,7 +75,21 @@ function formatToolCall(tc: DisplayToolCall): string {
   const durationStr = tc.durationMs != null ? formatDuration(tc.durationMs) : null
 
   const dotStyle = paint(isFailure ? 'error' : 'success')
-  const previewSuffix = inputPreview ? paint('primary')(`(${inputPreview})`) : ''
+  // Shell commands get codex-style syntax highlighting (their `Ran …`
+  // rows route the command through syntect's bash grammar): strings,
+  // option flags and variables pick up syntax colors while the command
+  // words stay on the terminal default fg. Other tools keep the flat
+  // primary-blue preview. Parens stay primary in both cases.
+  //
+  // Failed (denied/errored) calls skip highlighting: their preview went
+  // through authorityVisibleText to make terminal-injection bytes VISIBLE,
+  // and interleaving SGR color runs would split that sanitized text apart
+  // — the user must see the escape attempt as one contiguous string.
+  const previewSuffix = inputPreview
+    ? isShellToolName(tc.toolName) && !isFailure
+      ? `${paint('primary')('(')}${highlightLine(inputPreview, 'shell')}${paint('primary')(')')}`
+      : paint('primary')(`(${inputPreview})`)
+    : ''
   const line1 = ` ${dotStyle(GLYPH_TOOL_BULLET)} ${c.bold(label)}${previewSuffix}`
 
   // Edit / writeFile success path: render the structured diff under the

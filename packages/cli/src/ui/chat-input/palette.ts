@@ -8,11 +8,11 @@
 //
 // Structural (non-color) constants further down keep their hand-tuned
 // byte sequences and the comments explaining why.
-import { cellFg } from '../render/tokens.js'
+import { cellBadge, cellFg } from '../render/tokens.js'
 
 // ── Derived color styles (rebuilt on theme switch) ─────────────────────
 
-/** Prompt-box rules and card frames (`─`, `╭╮╰╯`). */
+/** Prompt-box frame (`╭╮╰╯` corners, `─` rules, `│` rails). */
 export let S_BORDER = cellFg('border')
 /** Mode-activated frame color (plan mode) — the primary rung. */
 export let S_BORDER_FOCUS = cellFg('borderFocus')
@@ -54,6 +54,10 @@ export let S_WARNING_BOLD = cellFg('warning', { bold: true })
 /** Non-bold error text — matches committed `paint('error')` output. */
 export let S_ERROR = cellFg('error')
 export let S_ERROR_BOLD = cellFg('error', { bold: true })
+/** Filled mode-badge pills in the footer (plan / accept-edits): token
+ *  color as background with fixed dark fg — see cellBadge in tokens.ts. */
+export let S_BADGE_PRIMARY = cellBadge('primary')
+export let S_BADGE_WARNING = cellBadge('warning')
 
 /** Re-derive every color style from tokens after a `/theme` switch.
  *  ESM live bindings propagate the new strings to all importers. */
@@ -73,6 +77,8 @@ export function rebuildPalette(): void {
   S_WARNING_BOLD = cellFg('warning', { bold: true })
   S_ERROR = cellFg('error')
   S_ERROR_BOLD = cellFg('error', { bold: true })
+  S_BADGE_PRIMARY = cellBadge('primary')
+  S_BADGE_WARNING = cellBadge('warning')
 }
 
 // ── Structural styles (not colors — fixed byte sequences) ──────────────

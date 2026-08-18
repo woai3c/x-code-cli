@@ -74,6 +74,38 @@ describe('stdout writer spacing', () => {
     expect(output).not.toContain('\u2066')
   })
 
+  it('syntax-highlights successful shell command previews (codex-style)', () => {
+    let output = ''
+
+    writeMessageToStdout(
+      (chunk) => {
+        output += chunk
+      },
+      {
+        id: 'shell-ok',
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 'tool-call',
+            toolName: 'shell',
+            input: { command: 'git log --oneline && echo "done"' },
+            status: 'completed',
+            output: 'abc123 commit\ndone',
+          },
+        ],
+        timestamp: 0,
+      },
+    )
+
+    // Command text survives verbatim once the SGR color runs are stripped…
+    expect(output.replace(/\x1b\[[0-9;]*m/g, '')).toContain('git log --oneline && echo "done"')
+    // …and the flag + string carry syntax colors (one-dark palette:
+    // storage #c678dd, string #98c379) instead of the flat primary blue.
+    expect(output).toContain('\x1b[38;2;198;120;221m--oneline')
+    expect(output).toContain('\x1b[38;2;152;195;121m"done"')
+  })
+
   it('renders denied authority tool input as visible escapes in scrollback', () => {
     let output = ''
 

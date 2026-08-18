@@ -52,7 +52,7 @@ describe('TUI /clear behavior', () => {
         expect(echoRow).toBeGreaterThanOrEqual(2)
         expect((lines[echoRow - 1] ?? 'x').trim()).toBe('')
         expect((lines[echoRow + 1] ?? 'x').trim()).toBe('')
-        expect(lines[echoRow + 2] ?? '').toMatch(/^─/)
+        expect(lines[echoRow + 2] ?? '').toMatch(/^╭/)
         // The card's bg rows must actually be emitted AFTER the clear's
         // home-cursor jump (they used to be pushed into scrollback where
         // some terminals drop bg-only rows from history).

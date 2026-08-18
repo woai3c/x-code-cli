@@ -19,7 +19,8 @@ const LONG_CJK =
   '我通过 /ps 命令来查看后台 shell 的时候，发现执行的时候只是打印了一下当前后台 shell 的执行情况，codex cli 也是这样的吗 还是说一直实时显示状态的 先确认我们产品和 codex cli 的实现是 /ps 只打印当前状态还是实时显示状态的  d:\\res\\codex'
 
 function countSeparatorRows(screen: string[]): number {
-  return screen.filter((line) => /^─{20,}$/.test(line)).length
+  // The input box's top/bottom rules: `╭───…╮` / `╰───…╯`.
+  return screen.filter((line) => /^[╭╰]─{18,}[╮╯]$/.test(line)).length
 }
 
 describe('TUI phantom input frame', () => {

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { CLI_BIN, isolatedCliEnv, waitFor } from '../fixtures/cli-test-helpers.js'
 import type { TestWorkspace } from '../fixtures/cli-test-helpers.js'
 import type { FakeProvider } from '../fixtures/fake-provider-server.js'
-import { lastPromptLine, screenText, terminalScreen } from './screen.js'
+import { lastPromptLine, promptContent, screenText, terminalScreen } from './screen.js'
 
 const EXIT_MARKER = '__X_CODE_CLI_EXIT__:'
 const require = createRequire(import.meta.url)
@@ -177,14 +177,16 @@ export async function createTuiHarness(options: {
   const waitForInputReady = async (): Promise<void> => {
     const probe = 'q'
     const deadline = Date.now() + 5000
-    while (!promptLine().endsWith(` ${probe}`)) {
+    // promptContent() strips the input box's rails/padding so the probe
+    // asserts against the typed text, not the `│ …… │` frame around it.
+    while (!promptContent(promptLine()).endsWith(` ${probe}`)) {
       if (Date.now() >= deadline) throw new Error('Timed out waiting for interactive stdin listener')
       processUnderTest.write(probe)
       await waitForRendered()
       await waitFor(
         async () => {
           await waitForRendered()
-          return promptLine().endsWith(` ${probe}`)
+          return promptContent(promptLine()).endsWith(` ${probe}`)
         },
         'one input readiness probe attempt',
         100,

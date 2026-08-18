@@ -628,6 +628,13 @@ function shellRules(): Rule[] {
     { re: /'[^'\n]{0,500}'/, token: 'string' },
     // Variables: $VAR or ${VAR}.
     { re: /\$\{[^}\n]{1,200}\}|\$[A-Za-z_]\w*/, token: 'literal' },
+    // Option flags (`-la`, `--check`). Syntect scopes these
+    // `variable.parameter`; we route them to `storage` (cyan in
+    // monokai / bright cyan in ansi) — this is what makes codex's
+    // `Ran …` rows read as highlighted commands. Must precede the
+    // number rule so `--verbose` never half-matches as a digit run,
+    // and the identifier rule so `-la` isn't split into `-` + word.
+    { re: /-{1,2}[A-Za-z][\w-]*/, token: 'storage' },
     { re: /-?\b\d+\b/, token: 'number' },
     { re: /[A-Za-z_][\w-]*/, token: 'keyword' },
   ])

@@ -71,6 +71,14 @@ function normalizeToolName(name: string): string {
   return name.toLowerCase().replace(/[_-]/g, '')
 }
 
+/** True for the shell-command tools on any provider (zsh / bash /
+ *  powershell). Used to route command previews through shell syntax
+ *  highlighting — codex-style colored strings/flags in `Zsh(...)` rows. */
+export function isShellToolName(toolName: string): boolean {
+  const n = normalizeToolName(toolName)
+  return n === 'shell' || n === 'bash'
+}
+
 export function isCollapsibleReadOnlyTool(toolName: string): boolean {
   return COLLAPSIBLE_READ_ONLY_TOOLS.has(normalizeToolName(toolName))
 }

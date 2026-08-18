@@ -4,8 +4,9 @@
 // self-contained data → Cell[] mapping that has no React state.
 import { getPermissionLevel } from '@x-code-cli/core'
 
+import { highlightLine } from '../render/syntax-highlight.js'
 import { GLYPH_ELLIPSIS } from '../render/terminal-glyphs.js'
-import { type Cell, textToCells } from './cells.js'
+import { type Cell, ansiTextToCells, textToCells } from './cells.js'
 import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS, S_WARNING } from './palette.js'
 import { truncatePathFromStart } from './text-helpers.js'
 
@@ -102,9 +103,15 @@ export function permissionContentCells(
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     const rawCommand = String(input.command ?? '')
-    const decoration = 2 + 2 + 1 + (info.label.length + 2) + 2
-    const command = truncateToWidth('$ ' + rawCommand, decoration)
-    cells.push(...textToCells(command, S_PRIMARY))
+    // Leading 2 spaces + `$ ` + trailing space + `[label]` + 2-col safety
+    // margin. The `$ ` is prepended AFTER truncation, so it must be in the
+    // budget — otherwise a max-length command overflows boxedRow's content
+    // width and truncateCellRow clips the tail of the `[label]` tag.
+    const decoration = 2 + 2 + 1 + (info.label.length + 2) + 2 + 2
+    const command = truncateToWidth(rawCommand, decoration)
+    // Same codex-style shell highlighting as the live/committed tool rows.
+    cells.push(...textToCells('$ ', S_PRIMARY))
+    cells.push(...ansiTextToCells(highlightLine(command, 'shell')))
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push(...textToCells(`[${info.label}]`, info.style))
     return cells
