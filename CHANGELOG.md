@@ -1,3 +1,13 @@
+## v0.5.1 (2026-08-18)
+
+### Features
+
+- rounded prompt box, footer mode badges and shell command highlighting (9f5f457)
+
+### Bug Fixes
+
+- repaint frame top rows at risk of scrollback commit spill (a6018c9)
+
 ## v0.5.0 (2026-08-16)
 
 ### Features
