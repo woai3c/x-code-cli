@@ -95,6 +95,8 @@ import {
   S_SUCCESS,
   S_SUCCESS_DOT,
   S_SUCCESS_DOT_DIM,
+  S_TEXT_STRONG,
+  S_TEXT_STRONG_BOLD,
   S_USAGE,
   S_WARNING,
   S_WARNING_BOLD,
@@ -1593,7 +1595,7 @@ export function ChatInput({
       const titleCells: Cell[] = []
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
-      titleCells.push(...textToCells(titleText, S_WARNING_BOLD))
+      titleCells.push(...textToCells(titleText, S_TEXT_STRONG_BOLD))
       frame.push(boxedRow(titleCells, S_WARNING))
 
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
@@ -1608,10 +1610,10 @@ export function ChatInput({
       const yesCells: Cell[] = []
       if (permissionSelected === 0) {
         yesCells.push(...textToCells('    ', S_NONE))
-        yesCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes`, S_SUCCESS))
+        yesCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes`, S_TEXT_STRONG_BOLD))
       } else {
         yesCells.push(...textToCells('      ', S_NONE))
-        yesCells.push(...textToCells('Yes', S_DIM))
+        yesCells.push(...textToCells('Yes', S_TEXT_STRONG))
       }
       frame.push(boxedRow(yesCells, S_WARNING))
 
@@ -1619,10 +1621,12 @@ export function ChatInput({
         const alwaysCells: Cell[] = []
         if (permissionSelected === 1) {
           alwaysCells.push(...textToCells('    ', S_NONE))
-          alwaysCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes, don't ask again for: ${ruleLabel}`, S_SUCCESS))
+          alwaysCells.push(
+            ...textToCells(`${GLYPH_SELECT_POINTER} Yes, don't ask again for: ${ruleLabel}`, S_TEXT_STRONG_BOLD),
+          )
         } else {
           alwaysCells.push(...textToCells('      ', S_NONE))
-          alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_DIM))
+          alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_TEXT_STRONG))
         }
         frame.push(boxedRow(alwaysCells, S_WARNING))
       }

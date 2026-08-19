@@ -24,6 +24,9 @@ export let S_PRIMARY_BOLD = cellFg('primary', { bold: true })
  *  footer reads as live status rather than meta text. */
 export let S_MODEL = cellFg('model')
 export let S_USAGE = cellFg('usage')
+/** Plain near-white emphasis — permission dialog title and Yes options. */
+export let S_TEXT_STRONG = cellFg('textStrong')
+export let S_TEXT_STRONG_BOLD = cellFg('textStrong', { bold: true })
 /** Workhorse meta/hints gray — footer model label, menu descriptions,
  *  permission option labels. An explicit textDim hex rather than the
  *  ANSI dim attribute: `\x1b[2m` on the terminal default fg renders as
@@ -68,6 +71,8 @@ export function rebuildPalette(): void {
   S_PRIMARY_BOLD = cellFg('primary', { bold: true })
   S_MODEL = cellFg('model')
   S_USAGE = cellFg('usage')
+  S_TEXT_STRONG = cellFg('textStrong')
+  S_TEXT_STRONG_BOLD = cellFg('textStrong', { bold: true })
   S_DIM = cellFg('textDim')
   S_SPINNER = cellFg('primary')
   S_SUCCESS = cellFg('success', { bold: true })
