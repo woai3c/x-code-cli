@@ -1786,7 +1786,7 @@ export function ChatInput({
       if (layout === 'compact-vertical') {
         // compact-vertical: description on a separate indented line below
         // the label. Matches CC's QuestionView layout:
-        //   ▸ 1. Label        ← focused: pointer "suggestion", label "suggestion"
+        //   › 1. Label        ← focused: pointer "suggestion", label "suggestion"
         //      description     ← paddingLeft = maxIndexWidth + 4
         //     2. Label         ← unfocused: no pointer, label default (no bold)
         //      description     ← dim
@@ -2010,9 +2010,9 @@ export function ChatInput({
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
       if (i === 0) inputFirstLineRow = frame.length
-      // Same `▸` glyph the committed echo uses (stdout-writer) — the
+      // Same `›` glyph the committed echo uses (stdout-writer) — the
       // plain ASCII `>` reads pointier and out of place next to it.
-      // U+25B8 is width-1 per text-width.ts, so the prompt keeps its
+      // U+203A is width-1 per text-width.ts, so the prompt keeps its
       // two-cell footprint (arrow + space). The arrow takes the frame
       // color so plan/acceptEdits modes tint it along with the box.
       const prompt = i === 0 ? `${GLYPH_PROMPT_ARROW} ` : '  '
@@ -2307,7 +2307,7 @@ export function ChatInput({
     // drawn (caret scrolled out of the windowed input), fall back to the
     // input box's first text column so the preview stays inside the box.
     let caretParkRow = inputFirstLineRow
-    let caretParkCol = 5 // 1-based: │ + space + ▸ + space, then text
+    let caretParkCol = 5 // 1-based: │ + space + › + space, then text
     scanCaret: for (let r = 0; r < frame.length; r++) {
       let col = 0
       for (const cell of frame[r]!) {

@@ -3,7 +3,7 @@
 // Legacy ConHost (cmd.exe / Windows PowerShell host outside Windows Terminal)
 // defaults to fonts (Lucida Console, Consolas, SimSun, NSimSun, MS Gothic)
 // that lack many Unicode glyphs outside the CP437 / Latin-1 Supplement range.
-// Characters like ●, ▸, ⎿, ✢, ✶, ⏸, ⚡, ✓, ◼, •, ▎ either render as
+// Characters like ●, ›, ⎿, ✢, ✶, ⏸, ⚡, ✓, ◼, •, ▎ either render as
 // missing-glyph boxes (□) or at incorrect widths, producing visual artifacts
 // the user described as "ugly" / "broken".
 //
@@ -39,16 +39,16 @@ export const GLYPH_BULLET = IS_LEGACY_TERMINAL ? '*' : '●'
  *  with the rest of the table. */
 export const GLYPH_TOOL_BULLET = IS_LEGACY_TERMINAL ? '*' : '\u2022'
 
-/** User-message prompt arrow: `▸` (U+25B8) → `>`. Middle ground
- *  between the heavy `❯` (U+276F) and the tiny `›` (U+203A). */
-export const GLYPH_PROMPT_ARROW = IS_LEGACY_TERMINAL ? '>' : '\u25b8'
+/** User-message prompt arrow: `›` (U+203A) → `>`. Matches the
+ *  codex CLI composer prompt. */
+export const GLYPH_PROMPT_ARROW = IS_LEGACY_TERMINAL ? '>' : '\u203a'
 
 /** Tool-result / sub-item bracket: `⎿` (U+23BF) → `|` */
 export const GLYPH_RESULT_BRACKET = IS_LEGACY_TERMINAL ? '|' : '⎿'
 
-/** Permission / select-option pointer: `▸` (U+25B8) → `>`. Matches
- *  GLYPH_PROMPT_ARROW. */
-export const GLYPH_SELECT_POINTER = IS_LEGACY_TERMINAL ? '>' : '\u25b8'
+/** Permission / select-option pointer: `›` (U+203A) → `>`. Matches
+ *  GLYPH_PROMPT_ARROW and the codex CLI selection pointer. */
+export const GLYPH_SELECT_POINTER = IS_LEGACY_TERMINAL ? '>' : '\u203a'
 
 /** Plan mode indicator: `⏸` (U+23F8) → `=` */
 export const GLYPH_PLAN_MODE = IS_LEGACY_TERMINAL ? '=' : '\u23f8'

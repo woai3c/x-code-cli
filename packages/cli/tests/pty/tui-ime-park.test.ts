@@ -24,7 +24,7 @@ describe('IME cursor park', () => {
 
       const { row, col } = lastCursorPosition(harness.raw())
       // Caret visual column: 1-based col 5 is the first text cell
-      // (│ space ▸ space), then a(1) b(1) 中(2) 文(2) → caret at col 11.
+      // (│ space › space), then a(1) b(1) 中(2) 文(2) → caret at col 11.
       expect(col).toBe(11)
 
       // The parked row must be the screen row that contains the typed text.

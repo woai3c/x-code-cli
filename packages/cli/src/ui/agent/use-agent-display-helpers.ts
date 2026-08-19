@@ -27,7 +27,7 @@ export function useAgentDisplayHelpers(appendMessage: (msg: DisplayMessage) => v
   /** Add a user message to the history (for echoing slash commands) */
   const addUserMessage = useCallback((content: string) => addMessage('user', content), [addMessage])
 
-  /** Echo a slash command as a compact `▸ /cmd` line (no trailing blank).
+  /** Echo a slash command as a compact `› /cmd` line (no trailing blank).
    *  Follow up with `addCommandResult` for the tight `⎿  result` lines. */
   const echoCommand = useCallback(
     (content: string) => {

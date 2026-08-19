@@ -481,7 +481,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
 
 /**
  * Echo a user message in full. For multi-line content we indent continuation
- * lines so they align under the text that followed the `▸` prompt glyph on
+ * lines so they align under the text that followed the `›` prompt glyph on
  * the first line. `content` is assumed to have already been normalized to
  * use `\n` line separators.
  *
@@ -489,7 +489,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
  * bg span) so questions read as solid blocks next to the assistant's
  * markdown — codex-rs does the same via `user_message_style`. The block
  * gets breathing room beyond the text: one full-width bg row above and
- * below as vertical padding, plus a one-cell inset left of the `▸`. On
+ * below as vertical padding, plus a one-cell inset left of the `›`. On
  * *-ansi themes and under NO_COLOR `paintEchoBg()` returns null and we
  * fall back to bold text instead of forcing a hex bg onto the terminal's
  * own palette.
@@ -516,7 +516,7 @@ function writeUserMessage(write: InkWrite, content: string, compact = false): vo
   // dark card.
   const bgArrow = paintEchoArrow()(GLYPH_PROMPT_ARROW)
   const echoText = paintEchoFg()
-  // Both prefixes are 3 cells wide (` ▸ ` / three spaces), so wrapped
+  // Both prefixes are 3 cells wide (` › ` / three spaces), so wrapped
   // continuation rows align under the first row's text.
   const PREFIX_CELLS = 3
   // Never let a PRINTABLE cell land in the terminal's last column: a row
