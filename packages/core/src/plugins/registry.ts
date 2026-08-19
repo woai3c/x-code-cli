@@ -11,17 +11,13 @@
 // CLI invalidates `systemPromptCache` afterwards — the byte-stability
 // constraint described in CLAUDE.md still applies because plugins
 // contribute skills / agents / commands into the system prompt.
+import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
 import type { LoadedPlugin, PluginLoadError } from './types.js'
 
 /** Summary of what changed between two registry snapshots — used by
  *  `/plugin refresh` to render an "added / removed / changed" message
  *  the same way `/mcp refresh` and `/skill refresh` do. */
-export interface PluginReloadSummary {
-  added: string[]
-  removed: string[]
-  changed: string[]
-  unchanged: string[]
-}
+export type PluginReloadSummary = ReloadSummary
 
 export class PluginRegistry {
   private byId: Map<string, LoadedPlugin>
@@ -77,25 +73,15 @@ export class PluginRegistry {
     const next = new Map<string, LoadedPlugin>()
     for (const p of plugins) next.set(p.id, p)
 
-    const summary: PluginReloadSummary = { added: [], removed: [], changed: [], unchanged: [] }
-    for (const [id, plugin] of next) {
-      const prev = previous.get(id)
-      if (!prev) {
-        summary.added.push(id)
-      } else if (
+    const summary = diffNamedEntries(
+      previous,
+      next,
+      (prev, plugin) =>
         prev.manifest.version !== plugin.manifest.version ||
         prev.rootDir !== plugin.rootDir ||
         prev.enabled !== plugin.enabled ||
-        prev.scope !== plugin.scope
-      ) {
-        summary.changed.push(id)
-      } else {
-        summary.unchanged.push(id)
-      }
-    }
-    for (const id of previous.keys()) {
-      if (!next.has(id)) summary.removed.push(id)
-    }
+        prev.scope !== plugin.scope,
+    )
 
     this.byId = next
     this.errors = [...errors]

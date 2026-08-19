@@ -8,7 +8,7 @@
 // Provider capabilities describe the wire API. modelSupportsVision applies
 // the curated per-model flag on top, so text-only Qwen/GLM variants still
 // downgrade images even though their provider accepts multimodal content.
-import { MODEL_ALIASES, PROVIDER_MODELS } from '../types/index.js'
+import { MODEL_ALIASES, PROVIDER_MODELS } from './catalog.js'
 
 export interface ProviderCapabilities {
   /** Provider can receive inline image parts (base64 or URL) in user messages. */

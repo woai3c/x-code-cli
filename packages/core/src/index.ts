@@ -34,8 +34,9 @@ export {
   PROVIDER_KEY_URLS,
   PROVIDER_MODELS,
   PROVIDER_REASONING_TIERS,
-} from './types/index.js'
-export type { ProviderModel } from './types/index.js'
+  PROVIDERS,
+} from './providers/catalog.js'
+export type { ProviderModel } from './providers/catalog.js'
 
 // Config
 export {

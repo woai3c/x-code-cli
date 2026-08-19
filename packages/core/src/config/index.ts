@@ -16,20 +16,11 @@
 import fsSync from 'node:fs'
 import path from 'node:path'
 
-import { MODEL_ALIASES, PROVIDER_DETECTION_ORDER } from '../types/index.js'
+import { MODEL_ALIASES, PROVIDERS, PROVIDER_DETECTION_ORDER } from '../providers/catalog.js'
 import { userXcodeDir } from '../utils.js'
 
-/** Provider → environment variable mapping */
-const ENV_MAP: Record<string, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  xai: 'XAI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  alibaba: 'ALIBABA_API_KEY',
-  zhipu: 'ZHIPU_API_KEY',
-  moonshotai: 'MOONSHOT_API_KEY',
-}
+/** Provider → environment variable mapping, derived from the catalog. */
+const ENV_MAP: Record<string, string> = Object.fromEntries(PROVIDERS.map((p) => [p.name, p.envKey]))
 
 /** Get API key for a provider — reads from environment variables only */
 function getApiKey(provider: string): string | undefined {

@@ -15,6 +15,7 @@ import {
   resolvePeerMessagingConfig,
   resolveStreamConfig,
 } from '../src/config/index.js'
+import { PROVIDER_ENV_VARS } from './provider-env.js'
 
 describe('resolvePeerMessagingConfig', () => {
   it('falls back safely for malformed policy values', () => {
@@ -36,25 +37,8 @@ describe('resolvePeerMessagingConfig', () => {
   })
 })
 
-/** Every provider env var the config module reads. Mirrors `ENV_MAP` in
- *  `src/config/index.ts` plus the `OPENAI_COMPATIBLE_*` pair from
- *  `getAvailableProviders`. Listed in full so a developer running tests
- *  with any single provider key set in their shell (Google for Gemini,
- *  Alibaba for Qwen, etc.) doesn't get a leak that fails the
- *  "no providers configured" assertions. Update when adding providers. */
-const PROVIDER_ENV_VARS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
-  'XAI_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'ALIBABA_API_KEY',
-  'ZHIPU_API_KEY',
-  'MOONSHOT_API_KEY',
-  'OPENAI_COMPATIBLE_API_KEY',
-  'OPENAI_COMPATIBLE_BASE_URL',
-] as const
-
+// Scrub the developer's real shell keys so they can't leak into the
+// "no providers configured" assertions.
 function clearProviderEnvVars(): void {
   for (const key of PROVIDER_ENV_VARS) delete process.env[key]
 }

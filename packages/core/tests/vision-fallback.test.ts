@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateText } from 'ai'
 
 import { captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
+import { PROVIDER_ENV_VARS } from './provider-env.js'
 
 vi.mock('ai', async () => {
   const actual = await vi.importActual('ai')
@@ -21,21 +22,8 @@ vi.mock('../src/utils/image-compress.js', () => ({
   compressImage: vi.fn(async (data: Buffer, mimeType: string) => ({ data, mimeType, changed: false })),
 }))
 
-const VISION_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
-  'XAI_API_KEY',
-  'ALIBABA_API_KEY',
-  'ZHIPU_API_KEY',
-  'MOONSHOT_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'OPENAI_COMPATIBLE_API_KEY',
-  'OPENAI_COMPATIBLE_BASE_URL',
-]
-
 function clearAllKeys(): void {
-  for (const k of VISION_KEYS) delete process.env[k]
+  for (const k of PROVIDER_ENV_VARS) delete process.env[k]
 }
 
 describe('pickVisionProvider', () => {

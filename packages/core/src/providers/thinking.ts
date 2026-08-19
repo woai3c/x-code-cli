@@ -16,8 +16,8 @@
 // When `effort` is set (user picked a tier via /model), it takes priority
 // over the `enabled` flag. The /thinking toggle is only used as a fallback
 // for models without an explicit tier.
-import { PROVIDER_REASONING_TIERS } from '../types/index.js'
 import { providerOf } from './capabilities.js'
+import { PROVIDER_REASONING_TIERS } from './catalog.js'
 
 /** Whether the model exposes a granular reasoning-effort tier (vs. the
  *  binary /thinking toggle). A provider has tiers but only some of its
