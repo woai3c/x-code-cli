@@ -340,7 +340,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
 
   if (msg.kind === 'peer-status') {
     const content = normalizeLineEndings(msg.content)
-    write(toCRLF(`  ${c.gray(GLYPH_RESULT_BRACKET)}  ${renderInlineMarkdown(content)}\n`))
+    write(toCRLF(`   ${c.gray(GLYPH_RESULT_BRACKET)}  ${renderInlineMarkdown(content)}\n`))
     prevWriteEndedWithBlankRow = false
     prevWriteWasStreamingChunk = false
     return
@@ -358,9 +358,14 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     return
   }
 
-  // Compact slash-command result — render as a tight `  ⎿  text` line so the
+  // Compact slash-command result — render as a tight `   ⎿  text` line so the
   // pair `> /cmd` + result shows up as the Claude-style 2-line block instead
-  // of command + blank + indented body + blank.
+  // of command + blank + indented body + blank. The 3-space prefix matches
+  // formatToolCall's result-block indent, so standalone notices that reuse
+  // this kind (background-shell lifecycle lines, compression summaries,
+  // interrupts) keep their ⎿ aligned with the tool block above them instead
+  // of shifting one cell left; head text then lands exactly at RESULT_INDENT
+  // like the tail lines.
   //
   // Body lines go through `renderInlineMarkdown` so `**name**` / `` `code` `` /
   // `_italic_` markers our slash-command handlers emit display styled rather
@@ -376,7 +381,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     const content = normalizeLineEndings(msg.content)
     debugLog('stdout.command-result', content)
     const lines = content.split('\n')
-    const head = `  ${c.gray(GLYPH_RESULT_BRACKET)}  ${renderInlineMarkdown(lines[0] ?? '')}`
+    const head = `   ${c.gray(GLYPH_RESULT_BRACKET)}  ${renderInlineMarkdown(lines[0] ?? '')}`
     const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${renderInlineMarkdown(l)}`)
     write(toCRLF([head, ...tail].join('\n') + '\n'))
     prevWriteEndedWithBlankRow = false
