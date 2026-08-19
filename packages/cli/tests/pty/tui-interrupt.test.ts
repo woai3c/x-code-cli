@@ -96,11 +96,11 @@ describe('TUI interruption', () => {
       })
 
       await submitInput(harness, 'interrupt this permission')
-      await harness.waitForText('X-Code wants to write a file')
+      await harness.waitForText('Would you like to write the following file?')
       harness.key('ctrl-c')
       await harness.waitForText('Press Ctrl+C again to exit')
       await harness.waitForScreen(
-        (screen) => !screen.includes('X-Code wants to write a file'),
+        (screen) => !screen.includes('Would you like to write the following file?'),
         'permission dialog closed after interrupt',
       )
       expect(await pathExists(target)).toBe(false)
@@ -125,7 +125,7 @@ describe('TUI interruption', () => {
       })
 
       await submitInput(harness, 'run and interrupt a child')
-      await harness.waitForText('X-Code wants to run a shell command')
+      await harness.waitForText('Would you like to run the following command?')
       harness.write('y')
       await waitFor(() => pathExists(pidFile), 'shell child pid file')
       const pid = Number(await fs.readFile(pidFile, 'utf-8'))

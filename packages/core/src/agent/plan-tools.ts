@@ -121,13 +121,14 @@ export async function handleEnterPlanMode(
     pushToolResult(state, callbacks, toolCallId, 'enterPlanMode', '[Tool execution interrupted by user]', true)
     return
   }
-  if (decision === 'no') {
+  if (decision === 'no' || typeof decision === 'object') {
+    const feedback = typeof decision === 'object' ? decision.feedback.trim() : ''
     pushToolResult(
       state,
       callbacks,
       toolCallId,
       'enterPlanMode',
-      "User declined to enter plan mode. Continue with the user's request in default mode — make whatever edits or shell calls the task requires (subject to per-tool permission).",
+      `User declined to enter plan mode.${feedback ? ` User feedback: ${feedback}.` : ''} Continue with the user's request in default mode — make whatever edits or shell calls the task requires (subject to per-tool permission).`,
       true,
     )
     return

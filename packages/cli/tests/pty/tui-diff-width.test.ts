@@ -25,7 +25,7 @@ describe('diff band width', () => {
       ],
       async ({ harness }) => {
         await submitInput(harness, 'edit the file')
-        await harness.waitForText('wants to edit a file', 30000)
+        await harness.waitForText('Would you like to edit the following file?', 30000)
         harness.write('y')
         await harness.waitForText('done-all', 30000)
         await harness.settle()

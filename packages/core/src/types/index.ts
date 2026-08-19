@@ -38,6 +38,13 @@ export type PermissionLevel = 'always-allow' | 'ask' | 'deny'
  *                     mode on approval. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
 
+/** User decision returned by the permission prompt. The object form is a
+ *  denial carrying the user's free-text feedback (kimi-cli's "reject with
+ *  feedback") — the core appends it to the denial tool result so the
+ *  model can adapt its next attempt instead of guessing why it was
+ *  refused. */
+export type PermissionDecision = 'yes' | 'always' | 'no' | { kind: 'deny'; feedback: string }
+
 // ─── Execution authority and transcript provenance ───
 
 export interface PeerOrigin {
@@ -277,7 +284,7 @@ export interface AgentCallbacks {
     toolCallId: string
     toolName: string
     input: Record<string, unknown>
-  }) => Promise<'yes' | 'always' | 'no'>
+  }) => Promise<PermissionDecision>
   /** Peer-influenced calls use a separate allow-once-only surface. The
    *  callback must prove that the complete canonical payload was rendered;
    *  absence of this callback is a fail-closed denial. */

@@ -26,7 +26,7 @@ describe('TUI permissions', () => {
       })
 
       await submitInput(harness, 'run the requested command')
-      await harness.waitForText('X-Code wants to run a shell command')
+      await harness.waitForText('Would you like to run the following command?')
       expect(harness.text()).toContain('$ touch ask-target.txt')
       expect(harness.text()).toContain('[write]')
       expect(harness.text()).toContain("Yes, don't ask again")
@@ -48,7 +48,7 @@ describe('TUI permissions', () => {
       })
 
       await submitInput(harness, 'try a denied write')
-      await harness.waitForText('X-Code wants to write a file')
+      await harness.waitForText('Would you like to write the following file?')
       expect(harness.text()).toContain('denied.txt')
       harness.write('n')
       await harness.waitForText('denial-observed')
@@ -87,11 +87,11 @@ describe('TUI permissions', () => {
       )
 
       await submitInput(harness, 'first edit')
-      await harness.waitForText('X-Code wants to write a file')
+      await harness.waitForText('Would you like to write the following file?')
       expect(harness.text()).toContain('all edits this session')
       harness.key('down')
       await harness.waitForScreen(
-        (screen) => screen.includes(`${GLYPH_SELECT_POINTER} Yes, don't ask again`),
+        (screen) => screen.includes(`${GLYPH_SELECT_POINTER} 2. Yes, don't ask again`),
         'always option selected',
       )
       harness.key('enter')
@@ -103,11 +103,41 @@ describe('TUI permissions', () => {
       await waitFor(() => pathExists(second), 'second edit auto-approved')
 
       await submitInput(harness, 'unrelated shell action')
-      await harness.waitForText('X-Code wants to run a shell command')
+      await harness.waitForText('Would you like to run the following command?')
       expect(await pathExists(shellTarget)).toBe(false)
       harness.write('n')
       await harness.waitForText('shell-denied-after-scope-check')
       expect(await pathExists(shellTarget)).toBe(false)
+    })
+  })
+
+  it('denies with inline feedback and returns it to the agent', async () => {
+    await withTui('permissions-feedback', [], async ({ harness, provider, workspace }) => {
+      const target = path.join(workspace.cwd, 'feedback-target.txt')
+      provider.enqueue({
+        type: 'tool-call',
+        name: 'shell',
+        input: { command: 'touch feedback-target.txt' },
+        finalText: 'feedback-denied',
+      })
+
+      await submitInput(harness, 'run the requested command')
+      await harness.waitForText('Would you like to run the following command?')
+      expect(harness.text()).toContain('No, and tell X-Code what to do instead')
+
+      // 'f' opens the inline feedback editor on the last option row.
+      harness.write('f')
+      await harness.waitForText('Type your feedback, then press Enter to submit')
+      harness.write('use a different directory')
+      // Wait for the typed text to paint so the Enter handler reads the
+      // updated buffer (the whole string lands as one setState).
+      await harness.waitForText('No: use a different directory')
+      harness.key('enter')
+      await harness.waitForText('feedback-denied')
+
+      expect(await pathExists(target)).toBe(false)
+      const requests = await provider.waitForMainRequests(2)
+      expect(JSON.stringify(requests[1]!.messages)).toContain('User feedback: use a different directory')
     })
   })
 
@@ -128,7 +158,7 @@ describe('TUI permissions', () => {
         await submitInput(harness, 'attempt a workspace write while planning')
         await harness.waitForText('plan mode may only modify the current session plan file')
         await harness.waitForText('plan-write-denied')
-        expect(harness.text()).not.toContain('X-Code wants to write a file')
+        expect(harness.text()).not.toContain('Would you like to write the following file?')
         expect(await pathExists(target)).toBe(false)
       },
       { args: ['--plan'] },

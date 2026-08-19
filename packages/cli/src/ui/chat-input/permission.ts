@@ -10,19 +10,22 @@ import { type Cell, ansiTextToCells, textToCells } from './cells.js'
 import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS } from './palette.js'
 import { truncatePathFromStart } from './text-helpers.js'
 
+// Codex-style question titles ("Would you like to run the following
+// command?") — the dialog reads as a request the user answers, not a
+// status line.
 export function permissionTitle(toolName: string, mcp?: { serverName: string; rawName: string }): string {
-  if (mcp) return `X-Code wants to use MCP tool: ${mcp.serverName}/${mcp.rawName}`
+  if (mcp) return `Would you like to use MCP tool ${mcp.serverName}/${mcp.rawName}?`
   switch (toolName) {
     case 'shell':
-      return 'X-Code wants to run a shell command'
+      return 'Would you like to run the following command?'
     case 'writeFile':
-      return 'X-Code wants to write a file'
+      return 'Would you like to write the following file?'
     case 'edit':
-      return 'X-Code wants to edit a file'
+      return 'Would you like to edit the following file?'
     case 'enterPlanMode':
-      return 'X-Code wants to enter plan mode'
+      return 'Would you like to enter plan mode?'
     default:
-      return `X-Code wants to use ${toolName}`
+      return `Would you like to use ${toolName}?`
   }
 }
 

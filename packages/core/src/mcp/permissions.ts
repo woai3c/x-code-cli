@@ -16,6 +16,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import type { PermissionDecision } from '../types/index.js'
 import { debugLog, userXcodeDir } from '../utils.js'
 
 function permissionsFile(): string {
@@ -105,11 +106,12 @@ async function readPersisted(): Promise<Set<string>> {
 }
 
 /** Pull "yes" / "always" / "no" out of the existing askPermission
- *  callback. The callback's contract returns one of those three strings;
- *  we map them to a structured choice for our own callers. */
+ *  callback. The callback's contract returns one of those three strings
+ *  (or a denial carrying user feedback); we map them to a structured
+ *  choice for our own callers. */
 export type McpPermissionDecision = 'allow-once' | 'allow-always' | 'deny'
 
-export function classifyDecision(raw: 'yes' | 'always' | 'no'): McpPermissionDecision {
+export function classifyDecision(raw: PermissionDecision): McpPermissionDecision {
   if (raw === 'always') return 'allow-always'
   if (raw === 'yes') return 'allow-once'
   return 'deny'

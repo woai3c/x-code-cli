@@ -304,9 +304,9 @@ export function ChatInput({
   const lastFrameTopRef = useRef(0)
   /** Reserves vertical space inside the tool-running frame when a permission
    *  dialog just closed but its approved tool hasn't committed a result yet.
-   *  Without the reservation the frame snaps 7→5 rows (permission was 4 rows,
-   *  tool rows are 2) and the now-empty top 2 rows of the old permission
-   *  region flash as blank lines between the last committed scrollback entry
+   *  Without the reservation the frame snaps 14→5 rows (permission was 11
+   *  rows + 3 input, tool rows are 2) and the now-empty top rows of the old
+   *  permission region flash as blank lines between the last committed scrollback entry
    *  and the running tool — for a beat the user sees "Running..." pinned to
    *  the bottom with a gap above, until the tool finishes and its commit
    *  backfills those rows. The reservation holds the frame at the old size
@@ -353,6 +353,10 @@ export function ChatInput({
   // react-hooks/set-state-in-effect lint.
   // https://react.dev/reference/react/useState#storing-information-from-previous-renders
   const [permissionSelected, setPermissionSelected] = useState(0)
+  /** Non-null while the "No, and tell X-Code what to do instead" row is
+   *  in inline-edit mode (kimi-cli's reject-with-feedback): typed text
+   *  lands here instead of resolving the dialog. */
+  const [permissionFeedback, setPermissionFeedback] = useState<{ text: string; cursor: number } | null>(null)
   const [authoritySelected, setAuthoritySelected] = useState(1)
   const [authorityViewedComplete, setAuthorityViewedComplete] = useState(false)
   const [authorityPage, setAuthorityPage] = useState(0)
@@ -361,6 +365,7 @@ export function ChatInput({
   if (permissionKey !== lastPermissionKey) {
     setLastPermissionKey(permissionKey)
     setPermissionSelected(0)
+    setPermissionFeedback(null)
   }
   const [lastAuthorityKey, setLastAuthorityKey] = useState<string | null>(null)
   const authorityKey = authorityRequest?.preview.canonicalCallSha256 ?? null
@@ -685,14 +690,58 @@ export function ChatInput({
       // `/goal cancel` can interrupt a goal even while a tool approval is
       // waiting.
       if (permission) {
-        const ch = chunk.toLowerCase()
-        if (!dialogSlashDraft && ch === 'y') {
-          permission.onResolve('yes')
+        // Feedback edit mode swallows ALL typed text into the inline
+        // buffer (kimi-cli's Reject-with-feedback row).
+        if (permissionFeedback) {
+          setPermissionFeedback((prev) =>
+            prev
+              ? {
+                  text: prev.text.slice(0, prev.cursor) + chunk + prev.text.slice(prev.cursor),
+                  cursor: prev.cursor + chunk.length,
+                }
+              : prev,
+          )
           return
         }
-        if (!dialogSlashDraft && ch === 'n') {
-          permission.onResolve('no')
-          return
+        const ch = chunk.toLowerCase()
+        if (!dialogSlashDraft) {
+          // Codex/kimi-style single-key shortcuts: y/n always work, 'a'
+          // approves the always-rule when one is offered, 'f' opens the
+          // deny-with-feedback editor, and digits pick the numbered
+          // option directly.
+          const hasAlways = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp) !== null
+          const actions: ('yes' | 'always' | 'no' | 'feedback')[] = hasAlways
+            ? ['yes', 'always', 'no', 'feedback']
+            : ['yes', 'no', 'feedback']
+          if (ch === 'y') {
+            permission.onResolve('yes')
+            return
+          }
+          if (ch === 'n') {
+            permission.onResolve('no')
+            return
+          }
+          if (ch === 'a' && hasAlways) {
+            permission.onResolve('always')
+            return
+          }
+          if (ch === 'f') {
+            setPermissionSelected(actions.length - 1)
+            setPermissionFeedback({ text: '', cursor: 0 })
+            return
+          }
+          if (/^[1-9]$/.test(ch)) {
+            const action = actions[Number(ch) - 1]
+            if (action === 'feedback') {
+              setPermissionSelected(actions.length - 1)
+              setPermissionFeedback({ text: '', cursor: 0 })
+              return
+            }
+            if (action) {
+              permission.onResolve(action)
+              return
+            }
+          }
         }
         if (dialogSlashDraft) {
           insertAtCursor(chunk)
@@ -725,6 +774,17 @@ export function ChatInput({
       const dialogSlashPaste = content.trimStart().startsWith('/')
       if (authorityRequest) return
       if (permission) {
+        if (permissionFeedback) {
+          setPermissionFeedback((prev) =>
+            prev
+              ? {
+                  text: prev.text.slice(0, prev.cursor) + content + prev.text.slice(prev.cursor),
+                  cursor: prev.cursor + content.length,
+                }
+              : prev,
+          )
+          return
+        }
         if (dialogSlashPaste) {
           insertAtCursor(content)
           setCompletionIndex(0)
@@ -793,7 +853,67 @@ export function ChatInput({
       // Permission dialog captures navigation + submit keys.
       if (permission && !dialogSlashMode) {
         const hasAlwaysOption = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp) !== null
-        const maxIdx = hasAlwaysOption ? 2 : 1
+        const maxIdx = hasAlwaysOption ? 3 : 2
+        // Inline feedback editing (same key set as the selectRequest
+        // freeform row). Esc exits back to option navigation without
+        // resolving; Enter submits the denial only when non-empty so a
+        // stray keypress can't send a blank explanation.
+        if (permissionFeedback) {
+          if (key === 'escape') {
+            setPermissionFeedback(null)
+            return
+          }
+          if (key === 'return') {
+            const trimmed = permissionFeedback.text.trim()
+            if (!trimmed) return
+            permission.onResolve({ kind: 'deny', feedback: trimmed })
+            return
+          }
+          if (key === 'up' || key === 'down') {
+            setPermissionFeedback(null)
+            setPermissionSelected((p) => (key === 'up' ? (p > 0 ? p - 1 : maxIdx) : p < maxIdx ? p + 1 : 0))
+            return
+          }
+          if (key === 'backspace') {
+            setPermissionFeedback((prev) =>
+              !prev || prev.cursor === 0
+                ? prev
+                : { text: prev.text.slice(0, prev.cursor - 1) + prev.text.slice(prev.cursor), cursor: prev.cursor - 1 },
+            )
+            return
+          }
+          if (key === 'delete') {
+            setPermissionFeedback((prev) =>
+              !prev || prev.cursor >= prev.text.length
+                ? prev
+                : { text: prev.text.slice(0, prev.cursor) + prev.text.slice(prev.cursor + 1), cursor: prev.cursor },
+            )
+            return
+          }
+          if (key === 'left') {
+            setPermissionFeedback((prev) => (prev ? { text: prev.text, cursor: Math.max(0, prev.cursor - 1) } : prev))
+            return
+          }
+          if (key === 'right') {
+            setPermissionFeedback((prev) =>
+              prev ? { text: prev.text, cursor: Math.min(prev.text.length, prev.cursor + 1) } : prev,
+            )
+            return
+          }
+          if (key === 'home') {
+            setPermissionFeedback((prev) => (prev ? { text: prev.text, cursor: 0 } : prev))
+            return
+          }
+          if (key === 'end') {
+            setPermissionFeedback((prev) => (prev ? { text: prev.text, cursor: prev.text.length } : prev))
+            return
+          }
+          if (key === 'clear') {
+            setPermissionFeedback({ text: '', cursor: 0 })
+            return
+          }
+          return
+        }
         if (key === 'up') {
           setPermissionSelected((p) => (p > 0 ? p - 1 : maxIdx))
           return
@@ -803,8 +923,21 @@ export function ChatInput({
           return
         }
         if (key === 'return') {
-          const decisions: ('yes' | 'always' | 'no')[] = hasAlwaysOption ? ['yes', 'always', 'no'] : ['yes', 'no']
-          permission.onResolve(decisions[permissionSelected]!)
+          const decisions: ('yes' | 'always' | 'no' | 'feedback')[] = hasAlwaysOption
+            ? ['yes', 'always', 'no', 'feedback']
+            : ['yes', 'no', 'feedback']
+          const picked = decisions[permissionSelected]!
+          if (picked === 'feedback') {
+            setPermissionFeedback({ text: '', cursor: 0 })
+            return
+          }
+          permission.onResolve(picked)
+          return
+        }
+        // Esc rejects, matching codex-cli's approval overlay (and the
+        // hint footer that advertises it).
+        if (key === 'escape') {
+          permission.onResolve('no')
           return
         }
         return
@@ -1248,28 +1381,28 @@ export function ChatInput({
     // clears the reservation — the new dialog owns the slot directly.
     //
     // Only reserve when one to three tools are pending. The boxed
-    // permission dialog is 7 rows (top rule + title + content + Yes +
-    // Always + No + bottom rule) + 3 input = 10; one running tool takes
-    // 2 rows so it needs 5 blanks to hold that height, two tools take 4
-    // rows and need 3, three take 6 and need 1. Four or more tools make
-    // the frame LARGER than the dialog, which is a grow (handled
-    // correctly by the existing freeBlanks/preScroll path); zero tools
-    // means the approved tool was denied or hasn't produced an onToolCall
-    // yet — reserving blank rows there would just shift the gap around
-    // rather than eliminate it.
+    // permission dialog is 11 rows (top rule + title + blank + content +
+    // blank + Yes + Always + No + feedback + blank + hint + bottom rule)
+    // + 3 input = 14; one running tool takes 2 rows so it needs 9 blanks
+    // to hold that height, two tools take 4 rows and need 7, three take
+    // 6 and need 5. Four or more tools make the frame LARGER than the
+    // dialog, which is a grow (handled correctly by the existing
+    // freeBlanks/preScroll path); zero tools means the approved tool was
+    // denied or hasn't produced an onToolCall yet — reserving blank rows
+    // there would just shift the gap around rather than eliminate it.
     //
-    // The 7-row figure is the COMMON case: suggestRuleLabel only returns
-    // null for enterPlanMode (which runs no tools on approval), so the
-    // Always row is effectively always present. Rare 6-row dialogs
-    // (unknown tool with no content row) over-reserve by one — a
-    // transient blank row, cheaper than the stale residue an
+    // The 11-row figure is the COMMON case: suggestRuleLabel only
+    // returns null for enterPlanMode (which runs no tools on approval),
+    // so the Always row is effectively always present. Rare 9-row
+    // dialogs (unknown tool with no content row) over-reserve by two —
+    // transient blank rows, cheaper than the stale residue an
     // under-reserved shrink leaves behind.
     const hadPermissionLastRender = prevHadPermissionRef.current
     const runningToolCount = activeToolCalls?.length ?? 0
     if (hasNewMessages || permission) {
       permissionSlotReserveRef.current = 0
     } else if (hadPermissionLastRender && !permission && runningToolCount >= 1 && runningToolCount <= 3) {
-      permissionSlotReserveRef.current = 7 - runningToolCount * 2
+      permissionSlotReserveRef.current = 11 - runningToolCount * 2
     }
     prevHadPermissionRef.current = !!permission
 
@@ -1597,6 +1730,9 @@ export function ChatInput({
       // Boxed dialog (same `╭╮│╰╯` language as the prompt box) in
       // neutral white, matching the title and option text — the modal
       // moment should read as a container, not as more scrolling text.
+      // Layout follows codex-cli's approval overlay: bold question title,
+      // blank, content, blank, numbered options with dim shortcut suffixes,
+      // blank, dim key-hint footer. Selected row uses the accent color.
       frame.push(textToCells(`╭${boxRule}╮`, S_TEXT_STRONG))
       const titleText = permissionTitle(permission.toolName, permission.mcp)
       const titleCells: Cell[] = []
@@ -1606,47 +1742,59 @@ export function ChatInput({
       frame.push(boxedRow(titleCells, S_TEXT_STRONG))
 
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
-      if (contentCells) frame.push(boxedRow(contentCells, S_TEXT_STRONG))
+      if (contentCells) {
+        frame.push(boxedRow([], S_TEXT_STRONG))
+        frame.push(boxedRow(contentCells, S_TEXT_STRONG))
+      }
+      frame.push(boxedRow([], S_TEXT_STRONG))
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
       // When no rule can be suggested (e.g. powershell -Command "...",
-      // enterPlanMode), only show Yes/No (2 options). When a prefix is
-      // available, show Yes / Yes don't ask again / No (3 options).
-      const noIndex = ruleLabel ? 2 : 1
+      // enterPlanMode), the always-option is omitted. The last row is
+      // kimi-cli's reject-with-feedback: selecting it (Enter / digit /
+      // 'f') opens an inline text field instead of resolving.
+      const options: { label: string; shortcut: string }[] = [{ label: 'Yes', shortcut: 'y' }]
+      if (ruleLabel) options.push({ label: `Yes, don't ask again for: ${ruleLabel}`, shortcut: 'a' })
+      options.push({ label: 'No', shortcut: 'esc' })
+      options.push({ label: 'No, and tell X-Code what to do instead', shortcut: 'f' })
 
-      const yesCells: Cell[] = []
-      if (permissionSelected === 0) {
-        yesCells.push(...textToCells('    ', S_NONE))
-        yesCells.push(...textToCells(`${GLYPH_SELECT_POINTER} Yes`, S_TEXT_STRONG_BOLD))
-      } else {
-        yesCells.push(...textToCells('      ', S_NONE))
-        yesCells.push(...textToCells('Yes', S_TEXT_STRONG))
-      }
-      frame.push(boxedRow(yesCells, S_TEXT_STRONG))
-
-      if (ruleLabel) {
-        const alwaysCells: Cell[] = []
-        if (permissionSelected === 1) {
-          alwaysCells.push(...textToCells('    ', S_NONE))
-          alwaysCells.push(
-            ...textToCells(`${GLYPH_SELECT_POINTER} Yes, don't ask again for: ${ruleLabel}`, S_TEXT_STRONG_BOLD),
-          )
+      options.forEach((opt, index) => {
+        const selected = permissionSelected === index
+        const style = selected ? S_PRIMARY_BOLD : S_TEXT_STRONG
+        const cells: Cell[] = []
+        cells.push(...textToCells(selected ? `${GLYPH_SELECT_POINTER} ` : '  ', style))
+        if (index === options.length - 1 && permissionFeedback) {
+          // Active feedback row collapses to an inline text field with
+          // the same inverse-video cursor as the main input.
+          cells.push(...textToCells(`${index + 1}. No: `, style))
+          const t = permissionFeedback.text
+          const c = permissionFeedback.cursor
+          const before = t.slice(0, c)
+          const cursorChar = c < t.length ? (graphemeAt(t, c) ?? ' ') : ' '
+          const after = c < t.length ? t.slice(c + cursorChar.length) : ''
+          cells.push(...textToCells(before, style))
+          cells.push({ char: cursorChar, style: S_CURSOR, width: charWidth(cursorChar) })
+          cells.push(...textToCells(after, style))
         } else {
-          alwaysCells.push(...textToCells('      ', S_NONE))
-          alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_TEXT_STRONG))
+          cells.push(...textToCells(`${index + 1}. ${opt.label}`, style))
+          cells.push(...textToCells(` (${opt.shortcut})`, S_DIM))
         }
-        frame.push(boxedRow(alwaysCells, S_TEXT_STRONG))
-      }
+        frame.push(boxedRow(cells, S_TEXT_STRONG))
+      })
 
-      const noCells: Cell[] = []
-      if (permissionSelected === noIndex) {
-        noCells.push(...textToCells('    ', S_NONE))
-        noCells.push(...textToCells(`${GLYPH_SELECT_POINTER} No`, S_ERROR_BOLD))
-      } else {
-        noCells.push(...textToCells('      ', S_NONE))
-        noCells.push(...textToCells('No', S_DIM))
-      }
-      frame.push(boxedRow(noCells, S_TEXT_STRONG))
+      frame.push(boxedRow([], S_TEXT_STRONG))
+      // ↑/↓ (U+2191/2193) and · (U+00B7) are both in CP437, so legacy
+      // ConHost renders them without a glyph fallback.
+      const hintCells: Cell[] = []
+      hintCells.push(
+        ...textToCells(
+          permissionFeedback
+            ? '  Type your feedback, then press Enter to submit · Esc to go back'
+            : '  ↑/↓ select · Enter confirm · Esc cancel',
+          S_DIM,
+        ),
+      )
+      frame.push(boxedRow(hintCells, S_TEXT_STRONG))
       frame.push(textToCells(`╰${boxRule}╯`, S_TEXT_STRONG))
     }
 

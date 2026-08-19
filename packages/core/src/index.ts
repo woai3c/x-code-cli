@@ -2,6 +2,7 @@
 
 // Types
 export type {
+  PermissionDecision,
   PermissionLevel,
   PermissionMode,
   TokenUsage,

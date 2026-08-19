@@ -1,5 +1,5 @@
 // ChatInput public + internal data types.
-import type { AuthorityApprovalPreview, DisplayMessage, TodoItem } from '@x-code-cli/core'
+import type { AuthorityApprovalPreview, DisplayMessage, PermissionDecision, TodoItem } from '@x-code-cli/core'
 
 import type { ShellWaitStreak } from '../agent/shell-session-ui.js'
 import type { TurnOwner } from '../agent/turn-coordinator.js'
@@ -80,7 +80,7 @@ interface SpinnerState {
 interface PermissionRequest {
   toolName: string
   input: Record<string, unknown>
-  onResolve: (decision: 'yes' | 'always' | 'no') => void
+  onResolve: (decision: PermissionDecision) => void
   /** Set by use-agent when the tool resolves to an MCP registry entry.
    *  Drives the MCP-flavoured title / preview / always-allow label in
    *  the dialog. Absent for built-in tools (shell/edit/writeFile/…). */

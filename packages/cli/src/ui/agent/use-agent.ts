@@ -72,6 +72,7 @@ import type {
   LanguageModel,
   LoadedSession,
   LoopState,
+  PermissionDecision,
   PermissionMode,
   PublicPeer,
   SessionForkSnapshot,
@@ -406,7 +407,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  Kept in a ref so `abort()` can deny every queued gate synchronously
    *  before `controller.abort()` — otherwise the core loop stays blocked
    *  on the first shell while the UI still shows stale Yes/No. */
-  const permissionResolversRef = useRef<Array<(decision: 'yes' | 'always' | 'no') => void>>([])
+  const permissionResolversRef = useRef<Array<(decision: PermissionDecision) => void>>([])
 
   // Mid-turn input queue (user + peer entries) — extracted state machine.
   const {
@@ -674,7 +675,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         },
         ...toolLifecycleCallbacks,
         onAskPermission: (toolCall) => {
-          return new Promise<'yes' | 'always' | 'no'>((resolve) => {
+          return new Promise<PermissionDecision>((resolve) => {
             permissionResolversRef.current.push(resolve)
             // MCP lookup: the registry holds the unmangled server + raw
             // tool name pair we need for the dialog title and the
@@ -1143,7 +1144,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   })
 
   /** Resolve the first pending permission request and pop it from the queue */
-  const resolvePermission = useCallback((decision: 'yes' | 'always' | 'no') => {
+  const resolvePermission = useCallback((decision: PermissionDecision) => {
     setState((prev) => {
       const [head, ...tail] = prev.permissionQueue
       if (head) {
@@ -1262,7 +1263,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       onTextDelta: appendTextDelta,
       ...goalToolLifecycleCallbacks,
       onAskPermission: (toolCall) => {
-        return new Promise<'yes' | 'always' | 'no'>((resolve) => {
+        return new Promise<PermissionDecision>((resolve) => {
           permissionResolversRef.current.push(resolve)
           const mcpEntry = options.mcpRegistry?.get(toolCall.toolName)
           setState((prev) => ({

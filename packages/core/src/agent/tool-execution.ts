@@ -10,7 +10,7 @@ import type { ToolHookSnapshot } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
 import type { PreparedPeerSend } from '../peers/service.js'
 import { evaluateToolAuthority, verifyAuthorityApproval } from '../permissions/index.js'
-import { checkPermission } from '../permissions/index.js'
+import { checkPermissionDetailed } from '../permissions/index.js'
 import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/capabilities.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
 import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
@@ -33,7 +33,7 @@ import type {
   ShellObservation,
 } from '../tools/shell-session/types.js'
 import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
-import type { AgentCallbacks, AgentOptions, LanguageModel } from '../types/index.js'
+import type { AgentCallbacks, AgentOptions, LanguageModel, PermissionDecision } from '../types/index.js'
 import { debugLog, isAbortError } from '../utils.js'
 import { runBrowserVisualCheck } from './browser/visual-check.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
@@ -1152,7 +1152,7 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
     }
   }
 
-  const approved = await checkPermission(
+  const { approved, feedback } = await checkPermissionDetailed(
     { toolCallId, toolName, input },
     options.trustMode,
     callbacks.onAskPermission,
@@ -1165,10 +1165,19 @@ async function checkWriteOrShellPermission(ctx: HandlerCtx): Promise<boolean> {
     return false
   }
   if (!approved) {
-    pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
+    pushToolResult(state, callbacks, toolCallId, toolName, permissionDeniedMessage(feedback))
     return false
   }
   return true
+}
+
+/** Denial tool-result text. When the user denied via "No, and tell
+ *  X-Code what to do instead" their typed feedback rides along so the
+ *  model can adjust its next attempt (kimi-cli's reject-with-feedback
+ *  semantics) instead of retrying a near-identical call. */
+function permissionDeniedMessage(feedback?: string): string {
+  const trimmed = feedback?.trim()
+  return trimmed ? `Permission denied by user. User feedback: ${trimmed}` : 'Permission denied by user.'
 }
 
 function findDeniedShellKeyword(command: string, restrictions: readonly string[] | undefined): string | null {
@@ -1724,7 +1733,7 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
   if (!approved && permissions) approved = await permissions.isApproved(toolName)
 
   if (!approved) {
-    let decision: 'yes' | 'always' | 'no'
+    let decision: PermissionDecision
     try {
       decision = await callbacks.onAskPermission({ toolCallId, toolName, input })
     } catch (err) {
@@ -1740,7 +1749,8 @@ async function handleMcpToolCall(ctx: HandlerCtx, deferred: ModelMessage[]): Pro
     }
     const choice = classifyDecision(decision)
     if (choice === 'deny') {
-      pushToolResult(state, callbacks, toolCallId, toolName, 'Permission denied by user.')
+      const feedback = typeof decision === 'object' ? decision.feedback : undefined
+      pushToolResult(state, callbacks, toolCallId, toolName, permissionDeniedMessage(feedback))
       return
     }
     if (permissions) {

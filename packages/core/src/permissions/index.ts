@@ -2,7 +2,7 @@
 import path from 'node:path'
 
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
-import type { PermissionLevel, PermissionMode } from '../types/index.js'
+import type { PermissionDecision, PermissionLevel, PermissionMode } from '../types/index.js'
 import { persistRule } from './persistence.js'
 import { addSessionAllowRule, buildAllowRule, sessionRulesMatch } from './session-store.js'
 
@@ -116,31 +116,43 @@ function isSensitivePath(filePath: string): boolean {
  *
  *  Trust mode is the global override and beats everything except an
  *  explicit `deny`. */
-export async function checkPermission(
+export interface PermissionGateResult {
+  approved: boolean
+  /** Free-text explanation the user typed when denying via the
+   *  "No, and tell X-Code what to do instead" option; undefined for a
+   *  plain No. Callers append it to the denial tool result. */
+  feedback?: string
+}
+
+/** Detailed variant of checkPermission that also returns the user's
+ *  denial feedback. The boolean wrapper below stays for callers that
+ *  only care about allow/deny (goal verifier, existing tests). */
+export async function checkPermissionDetailed(
   toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
   trustMode: boolean,
   onAskPermission: (toolCall: {
     toolCallId: string
     toolName: string
     input: PermissionInput
-  }) => Promise<'yes' | 'always' | 'no'>,
+  }) => Promise<PermissionDecision>,
   permissionMode: PermissionMode = 'default',
   projectCwd?: string,
   executionCwd?: string,
-): Promise<boolean> {
+): Promise<PermissionGateResult> {
   const level = getPermissionLevel(toolCall.toolName, toolCall.input)
-  if (level === 'always-allow' || trustMode) return true
+  if (level === 'always-allow' || trustMode) return { approved: true }
   if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
     const filePath = (toolCall.input.filePath as string) ?? ''
     const projectDir = projectCwd ?? process.cwd()
     if (filePath && isPathWithinProject(filePath, projectDir) && !isSensitivePath(filePath)) {
-      return true
+      return { approved: true }
     }
     // Path outside project or targeting sensitive file — fall through to ask
   }
-  if (sessionRulesMatch(toolCall.toolName, toolCall.input, executionCwd)) return true
+  if (sessionRulesMatch(toolCall.toolName, toolCall.input, executionCwd)) return { approved: true }
 
   const decision = await onAskPermission(toolCall)
+  if (typeof decision === 'object') return { approved: false, feedback: decision.feedback }
   if (decision === 'always') {
     const result = buildAllowRule(toolCall.toolName, toolCall.input, executionCwd)
     if (result) {
@@ -153,9 +165,25 @@ export async function checkPermission(
         if (result.persist && projectCwd) persistRule(projectCwd, rule)
       }
     }
-    return true
+    return { approved: true }
   }
-  return decision === 'yes'
+  return { approved: decision === 'yes' }
+}
+
+export async function checkPermission(
+  toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
+  trustMode: boolean,
+  onAskPermission: (toolCall: {
+    toolCallId: string
+    toolName: string
+    input: PermissionInput
+  }) => Promise<PermissionDecision>,
+  permissionMode: PermissionMode = 'default',
+  projectCwd?: string,
+  executionCwd?: string,
+): Promise<boolean> {
+  return (await checkPermissionDetailed(toolCall, trustMode, onAskPermission, permissionMode, projectCwd, executionCwd))
+    .approved
 }
 
 export { addSessionAllowRule, clearSessionRules, buildAllowRule } from './session-store.js'
