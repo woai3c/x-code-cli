@@ -37,6 +37,7 @@ import { isSlashCommandAllowedWhileBusy } from '../busy-command.js'
 import { ChatInput } from '../chat-input/ChatInput.js'
 import { rebuildPalette } from '../chat-input/palette.js'
 import { buildThemePreview } from '../render/render-diff.js'
+import { setShikiTheme } from '../render/shiki-highlight.js'
 import { setSyntaxTheme } from '../render/syntax-highlight.js'
 import { GLYPH_BULLET } from '../render/terminal-glyphs.js'
 import {
@@ -519,6 +520,7 @@ export function App({
   function applyTheme(name: ThemeName) {
     setTheme(name)
     setSyntaxTheme(getThemeColors(name).syntaxPalette)
+    setShikiTheme(getThemeColors(name).syntaxPalette)
     rebuildPalette()
   }
 

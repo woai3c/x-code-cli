@@ -54,6 +54,7 @@ import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printRes
 import { installTerminalStreamErrorGuards } from './terminal-stream-errors.js'
 import { getSessionExitInfo } from './ui/app/session-exit.js'
 import { rebuildPalette } from './ui/chat-input/palette.js'
+import { setShikiTheme, warmShikiEngine } from './ui/render/shiki-highlight.js'
 import { setSyntaxTheme } from './ui/render/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/render/theme.js'
 
@@ -291,9 +292,15 @@ async function main() {
     if (t !== null) {
       setTheme(t)
       setSyntaxTheme(getThemeColors(t).syntaxPalette)
+      setShikiTheme(getThemeColors(t).syntaxPalette)
       rebuildPalette()
     }
   }
+
+  // Warm the shiki engine in the background (async grammar/theme load).
+  // Until it reports ready, all highlight entry points fall back to the
+  // in-house regex highlighter, so this never blocks startup or render.
+  warmShikiEngine()
 
   // Create registries and get model
   const providerRegistry = createModelRegistry()

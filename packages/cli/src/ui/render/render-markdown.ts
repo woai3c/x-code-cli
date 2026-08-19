@@ -15,6 +15,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { type Token, type Tokens, marked } from 'marked'
 
+import { highlightCodeShiki } from './shiki-highlight.js'
 import { detectFenceLanguage, highlightLine } from './syntax-highlight.js'
 import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
 import { visualWidth } from './text-width.js'
@@ -150,6 +151,12 @@ function formatToken(
       // to one of our supported tokenisers. Unknown / missing langs fall
       // through to plain text — same as the prior behavior, just no
       // longer the universal default.
+      // Prefer the shiki engine (TextMate grammars, ~50 langs, cross-line
+      // state) once warmed up; it returns null for unknown langs, oversized
+      // blocks, or the `ansi` palette — all of which fall through to the
+      // in-house regex path below.
+      const shikiHighlighted = highlightCodeShiki(text, code.lang)
+      if (shikiHighlighted !== null) return shikiHighlighted + EOL
       const lang = detectFenceLanguage(code.lang)
       if (!lang) return text + EOL
       // Highlight per-line so embedded \n in `text` don't get fed into

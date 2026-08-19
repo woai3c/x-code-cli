@@ -43,6 +43,7 @@
     "ink": "npm:@jrichman/ink@6.6.9",
     "marked": "^17.0.1",
     "react": "^19.1.0",
+    "shiki": "^4.4.3",
     "yargs": "^18.0.0"
   }
 }

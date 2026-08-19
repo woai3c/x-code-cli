@@ -32,13 +32,13 @@ import { debugLog, suggestRuleLabel } from '@x-code-cli/core'
 
 import { isSlashCommandAllowedWhileBusy } from '../busy-command.js'
 import { renderInlineMarkdown } from '../render/render-markdown.js'
+import { highlightShellCommand } from '../render/shiki-highlight.js'
 import {
   flushPendingReadGroup,
   lastWriteEndedWithBlankRow,
   resetScrollbackSpacing,
   writeMessageToStdout,
 } from '../render/stdout-writer.js'
-import { highlightLine } from '../render/syntax-highlight.js'
 import {
   GLYPH_ACCEPT_EDITS,
   GLYPH_ELLIPSIS,
@@ -1493,7 +1493,7 @@ export function ChatInput({
             // the live→commit color-flash).
             if (isShellToolName(tc.toolName)) {
               row1.push(...textToCells('(', S_PRIMARY))
-              row1.push(...ansiTextToCells(highlightLine(trimmed, 'shell')))
+              row1.push(...ansiTextToCells(highlightShellCommand(trimmed)))
               row1.push(...textToCells(')', S_PRIMARY))
             } else {
               row1.push(...textToCells(`(${trimmed})`, S_PRIMARY))

@@ -36,7 +36,7 @@ import {
 } from '../utils.js'
 import { renderEditDiff } from './render-diff.js'
 import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
-import { highlightLine } from './syntax-highlight.js'
+import { highlightShellCommand } from './shiki-highlight.js'
 import { GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET, GLYPH_TOOL_BULLET } from './terminal-glyphs.js'
 import { sliceByWidth, visualWidth } from './text-width.js'
 import { chalk as c, paint, paintEchoArrow, paintEchoBg, paintEchoFg } from './tokens.js'
@@ -87,7 +87,7 @@ function formatToolCall(tc: DisplayToolCall): string {
   // — the user must see the escape attempt as one contiguous string.
   const previewSuffix = inputPreview
     ? isShellToolName(tc.toolName) && !isFailure
-      ? `${paint('primary')('(')}${highlightLine(inputPreview, 'shell')}${paint('primary')(')')}`
+      ? `${paint('primary')('(')}${highlightShellCommand(inputPreview)}${paint('primary')(')')}`
       : paint('primary')(`(${inputPreview})`)
     : ''
   const line1 = ` ${dotStyle(GLYPH_TOOL_BULLET)} ${c.bold(label)}${previewSuffix}`

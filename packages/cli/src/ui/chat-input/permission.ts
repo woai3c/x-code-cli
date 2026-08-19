@@ -4,7 +4,7 @@
 // self-contained data → Cell[] mapping that has no React state.
 import { getPermissionLevel } from '@x-code-cli/core'
 
-import { highlightLine } from '../render/syntax-highlight.js'
+import { highlightShellCommand } from '../render/shiki-highlight.js'
 import { GLYPH_ELLIPSIS } from '../render/terminal-glyphs.js'
 import { type Cell, ansiTextToCells, textToCells } from './cells.js'
 import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS, S_WARNING } from './palette.js'
@@ -111,7 +111,7 @@ export function permissionContentCells(
     const command = truncateToWidth(rawCommand, decoration)
     // Same codex-style shell highlighting as the live/committed tool rows.
     cells.push(...textToCells('$ ', S_PRIMARY))
-    cells.push(...ansiTextToCells(highlightLine(command, 'shell')))
+    cells.push(...ansiTextToCells(highlightShellCommand(command)))
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push(...textToCells(`[${info.label}]`, info.style))
     return cells
