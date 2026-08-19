@@ -2,8 +2,10 @@
 //
 // Output is a multi-line string ready for the scrollback writer. Layout
 // mirrors Claude Code's StructuredDiff: per-line gutter with right-
-// aligned line number + sigil, then syntax-highlighted code padded to
-// fill the column so the red/green background reaches the right edge.
+// aligned line number + sigil, then syntax-highlighted code. The red/green
+// background is carried to the right edge by a BCE erase (`\x1b[K` inside
+// the bg span) rather than space padding, so scrollback reflow on terminal
+// resize has no printable padding cells to split into phantom rows.
 //
 // Each rendered line is prefixed with RESULT_INDENT so the diff sits
 // directly under the tool-call bullet in scrollback (`   ⎿  Added X
@@ -176,13 +178,12 @@ function renderHunks(
   // Gutter format: " <num> <sigil> " — 1 leading space + num + 1 space +
   // sigil + 1 trailing space.
   const gutterWidth = lineNumWidth + 4
-  // Reserve 1 trailing cell of safety: `-`/`+` rows pad their code column
-  // with bg-colored spaces so the diff band reaches the right edge. If the
-  // row's printable width hits exactly `cols`, the terminal enters
-  // delayed-wrap state at the last column; Windows conhost / Windows
-  // Terminal in some configurations counts that as a wrap and inserts a
-  // phantom blank row below every padded `-`/`+` line. Leaving one cell
-  // unpainted keeps the cursor strictly inside the row.
+  // Reserve 1 trailing cell of safety: if the row's printable width hits
+  // exactly `cols`, the terminal enters delayed-wrap state at the last
+  // column; Windows conhost / Windows Terminal in some configurations
+  // counts that as a wrap and inserts a phantom blank row below every
+  // `-`/`+` line. Keeping the budget at cols-1 keeps the cursor strictly
+  // inside the row.
   const codeWidth = Math.max(1, cols - RESULT_INDENT.length - gutterWidth - 1)
   const lang = detectLanguage(payload.filePath)
 
@@ -206,13 +207,14 @@ function renderHunks(
 
       const numStr = String(lineNum).padStart(lineNumWidth)
       const fitted = fitCode(code, codeWidth)
-      // Pad against the RAW (pre-highlight) text so the colored bg fills
-      // exactly to the right edge. Highlighting only adds escape codes —
-      // it doesn't change the visible character count. Use visual width
-      // (CJK chars are 2 cells wide despite `length === 1`); a length-
-      // based padding would over-pad by `visualWidth - length` and make
-      // the row wrap into a blank visual line below every CJK diff row.
-      const padding = ' '.repeat(Math.max(0, codeWidth - visualWidth(fitted)))
+      // The bg band reaches the right edge via `\x1b[K` emitted INSIDE the
+      // bg span: on BCE-capable terminals (xterm.js, WT, conhost) the erase
+      // fills with the row's bg color. We deliberately do NOT pad with
+      // bg-colored spaces — a padded row is printable up to the OLD terminal
+      // width, so when the terminal narrows later its scrollback reflow
+      // splits every padded row into content + a stray bg-colored blank row
+      // (one phantom line per diff line). On a non-BCE terminal the band
+      // simply ends after the code text.
       const gutter = ` ${numStr} ${sigil} `
       // Syntax highlighting is applied to CONTEXT rows only. On +/- rows
       // we render plain text on top of the diff bg — multi-color
@@ -233,7 +235,7 @@ function renderHunks(
         // the terminal default white.
         const code = highlightLine(fitted, lang, syntaxTheme, defaultFg)
         const coloredGutter = applyGutterFg(gutter, themeColors.diffAddedDecoration)
-        styled = applyBg(coloredGutter + code + padding, themeColors.diffAdded)
+        styled = applyBg(coloredGutter + code + '\x1b[K', themeColors.diffAdded)
       } else if (sigil === '-') {
         // `-` row: bg + decorated gutter + PLAIN code (no syntax
         // highlighting, ever — including in picker previews). CC's
@@ -247,7 +249,7 @@ function renderHunks(
         // brighter than terminal default.
         const plainCode = defaultFg ? applyColor(fitted, defaultFg) : fitted
         const coloredGutter = applyGutterFg(gutter, themeColors.diffRemovedDecoration)
-        let row = applyBg(coloredGutter + plainCode + padding, themeColors.diffRemoved)
+        let row = applyBg(coloredGutter + plainCode + '\x1b[K', themeColors.diffRemoved)
         // ANSI mode has no bg to mark the remove row, so dim the whole
         // line instead — matches CC's `dimContent` (color-diff/
         // index.ts:924). Without this, ANSI-mode `-` rows are visually
@@ -260,7 +262,7 @@ function renderHunks(
         // defaultFg here keeps brightness consistent across context and
         // +/- rows — CC paints all three from the same Theme.foreground.
         const highlighted = highlightLine(fitted, lang, syntaxTheme, defaultFg)
-        styled = gutter + highlighted + padding
+        styled = gutter + highlighted
       }
       out.push(`${RESULT_INDENT}${styled}`)
     }

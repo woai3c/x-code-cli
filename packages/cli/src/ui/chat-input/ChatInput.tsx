@@ -260,6 +260,14 @@ export function ChatInput({
    *  was positioned so it can be erased before painting at the new spot. */
   const lastTermRowsRef = useRef(0)
   const lastTermWidthRef = useRef(0)
+  /** Printable length of each row of the frame that was on screen when a
+   *  resize arrived, captured in onResize BEFORE prevFrameRef is cleared.
+   *  The render effect's width-change branch uses these to compute the
+   *  EXACT number of terminal rows the old frame occupies after xterm.js
+   *  reflow (each hard line of length L becomes ceil(L/newW) rows), so the
+   *  erase covers every reflowed remnant — the old heuristic only counted
+   *  the 2 separator rows and missed wrapped input/spinner rows. */
+  const prevFrameRowLensRef = useRef<number[]>([])
   /** Rows of blank space between the last on-screen content row and the
    *  TERMINAL BOTTOM. Conceptually the same value as the original "blanks
    *  above frame" — what changed is where we choose to draw the frame
@@ -444,6 +452,22 @@ export function ChatInput({
   useEffect(() => {
     if (!stdout) return
     const onResize = () => {
+      // Capture per-row printable lengths of the on-screen frame before
+      // dropping it (see prevFrameRowLensRef). A row's buffer length is the
+      // position after its last non-blank cell; wide (CJK) cells count 2.
+      // If prevFrameRef is already empty (two resizes before a render),
+      // keep the previously captured lens — they still describe the frame
+      // remnants on screen better than nothing.
+      if (prevFrameRef.current.length > 0) {
+        prevFrameRowLensRef.current = prevFrameRef.current.map((row) => {
+          let len = 0
+          for (let i = 0; i < row.length; i++) {
+            const cell = row[i]
+            if (cell && cell.char.trim() !== '') len = i + Math.max(1, cell.width)
+          }
+          return len
+        })
+      }
       prevFrameRef.current = []
       forceRender()
     }
@@ -2585,13 +2609,15 @@ export function ChatInput({
     //
     // Height-only: the old frame position is predictable from oldTermRows.
     //
-    // Width change: the terminal reflows ALL visible content. Old separator
-    // lines (e.g. 120 '─' chars at old width) may wrap to multiple rows
-    // when the terminal narrows, pushing them above where the new frame
-    // will be painted. We must erase those reflowed remnants WITHOUT wiping
-    // the scrollback content above (the user's conversation). Approach:
-    // estimate how many extra rows the old frame now occupies after reflow,
-    // then erase from (frameTop - extraRows) down to end of display.
+    // Width change: the terminal reflows ALL visible content. Every frame
+    // row was written as a hard (non-auto-wrapped) line, so a row of
+    // printable length L splits into exactly ceil(L/newW) rows when the
+    // terminal narrows and stays 1 row when it widens. onResize captured
+    // those lengths (prevFrameRowLensRef), so we can compute the reflowed
+    // frame's exact height instead of the old "2 separator rows" heuristic
+    // — which missed wrapped input/spinner/menu rows and left remnants
+    // above the repaint zone. We must still avoid wiping the scrollback
+    // content above the remnants (the user's conversation).
     const oldTermRows = lastTermRowsRef.current
     const oldTermWidth = lastTermWidthRef.current
     const didResize =
@@ -2601,18 +2627,22 @@ export function ChatInput({
     if (didResize) {
       const widthChanged = oldTermWidth > 0 && oldTermWidth !== termWidth
       if (widthChanged) {
-        // Estimate how many rows the old frame expanded to after reflow.
-        // The old separator lines were (oldTermWidth - 1) chars each; after
-        // reflow at the new termWidth, each wraps to ceil(oldChars / newW)
-        // rows. The frame has 2 separators + (oldFrameH - 2) normal rows
-        // (input, spinner, etc — those are short and don't wrap).
-        const oldSepLen = Math.max(0, oldTermWidth - 1)
         const newW = Math.max(1, termWidth)
-        const sepRowsAfterReflow = Math.ceil(oldSepLen / newW)
-        // 2 separator rows expanded, the rest stayed at 1 row each
-        const reflowedFrameH = oldFrameH - 2 + 2 * sepRowsAfterReflow
-        const extraRows = Math.max(0, reflowedFrameH - oldFrameH)
-        const eraseFrom = Math.max(1, frameTop - extraRows)
+        const lens = prevFrameRowLensRef.current
+        const reflowedFrameH =
+          lens.length > 0 ? lens.reduce((sum, len) => sum + Math.max(1, Math.ceil(len / newW)), 0) : oldFrameH
+        // Reflow overflow leaves via scrollback at the top, so the
+        // reflowed frame's LAST row stays at the terminal bottom — the
+        // remnants occupy exactly the bottom reflowedFrameH rows. When the
+        // frame was floating (lastFrameTopRef, same row count), content
+        // above may have expanded and pushed the frame down, so its
+        // remnants can start higher; erase from whichever top is higher.
+        // lastFrameTopRef is in OLD geometry — only meaningful when the
+        // terminal's row count didn't also change.
+        const bottomAnchoredTop = Math.max(1, termRows - reflowedFrameH + 1)
+        const oldTop =
+          lastFrameTopRef.current > 0 && oldTermRows === termRows ? lastFrameTopRef.current : bottomAnchoredTop
+        const eraseFrom = Math.max(1, Math.min(oldTop, bottomAnchoredTop))
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
       } else {
         // Height-only change: use the actual last-rendered top (the
