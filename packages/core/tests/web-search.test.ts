@@ -14,6 +14,7 @@ const SEARCH_KEYS = [
   'DEEPSEEK_API_KEY',
   'X_CODE_WEB_SEARCH_PROVIDER',
   'DEEPSEEK_SEARCH_BASE_URL',
+  'PERPLEXITY_SEARCH_MODEL',
 ] as const
 
 function clearSearchEnv() {
@@ -308,7 +309,47 @@ describe('webSearch', () => {
     stubFetchJson({ content: [{ type: 'text', text: 'I cannot search right now.' }] })
 
     const result = (await execute({ query: 'q' })) as string
-    expect(result).toMatch(/no web_search_tool_result block/)
+    expect(result).toMatch(/chose not to run a web search/)
+  })
+
+  it('names the token budget when max_tokens cuts the DeepSeek search turn', async () => {
+    clearSearchEnv()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
+    setWebSearchModelProvider('deepseek')
+    stubFetchJson({ content: [{ type: 'text', text: 'Partial' }], stop_reason: 'max_tokens' })
+
+    const result = (await execute({ query: 'q' })) as string
+    expect(result).toMatch(/max_tokens/)
+  })
+
+  it('caps DeepSeek max_uses at maxResults to bound per-search billing', async () => {
+    clearSearchEnv()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
+    setWebSearchModelProvider('deepseek')
+    const mockFetch = stubFetchJson({
+      content: [
+        {
+          type: 'web_search_tool_result',
+          content: [{ type: 'web_search_result', url: 'https://example.com/r', title: 'R' }],
+        },
+      ],
+    })
+
+    await execute({ query: 'q', maxResults: 2 })
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1]!.body as string)
+    expect(body.tools[0].max_uses).toBe(2)
+  })
+
+  it('honors the PERPLEXITY_SEARCH_MODEL override', async () => {
+    clearSearchEnv()
+    vi.stubEnv('PERPLEXITY_API_KEY', 'pplx-key')
+    vi.stubEnv('PERPLEXITY_SEARCH_MODEL', 'sonar-pro')
+    const mockFetch = stubFetchJson({ search_results: [] })
+
+    await execute({ query: 'q' })
+
+    expect(JSON.parse(mockFetch.mock.calls[0]![1]!.body as string).model).toBe('sonar-pro')
   })
 })
 

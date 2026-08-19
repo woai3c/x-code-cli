@@ -148,7 +148,8 @@ async function searchWithPerplexity(
       Accept: 'application/json',
     },
     body: JSON.stringify({
-      model: 'sonar',
+      // Override if Perplexity retires the id or a cheaper search model appears.
+      model: process.env.PERPLEXITY_SEARCH_MODEL || 'sonar',
       max_tokens: 1024,
       messages: [{ role: 'user', content: query }],
     }),
@@ -210,6 +211,11 @@ interface AnthropicContentBlock {
   citations?: Array<{ url?: string; cited_text?: string }>
 }
 
+interface AnthropicMessagesResponse {
+  content?: AnthropicContentBlock[]
+  stop_reason?: string
+}
+
 async function searchWithDeepseek(query: string, maxResults: number, signal?: AbortSignal): Promise<ProviderResponse> {
   const apiKey = process.env.DEEPSEEK_API_KEY!
   // Accept the documented base (https://api.deepseek.com/anthropic) with or
@@ -233,7 +239,9 @@ async function searchWithDeepseek(query: string, maxResults: number, signal?: Ab
       model: process.env.DEEPSEEK_SEARCH_MODEL || 'deepseek-v4-flash',
       max_tokens: 4096,
       messages: [{ role: 'user', content: [{ type: 'text', text: `Perform a web search for the query: ${query}` }] }],
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      // Each use is billed server-side, so don't grant more searches than the
+      // caller asked results for; cap at 5 so maxResults=20 stays cheap.
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: Math.min(maxResults, 5) }],
     }),
     signal: withTimeout(signal, DEEPSEEK_TIMEOUT_MS),
   })
@@ -242,12 +250,16 @@ async function searchWithDeepseek(query: string, maxResults: number, signal?: Ab
     throw await httpError('DeepSeek search', res)
   }
 
-  const data = (await res.json()) as { content?: AnthropicContentBlock[] }
+  const data = (await res.json()) as AnthropicMessagesResponse
   const blocks = data.content ?? []
 
-  // Snippets are not part of the result items; they arrive as citations on
-  // separate text blocks. First citation per URL wins. The text blocks
-  // themselves are the model's grounded summary and are surfaced as `answer`.
+  // Snippets are not part of the result items; on Anthropic they arrive as
+  // citations on separate text blocks. DeepSeek's compatibility table marks
+  // text-block citations as Ignored, so against the official endpoint this
+  // stitching never fires and contents stay empty — it exists for
+  // Anthropic-compatible proxies (DEEPSEEK_SEARCH_BASE_URL) that do emit
+  // them. First citation per URL wins. The text blocks themselves are the
+  // model's grounded summary and are surfaced as `answer`.
   const snippets = new Map<string, string>()
   const texts: string[] = []
   for (const block of blocks) {
@@ -273,7 +285,15 @@ async function searchWithDeepseek(query: string, maxResults: number, signal?: Ab
   // Strict mode: never scrape URLs out of model prose. If the server ran no
   // search, say so instead of returning a confident-looking empty list.
   if (results.length === 0) {
-    throw new Error('DeepSeek returned no web_search_tool_result block for this query')
+    // A max_tokens cut before the first search block is a budget problem,
+    // not a search refusal — name it so the user doesn't debug the wrong thing.
+    if (data.stop_reason === 'max_tokens') {
+      throw new Error(
+        'DeepSeek hit the max_tokens limit before returning any search result ' +
+          '(the search turn is billed per token); retry with a narrower query',
+      )
+    }
+    throw new Error('DeepSeek chose not to run a web search for this query (no web_search_tool_result block returned)')
   }
   return { answer: texts.join('\n\n') || undefined, results: results.slice(0, maxResults) }
 }
