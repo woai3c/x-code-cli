@@ -1594,19 +1594,19 @@ export function ChatInput({
     // and the input's top separator) so the input stays pinned at the
     // bottom of the screen regardless of dialog state.
     if (permission) {
-      // Boxed dialog (same `╭╮│╰╯` language as the prompt box) in the
-      // primary brand hue — the modal moment should read as a container,
-      // not as more scrolling text.
-      frame.push(textToCells(`╭${boxRule}╮`, S_PRIMARY))
+      // Boxed dialog (same `╭╮│╰╯` language as the prompt box) in
+      // neutral white, matching the title and option text — the modal
+      // moment should read as a container, not as more scrolling text.
+      frame.push(textToCells(`╭${boxRule}╮`, S_TEXT_STRONG))
       const titleText = permissionTitle(permission.toolName, permission.mcp)
       const titleCells: Cell[] = []
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push(...textToCells(titleText, S_TEXT_STRONG_BOLD))
-      frame.push(boxedRow(titleCells, S_PRIMARY))
+      frame.push(boxedRow(titleCells, S_TEXT_STRONG))
 
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
-      if (contentCells) frame.push(boxedRow(contentCells, S_PRIMARY))
+      if (contentCells) frame.push(boxedRow(contentCells, S_TEXT_STRONG))
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
       // When no rule can be suggested (e.g. powershell -Command "...",
@@ -1622,7 +1622,7 @@ export function ChatInput({
         yesCells.push(...textToCells('      ', S_NONE))
         yesCells.push(...textToCells('Yes', S_TEXT_STRONG))
       }
-      frame.push(boxedRow(yesCells, S_PRIMARY))
+      frame.push(boxedRow(yesCells, S_TEXT_STRONG))
 
       if (ruleLabel) {
         const alwaysCells: Cell[] = []
@@ -1635,7 +1635,7 @@ export function ChatInput({
           alwaysCells.push(...textToCells('      ', S_NONE))
           alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_TEXT_STRONG))
         }
-        frame.push(boxedRow(alwaysCells, S_PRIMARY))
+        frame.push(boxedRow(alwaysCells, S_TEXT_STRONG))
       }
 
       const noCells: Cell[] = []
@@ -1646,8 +1646,8 @@ export function ChatInput({
         noCells.push(...textToCells('      ', S_NONE))
         noCells.push(...textToCells('No', S_DIM))
       }
-      frame.push(boxedRow(noCells, S_PRIMARY))
-      frame.push(textToCells(`╰${boxRule}╯`, S_PRIMARY))
+      frame.push(boxedRow(noCells, S_TEXT_STRONG))
+      frame.push(textToCells(`╰${boxRule}╯`, S_TEXT_STRONG))
     }
 
     if (authorityRequest) {
