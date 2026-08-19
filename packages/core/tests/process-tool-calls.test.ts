@@ -330,6 +330,39 @@ describe('processToolCalls plan-mode boundary', () => {
   })
 })
 
+describe('processToolCalls relative write paths', () => {
+  it('anchors a relative writeFile path at projectCwd, not process.cwd()', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-rel-write-'))
+    temporaryDirectories.push(dir)
+    const relative = `rel-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`
+    const expected = path.join(dir, relative)
+    const input = { filePath: relative, content: 'anchored\n' }
+    const state = createLoopState('default', { projectCwd: dir })
+    state.messages.push(
+      { role: 'user', content: 'write a file' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'tc-rel-write', toolName: 'writeFile', input }],
+      } as ModelMessage,
+    )
+    const callbacks = makeCallbacks()
+
+    await processToolCalls(
+      [{ toolName: 'writeFile', toolCallId: 'tc-rel-write', input }],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+
+    expect(await fs.readFile(expected, 'utf8')).toBe('anchored\n')
+    // The cwd-shadow copy must NOT exist — before the fix the write went
+    // to process.cwd() while checkpoint tracking used projectCwd.
+    await expect(fs.access(path.resolve(relative))).rejects.toThrow()
+    expect(state.filesModified.has(expected)).toBe(true)
+  })
+})
+
 describe('processToolCalls edit validation', () => {
   async function runInvalidEdit(oldString: string, newString: string) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-edit-validation-'))

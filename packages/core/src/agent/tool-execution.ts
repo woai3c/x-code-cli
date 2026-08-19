@@ -16,6 +16,7 @@ import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js
 import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
 import { truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
+import { applySedSubstitution, parseSedEditCommand } from '../tools/sed-edit-parser.js'
 import { formatShellExecutionResult } from '../tools/shell-session/format.js'
 import {
   normalizeHardTimeout,
@@ -1214,7 +1215,6 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
       // file enters filesModified and is covered by /rewind checkpoints.
       // Falls through to real shell execution on parse failure or IO error.
       const command = ctx.preparedShell.command
-      const { parseSedEditCommand, applySedSubstitution } = await import('../tools/sed-edit-parser.js')
       const sedInfo = parseSedEditCommand(command)
       if (sedInfo) {
         const absPath = path.isAbsolute(sedInfo.filePath)
@@ -1297,6 +1297,21 @@ async function handleToolCall(
     callbacks,
     parentModel,
     control,
+  }
+
+  // Anchor relative write targets at projectCwd so the permission check,
+  // the checkpoint snapshot and the actual fs write all operate on the
+  // same file. The tool schema asks for an absolute path but nothing
+  // enforces it — a relative path previously wrote against process.cwd()
+  // while beforeWrite tracked path.resolve(projectCwd, filePath), so
+  // /rewind captured the wrong file whenever the two differed.
+  if (
+    (ctx.toolName === 'writeFile' || ctx.toolName === 'edit') &&
+    typeof ctx.input.filePath === 'string' &&
+    ctx.input.filePath !== '' &&
+    !path.isAbsolute(ctx.input.filePath)
+  ) {
+    ctx.input = { ...ctx.input, filePath: path.resolve(ctx.state.projectCwd, ctx.input.filePath) }
   }
 
   if (!enforcePlanModeBoundary(ctx)) return

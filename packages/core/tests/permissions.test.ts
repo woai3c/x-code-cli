@@ -64,6 +64,19 @@ describe('getPermissionLevel', () => {
     expect(getPermissionLevel('shell', { command: 'ls && rm -rf /' })).toBe('deny')
   })
 
+  // Writes/execution smuggled behind whitelisted leading tokens must fall
+  // back to ask — never always-allow. Unit-level cases live in
+  // shell-utils.test.ts; these guard the end-to-end wiring.
+  it('asks for writes hidden behind read-only leading tokens', () => {
+    expect(getPermissionLevel('shell', { command: 'echo x > ~/.zshrc' })).toBe('ask')
+    expect(getPermissionLevel('shell', { command: 'ls\nrm file' })).toBe('ask')
+    expect(getPermissionLevel('shell', { command: 'ls & rm file' })).toBe('ask')
+    expect(getPermissionLevel('shell', { command: 'find . -delete' })).toBe('ask')
+    expect(getPermissionLevel('shell', { command: 'echo $(rm file)' })).toBe('ask')
+    expect(getPermissionLevel('shell', { command: 'env rm file' })).toBe('ask')
+    expect(getPermissionLevel('shell', { command: 'Get-ChildItem | ForEach-Object { Remove-Item $_ }' })).toBe('ask')
+  })
+
   // End-to-end against the three real complaints from the user:
   // PS pipelines that should never have prompted, and a `cd && build`
   // chain that should at least be derivable as a `npx tsc:*` rule.

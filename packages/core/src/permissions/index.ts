@@ -30,7 +30,13 @@ function evaluateShellPermission(command: string): PermissionLevel {
 function resolveShellPermission(input: PermissionInput): PermissionLevel {
   const cmd = (input.command as string) ?? ''
   const cached = shellPermissionCache.get(cmd)
-  if (cached) return cached
+  if (cached) {
+    // Refresh recency: a hit moves the entry to the end so the oldest-
+    // inserted eviction below is a real LRU, not FIFO.
+    shellPermissionCache.delete(cmd)
+    shellPermissionCache.set(cmd, cached)
+    return cached
+  }
 
   const level = evaluateShellPermission(cmd)
 
