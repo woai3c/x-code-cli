@@ -1344,6 +1344,13 @@ export function ChatInput({
     // ── Build 2D cell frame ──
     const frame: Cell[][] = []
 
+    // Frame-relative row of the input box's first display line, captured
+    // while pushing input rows below. Fallback park target for the hidden
+    // hardware cursor when no S_CURSOR caret cell exists in the frame
+    // (caret scrolled out of the visible window). See the cursor-park
+    // block further down for why the park position matters to IMEs.
+    let inputFirstLineRow = -1
+
     // Error line (if any)
     if (errorMessage) {
       const cells: Cell[] = []
@@ -1588,18 +1595,18 @@ export function ChatInput({
     // bottom of the screen regardless of dialog state.
     if (permission) {
       // Boxed dialog (same `╭╮│╰╯` language as the prompt box) in the
-      // warning hue — the modal moment should read as a container, not
-      // as more scrolling text.
-      frame.push(textToCells(`╭${boxRule}╮`, S_WARNING))
+      // primary brand hue — the modal moment should read as a container,
+      // not as more scrolling text.
+      frame.push(textToCells(`╭${boxRule}╮`, S_PRIMARY))
       const titleText = permissionTitle(permission.toolName, permission.mcp)
       const titleCells: Cell[] = []
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push({ char: ' ', style: S_NONE, width: 1 })
       titleCells.push(...textToCells(titleText, S_TEXT_STRONG_BOLD))
-      frame.push(boxedRow(titleCells, S_WARNING))
+      frame.push(boxedRow(titleCells, S_PRIMARY))
 
       const contentCells = permissionContentCells(permission.toolName, permission.input, termWidth, permission.mcp)
-      if (contentCells) frame.push(boxedRow(contentCells, S_WARNING))
+      if (contentCells) frame.push(boxedRow(contentCells, S_PRIMARY))
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
       // When no rule can be suggested (e.g. powershell -Command "...",
@@ -1615,7 +1622,7 @@ export function ChatInput({
         yesCells.push(...textToCells('      ', S_NONE))
         yesCells.push(...textToCells('Yes', S_TEXT_STRONG))
       }
-      frame.push(boxedRow(yesCells, S_WARNING))
+      frame.push(boxedRow(yesCells, S_PRIMARY))
 
       if (ruleLabel) {
         const alwaysCells: Cell[] = []
@@ -1628,7 +1635,7 @@ export function ChatInput({
           alwaysCells.push(...textToCells('      ', S_NONE))
           alwaysCells.push(...textToCells(`Yes, don't ask again for: ${ruleLabel}`, S_TEXT_STRONG))
         }
-        frame.push(boxedRow(alwaysCells, S_WARNING))
+        frame.push(boxedRow(alwaysCells, S_PRIMARY))
       }
 
       const noCells: Cell[] = []
@@ -1639,8 +1646,8 @@ export function ChatInput({
         noCells.push(...textToCells('      ', S_NONE))
         noCells.push(...textToCells('No', S_DIM))
       }
-      frame.push(boxedRow(noCells, S_WARNING))
-      frame.push(textToCells(`╰${boxRule}╯`, S_WARNING))
+      frame.push(boxedRow(noCells, S_PRIMARY))
+      frame.push(textToCells(`╰${boxRule}╯`, S_PRIMARY))
     }
 
     if (authorityRequest) {
@@ -2002,6 +2009,7 @@ export function ChatInput({
     // position. So we don't compute or emit a cursor-park CSI here.
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
+      if (i === 0) inputFirstLineRow = frame.length
       // Same `▸` glyph the committed echo uses (stdout-writer) — the
       // plain ASCII `>` reads pointier and out of place next to it.
       // U+25B8 is width-1 per text-width.ts, so the prompt keeps its
@@ -2274,6 +2282,41 @@ export function ChatInput({
         if (atWinEnd < atTotal) {
           frame.push(textToCells(`  ▼ ${atTotal - atWinEnd} more`, S_DIM))
         }
+      }
+    }
+
+    // ── Hardware-cursor park target ────────────────────────────────────
+    //
+    // The terminal's hardware cursor is hidden app-wide, but macOS
+    // terminals (Terminal.app, iTerm2) still draw the IME composition
+    // preview (marked text — e.g. pinyin letters mid-composition) AT the
+    // hardware cursor position; the app only receives the committed
+    // characters. Our cell-diff loop leaves the cursor wherever the last
+    // changed cell ended: on a spinner tick that's mid-Working-row, after
+    // a keystroke it's one cell PAST the input box's right rail. The IME
+    // preview then lands there — pinyin letters overwriting the Working
+    // label, or a stray letter outside the box's right border. And since
+    // those glyphs never enter our cell grid, the diff (which compares
+    // against prevFrameRef, not the screen) doesn't know to erase them.
+    //
+    // Fix: park the hidden cursor on the visible caret cell at the end of
+    // every flush so the composition preview renders where the user is
+    // actually typing. The caret is the first S_CURSOR cell in the frame
+    // (dialogs render above the input box, so a freeform-dialog caret
+    // wins over the main input caret when both exist). When no caret is
+    // drawn (caret scrolled out of the windowed input), fall back to the
+    // input box's first text column so the preview stays inside the box.
+    let caretParkRow = inputFirstLineRow
+    let caretParkCol = 5 // 1-based: │ + space + ▸ + space, then text
+    scanCaret: for (let r = 0; r < frame.length; r++) {
+      let col = 0
+      for (const cell of frame[r]!) {
+        if (cell.style === S_CURSOR) {
+          caretParkRow = r
+          caretParkCol = col + 1
+          break scanCaret
+        }
+        col += cell.width
       }
     }
 
@@ -3099,15 +3142,15 @@ export function ChatInput({
       }
     }
 
-    // No cursor parking. The terminal cursor is hidden for the whole
-    // life of the TUI (see the mount useEffect that emits `\x1b[?25l`),
-    // so its position is invisible and doesn't matter for display. The
-    // visual "input cursor" the user sees is the inverse-video cell on
-    // the input row (S_CURSOR), drawn atomically by the cell-diff loop
-    // above. Skipping the park removes one cursor-position command per
-    // flush — on weak terminals each such command kicks the renderer's
-    // state machine even when the cursor itself is hidden, so dropping
-    // it visibly reduces residual flicker.
+    // Cursor parking happens at the END of the payload (see below), not
+    // here: the target's absolute row depends on the final `frameTop`,
+    // which the commit/geometry paths above may still reassign. What
+    // matters is that every flush that moves the cursor re-parks it on
+    // the caret cell — see the "Hardware-cursor park target" block at
+    // frame-build time for why (IME marked text renders at the hardware
+    // cursor even while hidden). The visual "input cursor" the user sees
+    // remains the inverse-video cell (S_CURSOR) drawn atomically by the
+    // cell-diff loop above.
 
     // Flush everything as a single write: preBuf (BSU + DECSTBM scrollback
     // insertion + any frame-height-change scrolling) + frame diff + ESU.
@@ -3174,6 +3217,20 @@ export function ChatInput({
       }
       blankRowsAboveFrameRef.current = pendingBlankRowsAbove
       return
+    }
+
+    // Park the hidden hardware cursor on the caret cell as the payload's
+    // last action. Appended AFTER the no-op early-return above so a flush
+    // that writes nothing stays byte-silent (the cursor is already parked
+    // from the previous write); any flush that DID write leaves the
+    // cursor mid-frame (mid-Working-row on a spinner tick, one cell past
+    // the right rail after a keystroke), which is exactly where macOS
+    // terminals would then paint the IME composition preview. One extra
+    // CSI per non-empty flush; caretParkRow is -1 only when the frame has
+    // no input box at all (nextH=0), in which case there's no caret to
+    // anchor and we leave the cursor where the writes left it.
+    if (caretParkRow >= 0) {
+      buf += `\x1b[${frameTop + caretParkRow};${caretParkCol}H`
     }
 
     const payload = preBuf + buf + esu

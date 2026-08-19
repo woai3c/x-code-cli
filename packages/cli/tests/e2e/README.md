@@ -138,4 +138,4 @@ stdout for `assistantText` so you still get something.
 2. **Loose regex on assistant text**. The model phrases things differently each run; `/pnpm/i` not `'pnpm@9.0.0'`.
 3. **Keep tmpDir small**. Many files = bigger context, slower runs, more $.
 4. **Use `--max-turns` to cap runaway loops** for cheap models that misfire.
-5. **Set `requires:` for optional scenarios** (web search needs Tavily/Brave key, etc.) so the suite doesn't fail when the key is absent.
+5. **Set `requires:` for optional scenarios** (web search needs one of the search keys — Tavily/Brave/Exa/Perplexity/Firecrawl — or a DeepSeek model key, etc.) so the suite doesn't fail when the key is absent.

@@ -7,7 +7,7 @@ import { getPermissionLevel } from '@x-code-cli/core'
 import { highlightShellCommand } from '../render/shiki-highlight.js'
 import { GLYPH_ELLIPSIS } from '../render/terminal-glyphs.js'
 import { type Cell, ansiTextToCells, textToCells } from './cells.js'
-import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS, S_WARNING } from './palette.js'
+import { S_DIM, S_ERROR_BOLD, S_NONE, S_PRIMARY, S_SUCCESS } from './palette.js'
 import { truncatePathFromStart } from './text-helpers.js'
 
 export function permissionTitle(toolName: string, mcp?: { serverName: string; rawName: string }): string {
@@ -36,7 +36,7 @@ function permissionLevelStyle(level: string): { label: string; style: string } {
     case 'deny':
       return { label: 'dangerous', style: S_ERROR_BOLD }
     default:
-      return { label: 'write', style: S_WARNING }
+      return { label: 'write', style: S_PRIMARY }
   }
 }
 
