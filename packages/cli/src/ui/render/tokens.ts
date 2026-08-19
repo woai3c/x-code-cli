@@ -75,7 +75,7 @@ const TOKENS: Record<ChromeToken, TokenDef> = {
   // body text stays on the terminal's own default foreground.
   textStrong: { dark: '#f8f8f2', light: '#1f2328', ansi: 'white' },
   // Gray ladder: textDim for meta/hints, textMuted for placeholder/
-  // gutter/hr, border for the input rules and ❯ echo arrow. Dark values
+  // gutter/hr, border for the input rules and ▸ echo arrow. Dark values
   // are brightened a step above CC's originals (border #888 → #a0a0,
   // textDim #999 → #b3b3, textMuted #5c5c → #8f8f): at CC's depths the
   // ladder reads muddy on many dark terminals, and the dim attribute
@@ -127,7 +127,7 @@ export function paint(token: ChromeToken): (s: string) => string {
 
 // ── User-echo block ───────────────────────────────────────────────────
 //
-// The committed `❯ user question` block in scrollback gets a full-row
+// The committed `▸ user question` block in scrollback gets a full-row
 // background so questions read as distinct blocks next to the
 // assistant's markdown (which already uses bold/primary freely, ruling
 // out text-level highlight). Same approach as codex-rs's

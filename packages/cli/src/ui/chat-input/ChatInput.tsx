@@ -1775,7 +1775,7 @@ export function ChatInput({
       if (layout === 'compact-vertical') {
         // compact-vertical: description on a separate indented line below
         // the label. Matches CC's QuestionView layout:
-        //   ❯ 1. Label        ← focused: pointer "suggestion", label "suggestion"
+        //   ▸ 1. Label        ← focused: pointer "suggestion", label "suggestion"
         //      description     ← paddingLeft = maxIndexWidth + 4
         //     2. Label         ← unfocused: no pointer, label default (no bold)
         //      description     ← dim
@@ -1998,9 +1998,9 @@ export function ChatInput({
     // position. So we don't compute or emit a cursor-park CSI here.
     for (let i = 0; i < displayLines.length; i++) {
       const line = displayLines[i]
-      // Same `❯` glyph the committed echo uses (stdout-writer) — the
+      // Same `▸` glyph the committed echo uses (stdout-writer) — the
       // plain ASCII `>` reads pointier and out of place next to it.
-      // U+276F is width-1 per text-width.ts, so the prompt keeps its
+      // U+25B8 is width-1 per text-width.ts, so the prompt keeps its
       // two-cell footprint (arrow + space). The arrow takes the frame
       // color so plan/acceptEdits modes tint it along with the box.
       const prompt = i === 0 ? `${GLYPH_PROMPT_ARROW} ` : '  '

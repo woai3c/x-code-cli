@@ -15,7 +15,7 @@ export function terminalScreen(terminal: Terminal): string[] {
 }
 
 /** The live prompt line reduced to just its editable content: box rails
- *  (`│ …… │`) and the `❯ ` prompt glyph stripped, trailing pad removed.
+ *  (`│ …… │`) and the `▸ ` prompt glyph stripped, trailing pad removed.
  *  Tests assert against what the user TYPED, not the frame around it. */
 export function promptContent(line: string): string {
   return line.replace(/^│ /, '').replace(/^\| /, '').replace(/ │$/, '').replace(/ \|$/, '').trimEnd()
@@ -28,11 +28,11 @@ export function screenText(terminal: Terminal): string {
 export function lastPromptLine(lines: string[]): string {
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index]!
-    if (line === '>' || line.startsWith('> ') || line === '❯' || line.startsWith('❯ ')) return line
-    // Boxed prompt: `│ ❯ …… │` — the rails are part of the live input box.
+    if (line === '>' || line.startsWith('> ') || line === '▸' || line.startsWith('▸ ')) return line
+    // Boxed prompt: `│ ▸ …… │` — the rails are part of the live input box.
     // Permission-dialog option rows also start with `│ ` but their pointer
-    // sits behind a 4-space indent, so they can't false-match `│ ❯`.
-    if (line.startsWith('│ ❯') || line.startsWith('| >')) return line
+    // sits behind a 4-space indent, so they can't false-match `│ ▸`.
+    if (line.startsWith('│ ▸') || line.startsWith('| >')) return line
   }
   return ''
 }

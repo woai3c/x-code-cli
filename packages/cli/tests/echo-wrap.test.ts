@@ -1,5 +1,6 @@
 import { countContentRows } from '../src/ui/chat-input/text-helpers.js'
 import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/render/stdout-writer.js'
+import { GLYPH_PROMPT_ARROW } from '../src/ui/render/terminal-glyphs.js'
 import { visualWidth } from '../src/ui/render/text-width.js'
 
 // Regression: an over-wide echo line used to be left to the terminal's
@@ -78,7 +79,7 @@ describe('user echo card wrapping', () => {
     const out = echo('x'.repeat(COLS)) // 80 ascii chars → wraps once at budget 76
     const rows = physicalRows(out).filter((r) => r.length > 0)
     expect(rows.length).toBe(4)
-    expect(rows[1]!.startsWith(' ❯ ')).toBe(true)
+    expect(rows[1]!.startsWith(` ${GLYPH_PROMPT_ARROW} `)).toBe(true)
     expect(rows[2]!.startsWith('   x')).toBe(true)
   })
 })

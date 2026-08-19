@@ -48,7 +48,7 @@ describe('TUI /clear behavior', () => {
         // fresh viewport — the same padded card every other command echo
         // gets: blank row, full-width bg pad row, text row, bg pad row —
         // with the fresh input frame directly below it.
-        const echoRow = lines.findIndex((line) => /[❯>] \/clear/.test(line))
+        const echoRow = lines.findIndex((line) => /[▸›❯>] \/clear/.test(line))
         expect(echoRow).toBeGreaterThanOrEqual(2)
         expect((lines[echoRow - 1] ?? 'x').trim()).toBe('')
         expect((lines[echoRow + 1] ?? 'x').trim()).toBe('')
