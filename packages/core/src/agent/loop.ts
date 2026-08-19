@@ -32,6 +32,7 @@ import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
 import { createUpdateGoalTool } from '../tools/update-goal.js'
+import { setWebSearchModelProvider } from '../tools/web-search.js'
 import type { AgentCallbacks, AgentOptions, MessageProvenance, PeerOrigin, QueuedAgentInput } from '../types/index.js'
 import { debugLog, errorMessage, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
@@ -741,6 +742,10 @@ async function runTurnAttempt(
   // @ai-sdk/openai-compatible which doesn't auto-translate top-level reasoning.
   setZhipuReasoningEffort(effort)
 
+  // Side-channel: the statically-registered webSearch tool needs the active
+  // model's provider to decide whether DeepSeek's built-in search applies.
+  setWebSearchModelProvider(options.modelId.split(':')[0])
+
   let result: StreamResult
   try {
     result = streamText({
@@ -751,6 +756,13 @@ async function runTurnAttempt(
       maxRetries: 3,
       abortSignal: attemptControl.signal,
       headers: cached.headers,
+      // Per-request context for webSearch's DeepSeek fallback. Unlike the
+      // module-level setWebSearchModelProvider side-channel, this travels
+      // with the request and stays correct when concurrent sub-agent loops
+      // run on different models. The tools record is loosely typed as
+      // Record<string, any>, so the SDK infers the context map as undefined;
+      // cast at this single call site (same rationale as providerOptions).
+      toolsContext: { webSearch: { modelProvider: options.modelId.split(':')[0] } } as never,
       // Explicit ceiling so provider defaults don't silently truncate long
       // replies. Most providers clamp a too-high value, but some reject it
       // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;

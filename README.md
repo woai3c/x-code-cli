@@ -107,14 +107,19 @@ setx DEEPSEEK_API_KEY "sk-..."
 <details>
 <summary><b>Web search keys (optional)</b></summary>
 
-To enable the `webSearch` tool, configure either of the following. Both offer a free tier:
+To enable the `webSearch` tool, configure any one of the following:
 
-| Variable         | Provider                                      | Current free quota                        | Signup         |
-| ---------------- | --------------------------------------------- | ----------------------------------------- | -------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | 1,000 API credits/month                   | Email, no card |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | $5 credits/month (~1,000 Search requests) | Card required  |
+| Variable             | Provider                                                   | Current free quota      | Signup         |
+| -------------------- | ---------------------------------------------------------- | ----------------------- | -------------- |
+| `TAVILY_API_KEY`     | [Tavily](https://tavily.com)                               | 1,000 API credits/month | Email, no card |
+| `BRAVE_API_KEY`      | [Brave Search](https://brave.com/search/api/)              | — (paid)                | Card required  |
+| `EXA_API_KEY`        | [Exa](https://exa.ai)                                      | 1,000 requests/month    | Email, no card |
+| `PERPLEXITY_API_KEY` | [Perplexity Sonar](https://www.perplexity.ai/settings/api) | — (paid)                | Card required  |
+| `FIRECRAWL_API_KEY`  | [Firecrawl](https://firecrawl.dev)                         | Free credits tier       | Email, no card |
 
-> Tavily is recommended for first-time setup: simpler signup, LLM-optimized responses. When both are set, Tavily is preferred and Brave serves as fallback.
+> Tavily is recommended for first-time setup: simpler signup, LLM-optimized responses. When several keys are set, the first in the table order above wins. Set `X_CODE_WEB_SEARCH_PROVIDER` to `tavily`, `brave`, `exa`, `perplexity`, `firecrawl`, or `deepseek` to force a specific provider.
+>
+> **DeepSeek users need no extra key**: when the active model is a DeepSeek model and `DEEPSEEK_API_KEY` is set, `webSearch` automatically uses DeepSeek's built-in server-side web search. Note that each search is billed as a model turn (default `deepseek-v4-flash`), not as a flat search request.
 
 </details>
 

@@ -107,14 +107,19 @@ setx DEEPSEEK_API_KEY "sk-..."
 <details>
 <summary><b>网页搜索 Key（可选）</b></summary>
 
-启用 `webSearch` 工具需任选一项配置，两家均提供免费额度：
+启用 `webSearch` 工具需任选一项配置：
 
-| 环境变量         | 提供方                                        | 当前免费额度                          | 注册门槛         |
-| ---------------- | --------------------------------------------- | ------------------------------------- | ---------------- |
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com)                  | 每月 1,000 API credits                | 邮箱，无需信用卡 |
-| `BRAVE_API_KEY`  | [Brave Search](https://brave.com/search/api/) | 每月 $5 credits（Search 约 1,000 次） | 需绑定信用卡     |
+| 环境变量             | 提供方                                                     | 当前免费额度           | 注册门槛         |
+| -------------------- | ---------------------------------------------------------- | ---------------------- | ---------------- |
+| `TAVILY_API_KEY`     | [Tavily](https://tavily.com)                               | 每月 1,000 API credits | 邮箱，无需信用卡 |
+| `BRAVE_API_KEY`      | [Brave Search](https://brave.com/search/api/)              | —（付费）              | 需绑定信用卡     |
+| `EXA_API_KEY`        | [Exa](https://exa.ai)                                      | 每月 1,000 次请求      | 邮箱，无需信用卡 |
+| `PERPLEXITY_API_KEY` | [Perplexity Sonar](https://www.perplexity.ai/settings/api) | —（付费）              | 需绑定信用卡     |
+| `FIRECRAWL_API_KEY`  | [Firecrawl](https://firecrawl.dev)                         | 免费 credits 额度      | 邮箱，无需信用卡 |
 
-> 推荐首次配 Tavily：注册简便，返回格式针对 LLM 优化。同时配置时优先 Tavily，未配时自动回退 Brave。
+> 推荐首次配 Tavily：注册简便，返回格式针对 LLM 优化。配置多个 key 时按上表顺序取第一个；也可通过 `X_CODE_WEB_SEARCH_PROVIDER` 显式指定（可选值：`tavily`、`brave`、`exa`、`perplexity`、`firecrawl`、`deepseek`）。
+>
+> **DeepSeek 用户无需额外 key**：当前模型为 DeepSeek 且已配置 `DEEPSEEK_API_KEY` 时，`webSearch` 自动使用 DeepSeek 内置的服务端联网搜索。注意每次搜索按一次模型调用计费（默认 `deepseek-v4-flash`），而非按搜索次数计费。
 
 </details>
 

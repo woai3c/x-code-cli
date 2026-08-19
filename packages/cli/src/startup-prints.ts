@@ -61,9 +61,13 @@ export function printNoWebSearchKeyHint(): void {
 
   console.error(yellow('Note:') + ' WebSearch is disabled — no search API key configured.')
   console.error(dim('  (WebFetch still works key-less; the hint is only for web search.)'))
-  console.error('  Pick either (both free, signup only):')
-  console.error(`    ${bold('TAVILY_API_KEY')}  ${dim('1000/month — https://tavily.com')}`)
-  console.error(`    ${bold('BRAVE_API_KEY')}   ${dim('2000/month — https://api.search.brave.com')}`)
+  console.error('  Pick any (Tavily recommended — free, signup only):')
+  console.error(`    ${bold('TAVILY_API_KEY')}      ${dim('1000/month free — https://tavily.com')}`)
+  console.error(`    ${bold('BRAVE_API_KEY')}       ${dim('paid — https://api.search.brave.com')}`)
+  console.error(`    ${bold('EXA_API_KEY')}         ${dim('1000/month free — https://exa.ai')}`)
+  console.error(`    ${bold('PERPLEXITY_API_KEY')}  ${dim('paid — https://www.perplexity.ai/settings/api')}`)
+  console.error(`    ${bold('FIRECRAWL_API_KEY')}   ${dim('free credits — https://firecrawl.dev')}`)
+  console.error(dim("  DeepSeek models need no extra key — DeepSeek's built-in search is used automatically."))
 
   const cmd = formatPersistCommand('TAVILY_API_KEY', 'tvly-...', shell)
   console.error(`  ${dim(`(${shell})`)}  ${code(cmd)}\n`)

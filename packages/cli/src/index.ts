@@ -31,6 +31,7 @@ import {
   pickLatestSession,
   resolveModelId,
   resolveStreamConfig,
+  resolveWebSearchProvider,
   setPluginDebugMirror,
   shutdownBrowserMcp,
 } from '@x-code-cli/core'
@@ -504,8 +505,19 @@ async function main() {
   // Heads-up: WebSearch needs a key. Print once, before Ink takes over, so
   // the hint lands in scrollback above the TUI. Not fatal — WebFetch still
   // works key-less, and the tool itself returns a detailed error if invoked
-  // without a key configured.
-  if (!process.env.TAVILY_API_KEY && !process.env.BRAVE_API_KEY) {
+  // without a key configured. DeepSeek-model users need no extra key: the
+  // tool falls back to DeepSeek's built-in server-side web search.
+  const forcedSearchProvider = process.env.X_CODE_WEB_SEARCH_PROVIDER?.trim()
+  if (forcedSearchProvider) {
+    // The tool reports the precise error on invocation; surface it at
+    // startup too so a typo'd override isn't mistaken for "no key".
+    if (!resolveWebSearchProvider(modelId.split(':')[0])) {
+      console.error(
+        `Warning: X_CODE_WEB_SEARCH_PROVIDER=${forcedSearchProvider} is not usable ` +
+          '(unknown provider id or its API key is missing).',
+      )
+    }
+  } else if (!resolveWebSearchProvider(modelId.split(':')[0])) {
     printNoWebSearchKeyHint()
   }
 
