@@ -1,3 +1,23 @@
+## v0.5.2 (2026-08-20)
+
+### Features
+
+- redesign permission dialog with shortcuts and deny-with-feedback (fb38aa9)
+- switch prompt arrow and select pointer back to codex-style › (db695f3)
+- park hardware cursor on caret for IME preview, tint permission dialog primary (c9a440d)
+- switch prompt arrow and select pointer to slimmer ▸ (247bb0b)
+- multi-provider webSearch with DeepSeek built-in fallback (0dec456)
+- add shiki-based syntax highlighting with lazy engine and guardrails (fd654da)
+
+### Bug Fixes
+
+- harden runtime security and lifecycle (1e0058f)
+- preserve TUI content across terminal resize (49e40ab)
+- survive terminal-narrow reflow without phantom rows or frame tearing (8596423)
+- harden shell permission classification and write-path handling (a20b273)
+- harden webSearch DeepSeek/Perplexity seams (7bc025b)
+- align ⎿ bracket indent for command-result and peer-status notices (5d1d221)
+
 ## v0.5.1 (2026-08-18)
 
 ### Features
