@@ -1,5 +1,7 @@
 import type { Scenario } from '../framework/types.js'
 
+const WIKIPEDIA_URL = /https:\/\/en\.wikipedia\.org\/wiki\/Prompt_engineering/i
+
 const scenario: Scenario = {
   id: '15-web-search',
   name: 'webSearch 工具：搜一个外部主题（需要任一搜索 API key）',
@@ -20,12 +22,15 @@ const scenario: Scenario = {
       { args: ['--max-turns', '6'] },
     )
     ctx.expect.exitCode(r, 0)
-    ctx.expect.toolCalled(r, 'webSearch', { query: /(prompt[- ]?engin|wikipedia)/i })
+    const searchCall = ctx.expect.toolCalled(r, 'webSearch', { query: /(prompt[- ]?engin|wikipedia)/i })
     // Wikipedia article URLs are stable — no vendor domain churn like docs sites
     // (e.g. Anthropic moved docs.anthropic.com → platform.claude.com), so the
-    // assertion can pin the exact domain.
-    ctx.expect.assistantMentions(r, /wikipedia\.org/i)
-    ctx.expect.assistantMentions(r, /prompt[- ]?engin/i)
+    // assertion can pin the exact URL in both the search result and final answer.
+    ctx.expect.truthy(
+      WIKIPEDIA_URL.test(searchCall.resultText ?? ''),
+      `webSearch result did not contain the expected Wikipedia URL; got: ${(searchCall.resultText ?? '').slice(0, 400)}`,
+    )
+    ctx.expect.assistantMentions(r, WIKIPEDIA_URL)
     ctx.expect.noToolErrors(r)
   },
 }

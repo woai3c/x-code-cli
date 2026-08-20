@@ -6,7 +6,7 @@ const scenario: Scenario = {
   async run(ctx) {
     // 生成 5000 行文件，远超 LARGE_FILE_LINE_THRESHOLD=2000。
     // readFile 默认只返回 head（前 2000 行），随后给出一条 hint：
-    //   "showing first 2000/5000 lines. Call readFile again with offset/limit..."
+    //   "showing first 2000 lines; the file contains more content. Call readFile again..."
     // 模型必须按 hint 再调一次 readFile 才能看到尾部。
     const lines: string[] = []
     for (let i = 1; i <= 5000; i++) {
@@ -19,7 +19,8 @@ const scenario: Scenario = {
     await ctx.writeFile('big.txt', lines.join('\n'))
 
     const r = await ctx.runCli(
-      'Use the readFile tool to read big.txt. Because the file is large, the first call will ' +
+      'Use the readFile tool to read big.txt, which contains exactly 5000 logical lines. ' +
+        'Because the file is large, the first call will ' +
         'truncate and the tool result will tell you so. When that happens you MUST call readFile ' +
         'again with offset/limit to fetch the very last line of the file — do not guess, do not ' +
         'extrapolate from the pattern of earlier lines. Then quote the very last line of the file ' +
