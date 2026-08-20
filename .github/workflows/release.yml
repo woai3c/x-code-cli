@@ -43,7 +43,7 @@ jobs:
           --target ${{ matrix.target }}
           --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-shell-supervisor-${{ matrix.arch }}
           path: packages/core/native/windows-job-supervisor/target/${{ matrix.target }}/release/xc-shell-supervisor.exe
