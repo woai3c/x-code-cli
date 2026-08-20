@@ -1,6 +1,17 @@
 import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/render/stdout-writer.js'
 
+const { originalNoColor } = vi.hoisted(() => {
+  const originalNoColor = process.env.NO_COLOR
+  delete process.env.NO_COLOR
+  return { originalNoColor }
+})
+
 describe('stdout writer spacing', () => {
+  afterAll(() => {
+    if (originalNoColor === undefined) delete process.env.NO_COLOR
+    else process.env.NO_COLOR = originalNoColor
+  })
+
   beforeEach(() => resetScrollbackSpacing())
 
   it('leaves exactly one blank row after a non-streaming assistant message', () => {

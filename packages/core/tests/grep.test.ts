@@ -58,6 +58,13 @@ describe('grep tool', () => {
     expect(out).not.toContain('c.md')
   })
 
+  it('glob filter restricts matching files', async () => {
+    const out = (await exec({ pattern: 'foo', path: dir, glob: '*.md' })) as string
+    expect(out).toContain('c.md')
+    expect(out).not.toContain('a.ts')
+    expect(out).not.toContain('b.ts')
+  })
+
   it('linesAfter includes trailing context', async () => {
     const out = (await exec({ pattern: 'bar', path: dir, linesAfter: 1 })) as string
     expect(out).toContain('const bar = 2')
@@ -67,5 +74,14 @@ describe('grep tool', () => {
   it('returns "No matches found." when nothing matches', async () => {
     const out = (await exec({ pattern: 'zzzznotfound', path: dir })) as string
     expect(out).toBe('No matches found.')
+  })
+
+  it('caps output at headLimit and reports omitted lines', async () => {
+    const out = (await exec({ pattern: 'foo', path: dir, type: 'ts', caseInsensitive: true, headLimit: 2 })) as string
+    const resultLines = out.split('\n').filter((line) => line.includes('.ts:'))
+
+    expect(resultLines).toHaveLength(2)
+    expect(out).toContain('1 more lines not shown')
+    expect(out).toContain('capped at 2')
   })
 })

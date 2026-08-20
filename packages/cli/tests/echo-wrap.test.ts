@@ -3,6 +3,12 @@ import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/render/s
 import { GLYPH_PROMPT_ARROW } from '../src/ui/render/terminal-glyphs.js'
 import { visualWidth } from '../src/ui/render/text-width.js'
 
+const { originalNoColor } = vi.hoisted(() => {
+  const originalNoColor = process.env.NO_COLOR
+  delete process.env.NO_COLOR
+  return { originalNoColor }
+})
+
 // Regression: an over-wide echo line used to be left to the terminal's
 // auto-wrap — the wrapped remainder row kept the bg behind its text but got
 // no trailing padding, tearing the card's right edge. The echo now hard-wraps
@@ -34,6 +40,11 @@ function physicalRows(out: string): string[] {
 
 describe('user echo card wrapping', () => {
   let originalColumns: number | undefined
+
+  afterAll(() => {
+    if (originalNoColor === undefined) delete process.env.NO_COLOR
+    else process.env.NO_COLOR = originalNoColor
+  })
 
   beforeEach(() => {
     resetScrollbackSpacing()
