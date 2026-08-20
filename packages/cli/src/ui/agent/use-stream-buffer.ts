@@ -44,7 +44,7 @@
 // typical 80-200ms inter-delta gaps from the provider, well below human
 // perception, and lets every commit arriving in the same window ride out
 // in one React render → one stdout write.
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import type { DisplayMessage, ModelMessage } from '@x-code-cli/core'
 import { debugLog } from '@x-code-cli/core'
@@ -279,6 +279,16 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
     pendingChunksRef.current = []
     bufferRef.current = ''
   }, [])
+
+  useEffect(
+    () => () => {
+      if (emitTimerRef.current !== null) clearTimeout(emitTimerRef.current)
+      emitTimerRef.current = null
+      pendingChunksRef.current = []
+      bufferRef.current = ''
+    },
+    [],
+  )
 
   return { appendTextDelta, flushBuffer, resetBuffer }
 }

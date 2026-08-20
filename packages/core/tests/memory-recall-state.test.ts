@@ -36,6 +36,22 @@ describe('memory recall attachment state', () => {
     expect(state.messages[0]?.content).toBe('How should you reply?')
   })
 
+  it('deeply detaches nested content from the canonical transcript', () => {
+    const state = createLoopState()
+    state.messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Question' },
+        { type: 'file', data: 'AAAA', mediaType: 'application/pdf', filename: 'sample.pdf' },
+      ],
+    })
+
+    const request = applyMemoryRecallAttachments(state.messages, state)
+    ;(request[0] as { content: Array<{ type: string }> }).content.splice(1, 1)
+
+    expect((state.messages[0]?.content as Array<{ type: string }>).map((part) => part.type)).toEqual(['text', 'file'])
+  })
+
   it('tombstones changed facts so stale attachments are never injected', () => {
     const state = createLoopState()
     state.messages.push({ role: 'user', content: 'Question' })

@@ -14,9 +14,9 @@
 //   1. Fetch source into a temp dir
 //   2. Discover + parse manifest (reject Gemini-only sources here)
 //   3. Compute final cache path: cache/<marketplace>/<plugin>/<version>/
-//   4. Wipe any existing install at that path (re-install / same-version upgrade)
-//   5. Move temp → final (rename when possible, copy+rm fallback for EXDEV)
-//   6. Append/update installed_plugins.json
+//   4. Stage the new tree beside the final cache path
+//   5. Atomically swap stage → final, retaining the previous tree for rollback
+//   6. Append/update installed_plugins.json, then remove the rollback tree
 //
 // AbortSignal threads through git clone (via execa's `signal`) and the
 // recursive copy (cooperative check between entries) so Esc during a long
@@ -24,14 +24,17 @@
 //
 // Cache layout is deliberately per-version so `/plugin update` can install
 // a new version side-by-side and atomically switch (a later improvement);
-// today we just overwrite same-version installs.
+// today the registry points at one active version while cached versions remain
+// side-by-side.
 import { execa } from 'execa'
 
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
 import { debugLog, errorMessage } from '../utils.js'
+import { atomicWriteFile } from '../utils/atomic-file.js'
 import { type ConsentPreview, buildConsentPreview, probePluginRoot } from './consent.js'
 import { ManifestParseError, discoverManifest, parseManifest } from './manifest.js'
 import { RESERVED_MARKETPLACE_NAMES, readKnownMarketplaces, resolveCloneUrl } from './marketplace.js'
@@ -120,6 +123,7 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
   const tempDir = await fetchToTemp(req.source, req.signal)
 
   try {
+    await validatePluginTree(tempDir, req.signal)
     const discovery = await discoverManifest(tempDir)
     if (!discovery) {
       throw new InstallError(
@@ -206,16 +210,8 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
       await setPluginUserConfig(pluginIdForConfig, collected)
     }
 
-    const finalDir = pluginCacheDir(req.marketplace, manifest.name, manifest.version)
-
-    // Same-version reinstall: wipe existing install first. Skipping this
-    // would leave stale files mixed with new ones if the new version drops
-    // a file the old version had.
-    await fs.rm(finalDir, { recursive: true, force: true })
-    await fs.mkdir(path.dirname(finalDir), { recursive: true })
-    await moveOrCopy(tempDir, finalDir, req.signal)
-
     const pluginId = `${manifest.name}@${req.marketplace}`
+    const finalDir = pluginCacheDir(req.marketplace, manifest.name, manifest.version)
     const record: InstalledPluginRecord = {
       id: pluginId,
       name: manifest.name,
@@ -225,7 +221,16 @@ export async function installPlugin(req: InstallRequest): Promise<InstallResult>
       installedAt: new Date().toISOString(),
       installScope: req.scope ?? 'user',
     }
-    await recordInstallation(record)
+    await withPluginMutationLock(async () => {
+      const swap = await stageAndSwapPluginDirectory(tempDir, finalDir, req.signal)
+      try {
+        await recordInstallation(record)
+        await swap.commit()
+      } catch (error) {
+        await swap.rollback()
+        throw error
+      }
+    })
 
     return { pluginId, rootDir: finalDir, manifest, manifestFormat: discovery.format, record }
   } catch (err) {
@@ -332,7 +337,28 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
     // original clone.
     const subdir = source.subdir
     if (subdir) {
-      const subdirPath = path.join(tempDir, subdir)
+      const cloneRoot = await fs.realpath(tempDir)
+      const lexicalSubdirPath = path.resolve(tempDir, subdir)
+      const lexicalRelative = path.relative(tempDir, lexicalSubdirPath)
+      if (
+        path.isAbsolute(subdir) ||
+        lexicalRelative === '..' ||
+        lexicalRelative.startsWith('..' + path.sep) ||
+        path.isAbsolute(lexicalRelative)
+      ) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
+        throw new InstallError(`subdir "${subdir}" escapes the cloned repository`)
+      }
+      const subdirPath = await fs.realpath(lexicalSubdirPath).catch(() => lexicalSubdirPath)
+      const physicalRelative = path.relative(cloneRoot, subdirPath)
+      if (
+        physicalRelative === '..' ||
+        physicalRelative.startsWith('..' + path.sep) ||
+        path.isAbsolute(physicalRelative)
+      ) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
+        throw new InstallError(`subdir "${subdir}" resolves outside the cloned repository`)
+      }
       const stat = await fs.stat(subdirPath).catch(() => null)
       if (!stat || !stat.isDirectory()) {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
@@ -360,8 +386,85 @@ async function fetchToTemp(source: PluginSource, signal?: AbortSignal): Promise<
  *  bundled-deps plugin should reinstall on the user's machine; if a
  *  plugin genuinely needs node_modules we'll revisit. */
 const COPY_SKIP = new Set(['.git', 'node_modules', '.DS_Store', 'Thumbs.db'])
+const MAX_PLUGIN_FILES = 20_000
+const MAX_PLUGIN_FILE_BYTES = 100 * 1024 * 1024
+const MAX_PLUGIN_TOTAL_BYTES = 512 * 1024 * 1024
 
-async function copyDirFiltered(src: string, dst: string, signal?: AbortSignal, root?: string): Promise<void> {
+interface CopyBudget {
+  files: number
+  bytes: number
+}
+
+function countPluginEntry(budget: CopyBudget): void {
+  budget.files++
+  if (budget.files > MAX_PLUGIN_FILES) {
+    throw new InstallError('plugin source exceeds the safe file-count or size limit')
+  }
+}
+
+function countPluginBytes(budget: CopyBudget, size: number): void {
+  budget.bytes += size
+  if (size > MAX_PLUGIN_FILE_BYTES || budget.bytes > MAX_PLUGIN_TOTAL_BYTES) {
+    throw new InstallError('plugin source exceeds the safe file-count or size limit')
+  }
+}
+
+async function validatePluginTree(rootDir: string, signal?: AbortSignal): Promise<void> {
+  const rootPhysical = await fs.realpath(rootDir)
+  const budget: CopyBudget = { files: 0, bytes: 0 }
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await fs.readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      signal?.throwIfAborted()
+      countPluginEntry(budget)
+      const entryPath = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(entryPath)
+        continue
+      }
+      if (entry.isSymbolicLink()) {
+        const target = await fs.readlink(entryPath)
+        const resolved = path.resolve(directory, target)
+        const relative = path.relative(rootDir, resolved)
+        const physical = await fs.realpath(resolved).catch(() => null)
+        const physicalRelative = physical ? path.relative(rootPhysical, physical) : relative
+        const targetStats = await fs.stat(resolved).catch(() => null)
+        if (
+          relative === '' ||
+          relative === '..' ||
+          relative.startsWith('..' + path.sep) ||
+          path.isAbsolute(relative) ||
+          physicalRelative === '..' ||
+          physicalRelative.startsWith('..' + path.sep) ||
+          path.isAbsolute(physicalRelative) ||
+          targetStats?.isDirectory()
+        ) {
+          await fs.rm(entryPath, { force: true })
+        } else if (targetStats?.isFile()) {
+          // A Windows host without symlink privileges copies this target
+          // into the cache, so charge its real size against the same budget.
+          countPluginBytes(budget, targetStats.size)
+        }
+        continue
+      }
+      if (!entry.isFile()) {
+        await fs.rm(entryPath, { recursive: true, force: true })
+        continue
+      }
+      const stats = await fs.stat(entryPath)
+      countPluginBytes(budget, stats.size)
+    }
+  }
+  await visit(rootDir)
+}
+
+async function copyDirFiltered(
+  src: string,
+  dst: string,
+  signal?: AbortSignal,
+  root?: string,
+  budget: CopyBudget = { files: 0, bytes: 0 },
+): Promise<void> {
   // `root` is captured on the first (non-recursive) call so the symlink
   // escape check below validates against the original plugin source, not
   // the current recursion's `src` (which moves with each subdir).
@@ -371,11 +474,14 @@ async function copyDirFiltered(src: string, dst: string, signal?: AbortSignal, r
   for (const entry of entries) {
     signal?.throwIfAborted()
     if (COPY_SKIP.has(entry.name)) continue
+    countPluginEntry(budget)
     const s = path.join(src, entry.name)
     const d = path.join(dst, entry.name)
     if (entry.isDirectory()) {
-      await copyDirFiltered(s, d, signal, rootDir)
+      await copyDirFiltered(s, d, signal, rootDir, budget)
     } else if (entry.isFile()) {
+      const stats = await fs.stat(s)
+      countPluginBytes(budget, stats.size)
       await fs.copyFile(s, d)
     } else if (entry.isSymbolicLink()) {
       // Resolve the symlink target relative to its containing directory.
@@ -389,10 +495,12 @@ async function copyDirFiltered(src: string, dst: string, signal?: AbortSignal, r
       const target = await fs.readlink(s)
       const resolved = path.resolve(path.dirname(s), target)
       const rel = path.relative(rootDir, resolved)
-      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+      if (rel === '' || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
         debugLog('plugins.copy-symlink-escape', `${s} -> ${target} (resolved ${resolved}, outside ${rootDir})`)
         continue
       }
+      const targetStats = await fs.stat(resolved).catch(() => null)
+      if (targetStats?.isFile()) countPluginBytes(budget, targetStats.size)
       try {
         await fs.symlink(target, d)
       } catch {
@@ -424,7 +532,75 @@ async function moveOrCopy(src: string, dst: string, signal?: AbortSignal): Promi
   await fs.rm(src, { recursive: true, force: true }).catch(() => {})
 }
 
+async function stageAndSwapPluginDirectory(
+  sourceDir: string,
+  finalDir: string,
+  signal?: AbortSignal,
+): Promise<{ commit: () => Promise<void>; rollback: () => Promise<void> }> {
+  const parent = path.dirname(finalDir)
+  const nonce = `${process.pid}-${randomUUID()}`
+  const stageDir = path.join(parent, `.${path.basename(finalDir)}.${nonce}.stage`)
+  const backupDir = path.join(parent, `.${path.basename(finalDir)}.${nonce}.backup`)
+  await fs.mkdir(parent, { recursive: true })
+  try {
+    await moveOrCopy(sourceDir, stageDir, signal)
+  } catch (error) {
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
+
+  let hasBackup = false
+  try {
+    await fs.rename(finalDir, backupDir)
+    hasBackup = true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {})
+      throw error
+    }
+  }
+
+  try {
+    await fs.rename(stageDir, finalDir)
+  } catch (error) {
+    if (hasBackup) await fs.rename(backupDir, finalDir).catch(() => {})
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
+
+  return {
+    commit: async () => {
+      if (hasBackup) {
+        await fs.rm(backupDir, { recursive: true, force: true }).catch((error) => {
+          debugLog('plugins.install-backup-cleanup-failed', errorMessage(error))
+        })
+      }
+    },
+    rollback: async () => {
+      await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {})
+      if (hasBackup) await fs.rename(backupDir, finalDir).catch(() => {})
+    },
+  }
+}
+
 // ── installed_plugins.json bookkeeping ──────────────────────────────────
+
+let pluginMutationTail: Promise<void> = Promise.resolve()
+
+async function withPluginMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = pluginMutationTail.catch(() => {})
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  pluginMutationTail = previous.then(() => gate)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+  }
+}
 
 async function readInstalledPlugins(): Promise<InstalledPlugins> {
   const file = installedPluginsPath()
@@ -442,8 +618,7 @@ async function readInstalledPlugins(): Promise<InstalledPlugins> {
 
 async function writeInstalledPlugins(data: InstalledPlugins): Promise<void> {
   const file = installedPluginsPath()
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+  await atomicWriteFile(file, JSON.stringify(data, null, 2) + '\n')
 }
 
 async function recordInstallation(record: InstalledPluginRecord): Promise<void> {
@@ -479,28 +654,30 @@ export interface UninstallResult {
  *  (`~/.x-code/plugins/data/<id>/`) intact so the user doesn't lose
  *  state if they reinstall later. */
 export async function uninstallPlugin(id: string): Promise<UninstallResult> {
-  const record = await findInstalledPlugin(id)
-  const result: UninstallResult = { removedVersions: [], removedRecord: false }
+  return withPluginMutationLock(async () => {
+    const data = await readInstalledPlugins()
+    const record = data.plugins.find((plugin) => plugin.id === id)
+    const result: UninstallResult = { removedVersions: [], removedRecord: false }
 
-  if (record) {
-    const parent = pluginCacheParent(record.marketplace, record.name)
-    try {
-      const versions = await fs.readdir(parent)
-      result.removedVersions = versions
-      await fs.rm(parent, { recursive: true, force: true })
-    } catch {
-      // No cache entries — the record might be stale. Removing the record
-      // below still happens.
+    if (record) {
+      const parent = pluginCacheParent(record.marketplace, record.name)
+      try {
+        const versions = await fs.readdir(parent)
+        result.removedVersions = versions.filter((version) => !version.startsWith('.'))
+        await fs.rm(parent, { recursive: true, force: true })
+      } catch {
+        // No cache entries — the record might be stale. Removing the record
+        // below still happens.
+      }
     }
-  }
 
-  const data = await readInstalledPlugins()
-  const before = data.plugins.length
-  data.plugins = data.plugins.filter((p) => p.id !== id)
-  if (data.plugins.length !== before) {
-    await writeInstalledPlugins(data)
-    result.removedRecord = true
-  }
+    const before = data.plugins.length
+    data.plugins = data.plugins.filter((plugin) => plugin.id !== id)
+    if (data.plugins.length !== before) {
+      await writeInstalledPlugins(data)
+      result.removedRecord = true
+    }
 
-  return result
+    return result
+  })
 }

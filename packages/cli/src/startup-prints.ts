@@ -166,7 +166,7 @@ let onUpdateHint: ((msg: string) => void) | null = null
 /** Register a handler for update hints. Called by App on mount so both
  *  the pre-mount cache-hit path and the post-mount network-fetch path
  *  render through ChatInput's message system instead of stderr. */
-export function registerUpdateHintHandler(handler: (msg: string) => void): void {
+export function registerUpdateHintHandler(handler: ((msg: string) => void) | null): void {
   onUpdateHint = handler
 }
 

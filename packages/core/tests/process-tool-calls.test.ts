@@ -156,11 +156,7 @@ describe('processToolCalls ghost-call skip', () => {
     expect(ghostResult).toBeUndefined()
   })
 
-  it('falls back to running every tool when the assistant message has no tool_calls at all', async () => {
-    // Edge case: if `activeIds` ends up empty we don't have evidence to
-    // judge ghosts vs legit calls, so the conservative fallback runs
-    // them all. The sanitizer still has the reverse-orphan check as
-    // backstop.
+  it('drops every tool when the assistant message has no committed tool_calls', async () => {
     const state = createLoopState()
     state.messages.push(
       { role: 'user', content: 'hi' } as ModelMessage,
@@ -187,7 +183,7 @@ describe('processToolCalls ghost-call skip', () => {
       callbacks,
       stubModel,
     )
-    expect(onAskUser).toHaveBeenCalledTimes(1)
+    expect(onAskUser).not.toHaveBeenCalled()
   })
 
   it('only inspects assistant messages from the current turn (stops at the previous user message)', async () => {
@@ -285,7 +281,7 @@ describe('processToolCalls plan-mode boundary', () => {
   it('writes the current plan file without a second permission dialog', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-plan-write-'))
     temporaryDirectories.push(dir)
-    const planPath = path.join(dir, 'plan.md')
+    const planPath = path.join(dir, '.x-code', 'plans', 'plan.md')
     const state = createLoopState('plan', { projectCwd: dir })
     state.currentPlanPath = planPath
     const input = { filePath: planPath, content: '# Plan\n' }
@@ -302,6 +298,37 @@ describe('processToolCalls plan-mode boundary', () => {
 
     expect(await fs.readFile(planPath, 'utf8')).toBe('# Plan\n')
     expect(callbacks.onAskPermission).not.toHaveBeenCalled()
+  })
+
+  it('rejects a plan path whose plans directory resolves outside the project', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-plan-link-'))
+    temporaryDirectories.push(dir)
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-plan-outside-'))
+    temporaryDirectories.push(outside)
+    const planRoot = path.join(dir, '.x-code', 'plans')
+    await fs.mkdir(path.dirname(planRoot), { recursive: true })
+    await fs.symlink(outside, planRoot, process.platform === 'win32' ? 'junction' : 'dir')
+    const planPath = path.join(planRoot, 'plan.md')
+    const state = createLoopState('plan', { projectCwd: dir })
+    state.currentPlanPath = planPath
+    const input = { filePath: planPath, content: '# Escaped\n' }
+    recordCall(state, 'writeFile', 'tc-plan-link', input)
+    const callbacks = makeCallbacks()
+
+    await processToolCalls(
+      [{ toolName: 'writeFile', toolCallId: 'tc-plan-link', input }],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+
+    await expect(fs.access(path.join(outside, 'plan.md'))).rejects.toThrow()
+    expect(callbacks.onToolResult).toHaveBeenCalledWith(
+      'tc-plan-link',
+      expect.stringContaining('only modify the current session plan file'),
+      true,
+    )
   })
 
   it('rejects shell calls even when trust mode is enabled', async () => {

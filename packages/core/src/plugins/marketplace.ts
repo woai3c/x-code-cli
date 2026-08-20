@@ -35,7 +35,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { debugLog, errorMessage } from '../utils.js'
-import { knownMarketplacesPath, marketplaceDir, marketplaceIndexPath } from './paths.js'
+import { isSafePluginPathComponent, knownMarketplacesPath, marketplaceDir, marketplaceIndexPath } from './paths.js'
 import type { KnownMarketplace, KnownMarketplaces, Marketplace, MarketplaceEntry, PluginSource } from './types.js'
 
 // ── Reserved marketplace names ──────────────────────────────────────────
@@ -314,7 +314,9 @@ export async function readKnownMarketplaces(): Promise<KnownMarketplaces> {
     const obj = parsed as Record<string, unknown>
     const list = Array.isArray(obj.marketplaces) ? (obj.marketplaces as KnownMarketplace[]) : []
     return {
-      marketplaces: list.filter((m) => m && typeof m.name === 'string' && typeof m.source === 'string'),
+      marketplaces: list.filter(
+        (m) => m && typeof m.name === 'string' && isSafePluginPathComponent(m.name) && typeof m.source === 'string',
+      ),
       strictKnownMarketplaces:
         typeof obj.strictKnownMarketplaces === 'boolean' ? obj.strictKnownMarketplaces : undefined,
       blockedPlugins: Array.isArray(obj.blockedPlugins)
@@ -378,6 +380,9 @@ export async function ensureDefaultMarketplaces(): Promise<void> {
  *  RESERVED_MARKETPLACE_NAMES. Idempotent: re-adding the same name
  *  updates the source. */
 export async function addKnownMarketplace(entry: KnownMarketplace): Promise<void> {
+  if (!isSafePluginPathComponent(entry.name)) {
+    throw new Error('Marketplace name must be one safe cross-platform filesystem path component')
+  }
   const reservedOrg = RESERVED_MARKETPLACE_NAMES[entry.name]
   if (reservedOrg !== undefined) {
     if (!sourceMatchesOrg(entry.source, reservedOrg)) {
@@ -401,6 +406,7 @@ export async function addKnownMarketplace(entry: KnownMarketplace): Promise<void
 }
 
 export async function removeKnownMarketplace(name: string): Promise<'removed' | 'noop'> {
+  if (!isSafePluginPathComponent(name)) return 'noop'
   const km = await readKnownMarketplaces()
   const before = km.marketplaces.length
   km.marketplaces = km.marketplaces.filter((m) => m.name !== name)

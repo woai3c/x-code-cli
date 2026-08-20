@@ -16,6 +16,7 @@
 //   - create path (`renderCreatePreview`): first N lines of new content,
 //     no diff bg (the whole file is "new" — bg coloring every row would
 //     be visual noise), but same syntax highlighting and gutter style.
+import { stripTerminalControls } from '@x-code-cli/core'
 import type { EditDiffHunk, EditDiffPayload } from '@x-code-cli/core'
 
 import { RESULT_INDENT } from '../utils.js'
@@ -112,7 +113,7 @@ function numberLines(h: EditDiffHunk): { sigil: ' ' | '+' | '-'; code: string; l
   let newN = h.newStart
   for (const raw of h.lines) {
     const sigil = raw[0] === '+' ? '+' : raw[0] === '-' ? '-' : ' '
-    const code = raw.slice(1)
+    const code = stripTerminalControls(raw.slice(1))
     if (sigil === '-') {
       out.push({ sigil, code, lineNum: oldN })
       oldN++
@@ -290,7 +291,7 @@ function renderCreatePreview(
   theme?: SyntaxThemeName,
 ): string[] {
   const cols = Math.max(40, terminalWidth)
-  const allLines = content.split('\n')
+  const allLines = stripTerminalControls(content).split('\n')
   // Drop a single trailing empty line — most file content ends with `\n`,
   // splitting yields an empty string we don't want to render.
   if (allLines.length > 0 && allLines[allLines.length - 1] === '') allLines.pop()

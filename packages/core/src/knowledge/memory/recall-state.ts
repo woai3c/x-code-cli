@@ -78,7 +78,10 @@ function prependToMessage(message: ModelMessage, block: string): ModelMessage {
 }
 
 export function applyMemoryRecallAttachments(messages: readonly ModelMessage[], state: LoopState): ModelMessage[] {
-  const result = [...messages]
+  // Provider compatibility transforms are intentionally request-local and
+  // may rewrite nested content arrays. Detach every message so those rewrites
+  // can never mutate the canonical tracked transcript by shared identity.
+  const result = messages.map((message) => structuredClone(message))
   const attachments = activeMemoryRecallAttachments(state).sort((a, b) => a.anchorMessageIndex - b.anchorMessageIndex)
   let offset = 0
   for (const attachment of attachments) {

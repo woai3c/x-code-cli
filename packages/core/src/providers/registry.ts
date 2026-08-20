@@ -151,9 +151,17 @@ const moonshotConvertUsage = (usage: any) => {
  * `reasoning` parameter. We inject `reasoning_effort` via the fetch shim.
  */
 let _zhipuReasoningEffort: string | undefined
+const ZHIPU_REASONING_HEADER = 'x-x-code-zhipu-reasoning-effort'
 
 export function setZhipuReasoningEffort(effort: string | undefined): void {
   _zhipuReasoningEffort = effort
+}
+
+export function withZhipuReasoningHeader(
+  headers: Record<string, string | undefined> | undefined,
+  effort: string | undefined,
+): Record<string, string | undefined> {
+  return { ...headers, [ZHIPU_REASONING_HEADER]: effort ?? '' }
 }
 
 /**
@@ -162,21 +170,27 @@ export function setZhipuReasoningEffort(effort: string | undefined): void {
  * top-level `reasoning` parameter. We intercept the HTTP body and add it.
  */
 const zhipuReasoningFetch: typeof fetch = async (input, init) => {
-  if (!init?.body || typeof init.body !== 'string') return permanentErrorFetch(input, init)
+  const headers = new Headers(init?.headers)
+  const hasRequestEffort = headers.has(ZHIPU_REASONING_HEADER)
+  const requestEffort = headers.get(ZHIPU_REASONING_HEADER) ?? undefined
+  headers.delete(ZHIPU_REASONING_HEADER)
+  const sanitizedInit = init ? { ...init, headers } : init
+  if (!init?.body || typeof init.body !== 'string') return permanentErrorFetch(input, sanitizedInit)
 
-  if (_zhipuReasoningEffort) {
+  const effort = hasRequestEffort ? requestEffort || undefined : _zhipuReasoningEffort
+  if (effort) {
     try {
       const body = JSON.parse(init.body) as { model?: string; reasoning_effort?: string }
       if (typeof body.model === 'string' && !body.reasoning_effort) {
-        body.reasoning_effort = _zhipuReasoningEffort
-        return permanentErrorFetch(input, { ...init, body: JSON.stringify(body) })
+        body.reasoning_effort = effort
+        return permanentErrorFetch(input, { ...sanitizedInit, body: JSON.stringify(body) })
       }
     } catch {
       // pass through
     }
   }
 
-  return permanentErrorFetch(input, init)
+  return permanentErrorFetch(input, sanitizedInit)
 }
 
 /**

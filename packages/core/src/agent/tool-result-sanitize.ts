@@ -247,7 +247,8 @@ export function repairOrphanToolCalls(messages: ModelMessage[]): void {
 /** Provenance-preserving orphan repair. Structural moves and removals operate
  * on whole tracked entries; rewritten content keeps the original entryId and
  * provenance, and synthetic results inherit the matching assistant calls. */
-export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): void {
+export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): boolean {
+  let changed = false
   for (let i = 0; i < entries.length; i++) {
     const message = entries[i]?.message
     if (!message || message.role !== 'assistant' || !Array.isArray(message.content)) continue
@@ -273,6 +274,7 @@ export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): vo
     for (let index = displaced.length - 1; index >= 0; index--) entries.splice(displaced[index]!, 1)
     const insertAt = cursor - displaced.length
     entries.splice(insertAt, 0, ...extracted)
+    changed = true
     i = insertAt + extracted.length - 1
   }
 
@@ -312,8 +314,10 @@ export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): vo
       } else {
         entries.splice(i, 1)
       }
+      changed = true
     } else if (kept.length !== parts.length) {
       entries[i] = { ...entry, message: { ...message, content: kept } as ModelMessage }
+      changed = true
     }
   }
 
@@ -348,7 +352,7 @@ export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): vo
       },
     })
   }
-  if (orphanParts.length === 0) return
+  if (orphanParts.length === 0) return changed
   const tail = entries[entries.length - 1]
   if (tail?.message.role === 'tool' && Array.isArray(tail.message.content)) {
     entries[entries.length - 1] = {
@@ -366,6 +370,7 @@ export function repairOrphanTrackedToolCalls(entries: TrackedModelMessage[]): vo
       ),
     )
   }
+  return true
 }
 
 /**

@@ -44,6 +44,17 @@ const CLIENT_INFO = { name: 'x-code-cli', version: VERSION }
  *  are usually up in 100-500ms; the budget is for slow npx installs on
  *  cold cache, not normal operation. */
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000
+const DISCOVERY_TIMEOUT_MS = 15_000
+const MAX_DISCOVERED_TOOLS = 256
+const MAX_DISCOVERED_RESOURCES = 1_000
+const MAX_TOOL_SCHEMA_BYTES = 128 * 1024
+const MAX_DISCOVERY_SCHEMA_BYTES = 1024 * 1024
+const MAX_DESCRIPTION_BYTES = 16 * 1024
+const MAX_ANNOTATIONS_BYTES = 16 * 1024
+const MAX_RESOURCE_TEXT_BYTES = 2 * 1024 * 1024
+const MAX_CONTENT_BLOCKS = 1_000
+const MAX_RESULT_IMAGES = 8
+const MAX_RESULT_IMAGE_BASE64_CHARS = 14 * 1024 * 1024
 
 export interface ConnectInfo {
   toolCount: number
@@ -58,7 +69,12 @@ export class McpClient {
   /** Rolling tail of stderr (stdio servers only). */
   private stderrTail: string[] = []
   /** Cached results from the last connect, served to the registry. */
-  private cachedTools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> = []
+  private cachedTools: Array<{
+    name: string
+    description?: string
+    inputSchema: Record<string, unknown>
+    annotations?: Record<string, unknown>
+  }> = []
   private cachedResources: McpResourceEntry[] = []
   /** The SDK does not replay an onclose event to listeners registered after
    *  the transport has already dropped. Keep our own lifecycle state so a
@@ -114,28 +130,61 @@ export class McpClient {
     // can offer one without the other — and we tolerate either listing
     // throwing (some servers reject `listResources` if they have none).
     try {
-      const tools = await this.client.listTools()
-      this.cachedTools = (tools.tools ?? []).map((t) => ({
-        name: t.name,
-        description: t.description ?? '',
-        inputSchema: (t.inputSchema as Record<string, unknown>) ?? {},
-        annotations: (t as { annotations?: Record<string, unknown> }).annotations,
-      }))
+      const discoverySignal = AbortSignal.timeout(Math.min(timeout, DISCOVERY_TIMEOUT_MS))
+      const signal = abortSignal ? AbortSignal.any([discoverySignal, abortSignal]) : discoverySignal
+      const tools = await this.client.listTools(undefined, { signal })
+      let schemaBytes = 0
+      this.cachedTools = []
+      for (const t of (tools.tools ?? []).slice(0, MAX_DISCOVERED_TOOLS)) {
+        if (typeof t.name !== 'string' || !t.name || t.name.length > 256) continue
+        const inputSchema = (t.inputSchema as Record<string, unknown>) ?? {}
+        if (typeof inputSchema !== 'object' || Array.isArray(inputSchema)) continue
+        let bytes: number
+        try {
+          bytes = Buffer.byteLength(JSON.stringify(inputSchema), 'utf8')
+        } catch {
+          continue
+        }
+        if (bytes > MAX_TOOL_SCHEMA_BYTES || schemaBytes + bytes > MAX_DISCOVERY_SCHEMA_BYTES) continue
+        schemaBytes += bytes
+        this.cachedTools.push({
+          name: t.name,
+          description: truncateText(t.description ?? '', MAX_DESCRIPTION_BYTES),
+          inputSchema,
+          annotations: boundedJsonRecord(
+            (t as { annotations?: Record<string, unknown> }).annotations,
+            MAX_ANNOTATIONS_BYTES,
+          ),
+        })
+      }
     } catch (err) {
+      if (abortSignal?.aborted) {
+        await this.safeClose()
+        throw err
+      }
       debugLog('mcp.listTools-failed', `${this.serverName}: ${String(err)}`)
       this.cachedTools = []
     }
 
     try {
-      const resources = await this.client.listResources()
-      this.cachedResources = (resources.resources ?? []).map((r) => ({
-        uri: r.uri,
-        name: r.name ?? r.uri,
-        description: r.description,
-        mimeType: r.mimeType,
-        serverName: this.serverName,
-      }))
+      const discoverySignal = AbortSignal.timeout(Math.min(timeout, DISCOVERY_TIMEOUT_MS))
+      const signal = abortSignal ? AbortSignal.any([discoverySignal, abortSignal]) : discoverySignal
+      const resources = await this.client.listResources(undefined, { signal })
+      this.cachedResources = (resources.resources ?? [])
+        .slice(0, MAX_DISCOVERED_RESOURCES)
+        .filter((r) => typeof r.uri === 'string' && r.uri.length > 0 && r.uri.length <= 8192)
+        .map((r) => ({
+          uri: r.uri,
+          name: truncateText(r.name ?? r.uri, MAX_DESCRIPTION_BYTES),
+          description: r.description ? truncateText(r.description, MAX_DESCRIPTION_BYTES) : undefined,
+          mimeType: r.mimeType ? truncateText(r.mimeType, 256) : undefined,
+          serverName: this.serverName,
+        }))
     } catch (err) {
+      if (abortSignal?.aborted) {
+        await this.safeClose()
+        throw err
+      }
       // JSON-RPC -32601 (Method not found) just means the server doesn't
       // implement the resources capability — normal for tools-only servers
       // (e.g. @playwright/mcp), not a failure worth logging. Anything else is.
@@ -282,12 +331,18 @@ export class McpClient {
     // Resources return an array of content blocks; concatenate text
     // representations, preserving the first mimeType for the caller.
     const parts: string[] = []
+    let remainingBytes = MAX_RESOURCE_TEXT_BYTES
     let mimeType: string | undefined
-    for (const c of result.contents ?? []) {
-      mimeType ??= (c as { mimeType?: string }).mimeType
+    const contents = Array.isArray(result.contents) ? result.contents.slice(0, MAX_CONTENT_BLOCKS) : []
+    for (const c of contents) {
+      const candidateMime = (c as { mimeType?: string }).mimeType
+      if (!mimeType && candidateMime) mimeType = truncateText(candidateMime, 256)
       const text = (c as { text?: string }).text
-      if (typeof text === 'string') parts.push(text)
-      else if ((c as { blob?: string }).blob !== undefined) {
+      if (typeof text === 'string' && remainingBytes > 0) {
+        const bounded = truncateText(text, remainingBytes)
+        parts.push(bounded)
+        remainingBytes -= Buffer.byteLength(bounded, 'utf8')
+      } else if ((c as { blob?: string }).blob !== undefined) {
         parts.push(`[binary content omitted, mimeType=${mimeType ?? 'unknown'}]`)
       }
     }
@@ -420,6 +475,22 @@ function isUnauthorizedError(err: unknown): boolean {
   return false
 }
 
+function truncateText(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8')
+  if (bytes.length <= maxBytes) return value
+  return new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, maxBytes))
+}
+
+function boundedJsonRecord(value: unknown, maxBytes: number): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  try {
+    if (Buffer.byteLength(JSON.stringify(value), 'utf8') > maxBytes) return undefined
+  } catch {
+    return undefined
+  }
+  return value as Record<string, unknown>
+}
+
 /** Flatten MCP call result content blocks. MCP responses are an array of
  *  `{ type: "text" | "image" | ... }` blocks. Text blocks join into a single
  *  string; image blocks are pulled out onto `images` (base64 + media type) so
@@ -429,17 +500,27 @@ function isUnauthorizedError(err: unknown): boolean {
  *  that an image was returned. */
 function flattenCallResult(result: unknown): McpCallResult {
   const r = result as { content?: Array<unknown>; isError?: boolean }
-  const blocks = Array.isArray(r.content) ? r.content : []
+  const blocks = Array.isArray(r.content) ? r.content.slice(0, MAX_CONTENT_BLOCKS) : []
   const parts: string[] = []
   const images: Array<{ data: string; mediaType: string }> = []
+  let remainingTextBytes = MAX_RESOURCE_TEXT_BYTES
+  let remainingImageChars = MAX_RESULT_IMAGE_BASE64_CHARS
   for (const b of blocks) {
     const block = b as { type?: string; text?: string; data?: unknown; mimeType?: string }
     if (block.type === 'text' && typeof block.text === 'string') {
-      parts.push(block.text)
+      const text = truncateText(block.text, remainingTextBytes)
+      if (text) parts.push(text)
+      remainingTextBytes -= Buffer.byteLength(text, 'utf8')
     } else if (block.type === 'image') {
-      const mediaType = block.mimeType ?? 'image/png'
-      if (typeof block.data === 'string' && block.data.length > 0) {
+      const mediaType = truncateText(block.mimeType ?? 'image/png', 256)
+      if (
+        typeof block.data === 'string' &&
+        block.data.length > 0 &&
+        images.length < MAX_RESULT_IMAGES &&
+        block.data.length <= remainingImageChars
+      ) {
         images.push({ data: block.data, mediaType })
+        remainingImageChars -= block.data.length
         parts.push(`[image returned, ${mediaType}]`)
       } else {
         parts.push(`[image content omitted, mimeType=${mediaType}]`)
@@ -447,10 +528,13 @@ function flattenCallResult(result: unknown): McpCallResult {
     } else if (block.type === 'resource') {
       // Embedded resource — surface a one-line marker + any nested text.
       const nested = (block as { resource?: { text?: string; uri?: string } }).resource
-      if (nested?.text) parts.push(nested.text)
-      else if (nested?.uri) parts.push(`[resource: ${nested.uri}]`)
+      if (nested?.text) {
+        const text = truncateText(nested.text, remainingTextBytes)
+        if (text) parts.push(text)
+        remainingTextBytes -= Buffer.byteLength(text, 'utf8')
+      } else if (nested?.uri) parts.push(`[resource: ${nested.uri}]`)
     } else if (block.type) {
-      parts.push(`[${block.type} content]`)
+      parts.push(`[${truncateText(block.type, 256)} content]`)
     }
   }
   return {

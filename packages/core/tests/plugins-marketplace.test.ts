@@ -244,6 +244,13 @@ describe('addKnownMarketplace + removeKnownMarketplace', () => {
     expect(km.marketplaces[0]!.officialSource).toBe(expectedOrg)
   })
 
+  it.each(['../outside', '..\\outside', '/absolute', 'con', 'name.'])(
+    'rejects unsafe marketplace name %s',
+    async (name) => {
+      await expect(addKnownMarketplace({ name, source: 'github:foo/community' })).rejects.toThrow(/safe/)
+    },
+  )
+
   it('removes entries', async () => {
     await addKnownMarketplace({ name: 'community', source: 'github:foo/community' })
     expect(await removeKnownMarketplace('community')).toBe('removed')

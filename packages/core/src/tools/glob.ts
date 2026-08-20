@@ -28,15 +28,15 @@ import { getRipgrepPath } from './utils.js'
 const execFileAsync = promisify(execFile)
 
 const MAX_GLOB_RESULTS = 200
-const RG_MAX_BUFFER = 20 * 1024 * 1024
+const RG_MAX_BUFFER = 4 * 1024 * 1024
 
 export const glob = tool({
   description:
     `Find files matching a glob pattern. Returns absolute file paths sorted by modification time, most recent first. ` +
     `Results are capped at ${MAX_GLOB_RESULTS} files — use a more specific pattern if truncated.`,
   inputSchema: z.object({
-    pattern: z.string().describe('Glob pattern (e.g. "**/*.ts", "src/**/*.tsx")'),
-    cwd: z.string().optional().describe('Directory to search in (defaults to working directory)'),
+    pattern: z.string().min(1).max(4096).describe('Glob pattern (e.g. "**/*.ts", "src/**/*.tsx")'),
+    cwd: z.string().max(4096).optional().describe('Directory to search in (defaults to working directory)'),
   }),
   execute: async ({ pattern, cwd }, { toolCallId, abortSignal }) => {
     try {

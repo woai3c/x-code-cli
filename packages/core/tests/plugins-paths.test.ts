@@ -56,4 +56,12 @@ describe('plugins/paths honors X_CODE_HOME', () => {
     // the suffix and that we didn't pick up a stray override.
     expect(pluginsRoot().endsWith(path.join('.x-code', 'plugins'))).toBe(true)
   })
+
+  it.each(['../outside', '..\\outside', '/absolute', 'C:\\absolute', 'nul', 'name.'])(
+    'rejects unsafe cache path component %s',
+    (component) => {
+      expect(() => pluginCacheDir('market', 'plugin', component)).toThrow(/safe filesystem path component/)
+      expect(() => marketplaceDir(component)).toThrow(/safe filesystem path component/)
+    },
+  )
 })

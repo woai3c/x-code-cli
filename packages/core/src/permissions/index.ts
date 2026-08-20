@@ -1,4 +1,5 @@
 // @x-code-cli/core — Permission system (3-level model)
+import { realpathSync } from 'node:fs'
 import path from 'node:path'
 
 import { isDestructive, isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
@@ -74,27 +75,45 @@ export function getPermissionLevel(toolName: string, input: PermissionInput): Pe
 // Sensitive dotfile / config paths that should never be auto-approved even
 // when acceptEdits is active. Matches Claude Code's isDangerousFilePathToAutoEdit.
 const SENSITIVE_PATH_PATTERNS = [
-  /[\\/]\.bashrc$/,
-  /[\\/]\.bash_profile$/,
-  /[\\/]\.profile$/,
-  /[\\/]\.zshrc$/,
-  /[\\/]\.zprofile$/,
-  /[\\/]\.gitconfig$/,
-  /[\\/]\.ssh[\\/]/,
-  /[\\/]\.env$/,
-  /[\\/]\.git[\\/]/,
-  /[\\/]\.vscode[\\/]/,
-  /[\\/]\.idea[\\/]/,
+  /[\\/]\.bashrc$/i,
+  /[\\/]\.bash_profile$/i,
+  /[\\/]\.profile$/i,
+  /[\\/]\.zshrc$/i,
+  /[\\/]\.zprofile$/i,
+  /[\\/]\.gitconfig$/i,
+  /[\\/]\.ssh[\\/]/i,
+  /[\\/]\.env$/i,
+  /[\\/]\.git[\\/]/i,
+  /[\\/]\.vscode[\\/]/i,
+  /[\\/]\.idea[\\/]/i,
 ]
 
-/** True when `filePath` is inside `projectDir` (or equals it). Normalizes
- *  both to forward-slash lower-case so Windows drive-letter differences and
- *  trailing separators don't cause false negatives. */
+/** Resolve the deepest existing ancestor through symlinks, then append any
+ * nonexistent suffix. This keeps permission checks aligned with the path the
+ * filesystem will actually mutate. */
+export function resolvePhysicalPath(filePath: string, baseDir: string = process.cwd()): string {
+  let candidate = path.resolve(baseDir, filePath)
+  const suffix: string[] = []
+  while (true) {
+    try {
+      return path.join(realpathSync.native(candidate), ...suffix.reverse())
+    } catch {
+      const parent = path.dirname(candidate)
+      if (parent === candidate) return path.resolve(baseDir, filePath)
+      suffix.push(path.basename(candidate))
+      candidate = parent
+    }
+  }
+}
+
+/** True when `filePath` physically resolves inside `projectDir` (or equals
+ * it). Case folding is Windows-only; Linux and case-sensitive macOS volumes
+ * must not conflate distinct paths. */
 export function isPathWithinProject(filePath: string, projectDir: string): boolean {
-  const normalize = (p: string) => path.resolve(p).replace(/\\/g, '/').toLowerCase()
-  const file = normalize(filePath)
-  const dir = normalize(projectDir)
-  return file === dir || file.startsWith(dir + '/')
+  const dir = resolvePhysicalPath(projectDir)
+  const file = resolvePhysicalPath(filePath, projectDir)
+  const relative = path.relative(dir, file)
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep))
 }
 
 function isSensitivePath(filePath: string): boolean {
@@ -144,7 +163,13 @@ export async function checkPermissionDetailed(
   if (permissionMode === 'acceptEdits' && (toolCall.toolName === 'writeFile' || toolCall.toolName === 'edit')) {
     const filePath = (toolCall.input.filePath as string) ?? ''
     const projectDir = projectCwd ?? process.cwd()
-    if (filePath && isPathWithinProject(filePath, projectDir) && !isSensitivePath(filePath)) {
+    const physicalPath = filePath ? resolvePhysicalPath(filePath, projectDir) : ''
+    if (
+      filePath &&
+      isPathWithinProject(filePath, projectDir) &&
+      !isSensitivePath(filePath) &&
+      !isSensitivePath(physicalPath)
+    ) {
       return { approved: true }
     }
     // Path outside project or targeting sensitive file — fall through to ask

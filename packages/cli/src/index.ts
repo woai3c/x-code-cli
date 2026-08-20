@@ -220,6 +220,7 @@ async function main() {
   if (!process.stdin.isTTY) {
     stdinContent = await readStdin()
   }
+  const printMode = argv.print || !process.stdin.isTTY || !process.stdout.isTTY
 
   const availableProviders = getAvailableProviders()
 
@@ -230,7 +231,7 @@ async function main() {
     // does not add package-manager noise. Print mode is automation-facing:
     // returning success there would make scripts mistake "nothing ran" for a
     // completed agent task.
-    process.exit(argv.print ? 1 : 0)
+    process.exit(printMode ? 1 : 0)
   }
 
   // Resolve model
@@ -392,7 +393,7 @@ async function main() {
   const options: AgentOptions = {
     modelId,
     trustMode: argv.trust,
-    printMode: argv.print,
+    printMode,
     maxTurns: argv['max-turns'],
     streamMaxRetries: streamConfig.maxRetries,
     streamIdleTimeoutMs: streamConfig.idleTimeoutMs,
@@ -488,7 +489,7 @@ async function main() {
   // Print mode: bypass Ink entirely. Mounting the TUI refs raw stdin, which
   // keeps the Node event loop alive past the queued unmount — that's why -p
   // used to hang until a keypress. See packages/cli/src/print.ts.
-  if (argv.print) {
+  if (printMode) {
     if (!fullPrompt) {
       console.error('Error: -p / --print requires a prompt (as an argument or via stdin).')
       process.exit(1)
@@ -645,30 +646,39 @@ async function askInTerminal(
 }
 
 function readStdin(): Promise<string> {
-  return new Promise((resolve) => {
+  const maxBytes = 5 * 1024 * 1024
+  return new Promise((resolve, reject) => {
     let data = ''
+    let bytes = 0
     process.stdin.setEncoding('utf-8')
 
     const onData = (chunk: string): void => {
+      bytes += Buffer.byteLength(chunk, 'utf8')
+      if (bytes > maxBytes) {
+        cleanup()
+        process.stdin.pause()
+        reject(new Error('stdin input exceeds the 5 MiB safety limit'))
+        return
+      }
       data += chunk
     }
     const onEnd = (): void => {
       cleanup()
       resolve(data)
     }
+    const onError = (error: Error): void => {
+      cleanup()
+      reject(error)
+    }
     const cleanup = (): void => {
       process.stdin.off('data', onData)
       process.stdin.off('end', onEnd)
-      clearTimeout(timer)
+      process.stdin.off('error', onError)
     }
 
     process.stdin.on('data', onData)
     process.stdin.on('end', onEnd)
-    // Timeout for stdin — don't hang forever
-    const timer = setTimeout(() => {
-      cleanup()
-      resolve(data)
-    }, 1000)
+    process.stdin.on('error', onError)
   })
 }
 
@@ -703,12 +713,12 @@ process.on('SIGINT', () => {
 })
 
 process.on('SIGTERM', () => {
-  void gracefulShutdown(0, 'cli-shutdown')
+  void gracefulShutdown(128 + 15, 'cli-shutdown')
 })
 
 if (process.platform !== 'win32') {
   process.on('SIGHUP', () => {
-    void gracefulShutdown(0, 'sighup')
+    void gracefulShutdown(128 + 1, 'sighup')
   })
 }
 

@@ -130,6 +130,19 @@ describe('installPlugin (local source)', () => {
         .catch(() => false),
     ).toBe(true)
   })
+
+  // Creating real symlinks is not reliably available to unprivileged Windows
+  // CI jobs; the production code still handles Windows junctions/symlinks.
+  it.skipIf(process.platform === 'win32')('drops symlinks that escape the plugin source tree', async () => {
+    const src = await makeTempPlugin({ name: 'demo', version: '1.0.0' })
+    const outside = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'xc-plugin-outside-')), 'secret.txt')
+    await fs.writeFile(outside, 'host secret')
+    await fs.symlink(outside, path.join(src, 'escape.txt'))
+
+    const result = await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
+
+    await expect(fs.access(path.join(result.rootDir, 'escape.txt'))).rejects.toThrow()
+  })
 })
 
 describe('install policy gates (strictKnownMarketplaces + blockedPlugins)', () => {
@@ -616,6 +629,19 @@ describe('install sha integrity check (marketplace.json `sha` field)', () => {
         marketplace: 'local',
       })
       expect(result.pluginId).toBe('demo@local')
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  )
+
+  it(
+    'rejects a git subdir that escapes the cloned repository',
+    async () => {
+      await expect(
+        installPlugin({
+          source: { kind: 'git', url: repo.url, subdir: '../outside' },
+          marketplace: 'local',
+        }),
+      ).rejects.toThrow(/escapes the cloned repository/)
     },
     GIT_INTEGRATION_TIMEOUT_MS,
   )

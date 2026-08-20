@@ -20,7 +20,7 @@ import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { listAgentsTool, sendMessageTool } from '../peers/tools.js'
 import { applyCacheControl } from '../providers/cache-control.js'
-import { setZhipuReasoningEffort } from '../providers/registry.js'
+import { withZhipuReasoningHeader } from '../providers/registry.js'
 import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME, browserVisualCheck } from '../tools/browser-visual-check.js'
@@ -31,7 +31,6 @@ import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
 import { createUpdateGoalTool } from '../tools/update-goal.js'
-import { setWebSearchModelProvider } from '../tools/web-search.js'
 import type { AgentCallbacks, AgentOptions, MessageProvenance, PeerOrigin, QueuedAgentInput } from '../types/index.js'
 import { debugLog, errorMessage, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
@@ -40,7 +39,7 @@ import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
-import { canonicalTranscriptDigest, effectiveExecutionAuthority, summarizePeerOrigins } from './provenance.js'
+import { effectiveExecutionAuthority, summarizePeerOrigins } from './provenance.js'
 import {
   downgradeBinaryPartsForProvider,
   reattachToolResultImagesForProvider,
@@ -388,6 +387,7 @@ async function runTurnAttempt(
   tracker: StreamAttemptTracker,
   recoveryText: string,
   retrying: boolean,
+  userConfig: ReturnType<typeof loadUserConfig>,
   /** Current turn number — diagnostic only, threaded in so the debug log
    *  can tag each finish with which iteration of the outer loop it was. */
   turn: number,
@@ -401,8 +401,7 @@ async function runTurnAttempt(
   // pairing and reject the whole request with confusing errors like
   // "tool must be a response to a preceding message with tool_calls".
   // Idempotent — running every turn is cheap and bulletproof.
-  const transcriptDigestBeforeRepair = canonicalTranscriptDigest(state.trackedMessages)
-  repairOrphanTrackedToolCalls(state.trackedMessages)
+  let transcriptChanged = repairOrphanTrackedToolCalls(state.trackedMessages)
 
   // Browser sub-agents keep only their latest snapshot/screenshot. The root
   // visual-check image is even shorter-lived: once a later assistant message
@@ -411,12 +410,13 @@ async function runTurnAttempt(
     ? options.collapseStaleToolResults
     : [...new Set([...(options.collapseStaleToolResults ?? []), BROWSER_VISUAL_CHECK_TOOL_NAME])]
   if (collapsibleToolResults?.length) {
-    collapseStaleToolResults(state.messages, collapsibleToolResults)
+    transcriptChanged = collapseStaleToolResults(state.messages, collapsibleToolResults) || transcriptChanged
   }
   if (!options.toolFilter) {
-    collapseConsumedToolResults(state.messages, [BROWSER_VISUAL_CHECK_TOOL_NAME])
+    transcriptChanged =
+      collapseConsumedToolResults(state.messages, [BROWSER_VISUAL_CHECK_TOOL_NAME]) || transcriptChanged
   }
-  if (canonicalTranscriptDigest(state.trackedMessages) !== transcriptDigestBeforeRepair) {
+  if (transcriptChanged) {
     recalculateContextSecurity(state)
     state.transcriptRequiresSnapshot = true
     await flushPendingMessages(state)
@@ -457,20 +457,12 @@ async function runTurnAttempt(
   // Tiered reasoning (via /model tier picker) takes priority over the binary
   // /thinking toggle. If the user explicitly chose a reasoning effort level
   // for this model (stored in config.modelReasoningEffort), we use it.
-  const config = loadUserConfig()
-  const effort = config.modelReasoningEffort?.[options.modelId]
+  const effort = userConfig.modelReasoningEffort?.[options.modelId]
   const reasoningLevel = getReasoningLevel(options.modelId, options.thinking ?? false, effort)
   const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false, effort)
   const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
-
-  // Side-channel: pass reasoning effort to the Zhipu fetch shim which
-  // injects `reasoning_effort` into the HTTP body. Zhipu goes through
-  // @ai-sdk/openai-compatible which doesn't auto-translate top-level reasoning.
-  setZhipuReasoningEffort(effort)
-
-  // Side-channel: the statically-registered webSearch tool needs the active
-  // model's provider to decide whether DeepSeek's built-in search applies.
-  setWebSearchModelProvider(options.modelId.split(':')[0])
+  const requestHeaders =
+    options.modelId.split(':')[0] === 'zhipu' ? withZhipuReasoningHeader(cached.headers, effort) : cached.headers
 
   let result: StreamResult
   try {
@@ -481,9 +473,8 @@ async function runTurnAttempt(
       tools: cached.tools ?? effectiveTools,
       maxRetries: 3,
       abortSignal: attemptControl.signal,
-      headers: cached.headers,
-      // Per-request context for webSearch's DeepSeek fallback. Unlike the
-      // module-level setWebSearchModelProvider side-channel, this travels
+      headers: requestHeaders,
+      // Per-request context for webSearch's DeepSeek fallback. This travels
       // with the request and stays correct when concurrent sub-agent loops
       // run on different models. The tools record is loosely typed as
       // Record<string, any>, so the SDK infers the context map as undefined;
@@ -549,7 +540,12 @@ async function runTurnAttempt(
       // notices and retry once. stripBinaryPartsFromMessages returns false
       // when nothing matched — then the bad part isn't in a shape we
       // recognize, so fall through and report instead of looping forever.
-      if (stripBinaryPartsFromMessages(state.messages)) return { kind: 'retry' }
+      if (stripBinaryPartsFromMessages(state.messages)) {
+        recalculateContextSecurity(state)
+        state.transcriptRequiresSnapshot = true
+        await flushPendingMessages(state)
+        return { kind: 'retry' }
+      }
     }
     if (isContextTooLongError(err)) {
       const compressed = await handleContextTooLong(state, model, callbacks, {
@@ -622,6 +618,7 @@ async function runTurn(
       : DEFAULT_STREAM_CONFIG.idleTimeoutMs
   let retryCount = 0
   let recoveredText = ''
+  const userConfig = loadUserConfig()
 
   while (true) {
     const attemptControl = createStreamAttemptControl(options.abortSignal, idleTimeoutMs)
@@ -645,6 +642,7 @@ async function runTurn(
         tracker,
         recoveredText,
         retryCount > 0,
+        userConfig,
         turn,
       )
     } finally {

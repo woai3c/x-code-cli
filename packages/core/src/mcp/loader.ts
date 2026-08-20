@@ -25,6 +25,8 @@ import {
 import { type TrustChoice, buildServerPreview, isProjectTrusted, promptForTrust, trustProject } from './trust.js'
 import { type McpResourceEntry, type McpServerConfig, type McpToolEntry } from './types.js'
 
+const MAX_MCP_CONFIG_BYTES = 1024 * 1024
+
 // Re-export for legacy callers that imported the type from this module.
 export type { OAuthProviderFactory }
 export type { RegisteredServer, ConnectResult }
@@ -354,6 +356,10 @@ async function readMcpServersFromFile(filePath: string): Promise<Record<string, 
   try {
     raw = await fs.readFile(filePath, 'utf-8')
   } catch {
+    return undefined
+  }
+  if (Buffer.byteLength(raw, 'utf8') > MAX_MCP_CONFIG_BYTES) {
+    debugLog('mcp.config-too-large', filePath)
     return undefined
   }
   try {

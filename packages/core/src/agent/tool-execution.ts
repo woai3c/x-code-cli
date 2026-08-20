@@ -7,7 +7,12 @@ import type { ModelMessage } from 'ai'
 import { aggregatePostToolUse, aggregatePreToolUse } from '../hooks/bus.js'
 import type { ToolHookSnapshot } from '../hooks/bus.js'
 import { classifyDecision } from '../mcp/permissions.js'
-import { evaluateToolAuthority, verifyAuthorityApproval } from '../permissions/index.js'
+import {
+  evaluateToolAuthority,
+  isPathWithinProject,
+  resolvePhysicalPath,
+  verifyAuthorityApproval,
+} from '../permissions/index.js'
 import { checkPermissionDetailed } from '../permissions/index.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
 import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
@@ -31,7 +36,7 @@ import type {
 } from '../tools/shell-session/types.js'
 import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel, PermissionDecision } from '../types/index.js'
-import { debugLog, isAbortError } from '../utils.js'
+import { XCODE_DIR, debugLog, isAbortError } from '../utils.js'
 import { runBrowserVisualCheck } from './browser/visual-check.js'
 import { createBuiltInToolHandlers } from './built-in-tool-handlers.js'
 import { computeEditDiff } from './diff.js'
@@ -1156,8 +1161,8 @@ const PLAN_MODE_EXECUTABLE_TOOLS = new Set([
 ])
 
 function sameResolvedPath(left: string, right: string): boolean {
-  const a = path.normalize(path.resolve(left))
-  const b = path.normalize(path.resolve(right))
+  const a = path.normalize(resolvePhysicalPath(left))
+  const b = path.normalize(resolvePhysicalPath(right))
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
@@ -1181,7 +1186,14 @@ function enforcePlanModeBoundary(ctx: HandlerCtx): boolean {
 
   const target = typeof ctx.input.filePath === 'string' ? ctx.input.filePath : ''
   const planPath = ctx.state.currentPlanPath
-  if (!target || !planPath || !sameResolvedPath(path.resolve(ctx.state.projectCwd, target), planPath)) {
+  const planRoot = path.join(ctx.state.projectCwd, XCODE_DIR, 'plans')
+  if (
+    !target ||
+    !planPath ||
+    !isPathWithinProject(planRoot, ctx.state.projectCwd) ||
+    !isPathWithinProject(planPath, planRoot) ||
+    !sameResolvedPath(path.resolve(ctx.state.projectCwd, target), planPath)
+  ) {
     pushToolResult(
       ctx.state,
       ctx.callbacks,
@@ -1473,7 +1485,7 @@ export async function processToolCalls(
     // sanitizer drops next turn anyway. Belt-and-suspenders: the
     // sanitizer's reverse-orphan branch would still clean up if this
     // check ever lets one through.
-    if (activeIds.size > 0 && !activeIds.has(tc.toolCallId)) {
+    if (!activeIds.has(tc.toolCallId)) {
       debugLog(
         'tool-exec.skip-ghost',
         `${tc.toolName} ${tc.toolCallId} — not in assistant tool_calls, likely SDK tool-error reject`,

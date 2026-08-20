@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 # @vscode/ripgrep's postinstall hits api.github.com/repos/microsoft/ripgrep-prebuilt/releases
 # to find the rg binary URL. Unauthenticated requests are rate-limited to 60/h per IP, and
@@ -21,9 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -36,20 +33,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm lint
-      - run: pnpm format
-
-      - name: Commit changes if any
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "style: auto fix lint and format"
-            git push
-          fi
+      - run: pnpm lint:check
+      - run: pnpm format:check
 
   typecheck:
     name: Type Check

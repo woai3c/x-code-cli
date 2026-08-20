@@ -115,6 +115,16 @@ describe('parseManifest', () => {
     await expect(parseManifest(file)).rejects.toBeInstanceOf(ManifestParseError)
   })
 
+  it.each(['../outside', '..\\outside', '/absolute', 'C:\\absolute', 'con', '1.0.0.'])(
+    'rejects unsafe version path component %s',
+    async (version) => {
+      const root = await makeTempPluginDir()
+      const file = await writeManifest(root, 'plugin.json', { name: 'foo', version })
+
+      await expect(parseManifest(file)).rejects.toBeInstanceOf(ManifestParseError)
+    },
+  )
+
   it('rejects malformed JSON with a path-tagged error', async () => {
     const root = await makeTempPluginDir()
     const file = path.join(root, 'plugin.json')

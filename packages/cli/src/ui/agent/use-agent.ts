@@ -167,6 +167,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const turnCoordinatorRef = useRef(createTurnCoordinator())
   const initializedRef = useRef(false)
   const pendingQuestionRef = useRef<PendingQuestion | null>(null)
+  const planApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingAuthorityRef = useRef<PendingAuthority | null>(null)
   /** Pending tool calls keyed by toolCallId. A single slot can't survive
    *  parallel tool calls in one turn — the SDK emits tool-call A, tool-call
@@ -536,20 +537,29 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             timestamp: Date.now(),
           })
           return new Promise<boolean>((resolve) => {
+            const finish = (approved: boolean) => {
+              if (planApprovalTimerRef.current) {
+                clearTimeout(planApprovalTimerRef.current)
+                planApprovalTimerRef.current = null
+              }
+              resolve(approved)
+            }
+            const pendingQuestion: PendingQuestion = {
+              question: 'Approve the plan above?',
+              options: [
+                { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
+                { label: 'No', description: 'Stay in plan mode and let the model revise.' },
+              ],
+              resolve: (answer) => finish(answer === 'Yes'),
+              abortAnswer: 'No',
+            }
+            pendingQuestionRef.current = pendingQuestion
             // Delay opening the dialog so the plan-text commit
             // paints first — avoids a simultaneous commit+grow
             // that confuses the geometry engine.
-            setTimeout(() => {
-              const pendingQuestion: PendingQuestion = {
-                question: 'Approve the plan above?',
-                options: [
-                  { label: 'Yes', description: 'Exit plan mode and start implementing (writes auto-approved).' },
-                  { label: 'No', description: 'Stay in plan mode and let the model revise.' },
-                ],
-                resolve: (answer) => resolve(answer === 'Yes'),
-                abortAnswer: 'No',
-              }
-              pendingQuestionRef.current = pendingQuestion
+            planApprovalTimerRef.current = setTimeout(() => {
+              planApprovalTimerRef.current = null
+              if (pendingQuestionRef.current !== pendingQuestion) return
               setState((prev) => ({ ...prev, pendingQuestion }))
             }, 0)
           })
@@ -1116,6 +1126,28 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     restoreQueueToDraft,
   ])
 
+  const quiesce = useCallback(async () => {
+    if (planApprovalTimerRef.current) {
+      clearTimeout(planApprovalTimerRef.current)
+      planApprovalTimerRef.current = null
+    }
+    drainPendingInteractions()
+    abort()
+    if (!turnCoordinatorRef.current.isOwned()) return
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        unsubscribe()
+        resolve()
+      }, 1_000)
+      const unsubscribe = turnCoordinatorRef.current.onChange((lease) => {
+        if (lease) return
+        clearTimeout(timer)
+        unsubscribe()
+        resolve()
+      })
+    })
+  }, [abort, drainPendingInteractions])
+
   const cleanupShells = useCallback(
     async (
       reason: TerminationReason = 'cli-shutdown',
@@ -1434,6 +1466,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     resolveAuthority,
     resolveQuestion,
     abort,
+    quiesce,
     cleanup,
     cleanupShells,
     listShellSessions,

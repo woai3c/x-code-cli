@@ -5,7 +5,7 @@
 //
 //   text / code  → TextPart with file body
 //   PDF          → TextPart with extracted text (local, no tokens wasted on binary)
-//   docx/xlsx/pptx → TextPart via officeparser/mammoth/xlsx
+//   docx/xlsx/pptx → TextPart via bounded format-specific parsers
 //   image        → ImagePart for multimodal providers; OCR'd TextPart for DeepSeek
 //
 // PDF is deliberately NOT sent as a FilePart even to multimodal providers
@@ -23,8 +23,14 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
-import { ATTACH_BYTE_BUDGET, buildCompressionCaption, compressImage, formatBytes } from '../utils/image-compress.js'
+import { debugLog, errorMessage, truncateUtf8, userXcodeDir } from '../utils.js'
+import {
+  ATTACH_BYTE_BUDGET,
+  MAX_EDGE_PX,
+  buildCompressionCaption,
+  compressImage,
+  formatBytes,
+} from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { formatTranscription, transcribeAudio } from './audio-transcribe.js'
 import { captionImage, pickVisionProvider } from './vision-fallback.js'
@@ -153,6 +159,16 @@ const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.
  *  sees a short hint instead and can call readFile with offset/limit or
  *  grep to narrow down. */
 export const MAX_INGEST_BYTES = 256 * 1024
+export const MAX_OFFICE_SOURCE_BYTES = 20 * 1024 * 1024
+export const MAX_PDF_SOURCE_BYTES = 20 * 1024 * 1024
+export const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024
+const MAX_PDF_TEXT_PAGES = 200
+const MAX_PDF_OCR_PAGES = 20
+const MAX_SPREADSHEET_SHEETS = 32
+const MAX_SPREADSHEET_ROWS = 10_000
+const MAX_SPREADSHEET_CELLS = 100_000
+const MAX_OFFICE_ARCHIVE_ENTRIES = 1_000
+const MAX_OFFICE_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
 
 /** The human/model-facing message we substitute when an attachment is too
  *  large to inline. Mirrors Claude Code's `MaxFileReadTokenExceededError`
@@ -160,10 +176,10 @@ export const MAX_INGEST_BYTES = 256 * 1024
  *  novel" / "review this entire log" requests, chunk-by-chunk readFile
  *  iteration burns the parent context fast (each tool_result sticks around).
  *  Delegating to a sub-agent keeps only the summary in the parent. */
-function tooLargeMessage(filePath: string, sizeBytes: number): string {
+function tooLargeMessage(filePath: string, sizeBytes: number, cap: number = MAX_INGEST_BYTES): string {
   return (
     `[File ${filePath} is too large to inline (${formatBytes(sizeBytes)}, ` +
-    `cap ${formatBytes(MAX_INGEST_BYTES)}). ` +
+    `cap ${formatBytes(cap)}). ` +
     `Use the readFile tool with offset/limit to read specific portions, ` +
     `or grep to search for specific content. ` +
     `For whole-file analysis (summarization, full review), prefer delegating to ` +
@@ -252,49 +268,209 @@ async function readTextFile(filePath: string): Promise<string> {
 /** Extract plain text from a PDF. Uses pdf-parse's class-based v2 API
  *  (PDFParse.getText). Returns an empty string on failure; the caller
  *  decides whether to fall back to OCR. */
-async function extractPdfText(filePath: string): Promise<string> {
+async function extractPdfText(filePath: string, abortSignal?: AbortSignal): Promise<string> {
   try {
+    abortSignal?.throwIfAborted()
     const { PDFParse } = await import('pdf-parse')
-    const buffer = await fs.readFile(filePath)
+    const buffer = await fs.readFile(filePath, { signal: abortSignal })
     const parser = new PDFParse({ data: new Uint8Array(buffer) })
     try {
-      const result = await parser.getText()
-      return result.text ?? ''
+      const result = await parser.getText({ first: MAX_PDF_TEXT_PAGES })
+      const suffix =
+        result.total > MAX_PDF_TEXT_PAGES ? `\n\n[PDF text limited to first ${MAX_PDF_TEXT_PAGES} pages.]` : ''
+      return (result.text ?? '') + suffix
     } finally {
       await parser.destroy().catch(() => {})
     }
   } catch {
+    abortSignal?.throwIfAborted()
     return ''
   }
 }
 
-/** Extract text from an Office document. Routes .docx through mammoth
- *  (best-in-class semantic extraction), .xlsx through SheetJS (CSV per
- *  sheet), everything else through officeparser. */
-export async function extractOfficeText(filePath: string): Promise<string> {
+function decodeXmlText(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[\da-fA-F]{1,6});/g, (entity) => {
+    if (entity === '&amp;') return '&'
+    if (entity === '&lt;') return '<'
+    if (entity === '&gt;') return '>'
+    if (entity === '&quot;') return '"'
+    if (entity === '&apos;') return "'"
+    const hex = entity.startsWith('&#x')
+    const value = Number.parseInt(entity.slice(hex ? 3 : 2, -1), hex ? 16 : 10)
+    return Number.isSafeInteger(value) && value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : ''
+  })
+}
+
+function officeXmlToText(xml: string): string {
+  const parts: string[] = []
+  let outputChars = 0
+  let cursor = 0
+  while (cursor < xml.length && outputChars < MAX_INGEST_BYTES) {
+    const tagStart = xml.indexOf('<', cursor)
+    const end = tagStart < 0 ? xml.length : tagStart
+    if (end > cursor) {
+      const text = decodeXmlText(xml.slice(cursor, end))
+      parts.push(text)
+      outputChars += text.length
+    }
+    if (tagStart < 0) break
+    const tagEnd = xml.indexOf('>', tagStart + 1)
+    if (tagEnd < 0) break
+    const tag = xml
+      .slice(tagStart + 1, Math.min(tagEnd, tagStart + 128))
+      .trimStart()
+      .toLowerCase()
+    if (
+      tag.startsWith('/a:p') ||
+      tag.startsWith('/text:p') ||
+      tag.startsWith('/text:h') ||
+      tag.startsWith('/table:table-row') ||
+      tag.startsWith('a:br')
+    ) {
+      parts.push('\n')
+    } else if (tag.startsWith('/table:table-cell') || tag.startsWith('text:tab')) {
+      parts.push('\t')
+    } else if (tag.startsWith('text:line-break')) {
+      parts.push('\n')
+    }
+    cursor = tagEnd + 1
+  }
+  const normalized = parts
+    .join('')
+    .replace(/[ \f\r\v]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return truncateUtf8(normalized, MAX_INGEST_BYTES)
+}
+
+async function extractZippedOfficeText(filePath: string, ext: string, abortSignal?: AbortSignal): Promise<string> {
+  const { strFromU8, unzip } = await import('fflate')
+  const archive = await fs.readFile(filePath, { signal: abortSignal })
+  let entryCount = 0
+  let uncompressedBytes = 0
+  const wanted = (name: string): boolean =>
+    ext === '.pptx' ? /^ppt\/slides\/slide\d+\.xml$/i.test(name) : name === 'content.xml'
+  const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
+    let settled = false
+    let terminate = (): void => {}
+    const finish = (error?: Error | null, result?: Record<string, Uint8Array>): void => {
+      if (settled) return
+      settled = true
+      abortSignal?.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve(result ?? {})
+    }
+    const onAbort = (): void => {
+      terminate()
+      finish(abortSignal?.reason instanceof Error ? abortSignal.reason : new Error('Office extraction aborted'))
+    }
+    terminate = unzip(
+      archive,
+      {
+        filter: (entry) => {
+          entryCount++
+          if (entryCount > MAX_OFFICE_ARCHIVE_ENTRIES) {
+            throw new Error('Office archive exceeds the safe entry-count limit')
+          }
+          if (!wanted(entry.name)) return false
+          uncompressedBytes += entry.originalSize
+          if (uncompressedBytes > MAX_OFFICE_UNCOMPRESSED_BYTES) {
+            throw new Error('Office archive exceeds the safe decompression limit')
+          }
+          return true
+        },
+      },
+      (error, result) => finish(error, result),
+    )
+    if (!settled) {
+      abortSignal?.addEventListener('abort', onAbort, { once: true })
+      if (abortSignal?.aborted) onAbort()
+    }
+  })
+  const names = Object.keys(files).sort((left, right) => {
+    const a = Number(/slide(\d+)\.xml$/i.exec(left)?.[1] ?? 0)
+    const b = Number(/slide(\d+)\.xml$/i.exec(right)?.[1] ?? 0)
+    return a - b || left.localeCompare(right)
+  })
+  const parts: string[] = []
+  let outputBytes = 0
+  for (const name of names) {
+    abortSignal?.throwIfAborted()
+    const text = officeXmlToText(strFromU8(files[name]!))
+    if (!text) continue
+    const prefix =
+      ext === '.pptx' ? `--- Slide ${Number(/slide(\d+)\.xml$/i.exec(name)?.[1] ?? parts.length + 1)} ---\n` : ''
+    const available = MAX_INGEST_BYTES - outputBytes - Buffer.byteLength(prefix, 'utf8')
+    if (available <= 0) break
+    const bounded = truncateUtf8(text, available)
+    parts.push(prefix + bounded)
+    outputBytes += Buffer.byteLength(prefix + bounded, 'utf8')
+  }
+  return parts.join('\n\n')
+}
+
+/** Extract text from an Office document with bounded, format-specific parsers. */
+export async function extractOfficeText(filePath: string, abortSignal?: AbortSignal): Promise<string> {
   const ext = path.extname(filePath).toLowerCase()
   try {
+    abortSignal?.throwIfAborted()
+    const stats = await fs.stat(filePath)
+    if (stats.size > MAX_OFFICE_SOURCE_BYTES) {
+      return `[Office file is too large to parse safely: ${formatBytes(stats.size)} (cap ${formatBytes(MAX_OFFICE_SOURCE_BYTES)}).]`
+    }
     if (ext === '.docx') {
       const mammoth = await import('mammoth')
       const result = await mammoth.extractRawText({ path: filePath })
       return result.value
     }
     if (ext === '.xlsx') {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.readFile(filePath)
+      const { default: readExcelFile } = await import('read-excel-file/node')
+      const sheets = await readExcelFile(filePath)
       const parts: string[] = []
-      for (const sheetName of wb.SheetNames) {
-        const sheet = wb.Sheets[sheetName]
-        if (!sheet) continue
-        parts.push(`--- Sheet: ${sheetName} ---\n${XLSX.utils.sheet_to_csv(sheet)}`)
+      let outputBytes = 0
+      let rowCount = 0
+      let cellCount = 0
+      let truncated = false
+      const csvCell = (value: unknown): string => {
+        const text = value instanceof Date ? value.toISOString() : value == null ? '' : String(value)
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
       }
+      for (const sheet of sheets.slice(0, MAX_SPREADSHEET_SHEETS)) {
+        const header = `--- Sheet: ${sheet.sheet} ---\n`
+        const headerBytes = Buffer.byteLength(header, 'utf-8')
+        if (outputBytes + headerBytes > MAX_INGEST_BYTES) {
+          truncated = true
+          break
+        }
+        const lines: string[] = [header.trimEnd()]
+        outputBytes += headerBytes
+        for (const row of sheet.data) {
+          rowCount++
+          cellCount += row.length
+          if (rowCount > MAX_SPREADSHEET_ROWS || cellCount > MAX_SPREADSHEET_CELLS) {
+            truncated = true
+            break
+          }
+          const line = row.map(csvCell).join(',') + '\n'
+          const lineBytes = Buffer.byteLength(line, 'utf-8')
+          if (outputBytes + lineBytes > MAX_INGEST_BYTES) {
+            truncated = true
+            break
+          }
+          lines.push(line.trimEnd())
+          outputBytes += lineBytes
+        }
+        parts.push(lines.join('\n'))
+        if (truncated) break
+      }
+      if (sheets.length > MAX_SPREADSHEET_SHEETS) truncated = true
+      if (truncated) parts.push('[Spreadsheet extraction truncated at configured sheet, row, cell, or byte limit.]')
       return parts.join('\n\n')
     }
-    // .pptx, .odt, .ods, .odp — officeparser handles these.
-    const { OfficeParser } = await import('officeparser')
-    const ast = await OfficeParser.parseOffice(filePath)
-    return ast.toText()
+    return extractZippedOfficeText(filePath, ext, abortSignal)
   } catch (err) {
+    abortSignal?.throwIfAborted()
     const msg = errorMessage(err)
     return `[Failed to extract text from ${path.basename(filePath)}: ${msg}]`
   }
@@ -355,26 +531,42 @@ export async function ocrImage(input: string | Buffer): Promise<string> {
  *  pdf-parse's text extraction returns little/no text. Rasterization uses
  *  pdf-parse's own getScreenshot (pdfjs under the hood), so we don't need
  *  a separate pdf-to-img dependency. */
-async function ocrPdf(filePath: string): Promise<string> {
+async function ocrPdf(filePath: string, abortSignal?: AbortSignal): Promise<string> {
   try {
+    abortSignal?.throwIfAborted()
     const { PDFParse } = await import('pdf-parse')
-    const buffer = await fs.readFile(filePath)
+    const buffer = await fs.readFile(filePath, { signal: abortSignal })
     const parser = new PDFParse({ data: new Uint8Array(buffer) })
-    let screenshots: { pages: Array<{ pageNumber: number; data?: Uint8Array }> }
+    let screenshots: { pages: Array<{ pageNumber: number; data?: Uint8Array }>; total: number }
     try {
-      screenshots = (await parser.getScreenshot({ scale: 2, imageBuffer: true })) as typeof screenshots
+      screenshots = (await parser.getScreenshot({
+        first: MAX_PDF_OCR_PAGES,
+        scale: 1.5,
+        imageDataUrl: false,
+        imageBuffer: true,
+      })) as typeof screenshots
     } finally {
       await parser.destroy().catch(() => {})
     }
 
     const out: string[] = []
+    let outputBytes = 0
     for (const page of screenshots.pages) {
+      abortSignal?.throwIfAborted()
       if (!page.data) continue
       const text = await ocrImage(Buffer.from(page.data))
-      out.push(`--- Page ${page.pageNumber} ---\n${text}`)
+      const block = `--- Page ${page.pageNumber} ---\n${text}`
+      outputBytes += Buffer.byteLength(block, 'utf-8')
+      if (outputBytes > MAX_INGEST_BYTES) {
+        out.push('[PDF OCR output truncated at attachment byte limit.]')
+        break
+      }
+      out.push(block)
     }
+    if (screenshots.total > MAX_PDF_OCR_PAGES) out.push(`[PDF OCR limited to first ${MAX_PDF_OCR_PAGES} pages.]`)
     return out.join('\n\n')
   } catch (err) {
+    abortSignal?.throwIfAborted()
     const msg = errorMessage(err)
     return `[PDF OCR failed: ${msg}]`
   }
@@ -415,6 +607,16 @@ export async function ingestFile(
     return [{ type: 'text', text: `[Cannot read ${ref.raw}: ${msg}]` }]
   }
 
+  if (kind === 'office' && stats.size > MAX_OFFICE_SOURCE_BYTES) {
+    return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size, MAX_OFFICE_SOURCE_BYTES) }]
+  }
+  if (kind === 'pdf' && stats.size > MAX_PDF_SOURCE_BYTES) {
+    return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size, MAX_PDF_SOURCE_BYTES) }]
+  }
+  if (kind === 'image' && stats.size > MAX_IMAGE_SOURCE_BYTES) {
+    return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size, MAX_IMAGE_SOURCE_BYTES) }]
+  }
+
   if (kind === 'text' || kind === 'unknown') {
     // For text files, on-disk byte size is a tight upper bound on the
     // inlined text size (numbered-line wrapper adds <1% overhead). Check
@@ -433,7 +635,7 @@ export async function ingestFile(
   }
 
   if (kind === 'office') {
-    const text = await extractOfficeText(ref.absolutePath)
+    const text = await extractOfficeText(ref.absolutePath, abortSignal)
     // Office binaries are usually much larger than their extracted text
     // (compression + media), so check post-extraction. A book-length .docx
     // can still exceed the cap.
@@ -445,7 +647,7 @@ export async function ingestFile(
   }
 
   if (kind === 'pdf') {
-    const extracted = await extractPdfText(ref.absolutePath)
+    const extracted = await extractPdfText(ref.absolutePath, abortSignal)
     // Heuristic: a "real" text PDF yields at least a couple hundred chars.
     // Scanned PDFs typically yield empty strings or a few stray ligatures.
     if (extracted.trim().length > 200) {
@@ -458,7 +660,7 @@ export async function ingestFile(
     // Scanned / image-based PDF.
     if (caps.pdf) {
       try {
-        const buffer = await fs.readFile(ref.absolutePath)
+        const buffer = await fs.readFile(ref.absolutePath, { signal: abortSignal })
         // base64 string, not the Buffer: this part is persisted to the session
         // jsonl via JSON.stringify, and a Buffer round-trips as
         // {"type":"Buffer","data":[...]} — which fails the SDK's ModelMessage
@@ -477,7 +679,7 @@ export async function ingestFile(
       }
     }
     // DeepSeek + scanned PDF: OCR locally.
-    const ocr = await ocrPdf(ref.absolutePath)
+    const ocr = await ocrPdf(ref.absolutePath, abortSignal)
     const ocrBytes = Buffer.byteLength(ocr, 'utf-8')
     if (ocrBytes > MAX_INGEST_BYTES) {
       return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, ocrBytes) }]
@@ -498,11 +700,11 @@ export async function ingestFile(
   //     and send only the timestamped text. Still useful, just lower fidelity.
   if (kind === 'audio') {
     if (caps.audio) {
+      if (stats.size > MAX_INGEST_BYTES) {
+        return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size) }]
+      }
       try {
-        const buffer = await fs.readFile(ref.absolutePath)
-        if (buffer.length > MAX_INGEST_BYTES) {
-          return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, buffer.length) }]
-        }
+        const buffer = await fs.readFile(ref.absolutePath, { signal: abortSignal })
         const mime = (await import('../utils/media-type.js')).mediaTypeFor(ref.absolutePath)
         return [
           { type: 'text', text: `<<file path="${ref.absolutePath}" kind="audio">>` },
@@ -559,7 +761,7 @@ export async function ingestFile(
   // Image.
   if (caps.image) {
     try {
-      const buffer = await fs.readFile(ref.absolutePath)
+      const buffer = await fs.readFile(ref.absolutePath, { signal: abortSignal })
       // Gate on the sniffed bytes, not the extension: an unsupported format
       // (AVIF, BMP, TIFF, HEIC) or a mislabeled file would be rejected by the
       // provider with a 400 — and since the message persists in the session,
@@ -572,6 +774,18 @@ export async function ingestFile(
 
       // Compress oversized images to fit pixel + byte budget.
       const compressed = await compressImage(buffer, effectiveMime, { byteBudget: ATTACH_BYTE_BUDGET })
+      if (
+        compressed.data.length > ATTACH_BYTE_BUDGET ||
+        compressed.width > MAX_EDGE_PX ||
+        compressed.height > MAX_EDGE_PX
+      ) {
+        return [
+          {
+            type: 'text',
+            text: `[Image ${ref.absolutePath} could not be reduced to provider limits (${formatBytes(compressed.data.length)}, ${compressed.width}x${compressed.height}).]`,
+          },
+        ]
+      }
       const finalMime = normalizeImageMime(compressed.changed ? compressed.mimeType : effectiveMime)
 
       const parts: IngestedPart[] = [
@@ -597,6 +811,10 @@ export async function ingestFile(
   if (sub) {
     try {
       const caption = await captionImage(ref.absolutePath, sub, { abortSignal, onUsage: onVisionUsage })
+      const captionBytes = Buffer.byteLength(caption, 'utf-8')
+      if (captionBytes > MAX_INGEST_BYTES) {
+        return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, captionBytes) }]
+      }
       onNotice?.(`Captioned image via ${sub.modelId}`)
       return [
         {
@@ -615,6 +833,10 @@ export async function ingestFile(
   // that this is not true image understanding so it doesn't confidently
   // describe colors/layout/etc.
   const ocr = await ocrImage(ref.absolutePath)
+  const ocrBytes = Buffer.byteLength(ocr, 'utf-8')
+  if (ocrBytes > MAX_INGEST_BYTES) {
+    return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, ocrBytes) }]
+  }
   return [
     {
       type: 'text',

@@ -21,6 +21,28 @@ import path from 'node:path'
 import { XCODE_DIR, userXcodeDir } from '../utils.js'
 
 const PLUGINS_DIR_NAME = 'plugins'
+const WINDOWS_RESERVED_COMPONENT_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i
+
+/** Plugin metadata may be persisted on one OS and consumed on another, so
+ * path components use the strictest common subset of supported filesystems. */
+export function isSafePluginPathComponent(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value !== '.' &&
+    value !== '..' &&
+    !path.isAbsolute(value) &&
+    !/[\\/:\0-\x1f]/.test(value) &&
+    !/[. ]$/.test(value) &&
+    !WINDOWS_RESERVED_COMPONENT_RE.test(value)
+  )
+}
+
+function requireSafePluginPathComponent(value: string, label: string): string {
+  if (!isSafePluginPathComponent(value)) {
+    throw new Error(`${label} must be a safe filesystem path component`)
+  }
+  return value
+}
 
 /** Root of the plugin subsystem. Two override knobs, checked in order:
  *  - `XC_PLUGINS_DIR` — plugin-specific override (parallels
@@ -42,7 +64,7 @@ export function knownMarketplacesPath(): string {
 
 /** ~/.x-code/plugins/marketplaces/<name>/ */
 export function marketplaceDir(name: string): string {
-  return path.join(pluginsRoot(), 'marketplaces', name)
+  return path.join(pluginsRoot(), 'marketplaces', requireSafePluginPathComponent(name, 'marketplace name'))
 }
 
 /** ~/.x-code/plugins/marketplaces/<name>/marketplace.json */
@@ -54,12 +76,17 @@ export function marketplaceIndexPath(name: string): string {
  *  under this directory; the active version is whichever the installer
  *  recorded most recently in installed_plugins.json. */
 export function pluginCacheParent(marketplace: string, plugin: string): string {
-  return path.join(pluginsRoot(), 'cache', marketplace, plugin)
+  return path.join(
+    pluginsRoot(),
+    'cache',
+    requireSafePluginPathComponent(marketplace, 'marketplace name'),
+    requireSafePluginPathComponent(plugin, 'plugin name'),
+  )
 }
 
 /** ~/.x-code/plugins/cache/<marketplace>/<plugin>/<version>/ */
 export function pluginCacheDir(marketplace: string, plugin: string, version: string): string {
-  return path.join(pluginCacheParent(marketplace, plugin), version)
+  return path.join(pluginCacheParent(marketplace, plugin), requireSafePluginPathComponent(version, 'plugin version'))
 }
 
 /** ~/.x-code/plugins/data/<sanitised-plugin-id>/ — persistent per-plugin

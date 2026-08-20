@@ -245,7 +245,7 @@ describe('agent loop', () => {
     )
   })
 
-  it('does not apply the provider idle timeout while tool activity is in progress', async () => {
+  it('keeps the provider idle watchdog active after tool activity', async () => {
     vi.mocked(streamText).mockImplementation(
       (options) =>
         ({
@@ -282,8 +282,10 @@ describe('agent loop', () => {
     )
 
     expect(streamText).toHaveBeenCalledTimes(1)
-    expect(mockCallbacks.onError).not.toHaveBeenCalled()
-    expect(state.messages.at(-1)).toEqual({ role: 'assistant', content: 'done' })
+    expect(mockCallbacks.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('timed out') }),
+    )
+    expect(state.messages.at(-1)).not.toEqual({ role: 'assistant', content: 'done' })
   })
 
   it('returns to input immediately when the visual-check circuit breaker is paused', async () => {

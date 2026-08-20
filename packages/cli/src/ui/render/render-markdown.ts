@@ -15,6 +15,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { type Token, type Tokens, marked } from 'marked'
 
+import { stripTerminalControls } from '@x-code-cli/core'
+
 import { highlightCodeShiki } from './shiki-highlight.js'
 import { detectFenceLanguage, highlightLine } from './syntax-highlight.js'
 import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
@@ -47,11 +49,21 @@ function hasMarkdownSyntax(s: string): boolean {
   return MD_SYNTAX_RE.test(s.length > 500 ? s.slice(0, 500) : s)
 }
 
-// Strip CSI escapes (`\x1B[…m`, etc.) so visual width calculations work on
-// colored text.
-const ANSI_RE = /\x1B\[[0-9;]*[A-Za-z]/g
+// Strip renderer-generated CSI and OSC 8 sequences so visual width
+// calculations only count printable cells.
+const ANSI_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
 function stripAnsi(str: string): string {
   return str.replace(ANSI_RE, '')
+}
+
+function safeHyperlinkHref(href: string): string | null {
+  if (!href || href.length > 4096) return null
+  try {
+    const parsed = new URL(href)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null
+  } catch {
+    return null
+  }
 }
 
 function numberToLetter(n: number): string {
@@ -219,7 +231,8 @@ function formatToken(
       // just show the underlined display text — graceful degradation in
       // both directions. Emitting the raw URL inline produced a cluttered
       // `text (url)text (url)...` output for web-fetch results.
-      return href ? `\x1b]8;;${href}\x1b\\${styled}\x1b]8;;\x1b\\` : styled
+      const safeHref = safeHyperlinkHref(href)
+      return safeHref ? `\x1b]8;;${safeHref}\x1b\\${styled}\x1b]8;;\x1b\\` : styled
     }
 
     case 'list': {
@@ -362,6 +375,7 @@ function formatToken(
  */
 export function renderInlineMarkdown(text: string): string {
   if (!text) return ''
+  text = stripTerminalControls(text)
 
   return (
     text
@@ -382,6 +396,7 @@ export function renderInlineMarkdown(text: string): string {
  */
 export function renderMarkdown(text: string): string {
   if (!text) return ''
+  text = stripTerminalControls(text)
 
   configureMarked()
 

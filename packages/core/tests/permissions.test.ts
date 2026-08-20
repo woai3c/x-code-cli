@@ -1,6 +1,10 @@
 // Tests for permission system
 import { describe, expect, it, vi } from 'vitest'
 
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
 import { checkPermission, getPermissionLevel, isPathWithinProject } from '../src/permissions/index.js'
 import {
   addSessionAllowRule,
@@ -550,6 +554,21 @@ describe('isPathWithinProject', () => {
   it('returns false for traversal attacks', () => {
     expect(isPathWithinProject(`${cwd}/../../etc/passwd`, cwd)).toBe(false)
     expect(isPathWithinProject(`${cwd}/../secret`, cwd)).toBe(false)
+  })
+
+  it('returns false when an in-project directory link resolves outside', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-path-boundary-'))
+    try {
+      const project = path.join(root, 'project')
+      const outside = path.join(root, 'outside')
+      await fs.mkdir(project)
+      await fs.mkdir(outside)
+      await fs.symlink(outside, path.join(project, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+
+      expect(isPathWithinProject(path.join(project, 'linked', 'file.txt'), project)).toBe(false)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 })
 

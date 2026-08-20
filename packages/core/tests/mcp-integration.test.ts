@@ -234,4 +234,23 @@ describe('MCP integration (stdio)', () => {
       await client.close()
     }
   }, 15_000)
+
+  it('keeps the first owner when servers expose the same resource URI', () => {
+    const first = new McpClient('first', { command: process.execPath })
+    const second = new McpClient('second', { command: process.execPath })
+    const registry = new McpRegistry({
+      servers: [
+        { name: 'first', client: first, status: { kind: 'connected', toolCount: 0, resourceCount: 1 } },
+        { name: 'second', client: second, status: { kind: 'connected', toolCount: 0, resourceCount: 1 } },
+      ],
+      tools: [],
+      resources: [
+        { uri: 'shared://resource', name: 'first', serverName: 'first' },
+        { uri: 'shared://resource', name: 'second', serverName: 'second' },
+      ],
+    })
+
+    expect(registry.listResources()).toEqual([{ uri: 'shared://resource', name: 'first', serverName: 'first' }])
+    expect(registry.resourceServer('shared://resource')).toBe(first)
+  })
 })

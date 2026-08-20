@@ -13,8 +13,10 @@ import { getRipgrepPath } from './utils.js'
 const execFileAsync = promisify(execFile)
 
 const DEFAULT_HEAD_LIMIT = 250
+const MAX_HEAD_LIMIT = 2_000
+const MAX_CONTEXT_LINES = 100
 const MAX_COLUMNS = 500
-const RG_MAX_BUFFER = 20 * 1024 * 1024
+const RG_MAX_BUFFER = 4 * 1024 * 1024
 
 export const grep = tool({
   description: `A powerful search tool built on ripgrep.
@@ -31,19 +33,22 @@ Usage:
 - Context lines (linesBefore / linesAfter / context) only apply to outputMode "content".
 - Results are capped at headLimit lines (default ${DEFAULT_HEAD_LIMIT}). Long lines are truncated at ${MAX_COLUMNS} chars.`,
   inputSchema: z.object({
-    pattern: z.string().describe('Regex pattern to search for'),
-    path: z.string().optional().describe('File or directory to search in (defaults to working directory)'),
-    glob: z.string().optional().describe('Glob pattern to filter files (e.g. "*.ts", "*.{ts,tsx}")'),
-    type: z.string().optional().describe('Filter by file type (ripgrep --type, e.g. "ts", "js", "py", "rust", "go")'),
+    pattern: z.string().min(1).max(16_384).describe('Regex pattern to search for'),
+    path: z.string().max(4096).optional().describe('File or directory to search in (defaults to working directory)'),
+    glob: z.string().max(4096).optional().describe('Glob pattern to filter files (e.g. "*.ts", "*.{ts,tsx}")'),
+    type: z.string().max(64).optional().describe('Filter by file type (ripgrep --type, e.g. "ts", "js", "py")'),
     outputMode: z
       .enum(['content', 'files_with_matches', 'count'])
       .optional()
       .describe('What to return (default: "content")'),
     caseInsensitive: z.boolean().optional().describe('Case-insensitive search (ripgrep -i)'),
-    linesBefore: z.number().optional().describe('Lines of context before each match (content mode only; ripgrep -B)'),
-    linesAfter: z.number().optional().describe('Lines of context after each match (content mode only; ripgrep -A)'),
+    linesBefore: z.number().int().min(0).max(MAX_CONTEXT_LINES).optional().describe('Lines before each match'),
+    linesAfter: z.number().int().min(0).max(MAX_CONTEXT_LINES).optional().describe('Lines after each match'),
     context: z
       .number()
+      .int()
+      .min(0)
+      .max(MAX_CONTEXT_LINES)
       .optional()
       .describe(
         'Lines of context both before AND after each match (content mode only; ripgrep -C; overrides linesBefore/linesAfter)',
@@ -52,7 +57,13 @@ Usage:
       .boolean()
       .optional()
       .describe('Allow a match to span multiple lines, with "." matching newlines (ripgrep -U --multiline-dotall)'),
-    headLimit: z.number().optional().describe(`Max number of output lines (default: ${DEFAULT_HEAD_LIMIT})`),
+    headLimit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_HEAD_LIMIT)
+      .optional()
+      .describe(`Max number of output lines (default: ${DEFAULT_HEAD_LIMIT}, max: ${MAX_HEAD_LIMIT})`),
   }),
   execute: async (
     {
@@ -72,7 +83,7 @@ Usage:
   ) => {
     try {
       const rgPath = getRipgrepPath()
-      const limit = headLimit ?? DEFAULT_HEAD_LIMIT
+      const limit = Math.min(MAX_HEAD_LIMIT, Math.max(1, headLimit ?? DEFAULT_HEAD_LIMIT))
       const mode = outputMode ?? 'content'
 
       const args: string[] = ['--color', 'never']

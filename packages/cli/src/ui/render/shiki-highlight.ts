@@ -62,66 +62,73 @@ export function setShikiTheme(name: SyntaxThemeName): void {
  *  output. Anything else in LANG_LOADERS below loads on first use. */
 const EAGER_LANGS = ['typescript', 'javascript', 'json', 'bash', 'python', 'markdown', 'yaml'] as const
 
+async function loadShikiLanguage(name: string): Promise<LanguageInput> {
+  const { languages } = EAGER_LANGS.includes(name as (typeof EAGER_LANGS)[number])
+    ? await import('./shiki-assets-common.js')
+    : await import('./shiki-assets-extra.js')
+  return languages[name]!
+}
+
 /** fence id / extension → shiki language id + lazy loader. Keys are
  *  lowercase. Fence aliases shiki doesn't know out of the box (or whose
  *  spelling differs, e.g. `shell`) are normalized here. */
-const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
-  ts: () => import('shiki/dist/langs/typescript.mjs'),
-  typescript: () => import('shiki/dist/langs/typescript.mjs'),
-  tsx: () => import('shiki/dist/langs/tsx.mjs'),
-  mts: () => import('shiki/dist/langs/typescript.mjs'),
-  cts: () => import('shiki/dist/langs/typescript.mjs'),
-  js: () => import('shiki/dist/langs/javascript.mjs'),
-  javascript: () => import('shiki/dist/langs/javascript.mjs'),
-  jsx: () => import('shiki/dist/langs/jsx.mjs'),
-  mjs: () => import('shiki/dist/langs/javascript.mjs'),
-  cjs: () => import('shiki/dist/langs/javascript.mjs'),
-  json: () => import('shiki/dist/langs/json.mjs'),
-  jsonc: () => import('shiki/dist/langs/jsonc.mjs'),
-  json5: () => import('shiki/dist/langs/json5.mjs'),
-  html: () => import('shiki/dist/langs/html.mjs'),
-  xml: () => import('shiki/dist/langs/xml.mjs'),
-  vue: () => import('shiki/dist/langs/vue.mjs'),
-  svelte: () => import('shiki/dist/langs/svelte.mjs'),
-  css: () => import('shiki/dist/langs/css.mjs'),
-  scss: () => import('shiki/dist/langs/scss.mjs'),
-  less: () => import('shiki/dist/langs/less.mjs'),
-  yml: () => import('shiki/dist/langs/yaml.mjs'),
-  yaml: () => import('shiki/dist/langs/yaml.mjs'),
-  toml: () => import('shiki/dist/langs/toml.mjs'),
-  ini: () => import('shiki/dist/langs/ini.mjs'),
-  sh: () => import('shiki/dist/langs/bash.mjs'),
-  bash: () => import('shiki/dist/langs/bash.mjs'),
-  shell: () => import('shiki/dist/langs/bash.mjs'),
-  zsh: () => import('shiki/dist/langs/bash.mjs'),
-  shellscript: () => import('shiki/dist/langs/bash.mjs'),
-  py: () => import('shiki/dist/langs/python.mjs'),
-  python: () => import('shiki/dist/langs/python.mjs'),
-  go: () => import('shiki/dist/langs/go.mjs'),
-  golang: () => import('shiki/dist/langs/go.mjs'),
-  rs: () => import('shiki/dist/langs/rust.mjs'),
-  rust: () => import('shiki/dist/langs/rust.mjs'),
-  md: () => import('shiki/dist/langs/markdown.mjs'),
-  markdown: () => import('shiki/dist/langs/markdown.mjs'),
-  sql: () => import('shiki/dist/langs/sql.mjs'),
-  c: () => import('shiki/dist/langs/c.mjs'),
-  h: () => import('shiki/dist/langs/c.mjs'),
-  cpp: () => import('shiki/dist/langs/cpp.mjs'),
-  cxx: () => import('shiki/dist/langs/cpp.mjs'),
-  java: () => import('shiki/dist/langs/java.mjs'),
-  kt: () => import('shiki/dist/langs/kotlin.mjs'),
-  kotlin: () => import('shiki/dist/langs/kotlin.mjs'),
-  swift: () => import('shiki/dist/langs/swift.mjs'),
-  rb: () => import('shiki/dist/langs/ruby.mjs'),
-  ruby: () => import('shiki/dist/langs/ruby.mjs'),
-  php: () => import('shiki/dist/langs/php.mjs'),
-  lua: () => import('shiki/dist/langs/lua.mjs'),
-  dockerfile: () => import('shiki/dist/langs/dockerfile.mjs'),
-  docker: () => import('shiki/dist/langs/dockerfile.mjs'),
-  graphql: () => import('shiki/dist/langs/graphql.mjs'),
-  diff: () => import('shiki/dist/langs/diff.mjs'),
-  make: () => import('shiki/dist/langs/make.mjs'),
-  makefile: () => import('shiki/dist/langs/make.mjs'),
+const LANG_LOADERS: Record<string, () => Promise<LanguageInput>> = {
+  ts: () => loadShikiLanguage('typescript'),
+  typescript: () => loadShikiLanguage('typescript'),
+  tsx: () => loadShikiLanguage('tsx'),
+  mts: () => loadShikiLanguage('typescript'),
+  cts: () => loadShikiLanguage('typescript'),
+  js: () => loadShikiLanguage('javascript'),
+  javascript: () => loadShikiLanguage('javascript'),
+  jsx: () => loadShikiLanguage('jsx'),
+  mjs: () => loadShikiLanguage('javascript'),
+  cjs: () => loadShikiLanguage('javascript'),
+  json: () => loadShikiLanguage('json'),
+  jsonc: () => loadShikiLanguage('jsonc'),
+  json5: () => loadShikiLanguage('json5'),
+  html: () => loadShikiLanguage('html'),
+  xml: () => loadShikiLanguage('xml'),
+  vue: () => loadShikiLanguage('vue'),
+  svelte: () => loadShikiLanguage('svelte'),
+  css: () => loadShikiLanguage('css'),
+  scss: () => loadShikiLanguage('scss'),
+  less: () => loadShikiLanguage('less'),
+  yml: () => loadShikiLanguage('yaml'),
+  yaml: () => loadShikiLanguage('yaml'),
+  toml: () => loadShikiLanguage('toml'),
+  ini: () => loadShikiLanguage('ini'),
+  sh: () => loadShikiLanguage('bash'),
+  bash: () => loadShikiLanguage('bash'),
+  shell: () => loadShikiLanguage('bash'),
+  zsh: () => loadShikiLanguage('bash'),
+  shellscript: () => loadShikiLanguage('bash'),
+  py: () => loadShikiLanguage('python'),
+  python: () => loadShikiLanguage('python'),
+  go: () => loadShikiLanguage('go'),
+  golang: () => loadShikiLanguage('go'),
+  rs: () => loadShikiLanguage('rust'),
+  rust: () => loadShikiLanguage('rust'),
+  md: () => loadShikiLanguage('markdown'),
+  markdown: () => loadShikiLanguage('markdown'),
+  sql: () => loadShikiLanguage('sql'),
+  c: () => loadShikiLanguage('c'),
+  h: () => loadShikiLanguage('c'),
+  cpp: () => loadShikiLanguage('cpp'),
+  cxx: () => loadShikiLanguage('cpp'),
+  java: () => loadShikiLanguage('java'),
+  kt: () => loadShikiLanguage('kotlin'),
+  kotlin: () => loadShikiLanguage('kotlin'),
+  swift: () => loadShikiLanguage('swift'),
+  rb: () => loadShikiLanguage('ruby'),
+  ruby: () => loadShikiLanguage('ruby'),
+  php: () => loadShikiLanguage('php'),
+  lua: () => loadShikiLanguage('lua'),
+  dockerfile: () => loadShikiLanguage('dockerfile'),
+  docker: () => loadShikiLanguage('dockerfile'),
+  graphql: () => loadShikiLanguage('graphql'),
+  diff: () => loadShikiLanguage('diff'),
+  make: () => loadShikiLanguage('makefile'),
+  makefile: () => loadShikiLanguage('makefile'),
 }
 
 // ─── Engine singleton ───
@@ -138,19 +145,16 @@ const pendingLangs = new Map<string, Promise<void>>()
 export function warmShikiEngine(): void {
   if (highlighter || warmPromise) return
   warmPromise = (async () => {
+    const assets = await import('./shiki-assets-common.js')
     const h = await createHighlighterCore({
-      themes: [
-        import('shiki/dist/themes/one-dark-pro.mjs'),
-        import('shiki/dist/themes/monokai.mjs'),
-        import('shiki/dist/themes/github-light.mjs'),
-      ],
+      themes: assets.themes,
       langs: (await Promise.all(
         EAGER_LANGS.map(async (id) => {
           const loader = LANG_LOADERS[id]
-          return loader ? (((await loader()) as { default: LanguageInput }).default ?? null) : null
+          return loader ? await loader() : null
         }),
       ).then((mods) => mods.filter((m) => m !== null))) as LanguageInput[],
-      engine: createOnigurumaEngine(import('shiki/wasm')),
+      engine: createOnigurumaEngine(Promise.resolve(assets.wasm)),
     })
     for (const id of EAGER_LANGS) loadedLangs.add(shikiLangId(id))
     highlighter = h
@@ -217,8 +221,8 @@ function ensureLang(shikiId: string, fenceId: string): boolean {
   if (!pending) {
     const h = highlighter
     pending = loader()
-      .then(async (mod) => {
-        await h.loadLanguage((mod as { default: never }).default)
+      .then(async (language) => {
+        await h.loadLanguage(language)
         loadedLangs.add(shikiId)
       })
       .catch(() => {

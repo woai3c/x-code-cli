@@ -17,7 +17,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { errorMessage, fileExists } from '../utils.js'
-import { GEMINI_MANIFEST_REL, MANIFEST_CANDIDATES } from './paths.js'
+import { GEMINI_MANIFEST_REL, MANIFEST_CANDIDATES, isSafePluginPathComponent } from './paths.js'
 import type { ManifestFormat, PluginManifest } from './types.js'
 
 // ── Zod schemas ─────────────────────────────────────────────────────────
@@ -57,13 +57,18 @@ const manifestSchema = z.object({
   name: z
     .string()
     .min(1)
-    .regex(NAME_RE, 'name must be lowercase letters, digits, and dashes only (e.g. "linear-issues")'),
+    .regex(NAME_RE, 'name must be lowercase letters, digits, and dashes only (e.g. "linear-issues")')
+    .refine(isSafePluginPathComponent, 'name is reserved or unsafe as a cross-platform filesystem component'),
   // version is optional in real Claude Code plugins (verified against
   // anthropics/claude-plugins-official — many ship without one,
   // including major third-party plugins like amplitude). We default
   // to "0.0.0" so cache paths and the installed_plugins.json record
   // still have a usable string.
-  version: z.string().min(1).optional(),
+  version: z
+    .string()
+    .min(1)
+    .refine(isSafePluginPathComponent, 'version must be one safe cross-platform filesystem component')
+    .optional(),
   description: z.string().optional(),
   author: authorSchema.optional(),
   keywords: z.array(z.string()).optional(),

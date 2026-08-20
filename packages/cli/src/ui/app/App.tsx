@@ -123,6 +123,7 @@ export function App({
     resolveAuthority,
     resolveQuestion,
     abort,
+    quiesce,
     cleanup,
     cleanupShells,
     listShellSessions,
@@ -271,8 +272,8 @@ export function App({
 
   // Register cleanup function for graceful exit (SIGINT)
   useEffect(() => {
-    onCleanupReady?.({ terminateShells: cleanupShells, drain: cleanup })
-  }, [cleanup, cleanupShells]) // eslint-disable-line react-hooks/exhaustive-deps
+    onCleanupReady?.({ quiesce, terminateShells: cleanupShells, drain: cleanup })
+  }, [cleanup, cleanupShells, quiesce]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Register the post-exit session-info getter. Index.ts uses it after
   // resetTerminal to print "Resume: xc --resume <id>" to the shell.
@@ -300,6 +301,7 @@ export function App({
       isUpdateNoticeRef.current = true
       setNotice(drained)
     }
+    return () => registerUpdateHintHandler(null)
   }, [])
 
   /** /resume — list every past session in this project and let the user

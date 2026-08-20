@@ -18,15 +18,22 @@ import type { McpServerConfig } from './types.js'
  *  + superRefine we get readable error messages for every misshape. */
 const serverSchema = z
   .object({
-    command: z.string().min(1).optional(),
-    args: z.array(z.string()).optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    cwd: z.string().optional(),
-    url: z.string().url().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
-    timeout: z.number().int().positive().optional(),
+    type: z.enum(['stdio', 'http']).optional(),
+    command: z.string().min(1).max(4096).optional(),
+    args: z.array(z.string().max(16_384)).max(256).optional(),
+    env: z.record(z.string().min(1).max(256), z.string().max(65_536)).optional(),
+    cwd: z.string().max(4096).optional(),
+    url: z
+      .string()
+      .url()
+      .max(8192)
+      .refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'MCP URL must use http or https')
+      .optional(),
+    headers: z.record(z.string().min(1).max(256), z.string().max(16_384)).optional(),
+    timeout: z.number().int().positive().max(300_000).optional(),
     enabled: z.boolean().optional(),
   })
+  .strict()
   .superRefine((v, ctx) => {
     const hasCommand = typeof v.command === 'string'
     const hasUrl = typeof v.url === 'string'
@@ -51,9 +58,19 @@ const serverSchema = z
     if (hasUrl && (v.args || v.env || v.cwd)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: '`args`/`env`/`cwd` are only valid for stdio servers' })
     }
+    if ((v.type === 'stdio' && !hasCommand) || (v.type === 'http' && !hasUrl)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: '`type` does not match the configured MCP transport' })
+    }
   })
 
-export const mcpServersSchema = z.record(z.string().min(1), serverSchema)
+const MAX_MCP_SERVERS = 128
+
+export const mcpServersSchema = z
+  .record(z.string().min(1).max(128), serverSchema)
+  .refine(
+    (servers) => Object.keys(servers).length <= MAX_MCP_SERVERS,
+    `at most ${MAX_MCP_SERVERS} MCP servers are allowed`,
+  )
 
 /** Validate a single server config; throw with a context-tagged message
  *  if it fails. Server name is included so the error tells the user which
@@ -84,7 +101,15 @@ export function parseServersBlock(raw: unknown): {
     return { servers, errors }
   }
 
-  for (const [name, entry] of Object.entries(raw as Record<string, unknown>)) {
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length > MAX_MCP_SERVERS) {
+    errors.push({ name: '*', message: `At most ${MAX_MCP_SERVERS} MCP servers are allowed` })
+  }
+  for (const [name, entry] of entries.slice(0, MAX_MCP_SERVERS)) {
+    if (!name || name.length > 128 || /[\u0000-\u001f\u007f]/.test(name)) {
+      errors.push({ name, message: 'MCP server name must be 1-128 characters without control characters' })
+      continue
+    }
     try {
       servers[name] = parseServerConfig(name, entry)
     } catch (err) {

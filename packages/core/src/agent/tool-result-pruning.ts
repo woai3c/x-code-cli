@@ -21,11 +21,12 @@ type ToolResultPartLike = {
   output?: { type?: string; value?: unknown }
 }
 
-function collapsePart(part: ToolResultPartLike, suffix: string, reason: string): void {
+function collapsePart(part: ToolResultPartLike, suffix: string, reason: string): boolean {
   const placeholder = `[${reason} ${suffix} result dropped to save context.]`
   const out = part.output
-  if (out?.type === 'text' && out.value === placeholder) return
+  if (out?.type === 'text' && out.value === placeholder) return false
   part.output = { type: 'text', value: placeholder }
+  return true
 }
 
 /** Replace the output of all-but-the-latest tool-result for each tool whose
@@ -33,8 +34,9 @@ function collapsePart(part: ToolResultPartLike, suffix: string, reason: string):
  *  MCP name like 'browser_snapshot' still hits the server-mangled callable name
  *  'browser__browser_snapshot'. Idempotent: an already-collapsed result is left
  *  untouched so the cache prefix stays stable across turns. Mutates in place. */
-export function collapseStaleToolResults(messages: ModelMessage[], toolSuffixes: readonly string[]): void {
-  if (toolSuffixes.length === 0) return
+export function collapseStaleToolResults(messages: ModelMessage[], toolSuffixes: readonly string[]): boolean {
+  if (toolSuffixes.length === 0) return false
+  let changed = false
 
   // Last message index carrying a result for each suffix — that one survives.
   const lastIdx = new Map<string, number>()
@@ -56,22 +58,24 @@ export function collapseStaleToolResults(messages: ModelMessage[], toolSuffixes:
       if (!suf) continue
       if (lastIdx.get(suf) === i) continue // keep the most recent result intact
 
-      collapsePart(part, suf, 'Older')
+      changed = collapsePart(part, suf, 'Older') || changed
     }
   })
+  return changed
 }
 
 /** Collapse matching tool results that a later assistant message has already
  *  consumed. A result immediately awaiting the model has no later assistant
  *  message and remains intact for exactly the request that needs to see it. */
-export function collapseConsumedToolResults(messages: ModelMessage[], toolSuffixes: readonly string[]): void {
-  if (toolSuffixes.length === 0) return
+export function collapseConsumedToolResults(messages: ModelMessage[], toolSuffixes: readonly string[]): boolean {
+  if (toolSuffixes.length === 0) return false
 
   let latestAssistantIndex = -1
   messages.forEach((message, index) => {
     if (message.role === 'assistant') latestAssistantIndex = index
   })
-  if (latestAssistantIndex < 0) return
+  if (latestAssistantIndex < 0) return false
+  let changed = false
 
   messages.forEach((message, index) => {
     if (index >= latestAssistantIndex || message.role !== 'tool' || !Array.isArray(message.content)) return
@@ -79,7 +83,8 @@ export function collapseConsumedToolResults(messages: ModelMessage[], toolSuffix
       if (part.type !== 'tool-result') continue
       const name = part.toolName ?? ''
       const suffix = toolSuffixes.find((candidate) => name.endsWith(candidate))
-      if (suffix) collapsePart(part, suffix, 'Consumed')
+      if (suffix) changed = collapsePart(part, suffix, 'Consumed') || changed
     }
   })
+  return changed
 }

@@ -1,7 +1,8 @@
 import type { ModelMessage } from 'ai'
 
 import { createLoopState } from '../src/agent/loop-state.js'
-import { processToolCalls } from '../src/agent/tool-execution.js'
+import { processToolCalls as dispatchToolCalls } from '../src/agent/tool-execution.js'
+import { appendTrackedMessage } from '../src/agent/tracked-messages.js'
 import { HookBus, type ToolHookSnapshot } from '../src/hooks/bus.js'
 import { HookRegistry } from '../src/hooks/registry.js'
 import type {
@@ -154,6 +155,20 @@ function resultPart(state: ReturnType<typeof createLoopState>, toolCallId: strin
 }
 
 const stubModel = {} as LanguageModel
+
+async function processToolCalls(...args: Parameters<typeof dispatchToolCalls>) {
+  const [calls, state] = args
+  appendTrackedMessage(state, {
+    role: 'assistant',
+    content: calls.map((call) => ({
+      type: 'tool-call',
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      input: call.input,
+    })) as never,
+  })
+  return dispatchToolCalls(...args)
+}
 
 describe('PTY shell tool transport', () => {
   it('enables tty launches and forwards terminal input and resize through shellOutput', async () => {

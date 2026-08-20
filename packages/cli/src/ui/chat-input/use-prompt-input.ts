@@ -27,14 +27,17 @@
 // absorbed into the buffer instead (backspace trims it) — on
 // non-bracketed Windows terminals a bare '\r' is just the paste's next
 // line break, and treating it as Return would submit half the paste.
+import { StringDecoder } from 'node:string_decoder'
+
 import { useEffect, useRef } from 'react'
 
 import { useStdin } from 'ink'
 
+import { type DecodedPromptInput, PromptInputDecoder } from './prompt-input-decoder.js'
+
 const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
 const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
-const PASTE_START = '\x1b[200~'
-const PASTE_END = '\x1b[201~'
+const INCOMPLETE_SEQUENCE_TIMEOUT_MS = 20
 
 // Time window for batching rapid stdin bursts. Human typing never
 // enters this buffer (single-keystroke chunks dispatch immediately),
@@ -102,14 +105,6 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     handlersRef.current = { onText, onPaste, onKey, onInterrupt }
   })
 
-  // Bracketed-paste state persists across stdin chunks so we can stitch a
-  // paste that arrives in multiple data events.
-  const pasteStateRef = useRef<{ inPaste: boolean; buffer: string; timer: NodeJS.Timeout | null }>({
-    inPaste: false,
-    buffer: '',
-    timer: null,
-  })
-
   // Debounce buffer + timer for the fallback path.
   const pendingTextRef = useRef<string>('')
   const pendingTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -137,7 +132,10 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     setRawMode(true)
     process.stdout.write(ENABLE_BRACKETED_PASTE)
     const useBracketedPaste = true
-    const pasteState = pasteStateRef.current
+    const inputDecoder = new PromptInputDecoder()
+    const utf8Decoder = new StringDecoder('utf8')
+    let sequenceTimer: ReturnType<typeof setTimeout> | null = null
+    let pasteTimer: ReturnType<typeof setTimeout> | null = null
 
     // ── Flush the debounce buffer ──
     //
@@ -306,69 +304,66 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
       }
     }
 
-    // Top-level stdin data handler. Walks the chunk looking for bracketed
-    // paste markers; anything outside a paste block goes through
-    // processNormalInput (and thus the debounce buffer for text).
-    const handleData = (data: Buffer | string): void => {
-      let chunk = typeof data === 'string' ? data : data.toString('utf8')
-
-      while (chunk.length > 0) {
-        const state = pasteStateRef.current
-
-        if (state.inPaste) {
-          const endIdx = chunk.indexOf(PASTE_END)
-          if (endIdx === -1) {
-            state.buffer += chunk
-            return
-          }
-          state.buffer += chunk.slice(0, endIdx)
-          // Clear the safety timeout
-          if (state.timer) {
-            clearTimeout(state.timer)
-            state.timer = null
-          }
-          // Normalize line endings for the same reason flushPending does —
-          // bare `\r` in pasted content acts as carriage return and
-          // overwrites previous characters when later echoed to the
-          // terminal.
-          const content = state.buffer.replace(/\r\n?/g, '\n')
-          state.buffer = ''
-          state.inPaste = false
-          // Bracketed paste trumps the debounce buffer — flush pending
-          // text first so it doesn't get mixed in with the paste payload.
+    const dispatchDecoded = (events: DecodedPromptInput[]): void => {
+      for (const event of events) {
+        if (event.type === 'paste') {
           flushPending()
-          handlersRef.current.onPaste(content)
-          chunk = chunk.slice(endIdx + PASTE_END.length)
-          continue
+          handlersRef.current.onPaste(event.value)
+        } else {
+          processNormalInput(event.value)
         }
-
-        const startIdx = chunk.indexOf(PASTE_START)
-        if (startIdx === -1) {
-          processNormalInput(chunk)
-          return
-        }
-        if (startIdx > 0) {
-          processNormalInput(chunk.slice(0, startIdx))
-        }
-        // Flush any pending typing before entering paste mode so we don't
-        // concatenate typed chars with the paste content.
-        flushPending()
-        chunk = chunk.slice(startIdx + PASTE_START.length)
-        state.inPaste = true
-        // Safety timeout: if PASTE_END is never received (ConHost bug),
-        // force-flush the buffer after 1 second so input doesn't freeze.
-        state.timer = setTimeout(() => {
-          const s = pasteStateRef.current
-          if (!s.inPaste) return
-          const content = s.buffer.replace(/\r\n?/g, '\n')
-          s.buffer = ''
-          s.inPaste = false
-          s.timer = null
-          if (content) {
-            handlersRef.current.onPaste(content)
-          }
-        }, 1000)
       }
+    }
+
+    const clearSequenceTimer = (): void => {
+      if (sequenceTimer) clearTimeout(sequenceTimer)
+      sequenceTimer = null
+    }
+
+    const clearPasteTimer = (): void => {
+      if (pasteTimer) clearTimeout(pasteTimer)
+      pasteTimer = null
+    }
+
+    const armDecoderTimers = (): void => {
+      clearSequenceTimer()
+      if (inputDecoder.inPaste()) {
+        clearPasteTimer()
+        pasteTimer = setTimeout(() => {
+          pasteTimer = null
+          dispatchDecoded(inputDecoder.flush())
+        }, 1000)
+        return
+      }
+      clearPasteTimer()
+      if (inputDecoder.hasPending()) {
+        sequenceTimer = setTimeout(() => {
+          sequenceTimer = null
+          dispatchDecoded(inputDecoder.flush())
+        }, INCOMPLETE_SEQUENCE_TIMEOUT_MS)
+      }
+    }
+
+    // Node chunks are arbitrary byte groups, not key events. Decode them
+    // incrementally so combined keys and split CSI/paste markers both work.
+    const handleData = (data: Buffer | string): void => {
+      const chunk = typeof data === 'string' ? data : utf8Decoder.write(data)
+      if (!chunk) return
+
+      // Unmarked paste fallback: an interior newline is likely clipboard
+      // content. A trailing Return is excluded so `abc\r` types then submits.
+      if (
+        !inputDecoder.inPaste() &&
+        !chunk.includes('\x1b') &&
+        (chunk.length >= PASTE_SIZE_THRESHOLD || /[\r\n][\s\S]+/.test(chunk))
+      ) {
+        queueText(chunk)
+        return
+      }
+
+      clearSequenceTimer()
+      dispatchDecoded(inputDecoder.push(chunk))
+      armDecoderTimers()
     }
 
     // Ink owns stdin's `readable` listener and drains the stream itself.
@@ -377,13 +372,9 @@ export function usePromptInput({ onText, onPaste, onKey, onInterrupt, enabled }:
     internal_eventEmitter.on('input', handleData)
     return () => {
       flushPending()
-      // Clear paste safety timeout
-      if (pasteState.timer) {
-        clearTimeout(pasteState.timer)
-        pasteState.timer = null
-      }
-      pasteState.inPaste = false
-      pasteState.buffer = ''
+      clearSequenceTimer()
+      clearPasteTimer()
+      inputDecoder.reset()
       internal_eventEmitter.off('input', handleData)
       if (useBracketedPaste) {
         process.stdout.write(DISABLE_BRACKETED_PASTE)

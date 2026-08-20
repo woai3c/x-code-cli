@@ -327,9 +327,7 @@ export function formatBytes(bytes: number): string {
 /** Build a caption telling the model that an image was compressed. */
 export function buildCompressionCaption(result: CompressResult): string {
   const orig =
-    result.originalWidth > 0
-      ? `${result.originalWidth}x${result.originalHeight} (${formatBytes(result.data.length)} from original)`
-      : `${formatBytes(result.data.length)}`
+    result.originalWidth > 0 ? `${result.originalWidth}x${result.originalHeight}` : `${formatBytes(result.data.length)}`
   const now = result.width > 0 ? `${result.width}x${result.height} ${result.mimeType}` : `${result.mimeType}`
   return `[Image compressed to fit model limits: ${orig} → ${now}. Fine detail may be lost.]`
 }

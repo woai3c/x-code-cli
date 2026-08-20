@@ -99,7 +99,9 @@ export class McpRegistry {
   }) {
     for (const s of input.servers) this.servers.set(s.name, s)
     for (const t of input.tools) this.entries.set(t.callableName, t)
-    for (const r of input.resources) this.resources.set(r.uri, r)
+    for (const r of input.resources) {
+      if (!this.resources.has(r.uri)) this.resources.set(r.uri, r)
+    }
     if (input.configs) for (const [k, v] of input.configs) this.configs.set(k, v)
     this.oauthFactory = input.oauthFactory
   }
@@ -389,7 +391,9 @@ export class McpRegistry {
         annotations: t.annotations,
       })
     }
-    for (const res of r.resources) this.resources.set(res.uri, res)
+    for (const res of r.resources) {
+      if (!this.resources.has(res.uri)) this.resources.set(res.uri, res)
+    }
   }
 }
 

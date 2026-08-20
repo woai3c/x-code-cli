@@ -20,8 +20,8 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { formatTranscription, transcribeAudio } from '../agent/audio-transcribe.js'
-import { classifyFile, extractOfficeText } from '../agent/file-ingest.js'
-import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
+import { MAX_IMAGE_SOURCE_BYTES, classifyFile, extractOfficeText } from '../agent/file-ingest.js'
+import { ATTACH_BYTE_BUDGET, MAX_EDGE_PX, compressImage } from '../utils/image-compress.js'
 import { mediaTypeFor } from '../utils/media-type.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
@@ -50,6 +50,7 @@ const MAX_READ_BYTES = 256 * 1024
  *  on every subsequent turn. 5 MB raw ≈ 6.67 MB base64 — within the
  *  per-request ceiling of all major providers. */
 const MAX_PDF_BYTES = 5 * 1024 * 1024
+const MAX_NOTEBOOK_SOURCE_BYTES = 5 * 1024 * 1024
 
 /** Per-file fingerprint used by the read de-dup cache. */
 export interface ReadFileCacheEntry {
@@ -353,6 +354,10 @@ Usage:
         // base64-laden JSON. Checked before classifyFile, which would otherwise
         // treat .ipynb as plain text.
         if (filePath.toLowerCase().endsWith('.ipynb')) {
+          const stats = await fs.stat(filePath)
+          if (stats.size > MAX_NOTEBOOK_SOURCE_BYTES) {
+            return `[Notebook ${filePath} is too large to parse safely (${(stats.size / (1024 * 1024)).toFixed(1)} MB, cap ${MAX_NOTEBOOK_SOURCE_BYTES / (1024 * 1024)} MB). Use grep or shell tools to inspect selected cells.]`
+          }
           const verdict = await checkReadCache(cache, filePath, false)
           if (verdict && verdict.hit) return verdict.stub
           const { text, complete } = await readNotebookResult(filePath, abortSignal)
@@ -381,10 +386,21 @@ Usage:
         }
 
         if (kind === 'image') {
+          const stats = await fs.stat(filePath)
+          if (stats.size > MAX_IMAGE_SOURCE_BYTES) {
+            return `[Image ${filePath} is too large to process safely (${(stats.size / (1024 * 1024)).toFixed(1)} MB, cap ${MAX_IMAGE_SOURCE_BYTES / (1024 * 1024)} MB).]`
+          }
           const buffer = await fs.readFile(filePath, { signal: abortSignal })
           const mime = mediaTypeFor(filePath)
           // Same byte budget as user-attached images (ATTACH_BYTE_BUDGET).
           const compressed = await compressImage(buffer, mime, { byteBudget: ATTACH_BYTE_BUDGET })
+          if (
+            compressed.data.length > ATTACH_BYTE_BUDGET ||
+            compressed.width > MAX_EDGE_PX ||
+            compressed.height > MAX_EDGE_PX
+          ) {
+            return `[Image ${filePath} could not be reduced to provider limits (${compressed.data.length} bytes, ${compressed.width}x${compressed.height}).]`
+          }
           const finalMime = compressed.changed ? compressed.mimeType : mime
           const header = compressed.changed
             ? `Loaded image: ${filePath} (compressed from ${buffer.length} to ${compressed.data.length} bytes)`
@@ -428,7 +444,7 @@ Usage:
         }
 
         if (kind === 'office') {
-          const text = await extractOfficeText(filePath)
+          const text = await extractOfficeText(filePath, abortSignal)
           abortSignal?.throwIfAborted()
           const textBytes = Buffer.byteLength(text, 'utf-8')
           if (textBytes > MAX_READ_BYTES) {

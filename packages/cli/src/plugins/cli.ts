@@ -93,7 +93,7 @@ function printUsage(): void {
       '  enable <id>               Enable a plugin (user scope)',
       '  disable <id>              Disable a plugin without uninstalling',
       '  search <keyword>          Search subscribed marketplaces',
-      '  update <id>               Reinstall from recorded source',
+      '  update [--yes] <id>|--all Reinstall from recorded source (consent required)',
       '  doctor                    Show plugin load errors',
       '  marketplace <add|remove|list|refresh|info> [args...]',
       '                            Manage marketplace subscriptions',
@@ -480,14 +480,15 @@ async function cliUpdate(args: string[]): Promise<number> {
   // Gemini CLI takes the same defensive stance. The error message offers
   // both forms so the right choice is one keypress away.
   const all = args.includes('--all') || args.includes('-a')
-  const positional = args.filter((a) => a !== '--all' && a !== '-a')
+  const skipConsent = args.includes('--yes') || args.includes('-y')
+  const positional = args.filter((a) => !['--all', '-a', '--yes', '-y'].includes(a))
 
   if (all && positional.length > 0) {
     console.error('xc plugin update: pass either `--all` or a plugin id, not both.')
     return 1
   }
   if (!all && positional.length === 0) {
-    console.error('Usage: xc plugin update <id> | --all')
+    console.error('Usage: xc plugin update [--yes] <id> | --all')
     console.error('  <id>: a name@marketplace from `xc plugin list`')
     console.error('  --all: update every installed plugin (sequential, skip-on-error)')
     return 1
@@ -504,7 +505,7 @@ async function cliUpdate(args: string[]): Promise<number> {
     let unchanged = 0
     let failed = 0
     for (const rec of records) {
-      const outcome = await updateOnePlugin(rec)
+      const outcome = await updateOnePlugin(rec, skipConsent)
       if (outcome === 'updated') updated++
       else if (outcome === 'unchanged') unchanged++
       else failed++
@@ -524,7 +525,7 @@ async function cliUpdate(args: string[]): Promise<number> {
     return 1
   }
   console.log(`Reinstalling ${id} from ${formatPluginSource(rec.source)} ...`)
-  const outcome = await updateOnePlugin(rec)
+  const outcome = await updateOnePlugin(rec, skipConsent)
   return outcome === 'failed' ? 1 : 0
 }
 
@@ -535,12 +536,16 @@ type UpdateOutcome = 'updated' | 'unchanged' | 'failed'
  *  output is concise (just the outcome) so a bulk update reads as a clean
  *  list. Never throws — failures become `'failed'` so the caller's loop
  *  can keep going. */
-async function updateOnePlugin(rec: Awaited<ReturnType<typeof listInstalledPlugins>>[number]): Promise<UpdateOutcome> {
+async function updateOnePlugin(
+  rec: Awaited<ReturnType<typeof listInstalledPlugins>>[number],
+  skipConsent: boolean,
+): Promise<UpdateOutcome> {
   try {
     const result = await installPlugin({
       source: rec.source,
       marketplace: rec.marketplace,
       expectedName: rec.name,
+      consent: skipConsent ? undefined : promptConsent,
     })
     if (result.manifest.version === rec.version) {
       console.log(`  ${rec.id}: reinstalled at ${rec.version}`)

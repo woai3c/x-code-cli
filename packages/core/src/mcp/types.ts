@@ -6,6 +6,7 @@
 
 /** stdio-based MCP server (local subprocess). */
 export interface McpStdioServerConfig {
+  type?: 'stdio'
   command: string
   args?: string[]
   env?: Record<string, string>
@@ -18,6 +19,7 @@ export interface McpStdioServerConfig {
 
 /** Streamable HTTP MCP server (remote). */
 export interface McpHttpServerConfig {
+  type?: 'http'
   url: string
   /** Static headers attached to every request (e.g. `X-Custom: foo`).
    *  OAuth `Authorization: Bearer ...` is added automatically — do NOT put

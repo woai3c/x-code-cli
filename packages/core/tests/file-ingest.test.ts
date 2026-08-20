@@ -1,3 +1,4 @@
+import { strToU8, zipSync } from 'fflate'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import fs from 'node:fs/promises'
@@ -5,10 +6,12 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  MAX_IMAGE_SOURCE_BYTES,
   MAX_INGEST_BYTES,
   buildUserContent,
   classifyFile,
   extractFileReferences,
+  extractOfficeText,
   ingestFile,
 } from '../src/agent/file-ingest.js'
 import { captionImage, pickVisionProvider } from '../src/agent/vision-fallback.js'
@@ -105,6 +108,55 @@ describe('classifyFile', () => {
   })
 })
 
+describe('extractOfficeText', () => {
+  it('reads xlsx sheets without the vulnerable SheetJS runtime', async () => {
+    const workbook = path.join(tmpDir, 'sample.xlsx')
+    const files = {
+      '[Content_Types].xml': strToU8(
+        '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+      ),
+      '_rels/.rels': strToU8(
+        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      ),
+      'xl/workbook.xml': strToU8(
+        '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      'xl/_rels/workbook.xml.rels': strToU8(
+        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      'xl/worksheets/sheet1.xml': strToU8(
+        '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Value</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>alpha</t></is></c><c r="B2"><v>42</v></c></row></sheetData></worksheet>',
+      ),
+    }
+    await fs.writeFile(workbook, Buffer.from(zipSync(files)))
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toContain('--- Sheet: Data ---')
+    expect(text).toContain('Name,Value')
+    expect(text).toContain('alpha,42')
+  })
+
+  it('reads pptx slide text with bounded ZIP extraction', async () => {
+    const presentation = path.join(tmpDir, 'sample.pptx')
+    await fs.writeFile(
+      presentation,
+      Buffer.from(
+        zipSync({
+          'ppt/slides/slide2.xml': strToU8('<p:sld><a:p><a:r><a:t>Second &amp; final</a:t></a:r></a:p></p:sld>'),
+          'ppt/slides/slide1.xml': strToU8('<p:sld><a:p><a:r><a:t>Hello</a:t></a:r></a:p></p:sld>'),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(presentation)
+
+    expect(text).toContain('--- Slide 1 ---\nHello')
+    expect(text).toContain('--- Slide 2 ---\nSecond & final')
+    expect(text.indexOf('Slide 1')).toBeLessThan(text.indexOf('Slide 2'))
+  })
+})
+
 describe('ingestFile', () => {
   const multimodalCaps = {
     image: true,
@@ -180,6 +232,18 @@ describe('ingestFile', () => {
     if (parts[0]?.type === 'text') {
       expect(parts[0].text).toMatch(/Cannot read/i)
     }
+  })
+
+  it('rejects oversized image sources before reading them into memory', async () => {
+    const oversized = path.join(tmpDir, 'oversized.png')
+    await fs.writeFile(oversized, '')
+    await fs.truncate(oversized, MAX_IMAGE_SOURCE_BYTES + 1)
+
+    const parts = await ingestFile({ raw: `@${oversized}`, absolutePath: oversized }, multimodalCaps)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0]?.type).toBe('text')
+    if (parts[0]?.type === 'text') expect(parts[0].text).toMatch(/too large to inline/i)
   })
 
   // Regression: a multi-MB @path attachment used to be inlined verbatim,

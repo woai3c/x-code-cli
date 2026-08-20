@@ -6,7 +6,7 @@
 // keeping the event loop alive until the user pressed a key or resized the
 // terminal — at which point the queued unmount finally ran. Keeping print
 // mode as a separate code path sidesteps every one of those landmines.
-import { agentLoop, createLoopState, hydrateLoopState, saveSession } from '@x-code-cli/core'
+import { agentLoop, createLoopState, hydrateLoopState, saveSession, stripTerminalControls } from '@x-code-cli/core'
 import type { AgentCallbacks, AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
 
 import { registerCleanupController } from './cleanup-controller.js'
@@ -39,7 +39,7 @@ export async function runPrintMode(
 
   const callbacks: AgentCallbacks = {
     onTextDelta: (delta) => {
-      if (delta) process.stdout.write(delta)
+      if (delta) process.stdout.write(stripTerminalControls(delta))
     },
     onToolCall: () => {},
     onToolProgress: () => {},

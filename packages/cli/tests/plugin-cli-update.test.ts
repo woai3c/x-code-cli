@@ -70,7 +70,7 @@ describe('xc plugin update — argv parsing', () => {
 
 describe('xc plugin update --all', () => {
   it("returns 0 and reports 'No plugins installed' when the registry is empty", async () => {
-    const code = await runPluginCli(['update', '--all'])
+    const code = await runPluginCli(['update', '--all', '--yes'])
     expect(code).toBe(0)
     expect(combinedOutput()).toMatch(/No plugins installed/)
   })
@@ -79,7 +79,7 @@ describe('xc plugin update --all', () => {
     const src = await makeTempPlugin({ name: 'demo', version: '1.0.0' })
     await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
 
-    const code = await runPluginCli(['update', '--all'])
+    const code = await runPluginCli(['update', '--all', '--yes'])
     expect(code).toBe(0)
     const out = combinedOutput()
     expect(out).toMatch(/demo@local: reinstalled at 1\.0\.0/)
@@ -93,7 +93,7 @@ describe('xc plugin update --all', () => {
     // recorded source path it should pick the new version up.
     await fs.writeFile(path.join(src, 'plugin.json'), JSON.stringify({ name: 'demo', version: '1.1.0' }))
 
-    const code = await runPluginCli(['update', '--all'])
+    const code = await runPluginCli(['update', '--all', '--yes'])
     expect(code).toBe(0)
     const out = combinedOutput()
     expect(out).toMatch(/demo@local: 1\.0\.0 → 1\.1\.0/)
@@ -109,7 +109,7 @@ describe('xc plugin update --all', () => {
     // will fail to read from a missing dir.
     await fs.rm(badSrc, { recursive: true, force: true })
 
-    const code = await runPluginCli(['update', '--all'])
+    const code = await runPluginCli(['update', '--all', '--yes'])
     expect(code).toBe(1)
     const out = combinedOutput()
     expect(out).toMatch(/Updating 2 plugins/)
@@ -135,7 +135,7 @@ describe('xc plugin update <id>', () => {
     const src = await makeTempPlugin({ name: 'demo', version: '1.0.0' })
     await installPlugin({ source: { kind: 'local', path: src }, marketplace: 'local' })
 
-    const code = await runPluginCli(['update', 'demo@local'])
+    const code = await runPluginCli(['update', 'demo@local', '--yes'])
     expect(code).toBe(0)
     expect(combinedOutput()).toMatch(/demo@local: reinstalled at 1\.0\.0/)
   })

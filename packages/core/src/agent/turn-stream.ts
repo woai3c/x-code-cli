@@ -58,7 +58,6 @@ export async function streamChunksToUI(
   })
   const markToolActivity = () => {
     tracker.toolActivity = true
-    attemptControl.dispose()
   }
 
   for await (const chunk of result.stream) {

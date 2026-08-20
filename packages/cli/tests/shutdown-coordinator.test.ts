@@ -14,6 +14,9 @@ describe('CLI shutdown coordinator', () => {
     const startedAt = performance.now()
     const result = await runShutdownPhases({
       controller: {
+        quiesce: async () => {
+          order.push('quiesce')
+        },
         terminateShells: async () => {
           order.push('shell')
           return null
@@ -37,7 +40,7 @@ describe('CLI shutdown coordinator', () => {
       },
     })
 
-    expect(order[0]).toBe('shell')
+    expect(order.slice(0, 2)).toEqual(['quiesce', 'shell'])
     expect(order.at(-1)).toBe('emergency')
     expect(emergencyDeadline).toBe(result.absoluteDeadline)
     expect(result.absoluteDeadline).toBe(startedAt + timing.hardCapMs)

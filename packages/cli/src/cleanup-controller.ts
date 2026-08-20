@@ -1,6 +1,7 @@
 import type { TerminateAllResult, TerminationBudget, TerminationReason } from '@x-code-cli/core'
 
 export interface CliCleanupController {
+  quiesce?(): Promise<void> | void
   terminateShells(reason: TerminationReason, budget?: TerminationBudget): Promise<TerminateAllResult | null>
   drain(): Promise<void>
 }

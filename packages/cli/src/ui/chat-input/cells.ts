@@ -4,6 +4,8 @@
 // the grid and only emits SGR/text bytes for cells whose `(char, style)`
 // pair changed since the previous frame. `width` lets the diff loop
 // skip the trailing half of a CJK pair without re-emitting the glyph.
+import { stripTerminalControls } from '@x-code-cli/core'
+
 import { charWidth, graphemes } from '../render/text-width.js'
 import { S_NONE } from './palette.js'
 
@@ -35,7 +37,7 @@ export function renderRowToAnsi(cells: Cell[]): string {
 
 export function textToCells(text: string, style: string): Cell[] {
   const cells: Cell[] = []
-  for (const ch of graphemes(text)) cells.push({ char: ch, style, width: charWidth(ch) })
+  for (const ch of graphemes(stripTerminalControls(text))) cells.push({ char: ch, style, width: charWidth(ch) })
   return cells
 }
 
@@ -76,6 +78,11 @@ export function ansiTextToCells(text: string): Cell[] {
       // Non-SGR CSI sequences are simply skipped — none should appear
       // in our preview rows but we don't want them as visible text.
       i = j + 1
+      continue
+    }
+    const unit = text.charCodeAt(i)
+    if (unit <= 0x1f || unit === 0x7f || (unit >= 0x80 && unit <= 0x9f)) {
+      i++
       continue
     }
     const style = active.length === 0 ? S_NONE : '\x1b[0m' + active.join('')

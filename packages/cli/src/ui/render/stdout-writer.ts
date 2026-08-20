@@ -68,7 +68,8 @@ function formatToolCall(tc: DisplayToolCall): string {
   const safetyMargin = 4
   const maxPreviewLen = Math.max(40, cols - decoration - safetyMargin)
   const inputPreview = truncatePreview(rawPreview, maxPreviewLen)
-  const resultSummary = getToolResultSummary(tc.toolName, tc.output, tc.status)
+  const rawResultSummary = getToolResultSummary(tc.toolName, tc.output, tc.status)
+  const resultSummary = rawResultSummary === null ? null : stripTerminalControls(rawResultSummary)
   const isDenied = tc.status === 'denied'
   const isError = tc.status === 'error'
   const isFailure = isDenied || isError
@@ -294,10 +295,12 @@ export function flushPendingReadGroup(write: InkWrite): void {
 
 /** Print a DisplayMessage to stdout. */
 export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
+  if (msg.content) {
+    msg = { ...msg, content: stripTerminalControls(msg.content) }
+  }
   if (msg.kind === 'peer-message' || msg.kind === 'peer-status') {
     msg = {
       ...msg,
-      content: stripTerminalControls(msg.content),
       ...(msg.peer
         ? {
             peer: {

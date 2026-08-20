@@ -65,6 +65,11 @@ export async function runShutdownPhases(options: {
   const absoluteDeadline = startedAt + timing.hardCapMs
   const ordinaryDeadline = absoluteDeadline - timing.emergencyReserveMs
 
+  const quiescePhase = options.controller?.quiesce
+    ? Promise.resolve().then(() => options.controller!.quiesce!())
+    : Promise.resolve()
+  await settleUntil(quiescePhase, ordinaryDeadline)
+
   const shellPhase = options.controller
     ? Promise.resolve().then(() => options.controller!.terminateShells(options.reason, timing.shellBudget))
     : Promise.resolve(null)
