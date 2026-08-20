@@ -2607,17 +2607,24 @@ export function ChatInput({
     // When the terminal dimensions change, the old frame must be erased
     // before painting the new one.
     //
-    // Height-only: the old frame position is predictable from oldTermRows.
-    //
     // Width change: the terminal reflows ALL visible content. Every frame
     // row was written as a hard (non-auto-wrapped) line, so a row of
     // printable length L splits into exactly ceil(L/newW) rows when the
     // terminal narrows and stays 1 row when it widens. onResize captured
     // those lengths (prevFrameRowLensRef), so we can compute the reflowed
-    // frame's exact height instead of the old "2 separator rows" heuristic
-    // — which missed wrapped input/spinner/menu rows and left remnants
-    // above the repaint zone. We must still avoid wiping the scrollback
-    // content above the remnants (the user's conversation).
+    // frame's exact height R. The reflowed remnants do NOT sit at a
+    // predictable anchor: with a floating frame (blank rows below it) the
+    // split rows push the frame UP past its old top, and on shrink the
+    // viewport window itself shifts. The exact post-reflow top is
+    //   oldTop - (R - oldFrameH) - max(0, oldTermRows - termRows)
+    // (the frame's own split growth, plus the viewport-window shift on a
+    // shrink). We erase from the min of that, the last-painted top (covers
+    // widen/join and top-anchored reflows), and the bottom-anchored
+    // estimate (covers full-viewport narrows where the remnants stay at
+    // the bottom). Erasing a few rows higher than the exact remnant top
+    // can clip blank rows, never conversation content — split continuations
+    // of content rows land below their originals, and scrollback content
+    // itself is untouched by reflow.
     const oldTermRows = lastTermRowsRef.current
     const oldTermWidth = lastTermWidthRef.current
     const didResize =
@@ -2631,26 +2638,35 @@ export function ChatInput({
         const lens = prevFrameRowLensRef.current
         const reflowedFrameH =
           lens.length > 0 ? lens.reduce((sum, len) => sum + Math.max(1, Math.ceil(len / newW)), 0) : oldFrameH
-        // Reflow overflow leaves via scrollback at the top, so the
-        // reflowed frame's LAST row stays at the terminal bottom — the
-        // remnants occupy exactly the bottom reflowedFrameH rows. When the
-        // frame was floating (lastFrameTopRef, same row count), content
-        // above may have expanded and pushed the frame down, so its
-        // remnants can start higher; erase from whichever top is higher.
-        // lastFrameTopRef is in OLD geometry — only meaningful when the
-        // terminal's row count didn't also change.
+        // The reflowed remnants do NOT sit at a predictable anchor: with
+        // a floating frame (blank rows below it) the split rows push the
+        // remnants UP past the old top, and on a shrink the viewport
+        // window itself shifts. The exact post-reflow top is
+        //   oldTop - (R - oldFrameH) - max(0, oldTermRows - termRows)
+        // (the frame's own split growth, plus the viewport-window shift
+        // on a shrink; split growth above the frame cancels out). Erase
+        // from the min of that, the last-painted top (covers widen/join
+        // and top-anchored reflows), the bottom-anchored estimate
+        // (covers full-viewport narrows whose remnants stay at the
+        // bottom). Erasing a few rows higher than the exact remnant top
+        // can clip blank rows — split
+        // continuations of scrollback content land below their originals,
+        // never above, so conversation content is never wiped.
         const bottomAnchoredTop = Math.max(1, termRows - reflowedFrameH + 1)
-        const oldTop =
-          lastFrameTopRef.current > 0 && oldTermRows === termRows ? lastFrameTopRef.current : bottomAnchoredTop
-        const eraseFrom = Math.max(1, Math.min(oldTop, bottomAnchoredTop))
+        const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, oldTermRows - oldFrameH + 1)
+        const shiftedTop = oldTop - Math.max(0, reflowedFrameH - oldFrameH) - Math.max(0, oldTermRows - termRows)
+        const eraseFrom = Math.max(1, Math.min(oldTop, shiftedTop, bottomAnchoredTop))
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
       } else {
-        // Height-only change: use the actual last-rendered top (the
-        // frame may have been floating before the resize, so the
-        // bottom-anchor formula is no longer reliable).
-        const oldFrameTop =
-          lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, oldTermRows - oldFrameH + 1)
-        const eraseFrom = Math.min(oldFrameTop, frameTop)
+        // Height-only change: no reflow, but a shrink shifts the viewport
+        // window up by the row delta (overflow leaves via scrollback at
+        // the top), so the last-rendered top moves up by the same amount;
+        // a grow keeps the old rows in place (top-anchored). Same
+        // min-of-candidates erase as the width branch, with R = oldFrameH.
+        const bottomAnchoredTop = Math.max(1, termRows - oldFrameH + 1)
+        const oldTop = lastFrameTopRef.current > 0 ? lastFrameTopRef.current : Math.max(1, oldTermRows - oldFrameH + 1)
+        const shiftedTop = oldTop - Math.max(0, oldTermRows - termRows)
+        const eraseFrom = Math.max(1, Math.min(oldTop, shiftedTop, bottomAnchoredTop))
         preBuf += `\x1b[${eraseFrom};1H\x1b[J`
       }
       // Resize invalidates the floating-frame state; the next render
@@ -3431,9 +3447,9 @@ export function ChatInput({
     // vsync window (16ms) causes visible flicker/jitter.
     //
     // Strategy:
-    //   • Commit frames (carrying new scrollback) write IMMEDIATELY — they
-    //     cancel any pending deferred write since commits involve complex
-    //     scroll/frame state that must be written atomically.
+    //   • Commit and resize frames write IMMEDIATELY — they cancel any
+    //     pending deferred write since both carry one-shot scroll/erase
+    //     operations that must reach the terminal atomically.
     //   • Non-commit frames are DEFERRED. Two windows:
     //       — Spinner ticks (spinnerFrame changed since last flush): 24ms.
     //         A wider window so a useStreamBuffer 150ms-drain commit
@@ -3465,9 +3481,8 @@ export function ChatInput({
       // re-emit them. Setting to '' (rather than slicing scrollbackContent
       // off the front) is safe: any render that mutates the ref between
       // scheduling and firing this throttled doFlush would have entered
-      // the commit branch (didCommitMessages || hasNewMessages) and
-      // cancelled this throttle in line 3235's `clearTimeout`, replacing
-      // it with a fresh throttle whose payload includes the new bytes.
+      // the immediate structural branch below and replaced the throttle
+      // with a fresh payload that includes the new bytes.
       pendingScrollbackRef.current = ''
       if (pendingFreeBlanks !== freeBlanksAboveFrameRef.current) {
         debugLog(
@@ -3502,17 +3517,17 @@ export function ChatInput({
     // until the next read's grow overwrites it. Visible symptom users
     // reported: the `● Read` row "appears then disappears" between
     // consecutive read tools.
-    if (didCommitMessages || hasNewMessages || didClearScreen) {
-      // Invalidate a deferred frame as soon as a commit is observed, not
-      // only after the commit reaches stdout. Its timer may already have
-      // queued a setImmediate and cleared deferredFlushRef; without this
-      // generation bump that stale callback can paint first, clear the
-      // pending scrollback bytes, and make the throttled commit skip itself.
+    if (didCommitMessages || hasNewMessages || didClearScreen || didResize) {
+      // Invalidate a deferred frame as soon as structural output is observed,
+      // not only after it reaches stdout. Its timer may already have queued a
+      // setImmediate and cleared deferredFlushRef; without this generation
+      // bump that stale callback can paint first, clear pending scrollback,
+      // or strand a resize erase that cannot be reconstructed next render.
       flushGenRef.current++
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
-        debugLog('chatinput.flush.deferred-cancelled', 'commit superseded deferred frame')
+        debugLog('chatinput.flush.deferred-cancelled', `${didResize ? 'resize' : 'commit'} superseded deferred frame`)
       }
       if (deferredImmediateRef.current !== null) {
         clearImmediate(deferredImmediateRef.current)
@@ -3535,11 +3550,12 @@ export function ChatInput({
       // write puts it in a fresh paint cycle. 50ms = ~3 vsyncs, enough
       // headroom on terminals that buffer multiple frames.
       const MIN_COMMIT_GAP_MS = 50
-      // The /clear payload is exempt from the gap throttle: its one-shot
-      // erase/scroll bytes cannot be re-collected by a later render, so
-      // deferring them risks supersession by a height-changed non-commit
-      // frame (which flushes its own clear-less payload immediately).
-      if (!didClearScreen && lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
+      // /clear and resize payloads are exempt from the gap throttle: their
+      // one-shot erase bytes cannot be re-collected by a later render. In
+      // particular, advancing lastTermWidthRef before a throttled resize
+      // flush lets the next reasoning/spinner render cancel the only payload
+      // that erases xterm.js's reflowed old frame.
+      if (!didClearScreen && !didResize && lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
         const delay = MIN_COMMIT_GAP_MS - dt
         const capturedGen = flushGenRef.current
         commitThrottleRef.current = setTimeout(() => {
