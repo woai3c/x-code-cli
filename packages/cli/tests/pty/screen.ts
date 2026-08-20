@@ -32,7 +32,7 @@ export function lastPromptLine(lines: string[]): string {
     // Boxed prompt: `│ › …… │` — the rails are part of the live input box.
     // Permission-dialog option rows also start with `│ ` but their pointer
     // sits behind a 4-space indent, so they can't false-match `│ ›`.
-    if (line.startsWith('│ ›') || line.startsWith('| >')) return line
+    if (line.startsWith('│ ›') || line.startsWith('│ >') || line.startsWith('| >')) return line
   }
   return ''
 }
