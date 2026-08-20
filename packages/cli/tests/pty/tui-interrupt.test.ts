@@ -105,6 +105,11 @@ describe('TUI interruption', () => {
       )
       expect(await pathExists(target)).toBe(false)
 
+      await harness.waitForScreen(
+        (screen) => screen.includes('[Request interrupted by user') && !screen.includes('Working'),
+        'idle prompt after permission interrupt',
+      )
+
       await submitInput(harness, 'hi')
       await harness.waitForText('permission-interrupt-recovery')
       expect(await pathExists(target)).toBe(false)
@@ -169,7 +174,10 @@ describe('TUI interruption', () => {
         harness.key('ctrl-c')
         await harness.waitForText('Press Ctrl+C again to exit')
         await waitFor(() => provider.mainRequests()[1]?.cancelled === true, 'sub-agent request cancellation', 5000)
-        await harness.waitForText('[Request interrupted by user')
+        await harness.waitForScreen(
+          (screen) => screen.includes('[Request interrupted by user') && !screen.includes('Working'),
+          'idle prompt after sub-agent interrupt',
+        )
 
         await submitInput(harness, 'hi')
         await harness.waitForText('sub-agent-recovery-ok', 10_000)

@@ -43,7 +43,7 @@ jobs:
           --target ${{ matrix.target }}
           --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-shell-supervisor-${{ matrix.arch }}
           path: packages/core/native/windows-job-supervisor/target/${{ matrix.target }}/release/xc-shell-supervisor.exe
@@ -60,17 +60,17 @@ jobs:
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.22.2
           cache: pnpm
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: windows-shell-supervisor-x64
           path: packages/core/native/prebuilt/windows/x64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: windows-shell-supervisor-arm64
           path: packages/core/native/prebuilt/windows/arm64
@@ -101,18 +101,18 @@ jobs:
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.22.2
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: windows-shell-supervisor-x64
           path: packages/core/native/prebuilt/windows/x64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: windows-shell-supervisor-arm64
           path: packages/core/native/prebuilt/windows/arm64
@@ -203,7 +203,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: RELEASE_NOTES.md
           generate_release_notes: false
