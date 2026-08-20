@@ -11,7 +11,7 @@ import { useCallback, useRef } from 'react'
 import type { QueuedAgentInput } from '@x-code-cli/core'
 
 import { partitionQueuedInputsForDraft, takeFreshQueuedInput } from './queued-agent-inputs.js'
-import type { AgentState, QueuedMessage } from './use-agent.js'
+import type { AgentState, QueuedMessage } from './types.js'
 
 type SetState = (update: AgentState | ((previous: AgentState) => AgentState)) => void
 

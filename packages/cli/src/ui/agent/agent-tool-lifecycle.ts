@@ -2,8 +2,8 @@ import { TOOL_SEARCH_TOOL_NAME } from '@x-code-cli/core'
 import type { AgentCallbacks, DisplayMessage, DisplayToolCall, EditDiffPayload } from '@x-code-cli/core'
 
 import { isCollapsibleReadOnlyTool } from '../utils.js'
+import type { AgentState } from './types.js'
 import { previewSubInput } from './use-agent-display.js'
-import type { AgentState } from './use-agent.js'
 
 interface MutableRef<T> {
   current: T

@@ -2,7 +2,7 @@ import { createUsageBreakdown, scanCacheMisses } from '@x-code-cli/core'
 import type { EditDiffPayload } from '@x-code-cli/core'
 
 import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from '../src/ui/agent/agent-tool-lifecycle.js'
-import type { AgentState } from '../src/ui/agent/use-agent.js'
+import type { AgentState } from '../src/ui/agent/types.js'
 
 function makeState(overrides: Partial<AgentState> = {}): AgentState {
   return {

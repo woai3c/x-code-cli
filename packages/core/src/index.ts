@@ -228,7 +228,7 @@ export type * from './peers/inbox-types.js'
 export * from './peers/index.js'
 
 // Utils
-export { USER_XCODE_DIR, XCODE_DIR, debugLog, setPluginDebugMirror, userXcodeDir } from './utils.js'
+export { USER_XCODE_DIR, XCODE_DIR, debugLog, errorMessage, setPluginDebugMirror, userXcodeDir } from './utils.js'
 export { LruCache } from './utils/lru-cache.js'
 export { mediaTypeFor } from './utils/media-type.js'
 export { extractText } from './utils/message-helpers.js'

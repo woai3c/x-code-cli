@@ -3,7 +3,7 @@ import type { AuthorityApprovalPreview, DisplayMessage, PermissionDecision, Todo
 
 import type { ShellWaitStreak } from '../agent/shell-session-ui.js'
 import type { TurnOwner } from '../agent/turn-coordinator.js'
-import type { ActiveToolCall } from '../agent/use-agent.js'
+import type { ActiveToolCall } from '../agent/types.js'
 
 export interface ChatInputProps {
   messages: readonly DisplayMessage[]

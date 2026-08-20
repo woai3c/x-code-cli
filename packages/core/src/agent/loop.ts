@@ -25,9 +25,8 @@ import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } f
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME, browserVisualCheck } from '../tools/browser-visual-check.js'
 import { createGetGoalTool } from '../tools/get-goal.js'
-import { toolRegistry, truncateToolResult } from '../tools/index.js'
+import { toolRegistry } from '../tools/index.js'
 import { createMemorySearchTool } from '../tools/memory-search.js'
-import { clearProgressReporter, setProgressReporter } from '../tools/progress.js'
 import { createReadFileTool } from '../tools/read-file.js'
 import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
@@ -36,12 +35,10 @@ import { setWebSearchModelProvider } from '../tools/web-search.js'
 import type { AgentCallbacks, AgentOptions, MessageProvenance, PeerOrigin, QueuedAgentInput } from '../types/index.js'
 import { debugLog, errorMessage, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
-import { appendProviderTurnUsage, consumeExpectedCacheMissReasons, createProviderTurnUsage } from './cache-stats.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
-import { toolErrorString } from './messages.js'
 import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 import { canonicalTranscriptDigest, effectiveExecutionAuthority, summarizePeerOrigins } from './provenance.js'
 import {
@@ -49,18 +46,15 @@ import {
   reattachToolResultImagesForProvider,
   stripBinaryPartsFromMessages,
 } from './provider-compat.js'
-import { appendCheckpoint, appendHeader, appendStepStats, appendUsage, flushPendingMessages } from './session-store.js'
+import { appendCheckpoint, appendHeader, appendStepStats, flushPendingMessages } from './session-store.js'
 import { createCheckpoint } from './snapshot.js'
 import {
-  StreamReplayFilter,
   appendStreamRecoveryContext,
   createStreamAttemptControl,
-  isRetryableStreamTransportError,
-  prependRecoveredText,
   streamRetryDelayMs,
   waitForStreamRetry,
 } from './stream-retry.js'
-import type { StreamAttemptControl, StreamRetryReason } from './stream-retry.js'
+import type { StreamAttemptControl } from './stream-retry.js'
 import { drainStreamResult } from './stream-utils.js'
 import type { StreamResult } from './stream-utils.js'
 import {
@@ -69,12 +63,13 @@ import {
   formatMcpCapabilities,
   formatSkillCapabilities,
 } from './system-prompt.js'
-import { isManagedMemoryAccess, processToolCalls } from './tool-execution.js'
+import { processToolCalls } from './tool-execution.js'
 import { collapseConsumedToolResults, collapseStaleToolResults } from './tool-result-pruning.js'
-import { repairOrphanTrackedToolCalls, truncateToolResultsInMessages } from './tool-result-sanitize.js'
+import { repairOrphanTrackedToolCalls } from './tool-result-sanitize.js'
 import { buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
 import { appendTrackedMessage, recalculateContextSecurity } from './tracked-messages.js'
-import { accumulateUsage, attributedModelId, normalizeLanguageModelUsage } from './usage.js'
+import { classifyTurnFailure, collectTurnResponse, streamChunksToUI } from './turn-stream.js'
+import type { FinalTurnOutcome, StreamAttemptTracker, TurnOutcome } from './turn-stream.js'
 
 /** Prepend an injected context block to a UserContent payload. Used by
  *  the UserPromptSubmit hook decision: plugins can inject context (e.g.
@@ -234,275 +229,6 @@ export type { CompressionResult } from './compression.js'
 export interface AgentLoopResult {
   state: LoopState
   turnCount: number
-}
-
-interface StreamAttemptTracker {
-  visibleText: string
-  toolActivity: boolean
-  receivedData: boolean
-  suppressedReplay: boolean
-}
-
-/** Consume streamText output, dispatching chunks to the UI via callbacks.
- *  Reasoning-delta chunks (thinking-mode models — DeepSeek-reasoner, o1,
- *  etc.) are deliberately ignored: that's the model's internal chain of
- *  thought, not user-facing output. The final user-facing answer arrives
- *  as regular text-delta chunks. */
-async function streamChunksToUI(
-  result: StreamResult,
-  callbacks: AgentCallbacks,
-  state: LoopState,
-  options: AgentOptions,
-  tracker: StreamAttemptTracker,
-  attemptControl: StreamAttemptControl,
-  recoveryText: string,
-  retrying: boolean,
-): Promise<void> {
-  // Deferred tools (webSearch / MCP / etc.) are name-only until the model loads
-  // them via toolSearch. If the model calls one BEFORE loading it, the tool
-  // isn't in this turn's tools map and the SDK rejects it with a tool-error.
-  // Track those calls so we can keep them out of the UI entirely.
-  const deferredNames = new Set((state.deferredCatalog ?? []).map((e) => e.name))
-  const suppressedDeferredCallIds = new Set<string>()
-  const suppressedMemoryAccessCallIds = new Set<string>()
-  const textFilter = new StreamReplayFilter(recoveryText, (text) => {
-    tracker.visibleText += text
-    callbacks.onTextDelta(text)
-  })
-  const markToolActivity = () => {
-    tracker.toolActivity = true
-    // A completed tool event makes replay unsafe. Stop the provider-idle
-    // watchdog as well, so a long-running tool is never mistaken for a
-    // disconnected response; the external user-cancel signal remains active.
-    attemptControl.dispose()
-  }
-  for await (const chunk of result.stream) {
-    attemptControl.touch()
-    if (chunk.type === 'error') {
-      // AI SDK doesn't throw from stream iteration on request failure —
-      // it enqueues this chunk and closes the stream.
-      // Without this re-throw the loop completes normally, then
-      // `await result.response` rejects with NoOutputGeneratedError —
-      // user sees that generic message instead of the real provider error
-      // (e.g. "insufficient balance"). Throw the original wrapped error so
-      // the outer try/catch can pass it to classifyApiError.
-      throw chunk.error instanceof Error ? chunk.error : new Error(String(chunk.error))
-    }
-    if (!tracker.receivedData) {
-      tracker.receivedData = true
-      if (retrying) callbacks.onStreamRetry?.(null)
-    }
-    if (chunk.type === 'text-delta') {
-      const text = chunk.text ?? ''
-      debugLog('stream.text-delta', `bytes=${Buffer.byteLength(text, 'utf8')}`)
-      textFilter.push(text)
-    } else if (chunk.type === 'tool-call') {
-      markToolActivity()
-      const inputKeys =
-        chunk.input && typeof chunk.input === 'object' && !Array.isArray(chunk.input)
-          ? Object.keys(chunk.input as Record<string, unknown>).sort()
-          : []
-      // Tool inputs can contain secrets or a complete peer egress payload.
-      // Debug logs retain only structural metadata; the local approval viewer
-      // is the sole place that displays canonical peer-influenced payloads.
-      debugLog('stream.tool-call', `${chunk.toolName ?? ''} keys=[${inputKeys.join(',')}]`)
-      const toolCallId = chunk.toolCallId ?? ''
-      const toolName = chunk.toolName ?? ''
-      if (
-        isManagedMemoryAccess(
-          toolName,
-          (chunk.input ?? {}) as Record<string, unknown>,
-          options.memoryService?.memoryRoot,
-        )
-      ) {
-        suppressedMemoryAccessCallIds.add(toolCallId)
-        debugLog('stream.memory-access-call', `${toolName} ${toolCallId} — suppressed`)
-        continue
-      }
-      // Deferred tool called before it was loaded: its schema isn't in this
-      // turn's tools map, so the SDK will immediately reject it with a
-      // tool-error (NoSuchToolError). Suppress the UI row entirely — otherwise
-      // onToolCall paints a live "Running…" line that the tool-error chunk
-      // below can't clear (there's no result), leaving a phantom row that hangs
-      // until the whole turn ends. state.messages still carries the SDK's error
-      // result, so the model sees what happened and self-corrects via toolSearch.
-      if (deferredNames.has(toolName) && !state.activatedTools.has(toolName)) {
-        suppressedDeferredCallIds.add(toolCallId)
-        debugLog('stream.deferred-early-call', `${toolName} ${toolCallId} — suppressed (not loaded yet)`)
-        continue
-      }
-      // Register the progress side-channel BEFORE tools start executing —
-      // AI SDK will synchronously invoke `execute(input, { toolCallId })`
-      // for auto-executed tools right after this event, and those tools
-      // call reportProgress(toolCallId, ...) to stream status updates.
-      if (toolCallId) {
-        setProgressReporter(toolCallId, (msg) => callbacks.onToolProgress(toolCallId, msg))
-      }
-      callbacks.onToolCall(toolCallId, toolName, (chunk.input ?? {}) as Record<string, unknown>)
-    } else if (chunk.type === 'tool-result') {
-      markToolActivity()
-      // Notify UI about auto-executed tool results (readFile, glob, grep, etc.)
-      const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
-      debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} bytes=${Buffer.byteLength(raw, 'utf8')}`)
-      if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
-      if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
-      const isError = /^Error(?:\s|:)/i.test(raw.trimStart())
-      callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw), isError)
-    } else if (chunk.type === 'tool-error') {
-      markToolActivity()
-      // The SDK rejected a tool call mid-stream. Two cases:
-      //  1. A deferred tool called before loading — already suppressed above,
-      //     so there's no UI row to clear; stay silent.
-      //  2. A genuine failure (malformed input on a loaded tool, or a
-      //     hallucinated tool name) where onToolCall DID paint a "Running…"
-      //     row. Resolve it to a visible error instead of letting it hang —
-      //     the old code dropped this chunk into the `else` below and the row
-      //     stayed "Running…" until the turn ended.
-      const toolCallId = chunk.toolCallId ?? ''
-      if (toolCallId) clearProgressReporter(toolCallId)
-      if (suppressedMemoryAccessCallIds.has(toolCallId)) {
-        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed memory access`)
-        continue
-      }
-      if (suppressedDeferredCallIds.has(toolCallId)) {
-        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed deferred early-call`)
-        continue
-      }
-      const message = chunk.error instanceof Error ? chunk.error.message : String(chunk.error ?? 'tool call failed')
-      debugLog(
-        'stream.tool-error',
-        `${chunk.toolName ?? ''} ${toolCallId} messageBytes=${Buffer.byteLength(message, 'utf8')}`,
-      )
-      callbacks.onToolResult(toolCallId, toolErrorString(message), true)
-    } else {
-      debugLog('stream.other-chunk', chunk.type)
-    }
-    // reasoning-delta / reasoning-start / reasoning-end: intentionally dropped from UI
-    // but logged above under stream.other-chunk so we can see them in debug mode.
-  }
-  textFilter.finish()
-  tracker.suppressedReplay = textFilter.suppressedReplay()
-}
-
-/** Pull the response + usage off a completed stream and fold into state. */
-async function collectTurnResponse(
-  result: StreamResult,
-  state: LoopState,
-  modelId: string,
-  callbacks: AgentCallbacks,
-  turnMessages: ModelMessage[],
-  recoveredText: string,
-  suppressedReplay: boolean,
-): Promise<string> {
-  const response = await result.response
-  if (!suppressedReplay) prependRecoveredText(response.messages, recoveredText)
-  // CRITICAL: auto-executed tools (readFile / grep / glob / listDir / webFetch
-  // / webSearch) return their results through `response.messages` without
-  // passing through the manual `pushToolResult` path. Without a sanitizer
-  // pass here, reading an 800-line file or a grep that matched 2k times dumps
-  // the full content into `state.messages` and then rides along on every
-  // subsequent turn. The worst realized case before this sanitizer was a
-  // 9M-token context built from cumulative failed-shell stacks + unsliced
-  // file reads. Truncate here so the messages we persist match the per-tool
-  // budget used elsewhere in the loop.
-  truncateToolResultsInMessages(response.messages)
-  state.messages.push(...response.messages)
-  turnMessages.push(...response.messages)
-
-  const usage = await result.usage
-  if (usage) {
-    const expectedMissReasons = consumeExpectedCacheMissReasons(state)
-    const raw = usage as Record<string, unknown>
-    const normalized = normalizeLanguageModelUsage(raw)
-    const effectiveModelId = attributedModelId(modelId, response.modelId)
-    accumulateUsage(
-      state,
-      { source: 'main', modelId: effectiveModelId, usage: normalized },
-      { updateCurrentContext: true },
-    )
-    // Snapshot the current context-window occupancy from this response —
-    // overwrite, not accumulate. Includes input + output because every
-    // major provider (Anthropic, OpenAI, Google, DeepSeek, Moonshot,
-    // Alibaba, xAI) defines context window as the SHARED budget pool of
-    // input + output: input + output ≤ context_window is the architectural
-    // constraint (single KV-cache cap). AI SDK's `inputTokens` already
-    // includes cache_read + cache_write, so this is the full
-    // prompt-the-model-saw plus what it just wrote — directly comparable
-    // to `getContextWindow(modelId)` in the footer "N / M · X%" indicator.
-    // Cumulative counters above remain for /usage billing summaries.
-    if (raw.inputTokens != null) state.lastInputTokens = normalized.inputTokens
-
-    const turnCacheRead = normalized.cacheReadTokens
-    const turnUsage = createProviderTurnUsage({
-      modelId: effectiveModelId,
-      usage: raw,
-      normalized,
-      expectedMissReasons,
-    })
-    const cacheMiss = appendProviderTurnUsage(state, turnUsage)
-    if (cacheMiss && !cacheMiss.expected) {
-      debugLog(
-        'cache-break',
-        `Estimated ${cacheMiss.missedTokens} re-billed input tokens after ${cacheMiss.idleMs}ms idle.`,
-      )
-    }
-    state.prevTurnCacheRead = turnCacheRead
-    callbacks.onUsageUpdate(state.tokenUsage)
-
-    // Persist a usage snapshot inline with the jsonl transcript. Per-turn
-    // cadence: the picker's tail-scan only ever needs the LATEST entry, but
-    // we write every turn so a crashed process doesn't lose its final
-    // counts. Fire-and-forget — never blocks the loop.
-    void appendUsage(state, effectiveModelId, turnUsage)
-  }
-
-  return result.finishReason
-}
-
-type TurnOutcome =
-  /** Turn completed normally; `finishReason` says what to do next. */
-  | { kind: 'done'; finishReason: string; result: StreamResult }
-  /** Fatal error (already reported to callbacks); caller should break the loop. */
-  | { kind: 'error' }
-  /** Retryable provider-stream failure. The wrapper owns backoff/UI status. */
-  | {
-      kind: 'stream-error'
-      error: unknown
-      partialText: string
-      toolActivity: boolean
-      reason: StreamRetryReason
-    }
-  /** Context overflowed and was compressed; caller should retry this turn. */
-  | { kind: 'retry' }
-  /** User aborted the request (Esc / Ctrl+C). NOT reported to onError —
-   *  the UI shows a `[Request interrupted by user]` notice instead. */
-  | { kind: 'aborted' }
-
-type FinalTurnOutcome = Exclude<TurnOutcome, { kind: 'stream-error' }>
-
-function classifyTurnFailure(
-  error: unknown,
-  options: AgentOptions,
-  callbacks: AgentCallbacks,
-  tracker: StreamAttemptTracker,
-  attemptControl: StreamAttemptControl,
-): TurnOutcome {
-  if (options.abortSignal?.aborted) return { kind: 'aborted' }
-
-  const idleTimedOut = attemptControl.didIdleTimeout()
-  if (idleTimedOut || isRetryableStreamTransportError(error)) {
-    return {
-      kind: 'stream-error',
-      error: idleTimedOut ? new Error('Network stream timed out while waiting for response data') : error,
-      partialText: tracker.visibleText,
-      toolActivity: tracker.toolActivity,
-      reason: idleTimedOut ? 'idle-timeout' : 'network',
-    }
-  }
-
-  if (isAbortError(error, options.abortSignal)) return { kind: 'aborted' }
-  callbacks.onError(new Error(classifyApiError(error).message))
-  return { kind: 'error' }
 }
 
 /** Build the BASE tool set for this loop. "Base" = everything directly loaded
@@ -1329,7 +1055,7 @@ export async function agentLoop(
       }
       stepToolCallCount += toolCalls.length
       const toolResultStartIndex = state.messages.length
-      const toolExecution = await processToolCalls(toolCalls, state, options, callbacks, model)
+      const toolExecution = await processToolCalls(toolCalls, state, options, callbacks, model, agentLoop)
       const manualToolMessages = state.messages.slice(toolResultStartIndex)
       turnMessages.push(...manualToolMessages)
       // processToolCalls short-circuits on abort with synthetic results;

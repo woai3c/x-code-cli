@@ -9,6 +9,7 @@ import { getShellProvider } from '../../tools/shell-provider.js'
 import type { AgentCallbacks, AgentOptions } from '../../types/index.js'
 import { debugLog, errorMessage } from '../../utils.js'
 import type { LoopState } from '../loop-state.js'
+import { agentLoop } from '../loop.js'
 import { runSubAgent } from '../sub-agents/runner.js'
 import { recordVerificationResult } from './state.js'
 import type { GoalState, GoalVerificationResult, GoalVerifier } from './types.js'
@@ -302,6 +303,7 @@ async function runSubAgentVerifier(input: {
         isGitRepo: state.isGitRepo ?? false,
       },
       model,
+      agentLoop,
     )
     if (hasDeniedSubAgentRestriction(result.resultText)) {
       return makeResult({

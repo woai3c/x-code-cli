@@ -4,10 +4,9 @@ import {
   type PeerServiceOptions,
   createPeerService,
   debugLog,
+  errorMessage,
   resolvePeerMessagingConfig,
 } from '@x-code-cli/core'
-
-import { errorMessage } from '../../core/src/utils.js'
 
 export interface CliPeerStartupOptions {
   userConfig?: unknown

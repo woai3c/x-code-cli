@@ -1,6 +1,5 @@
+import { errorMessage } from '@x-code-cli/core'
 import type { ShellSessionController, TerminateAllResult } from '@x-code-cli/core'
-
-import { errorMessage } from '../../../../core/src/utils.js'
 
 export type ShellSessionTransitionResult =
   | { ok: true; result: TerminateAllResult }

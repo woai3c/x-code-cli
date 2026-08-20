@@ -3,7 +3,7 @@
 // Executes a sub-agent as a nested agentLoop with isolated context.
 // The parent agent receives only the final text result; intermediate
 // tool calls and messages stay inside the child loop.
-import type { LanguageModel } from 'ai'
+import type { LanguageModel, UserContent } from 'ai'
 
 import { loadUserConfig, resolveModelId } from '../../config/index.js'
 import type { HookBus } from '../../hooks/bus.js'
@@ -18,7 +18,6 @@ import { withBrowserOperation } from '../browser/operation-lock.js'
 import { type BrowserMcp, PLAYWRIGHT_MCP_PACKAGE, getBrowserMcp } from '../browser/registry.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
-import { agentLoop } from '../loop.js'
 import { appendUsage } from '../session-store.js'
 import { buildSubAgentSystemPrompt } from '../system-prompt.js'
 import { accumulateChildUsage } from '../usage.js'
@@ -61,6 +60,14 @@ export interface RunSubAgentResult {
   aborted: boolean
   cleanupFailed?: boolean
 }
+
+export type SubAgentLoopRunner = (
+  userMessage: UserContent,
+  model: LanguageModel,
+  options: AgentOptions,
+  callbacks: AgentCallbacks,
+  existingState?: LoopState,
+) => Promise<{ state: LoopState; turnCount: number }>
 
 export interface SubAgentShellCleanupFailure {
   shellIds: string[]
@@ -165,7 +172,11 @@ export function buildSubAgentToolFilter(agentDef: SubAgentDefinition, parentPerm
 
 /** Resolve the model to use for the sub-agent. Need the actual LanguageModel
  *  instance from the parent since we pass it to agentLoop. */
-export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageModel): Promise<RunSubAgentResult> {
+export async function runSubAgent(
+  args: RunSubAgentArgs,
+  parentModel: LanguageModel,
+  runLoop?: SubAgentLoopRunner,
+): Promise<RunSubAgentResult> {
   const authority = args.authority ?? args.parentState.executionAuthority
   if ((authority.peerTainted || authority.source === 'peer') && !args.parentOptions?.trustMode) {
     return {
@@ -177,14 +188,16 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
       aborted: false,
     }
   }
-  if (args.agentName !== 'browser') return runSubAgentUnlocked(args, parentModel)
+  if (args.agentName !== 'browser') return runSubAgentUnlocked(args, parentModel, runLoop)
 
   const startTime = Date.now()
   try {
     // Playwright MCP has one mutable current Page. Hold the transaction lock
     // for the whole browser-agent run, not just individual MCP calls, so a
     // visual check or second browser task cannot silently switch its tab.
-    return await withBrowserOperation(args.parentOptions.abortSignal, () => runSubAgentUnlocked(args, parentModel))
+    return await withBrowserOperation(args.parentOptions.abortSignal, () =>
+      runSubAgentUnlocked(args, parentModel, runLoop),
+    )
   } catch (err) {
     if (!isAbortError(err, args.parentOptions.abortSignal)) throw err
     return {
@@ -198,7 +211,11 @@ export async function runSubAgent(args: RunSubAgentArgs, parentModel: LanguageMo
   }
 }
 
-async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageModel): Promise<RunSubAgentResult> {
+async function runSubAgentUnlocked(
+  args: RunSubAgentArgs,
+  parentModel: LanguageModel,
+  runLoop: SubAgentLoopRunner | undefined,
+): Promise<RunSubAgentResult> {
   const {
     parentState,
     parentOptions,
@@ -237,6 +254,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
       aborted: false,
     }
   }
+  if (!runLoop) throw new Error('Sub-agent loop runner not configured')
 
   const subModel = resolveSubModel(agentDef, parentOptions, parentModel)
   const subModelId = agentDef.model ? (resolveModelId(agentDef.model) ?? parentOptions.modelId) : parentOptions.modelId
@@ -418,7 +436,7 @@ async function runSubAgentUnlocked(args: RunSubAgentArgs, parentModel: LanguageM
   let completionFinalText: string | undefined
   let completionOutcome: 'completed' | 'aborted' | 'failed' = 'failed'
   try {
-    const { state: finalSubState, turnCount } = await agentLoop(prompt, subModel, subOptions, subCallbacks, subState)
+    const { state: finalSubState, turnCount } = await runLoop(prompt, subModel, subOptions, subCallbacks, subState)
 
     const finalText = extractFinalText(finalSubState.messages)
     const toolUseCount = countToolCalls(finalSubState.messages)

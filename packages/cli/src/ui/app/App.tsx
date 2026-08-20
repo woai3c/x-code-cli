@@ -10,8 +10,8 @@ import {
   PROVIDER_MODELS,
   PROVIDER_REASONING_TIERS,
   createModelRegistry,
+  errorMessage,
   estimateTokenCount,
-  expandCommandBody,
   getAvailableProviders,
   getContextWindow,
   listSessions,
@@ -27,7 +27,6 @@ import {
 import type { AgentOptions, CacheMissSummary, DiffStats, LanguageModel, LoadedSession } from '@x-code-cli/core'
 import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-code-cli/core'
 
-import { errorMessage } from '../../../../core/src/utils.js'
 import type { CliCleanupController } from '../../cleanup-controller.js'
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
 import { visibleBackgroundTerminals } from '../agent/shell-session-ui.js'
@@ -51,13 +50,14 @@ import {
 } from '../render/theme.js'
 import { formatCompactionResult, formatTokenCount, parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
-import { INIT_PROMPT, REVIEW_PROMPT, SLASH_COMMANDS, buildHelpText } from './command-content.js'
-import { formatBackgroundTerminals, formatStopResult } from './commands/background-terminal.js'
+import { SLASH_COMMANDS } from './command-content.js'
+import { formatStopResult } from './commands/background-terminal.js'
 import { createBrowserCommandHandler } from './commands/browser.js'
 import { createDoctorCommandHandler } from './commands/doctor.js'
 import { parseGoalCreateArgs, tokenizeArgs } from './commands/goal.js'
 import { createMcpCommandHandler } from './commands/mcp.js'
 import { createPluginCommandHandler } from './commands/plugin.js'
+import { routeSlashCommand } from './commands/router.js'
 import { createSkillCommandHandler } from './commands/skill.js'
 import type { SessionExitInfo } from './session-exit.js'
 import {
@@ -664,234 +664,45 @@ export function App({
       }
     }
 
-    // Slash commands
     if (text.startsWith('/')) {
-      const parts = text.slice(1).trim().split(/\s+/)
-      const command = parts[0].toLowerCase()
-      const arg = parts.slice(1).join(' ')
-
-      switch (command) {
-        case 'help':
-          echoCommand(text)
-          addInfoMessage(buildHelpText(skillCommands, fileCommands))
-          return
-
-        case 'model':
-          handleModelSwitch(text, arg)
-          return
-
-        case 'thinking':
-          handleThinkingToggle(text, arg)
-          return
-
-        case 'theme':
-          await handleThemeSwitch(text, arg)
-          return
-
-        case 'plan':
-          handlePlanToggle(text, arg)
-          return
-
-        case 'clear': {
-          pendingSkillRef.current = null
-          const result = await clear(text)
-          if (!result.ok) {
-            addCommandMessage(
-              text,
-              `Clear was not completed: ${result.reason}.${result.result ? `\n${formatStopResult(result.result)}` : ''}`,
-            )
-          }
-          return
-        }
-
-        case 'ps':
-          echoCommand(text)
-          addCommandResult(formatBackgroundTerminals(listShellSessions()))
-          return
-
-        case 'stop':
-          echoCommand(text)
-          try {
-            addCommandResult(formatStopResult(await stopShellSessions(arg.trim() || undefined)))
-          } catch (error) {
-            addCommandResult(`Unable to stop background terminal: ${errorMessage(error)}`)
-          }
-          return
-
-        case 'clear-peer-context': {
-          echoCommand(text)
-          const result = await clearPeerContext()
-          addInfoMessage(
-            result.ok
-              ? result.removed > 0
-                ? `Removed ${result.removed} peer-influenced transcript message(s).`
-                : 'No peer-influenced context is active.'
-              : `Peer context was not cleared: ${result.reason ?? 'unknown error'}`,
-          )
-          return
-        }
-
-        case 'list-agents': {
-          echoCommand(text)
-          const service = options.peerService
-          if (!service?.enabled) {
-            addCommandResult('This session is not a named agent. Restart with --name <name> to enable communication.')
-            return
-          }
-          if (!service.isAvailable()) {
-            addCommandResult(`Peer messaging unavailable: ${service.getUnavailableReason() ?? 'service not running'}`)
-            return
-          }
-          try {
-            const { peers, partial } = await service.list()
-            peers.sort(
-              (left, right) => left.startedAt.localeCompare(right.startedAt) || left.name.localeCompare(right.name),
-            )
-            addCommandResult(
-              peers.length === 0
-                ? 'No other reachable X-Code sessions.'
-                : `${peers
-                    .map(
-                      (peer) =>
-                        `${peer.name} · ${peer.address} · ${peer.status}${peer.busyKind ? ` (${peer.busyKind})` : ''} · ${peer.cwd}`,
-                    )
-                    .join('\n')}${partial ? '\nResults may be partial because discovery reached its deadline.' : ''}`,
-            )
-          } catch (error) {
-            addCommandResult(`Unable to list agents: ${errorMessage(error)}`)
-          }
-          return
-        }
-
-        case 'compact':
-          echoCommand(text)
-          await handleCompact()
-          return
-
-        case 'goal':
-          echoCommand(text)
-          await handleGoal(arg)
-          return
-
-        case 'resume':
-          echoCommand(text)
-          await handleResume()
-          return
-
-        case 'fork': {
-          echoCommand(text)
-          const name = arg.trim() || undefined
-          const result = await fork(name)
-          if (!result.ok) {
-            addCommandResult(`Fork failed: ${result.reason}`)
-            return
-          }
-          const boundary = result.excludedActiveTurn
-            ? 'The active request remains only in the original session.'
-            : 'Copied all completed conversation context.'
-          const title = name ? `**${name}** (\`${result.sessionId}\`)` : `**${result.sessionId}**`
-          const resumeKey = name ? `"${name}"` : result.sessionId
-          addCommandResult(
-            `Fork created: ${title} (${result.messageCount} messages).\n\n${boundary}\n\nThe conversation is independent, but both sessions still share this working tree. Avoid concurrent edits to the same files.\n\nOpen another terminal:\n\n\`xc --resume ${resumeKey}\``,
-          )
-          return
-        }
-
-        case 'rewind':
-          echoCommand(text)
-          await handleRewind(arg)
-          return
-
-        case 'init':
-          echoCommand(text)
-          await submit(INIT_PROMPT, { silent: true })
-          return
-
-        case 'review':
-          echoCommand(text)
-          await submit(REVIEW_PROMPT(arg), { silent: true })
-          return
-
-        case 'usage':
-          echoCommand(text)
-          await handleUsage()
-          return
-
-        case 'usage-history':
-          echoCommand(text)
-          await handleUsageHistory()
-          return
-
-        case 'memory':
-          echoCommand(text)
-          await handleMemory(arg)
-          return
-
-        case 'skill':
-          await handleSkill(text, arg)
-          return
-
-        case 'mcp':
-          await handleMcp(text, arg)
-          return
-
-        case 'plugin':
-          await handlePlugin(text, arg)
-          return
-
-        case 'browser':
-          await handleBrowser(text, arg)
-          return
-
-        case 'doctor':
-          handleDoctor(text)
-          return
-
-        case 'exit':
-          exit()
-          return
-
-        default: {
-          // Check if the command matches a loaded skill first.
-          const skill = options.skillRegistry?.get(command)
-          if (skill) {
-            if (arg) {
-              // Skill + immediate request — echo then inject and submit together
-              // so the model applies the skill persona to the user's specific ask.
-              // submit is silent so echoCommand provides the visible echo.
-              // wrapActivatedSkill builds the same <activated_skill> envelope
-              // (body + base directory + file list) used by the activateSkill
-              // tool, so the two activation paths look byte-identical to the
-              // model regardless of who triggered them.
-              echoCommand(text)
-              await submit(`${wrapActivatedSkill(skill)}\n\n${arg}`, {
-                silent: true,
-              })
-            } else {
-              // No follow-up yet — store the whole SkillDefinition so we can
-              // re-format it with the same wrapper when the user's next
-              // real message arrives. addCommandMessage handles the echo.
-              pendingSkillRef.current = skill
-              addCommandMessage(text, `Skill **${skill.name}** loaded. Type your request.`)
-            }
-            return
-          }
-
-          // Then check plugin-contributed slash commands. These map
-          // `commands/<name>.md` files from any installed plugin to
-          // `/<name>`. Body is sent as a model prompt with $ARGUMENTS
-          // / ${CLAUDE_PLUGIN_ROOT} substitution applied.
-          const cmd = options.commandRegistry?.get(command)
-          if (cmd) {
-            echoCommand(text)
-            const expanded = expandCommandBody(cmd, arg)
-            await submit(expanded, { silent: true })
-            return
-          }
-          addCommandMessage(text, `Unknown command: /${command}. Type /help for available commands.`)
-          return
-        }
-      }
+      await routeSlashCommand(text, {
+        agent: {
+          addCommandMessage,
+          addCommandResult,
+          addInfoMessage,
+          clear,
+          clearPeerContext,
+          echoCommand,
+          fork,
+          listShellSessions,
+          stopShellSessions,
+          submit,
+        },
+        options,
+        skillCommands,
+        fileCommands,
+        pendingSkillRef,
+        handlers: {
+          model: handleModelSwitch,
+          thinking: handleThinkingToggle,
+          theme: handleThemeSwitch,
+          plan: handlePlanToggle,
+          compact: handleCompact,
+          goal: handleGoal,
+          resume: handleResume,
+          rewind: handleRewind,
+          usage: handleUsage,
+          usageHistory: handleUsageHistory,
+          memory: handleMemory,
+          skill: handleSkill,
+          mcp: handleMcp,
+          plugin: handlePlugin,
+          browser: handleBrowser,
+          doctor: handleDoctor,
+        },
+        exit,
+      })
+      return
     }
 
     // Prepend any pending skill context to the user's message, then clear it.
