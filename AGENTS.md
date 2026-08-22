@@ -54,7 +54,7 @@ packages/
 
 **Knowledge** (`core/src/knowledge/`): four layers merged into system prompt — user AGENTS.md, user memory Core profile (`~/.x-code/memory/MEMORY.md`), project AGENTS.md chain (root→leaf, leaf wins), AGENTS.local.md.
 
-**Provider config**: `packages/core/src/providers/catalog.ts:PROVIDERS` is the single provider metadata table (envKey, defaultModel, /model picker entries, key URL, base URLs, reasoning tiers); `PROVIDER_*` derived views and the test env-var list all come from it. API keys read only from env vars, plus escape hatch `OPENAI_COMPATIBLE_API_KEY` + `OPENAI_COMPATIBLE_BASE_URL`. Adding a provider = one catalog entry + a constructor branch in `providers/registry.ts`.
+**Provider config**: `packages/core/src/providers/catalog.ts:PROVIDERS` is the single provider metadata table (envKey, defaultModel, /model picker entries, key URL, base URLs, reasoning tiers); `PROVIDER_*` derived views and the test env-var list all come from it. API keys read only from env vars, plus escape hatch `OPENAI_COMPATIBLE_API_KEY` + `OPENAI_COMPATIBLE_BASE_URL`. OpenAI also supports ChatGPT subscription OAuth through `auth/openai-chatgpt/`; stored ChatGPT credentials take exclusive precedence over `OPENAI_API_KEY` until `xc logout`, and authentication failures must never fall back to the key. Adding a provider = one catalog entry + a constructor branch in `providers/registry.ts`.
 
 **Permissions**: 3-level model (always-allow / ask / deny). Shell commands classified via `shell-utils.ts` with quote-aware compound-command splitting and LRU cache.
 

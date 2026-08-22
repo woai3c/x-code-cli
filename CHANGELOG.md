@@ -56,6 +56,7 @@
 
 ### Features
 
+- support ChatGPT subscription sign-in for OpenAI models with browser/device OAuth, automatic token refresh, and strict API-key mutual exclusion
 - unify foreground and background shell execution into managed sessions with automatic 10-second yielding, `/ps`, and `/stop`
 - use a bundled, hash-verified Windows Job Object supervisor for reliable process-tree cleanup on Windows x64 and arm64; normal Node.js builds do not require Rust
 - support interactive `tty: true` shell sessions through PTY/ConPTY with Unicode stdin, Ctrl+C, and terminal resize

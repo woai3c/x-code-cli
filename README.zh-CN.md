@@ -40,10 +40,21 @@ pnpm add -g @x-code-cli/cli
 
 安装完成后，使用 `xc` 或 `x-code` 命令启动。
 
-## 配置 API Key
+## 配置模型访问方式
 
-> **X-Code CLI 不内置免费模型，须配置至少一个厂商的 API Key。**
->
+使用 OpenAI 模型时，可以登录 ChatGPT 使用订阅权益：
+
+```bash
+xc login                    # 浏览器登录
+xc login --device-auth      # 远程或无浏览器环境
+xc login status             # 查看当前 OpenAI 认证方式
+xc logout                   # 退出并删除本地 ChatGPT 凭据
+```
+
+对于 `openai` provider，ChatGPT 登录和 `OPENAI_API_KEY` 严格互斥。ChatGPT 已登录时，请求使用 ChatGPT 订阅权益，API key 处于停用状态，认证失败也不会回退到 API key；执行 `xc logout` 后，已有的 `OPENAI_API_KEY` 才会恢复生效，其请求按 OpenAI Platform 账户用量计费。其他 provider 的 API key 不受影响。
+
+也可以配置至少一个厂商的 API Key：
+
 > **推荐 [DeepSeek](https://platform.deepseek.com/)**：价格低、国内访问稳定，适合首次试用。赠送额度与价格可能变化，请以官方控制台为准。
 
 | 环境变量                       | 厂商                | 注册地址                                                                    |
@@ -213,6 +224,9 @@ xc [options] [prompt]
 ### 非交互子命令
 
 ```text
+xc login [--device-auth]           登录 ChatGPT
+xc login status                    查看当前 OpenAI 认证方式
+xc logout                          退出 ChatGPT 登录
 xc plugin <subcommand>            管理插件（list / install / uninstall / enable / disable / search / update / info / doctor / marketplace）
 xc plugin install [--yes] <src>   安装插件；非 TTY 默认拒绝，--yes 跳过确认
 xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove / refresh / info）

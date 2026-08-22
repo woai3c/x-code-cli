@@ -22,13 +22,17 @@ import {
   forceTerminateManagedShellsSync,
   getAvailableProviders,
   getEnvVarName,
+  getOpenAIAuthContext,
+  getProviderModels,
   getTokenStorage,
+  initializeOpenAIAuthContext,
   listSessions,
   loadAllPlugins,
   loadMcpConfigsFromDisk,
   loadSession,
   loadUserConfig,
   pickLatestSession,
+  refreshOpenAIChatGPTModels,
   resolveModelId,
   resolveStreamConfig,
   resolveWebSearchProvider,
@@ -45,6 +49,7 @@ import type {
 } from '@x-code-cli/core'
 
 import { startApp } from './app.js'
+import { runAuthCli } from './auth-cli.js'
 import { getCleanupController } from './cleanup-controller.js'
 import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
@@ -58,6 +63,7 @@ import { rebuildPalette } from './ui/chat-input/palette.js'
 import { setShikiTheme, warmShikiEngine } from './ui/render/shiki-highlight.js'
 import { setSyntaxTheme } from './ui/render/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/render/theme.js'
+import { VERSION } from './version.js'
 
 restoreInvocationCwd()
 installTerminalStreamErrorGuards([process.stdout, process.stderr])
@@ -209,6 +215,12 @@ async function main() {
     const exitCode = await runPluginCli(rawArgs.slice(1))
     process.exit(exitCode)
   }
+  if (rawArgs[0] === 'login' || rawArgs[0] === 'logout') {
+    const exitCode = await runAuthCli(rawArgs)
+    process.exit(exitCode)
+  }
+
+  const openAIAuth = initializeOpenAIAuthContext()
 
   // Parse CLI arguments
   const argv = await parseCliArgs()
@@ -265,7 +277,9 @@ async function main() {
       console.error(`Error: ${envVar} is not set. Please set this environment variable to use ${argv.model}.`)
       process.exit(1)
     }
-    const fallback = PROVIDER_DETECTION_ORDER.find(({ envKey }) => process.env[envKey])
+    const fallback = PROVIDER_DETECTION_ORDER.find(({ defaultModel }) =>
+      availableProviders.includes(defaultModel.split(':')[0]),
+    )
     if (!fallback) {
       // Defensive: availableProviders was non-empty above, so something
       // configured got us here — surface and exit cleanly.
@@ -279,6 +293,33 @@ async function main() {
       ),
     )
     modelId = fallback.defaultModel
+  }
+
+  if (openAIAuth.mode === 'chatgpt' && modelId.startsWith('openai:')) {
+    await refreshOpenAIChatGPTModels(VERSION, { signal: AbortSignal.timeout(8_000) })
+  }
+
+  if (getOpenAIAuthContext().mode === 'chatgpt' && modelId.startsWith('openai:')) {
+    const availableOpenAIModels = getProviderModels().openai ?? []
+    if (!availableOpenAIModels.some((candidate) => candidate.id === modelId)) {
+      if (argv.model) {
+        console.error(`Error: ${modelId} is not available for the signed-in ChatGPT account.`)
+        process.exit(1)
+      }
+      const fallback = availableOpenAIModels[0]
+      if (fallback) {
+        console.error(
+          chalk.yellow(
+            `Note: saved model '${modelId}' is not available for the signed-in ChatGPT account. ` +
+              `Falling back to '${fallback.id}'. Use /model to pick a different default.`,
+          ),
+        )
+        modelId = fallback.id
+      } else {
+        console.error('Error: no models are available for the signed-in ChatGPT account.')
+        process.exit(1)
+      }
+    }
   }
 
   // Apply persisted UI theme. Done early (before startApp) so the very

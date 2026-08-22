@@ -1,6 +1,9 @@
 // @x-code-cli/core — Context window lookup & estimation
 import type { ModelMessage } from 'ai'
 
+import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
+import { getOpenAIChatGPTRuntimeModel } from '../providers/openai-chatgpt-models.js'
+
 /**
  * Compress context when usage exceeds this fraction of the model's context
  * window. Two checks use this:
@@ -80,6 +83,9 @@ const PROVIDER_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
 
 /** Resolve context window (tokens) for a model id like `provider:model`. */
 export function getContextWindow(modelId: string): number {
+  const runtimeModel = getOpenAIChatGPTRuntimeModel(modelId)
+  if (runtimeModel) return runtimeModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW
+  if (getOpenAIAuthContext().mode === 'chatgpt' && modelId.startsWith('openai:')) return DEFAULT_CONTEXT_WINDOW
   const exact = MODEL_CONTEXT_WINDOWS.get(modelId)
   if (exact !== undefined) return exact
   const provider = modelId.split(':')[0]
@@ -114,6 +120,9 @@ const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
 
 /** Resolve the max_tokens ceiling we send to the provider. */
 export function getMaxOutputTokens(modelId: string): number {
+  const runtimeModel = getOpenAIChatGPTRuntimeModel(modelId)
+  if (runtimeModel) return runtimeModel.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+  if (getOpenAIAuthContext().mode === 'chatgpt' && modelId.startsWith('openai:')) return DEFAULT_MAX_OUTPUT_TOKENS
   return MODEL_MAX_OUTPUT_TOKENS.get(modelId) ?? DEFAULT_MAX_OUTPUT_TOKENS
 }
 

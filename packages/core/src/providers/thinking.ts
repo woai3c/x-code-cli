@@ -18,6 +18,8 @@
 // for models without an explicit tier.
 import { providerOf } from './capabilities.js'
 import { PROVIDER_REASONING_TIERS } from './catalog.js'
+import type { ReasoningTierOption } from './catalog.js'
+import { getOpenAIChatGPTReasoningTiers, getOpenAIChatGPTRuntimeModel } from './openai-chatgpt-models.js'
 
 /** Whether the model exposes a granular reasoning-effort tier (vs. the
  *  binary /thinking toggle). A provider has tiers but only some of its
@@ -25,9 +27,19 @@ import { PROVIDER_REASONING_TIERS } from './catalog.js'
  *  gates that. Drives both the /model tier picker and the effort branch
  *  in getReasoningLevel. */
 export function supportsReasoningTier(modelId: string): boolean {
+  const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
+  if (chatGPTTiers !== undefined) return chatGPTTiers.length > 0
   const config = PROVIDER_REASONING_TIERS[providerOf(modelId)]
   if (!config) return false
   return !config.modelPattern || config.modelPattern.test(modelId)
+}
+
+export function getReasoningTierOptions(modelId: string): readonly ReasoningTierOption[] | undefined {
+  const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
+  if (chatGPTTiers !== undefined) return chatGPTTiers
+  const config = PROVIDER_REASONING_TIERS[providerOf(modelId)]
+  if (!config || (config.modelPattern && !config.modelPattern.test(modelId))) return undefined
+  return config.options
 }
 
 export type ReasoningLevel = 'provider-default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
@@ -54,10 +66,21 @@ const TIER_TO_REASONING: Record<string, ReasoningLevel> = {
  */
 export function getReasoningLevel(modelId: string, enabled: boolean, effort?: string): ReasoningLevel | undefined {
   const provider = providerOf(modelId)
+  const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
 
   // These providers use separate mechanisms (providerOptions / fetch shim)
   if (provider === 'alibaba' || provider === 'zhipu' || provider === 'custom') {
     return undefined
+  }
+
+  if (chatGPTTiers !== undefined) {
+    if (chatGPTTiers.length === 0) return undefined
+    const supported = chatGPTTiers.map((tier) => tier.value)
+    if (effort && supported.includes(effort)) return effort as ReasoningLevel
+    if (!effort && !enabled && supported.includes('none')) return 'none'
+    const declaredDefault = getOpenAIChatGPTRuntimeModel(modelId)?.defaultReasoningLevel
+    if (declaredDefault && supported.includes(declaredDefault)) return declaredDefault as ReasoningLevel
+    return chatGPTTiers[Math.floor((chatGPTTiers.length - 1) / 2)]?.value as ReasoningLevel
   }
 
   // Tiered reasoning — user picked an explicit effort level AND the model

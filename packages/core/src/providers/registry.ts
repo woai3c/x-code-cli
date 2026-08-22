@@ -9,7 +9,10 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createXai } from '@ai-sdk/xai'
 import { createProviderRegistry, customProvider } from 'ai'
 
+import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
+import { getOpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
 import { getProviderOptions, loadUserConfig } from '../config/index.js'
+import { createOpenAIChatGPTFetch } from './openai-chatgpt-fetch.js'
 
 const KIMI_CODING_MODEL_IDS = {
   'kimi-k3': 'k3',
@@ -31,7 +34,19 @@ export function createModelRegistry() {
   const config = loadUserConfig()
 
   if (opts.anthropic) providers.anthropic = createAnthropic({ fetch: permanentErrorFetch })
-  if (opts.openai) providers.openai = createOpenAI({ fetch: permanentErrorFetch })
+  const openAIAuth = getOpenAIAuthContext()
+  if (openAIAuth.mode === 'chatgpt') {
+    providers.openai = createOpenAI({
+      apiKey: 'x-code-chatgpt-oauth',
+      fetch: createOpenAIChatGPTFetch({
+        tokenManager: getOpenAIChatGPTTokenManager(),
+        fetch: permanentErrorFetch,
+        userAgent: 'x-code-cli',
+      }),
+    })
+  } else if (opts.openai) {
+    providers.openai = createOpenAI({ fetch: permanentErrorFetch })
+  }
   if (opts.google) providers.google = createGoogle({ fetch: permanentErrorFetch })
   if (opts.xai) providers.xai = createXai({ fetch: permanentErrorFetch })
   if (opts.deepseek) providers.deepseek = createDeepSeek({ fetch: permanentErrorFetch })

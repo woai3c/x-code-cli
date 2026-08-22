@@ -53,6 +53,27 @@ export {
   loadUserConfig,
   saveUserConfig,
 } from './config/index.js'
+
+// OpenAI authentication
+export {
+  getOpenAIAuthContext,
+  getOpenAIAuthStatus,
+  initializeOpenAIAuthContext,
+  resetOpenAIAuthContextForTesting,
+} from './auth/openai-chatgpt/auth-resolver.js'
+export {
+  clearOpenAIChatGPTCredentials,
+  hasOpenAIChatGPTCredentials,
+  readOpenAIChatGPTCredentials,
+  withOpenAIChatGPTCredentialLock,
+  writeOpenAIChatGPTCredentials,
+} from './auth/openai-chatgpt/credential-store.js'
+export {
+  loginOpenAIChatGPTWithBrowser,
+  loginOpenAIChatGPTWithDevice,
+  revokeOpenAIChatGPTCredentials,
+} from './auth/openai-chatgpt/oauth.js'
+export type { OpenAIAuthContext, OpenAIAuthStatus, OpenAIChatGPTCredentials } from './auth/openai-chatgpt/types.js'
 export type {
   MemoryConfig,
   MemoryReasoningMode,
@@ -64,6 +85,7 @@ export type {
 
 // Provider Registry
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'
+export { getProviderModels, refreshOpenAIChatGPTModels } from './providers/openai-chatgpt-models.js'
 
 // Agent
 export {
@@ -174,7 +196,7 @@ export type {
 // Provider capabilities
 export { capabilitiesOf, modelSupportsVision, providerOf } from './providers/capabilities.js'
 export type { ProviderCapabilities } from './providers/capabilities.js'
-export { supportsReasoningTier } from './providers/thinking.js'
+export { getReasoningTierOptions, supportsReasoningTier } from './providers/thinking.js'
 
 // Tools
 export { toolRegistry, truncateToolResult } from './tools/index.js'

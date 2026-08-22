@@ -4,11 +4,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 
+import { resetOpenAIAuthContextForTesting } from '../src/auth/openai-chatgpt/auth-resolver.js'
+import { writeOpenAIChatGPTCredentials } from '../src/auth/openai-chatgpt/credential-store.js'
 import {
   DEFAULT_MEMORY_CONFIG,
   DEFAULT_PEER_MESSAGING_CONFIG,
   DEFAULT_STREAM_CONFIG,
   getAvailableProviders,
+  getProviderOptions,
   resolveBrowserConfig,
   resolveMemoryConfig,
   resolveModelId,
@@ -41,6 +44,7 @@ describe('resolvePeerMessagingConfig', () => {
 // "no providers configured" assertions.
 function clearProviderEnvVars(): void {
   for (const key of PROVIDER_ENV_VARS) delete process.env[key]
+  resetOpenAIAuthContextForTesting()
 }
 
 /** Redirect config.json reads to an empty tmpdir so the real user's
@@ -106,14 +110,27 @@ describe('resolveModelId', () => {
   it('returns model even if provider key missing when explicitly requested', () => {
     expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-v4-flash')
   })
+
+  it('uses ChatGPT authentication as the OpenAI smart default without an API key', async () => {
+    await writeOpenAIChatGPTCredentials({
+      version: 1,
+      accessToken: 'oauth-access',
+      refreshToken: 'oauth-refresh',
+      expiresAt: Date.now() + 60_000,
+    })
+    resetOpenAIAuthContextForTesting()
+    expect(resolveModelId()).toBe('openai:gpt-5.6-sol')
+  })
 })
 
 describe('getAvailableProviders', () => {
   beforeEach(() => {
+    isolateUserConfig()
     clearProviderEnvVars()
   })
 
   afterEach(() => {
+    delete process.env.X_CODE_HOME
     clearProviderEnvVars()
   })
 
@@ -127,6 +144,19 @@ describe('getAvailableProviders', () => {
     const providers = getAvailableProviders()
     expect(providers).toContain('anthropic')
     expect(providers).toContain('openai')
+  })
+
+  it('keeps OpenAI available through ChatGPT auth while the API key stays inactive', async () => {
+    process.env.OPENAI_API_KEY = 'platform-key'
+    await writeOpenAIChatGPTCredentials({
+      version: 1,
+      accessToken: 'oauth-access',
+      refreshToken: 'oauth-refresh',
+      expiresAt: Date.now() + 60_000,
+    })
+    resetOpenAIAuthContextForTesting()
+    expect(getAvailableProviders()).toContain('openai')
+    expect(getProviderOptions().openai).toBeUndefined()
   })
 })
 

@@ -40,10 +40,21 @@ pnpm add -g @x-code-cli/cli
 
 After installation, launch with the `xc` or `x-code` command.
 
-## Configure API Keys
+## Configure Model Access
 
-> **X-Code CLI does not bundle a free model. At least one provider API key must be configured.**
->
+For OpenAI models, you can sign in with ChatGPT to use your subscription:
+
+```bash
+xc login                    # Browser sign-in
+xc login --device-auth      # Remote or headless environment
+xc login status             # Show the active OpenAI authentication method
+xc logout                   # Sign out and remove the stored ChatGPT credentials
+```
+
+ChatGPT login and `OPENAI_API_KEY` are mutually exclusive for the `openai` provider. While ChatGPT is signed in, requests use ChatGPT subscription access; the API key is inactive and is never used as a fallback. After `xc logout`, an existing `OPENAI_API_KEY` becomes active again and its requests are billed through the OpenAI Platform account. API keys for every other provider are unaffected.
+
+Alternatively, configure at least one provider API key:
+
 > **Recommended: [DeepSeek](https://platform.deepseek.com/)** — affordable and capable enough for everyday coding. Promotional credits and prices can change; check the official console for current terms.
 
 | Variable                       | Provider           | Sign up                                                                     |
@@ -213,6 +224,9 @@ xc [options] [prompt]
 ### Non-interactive subcommands
 
 ```text
+xc login [--device-auth]           Sign in with ChatGPT
+xc login status                    Show the active OpenAI authentication method
+xc logout                          Sign out from ChatGPT
 xc plugin <subcommand>            Manage plugins (list / install / uninstall / enable / disable / search / update / info / doctor / marketplace)
 xc plugin install [--yes] <src>   Install a plugin; --yes skips confirmation
 xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add / remove / refresh / info)

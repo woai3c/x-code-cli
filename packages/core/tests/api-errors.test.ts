@@ -85,6 +85,17 @@ describe('classifyApiError', () => {
     expect(result.message).not.toContain('invalid test credential')
   })
 
+  it('uses response metadata to classify a plain ChatGPT 401', () => {
+    const error = Object.assign(new Error('Unauthorized'), {
+      statusCode: 401,
+      responseHeaders: { 'x-x-code-openai-auth-mode': 'chatgpt' },
+    })
+    const result = classifyApiError(error)
+    expect(result.message).toContain('xc login')
+    expect(result.message).not.toContain('check your API key')
+    expect(result.retryable).toBe(false)
+  })
+
   it('classifies 402 insufficient balance', () => {
     const result = classifyApiError(new Error('Insufficient Balance (402)'))
     expect(result.message).toContain('balance insufficient')
@@ -108,6 +119,31 @@ describe('classifyApiError', () => {
   it('classifies 403 forbidden', () => {
     const result = classifyApiError(new Error('Request failed with status code 403'))
     expect(result.message).toContain('forbidden')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies ChatGPT 403 as a workspace or model entitlement error', () => {
+    const error = Object.assign(new Error('Forbidden'), {
+      statusCode: 403,
+      responseHeaders: { 'x-x-code-openai-auth-mode': 'chatgpt' },
+    })
+    expect(classifyApiError(error).message).toContain('workspace or subscription')
+  })
+
+  it('classifies ChatGPT subscription usage limits as non-retryable with reset metadata', () => {
+    const error = Object.assign(new Error('usage_limit_reached'), {
+      statusCode: 402,
+      responseHeaders: {
+        'x-x-code-openai-auth-mode': 'chatgpt',
+        'x-x-code-chatgpt-usage-limit': 'true',
+        'x-codex-primary-used-percent': '100.0',
+        'x-codex-primary-reset-at': '2000000000',
+      },
+    })
+    const result = classifyApiError(error)
+    expect(result.message).toContain('ChatGPT subscription usage limit reached')
+    expect(result.message).toContain('100.0%')
+    expect(result.message).toContain('2033-05-18')
     expect(result.retryable).toBe(false)
   })
 

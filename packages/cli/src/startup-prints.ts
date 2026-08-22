@@ -20,8 +20,9 @@ export function printNoApiKeyMessage(): void {
   const comment = (s: string) => chalk.gray(s)
   const envName = (s: string) => chalk.yellow(s)
 
-  console.error(chalk.red.bold('Error: No API key found.') + '\n')
-  console.error('Set at least one provider API key via environment variable:\n')
+  console.error(chalk.red.bold('Error: No model provider configured.') + '\n')
+  console.error(`Use your ChatGPT subscription:\n\n  ${code('xc login')}\n`)
+  console.error('Or set at least one provider API key via environment variable:\n')
   for (const { envKey } of PROVIDER_DETECTION_ORDER) {
     const provider = envKey
       .replace(/_API_KEY$/, '')

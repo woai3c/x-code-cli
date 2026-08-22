@@ -16,6 +16,7 @@
 import fsSync from 'node:fs'
 import path from 'node:path'
 
+import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
 import { MODEL_ALIASES, PROVIDERS, PROVIDER_DETECTION_ORDER } from '../providers/catalog.js'
 import { userXcodeDir } from '../utils.js'
 
@@ -24,6 +25,10 @@ const ENV_MAP: Record<string, string> = Object.fromEntries(PROVIDERS.map((p) => 
 
 /** Get API key for a provider — reads from environment variables only */
 function getApiKey(provider: string): string | undefined {
+  if (provider === 'openai') {
+    const auth = getOpenAIAuthContext()
+    return auth.mode === 'api-key' ? auth.apiKey : undefined
+  }
   const envKey = ENV_MAP[provider]
   return envKey ? process.env[envKey] : undefined
 }
@@ -35,7 +40,10 @@ export function getEnvVarName(provider: string): string | undefined {
 
 /** Check which providers have API keys configured (env vars only) */
 export function getAvailableProviders(): string[] {
-  const providers = Object.keys(ENV_MAP).filter((p) => getApiKey(p))
+  const openAIAuth = getOpenAIAuthContext()
+  const providers = Object.keys(ENV_MAP).filter((provider) =>
+    provider === 'openai' ? openAIAuth.mode !== 'none' : !!getApiKey(provider),
+  )
   if (process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_BASE_URL) {
     providers.push('custom')
   }
@@ -59,7 +67,9 @@ export function resolveModelId(input?: string): string | null {
   }
 
   for (const { envKey, defaultModel } of PROVIDER_DETECTION_ORDER) {
-    if (process.env[envKey]) return defaultModel
+    if (envKey === 'OPENAI_API_KEY' ? getOpenAIAuthContext().mode !== 'none' : !!process.env[envKey]) {
+      return defaultModel
+    }
   }
 
   return null

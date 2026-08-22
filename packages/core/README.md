@@ -8,7 +8,7 @@
 
 > ⚠️ 公共 API 尚未稳定，小版本之间可能会有破坏性变更。如果你只是想使用 CLI，请直接安装 [`@x-code-cli/cli`](https://www.npmjs.com/package/@x-code-cli/cli)。
 
-完整的安装说明、API Key 配置、使用方式请看 [主仓库 README](https://github.com/woai3c/x-code-cli)。
+完整的安装说明、ChatGPT 登录与 API Key 配置、使用方式请看 [主仓库 README](https://github.com/woai3c/x-code-cli)。
 
 ## License
 

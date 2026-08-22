@@ -17,6 +17,7 @@ export interface AcquireFileLockOptions {
   retryMs?: number
   /** When given, a wait timeout throws this message instead of returning null. */
   timeoutError?: string
+  signal?: AbortSignal
 }
 
 interface OwnerMetadata {
@@ -82,6 +83,21 @@ async function openLockFile(lockPath: string): Promise<{
   }
 }
 
+async function retryDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw signal.reason ?? new Error('File lock acquisition aborted')
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason ?? new Error('File lock acquisition aborted'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export async function acquireFileLock(
   lockPath: string,
   options: AcquireFileLockOptions = {},
@@ -90,6 +106,7 @@ export async function acquireFileLock(
   const retryMs = options.retryMs ?? 25
   const deadline = Date.now() + (options.waitMs ?? 0)
   while (true) {
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error('File lock acquisition aborted')
     let opened: Awaited<ReturnType<typeof openLockFile>>
     try {
       opened = await openLockFile(lockPath)
@@ -110,7 +127,7 @@ export async function acquireFileLock(
           if (options.timeoutError) throw new Error(options.timeoutError)
           return null
         }
-        await new Promise((resolve) => setTimeout(resolve, retryMs))
+        await retryDelay(retryMs, options.signal)
         continue
       }
       await handle.truncate(0)
@@ -135,7 +152,7 @@ export async function acquireFileLock(
         if (options.timeoutError) throw new Error(options.timeoutError)
         return null
       }
-      await new Promise((resolve) => setTimeout(resolve, retryMs))
+      await retryDelay(retryMs, options.signal)
     }
   }
 }

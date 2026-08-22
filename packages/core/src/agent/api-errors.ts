@@ -1,4 +1,8 @@
 // @x-code-cli/core — API error classification & pattern detection
+import {
+  OPENAI_CHATGPT_AUTH_RESPONSE_HEADER,
+  OPENAI_CHATGPT_USAGE_LIMIT_HEADER,
+} from '../providers/openai-chatgpt-fetch.js'
 import { errorMessage } from '../utils.js'
 
 /** Substrings that signal the request exceeded the model's context window. */
@@ -234,10 +238,78 @@ function extractErrorMessage(err: unknown): string {
   return msg
 }
 
+function errorComesFromChatGPTAuth(err: unknown, message: string, depth = 0): boolean {
+  if (/chatgpt|backend-api\/codex/i.test(message)) return true
+  if (!err || typeof err !== 'object' || depth > 3) return false
+  const record = err as Record<string, unknown>
+  if (extractResponseHeader(record, OPENAI_CHATGPT_AUTH_RESPONSE_HEADER) === 'chatgpt') return true
+  if (typeof record.url === 'string' && record.url.includes('chatgpt.com/backend-api/codex')) return true
+  if (Array.isArray(record.errors)) {
+    if (record.errors.some((item) => errorComesFromChatGPTAuth(item, '', depth + 1))) return true
+  }
+  return (
+    errorComesFromChatGPTAuth(record.lastError, '', depth + 1) || errorComesFromChatGPTAuth(record.cause, '', depth + 1)
+  )
+}
+
+function isChatGPTLoginRequiredError(err: unknown, depth = 0): boolean {
+  if (!err || typeof err !== 'object' || depth > 3) return false
+  const record = err as Record<string, unknown>
+  if (record.name === 'OpenAIChatGPTAuthError' && record.code === 'login-required') return true
+  if (Array.isArray(record.errors) && record.errors.some((item) => isChatGPTLoginRequiredError(item, depth + 1))) {
+    return true
+  }
+  return (
+    isChatGPTLoginRequiredError(record.lastError, depth + 1) || isChatGPTLoginRequiredError(record.cause, depth + 1)
+  )
+}
+
+function extractResponseHeader(err: unknown, name: string, depth = 0): string | undefined {
+  if (!err || typeof err !== 'object' || depth > 3) return undefined
+  const record = err as Record<string, unknown>
+  for (const key of ['responseHeaders', 'headers']) {
+    const headers = record[key]
+    if (headers instanceof Headers) {
+      const value = headers.get(name)
+      if (value) return value
+    } else if (headers && typeof headers === 'object') {
+      for (const [headerName, value] of Object.entries(headers as Record<string, unknown>)) {
+        if (headerName.toLowerCase() === name.toLowerCase() && typeof value === 'string') return value
+      }
+    }
+  }
+  if (Array.isArray(record.errors)) {
+    for (const item of record.errors) {
+      const value = extractResponseHeader(item, name, depth + 1)
+      if (value) return value
+    }
+  }
+  return (
+    extractResponseHeader(record.lastError, name, depth + 1) ?? extractResponseHeader(record.cause, name, depth + 1)
+  )
+}
+
+function isChatGPTUsageLimitError(err: unknown, message: string): boolean {
+  if (extractResponseHeader(err, OPENAI_CHATGPT_USAGE_LIMIT_HEADER) === 'true') return true
+  return /usage_limit_reached|workspace_(?:owner|member)_usage_limit_reached/i.test(message)
+}
+
+function chatGPTUsageLimitMessage(err: unknown): string {
+  const usedPercent = extractResponseHeader(err, 'x-codex-primary-used-percent')
+  const resetAt = Number(extractResponseHeader(err, 'x-codex-primary-reset-at'))
+  const retryAfter = Number(extractResponseHeader(err, 'retry-after'))
+  const details: string[] = []
+  if (usedPercent && Number.isFinite(Number(usedPercent))) details.push(`Current window used: ${usedPercent}%`)
+  if (Number.isFinite(resetAt) && resetAt > 0) details.push(`resets at ${new Date(resetAt * 1000).toISOString()}`)
+  else if (Number.isFinite(retryAfter) && retryAfter > 0) details.push(`retry after ${Math.ceil(retryAfter)} seconds`)
+  return `ChatGPT subscription usage limit reached${details.length ? ` (${details.join(', ')})` : ''}.`
+}
+
 /** Classify API error and return a user-friendly recovery message. */
 export function classifyApiError(err: unknown): ClassifiedError {
   const msg = extractErrorMessage(err)
   const status = extractErrorStatus(err) || extractHttpStatus(msg)
+  const chatGPTAuth = errorComesFromChatGPTAuth(err, msg)
 
   if (isContextTooLongError(err)) {
     return {
@@ -260,9 +332,24 @@ export function classifyApiError(err: unknown): ClassifiedError {
       retryable: false,
     }
   }
+  if (isChatGPTLoginRequiredError(err)) {
+    return {
+      message:
+        'ChatGPT sign-in expired or was revoked. Run `xc login` again, or `xc logout` to return to OpenAI API key authentication.',
+      retryable: false,
+    }
+  }
   if (isUnauthorizedError(msg, status)) {
     return {
-      message: 'API authentication failed (401). Please check your API key with /model or reconfigure with `xc init`.',
+      message: chatGPTAuth
+        ? 'ChatGPT authentication failed (401). Run `xc login` again, or `xc logout` to return to OpenAI API key authentication.'
+        : 'API authentication failed (401). Please check your API key with /model or reconfigure with `xc init`.',
+      retryable: false,
+    }
+  }
+  if (chatGPTAuth && isChatGPTUsageLimitError(err, msg)) {
+    return {
+      message: chatGPTUsageLimitMessage(err),
       retryable: false,
     }
   }
@@ -275,14 +362,17 @@ export function classifyApiError(err: unknown): ClassifiedError {
   }
   if (isForbiddenError(msg, status)) {
     return {
-      message: 'API access forbidden (403). Your API key may not have permission for this model.',
+      message: chatGPTAuth
+        ? 'ChatGPT access forbidden (403). The signed-in workspace or subscription does not allow this model.'
+        : 'API access forbidden (403). Your API key may not have permission for this model.',
       retryable: false,
     }
   }
   if (isModelNotFoundError(msg, status)) {
     return {
-      message:
-        'Model not found (404). The id may be wrong, deprecated, or not enabled for your account. Switch with /model.',
+      message: chatGPTAuth
+        ? 'ChatGPT model unavailable (404). The subscription model catalog was refreshed; switch with /model.'
+        : 'Model not found (404). The id may be wrong, deprecated, or not enabled for your account. Switch with /model.',
       retryable: false,
     }
   }

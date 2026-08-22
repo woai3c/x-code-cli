@@ -7,18 +7,20 @@ import { useApp } from 'ink'
 
 import {
   PROVIDER_BASE_URLS,
-  PROVIDER_MODELS,
-  PROVIDER_REASONING_TIERS,
   createModelRegistry,
   errorMessage,
   estimateTokenCount,
   getAvailableProviders,
   getContextWindow,
+  getOpenAIAuthStatus,
+  getProviderModels,
+  getReasoningTierOptions,
   listSessions,
   loadSession,
   loadUserConfig,
   pickLatestSession,
   providerOf,
+  refreshOpenAIChatGPTModels,
   resolveModelId,
   saveUserConfig,
   supportsReasoningTier,
@@ -29,6 +31,7 @@ import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-
 
 import type { CliCleanupController } from '../../cleanup-controller.js'
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
+import { VERSION } from '../../version.js'
 import { visibleBackgroundTerminals } from '../agent/shell-session-ui.js'
 import { useAgent } from '../agent/use-agent.js'
 import { usePeerInboxAdapter } from '../agent/use-peer-inbox-adapter.js'
@@ -719,7 +722,7 @@ export function App({
 
   /** Look up a human-friendly label for a model id; falls back to the raw id. */
   function renderModelLabel(modelId: string): string {
-    for (const models of Object.values(PROVIDER_MODELS)) {
+    for (const models of Object.values(getProviderModels())) {
       for (const m of models) if (m.id === modelId) return m.label
     }
     return modelId
@@ -734,8 +737,7 @@ export function App({
     if (!supportsReasoningTier(modelId)) return null
     const effort = loadUserConfig().modelReasoningEffort?.[modelId]
     if (!effort) return null
-    const tier = PROVIDER_REASONING_TIERS[providerOf(modelId)]
-    return tier?.options.find((o) => o.value === effort)?.label ?? effort
+    return getReasoningTierOptions(modelId)?.find((option) => option.value === effort)?.label ?? effort
   }
 
   /**
@@ -744,6 +746,14 @@ export function App({
    * reference, persist to the user config, and echo a confirmation message.
    */
   function commitModelChange(commandText: string, newModelId: string) {
+    if (
+      getOpenAIAuthStatus().mode === 'chatgpt' &&
+      newModelId.startsWith('openai:') &&
+      !(getProviderModels().openai ?? []).some((model) => model.id === newModelId)
+    ) {
+      addCommandMessage(commandText, `${newModelId} is not available for the signed-in ChatGPT account.`)
+      return
+    }
     try {
       const registry = createModelRegistry()
       const newModel = registry.languageModel(newModelId as `${string}:${string}`)
@@ -757,9 +767,13 @@ export function App({
   }
 
   async function handleModelSwitch(commandText: string, arg: string) {
+    const requestedModel = arg ? resolveModelId(arg) : undefined
+    if (getOpenAIAuthStatus().mode === 'chatgpt' && (!requestedModel || requestedModel.startsWith('openai:'))) {
+      await refreshOpenAIChatGPTModels(VERSION, { signal: AbortSignal.timeout(8_000) })
+    }
     // With an explicit arg: keep the old scriptable path (alias or full id).
     if (arg) {
-      const newModelId = resolveModelId(arg)
+      const newModelId = requestedModel
       if (!newModelId) {
         addCommandMessage(commandText, `Could not resolve model: ${arg}`)
         return
@@ -768,11 +782,11 @@ export function App({
       return
     }
 
-    // No arg → interactive picker. Enumerate models whose provider has a
-    // configured API key so the list is actionable, not aspirational.
+    // No arg → interactive picker. Enumerate models whose provider has an
+    // active authentication method so the list is actionable, not aspirational.
     const availableProviders = new Set(getAvailableProviders())
     const choices: { id: string; label: string; description: string }[] = []
-    for (const [provider, models] of Object.entries(PROVIDER_MODELS)) {
+    for (const [provider, models] of Object.entries(getProviderModels())) {
       if (!availableProviders.has(provider)) continue
       for (const m of models) {
         const marker = m.id === state.modelId ? `${GLYPH_BULLET} ` : '  '
@@ -783,7 +797,7 @@ export function App({
     if (choices.length === 0) {
       addCommandMessage(
         commandText,
-        'No models available — set an API key (e.g. `ANTHROPIC_API_KEY`, `ALIBABA_API_KEY`) and restart.',
+        'No models available — run `xc login` for ChatGPT or configure a provider API key, then restart.',
       )
       return
     }
@@ -841,14 +855,14 @@ export function App({
     // Only for models that actually honor a tier (e.g. thinkingLevel is
     // Gemini 3-only, Kimi reasoningEffort is K3-only); others keep the
     // binary /thinking toggle as their only knob.
-    const tierConfig = supportsReasoningTier(modelId) ? PROVIDER_REASONING_TIERS[modelProvider] : undefined
-    if (tierConfig) {
+    const tierOptions = getReasoningTierOptions(modelId)
+    if (tierOptions?.length) {
       const tierAnswer = await askQuestion(
         `Reasoning effort for ${renderModelLabel(modelId)}:`,
-        tierConfig.options.map((o) => ({ label: o.label, description: o.description })),
+        tierOptions.map((option) => ({ label: option.label, description: option.description })),
         { noOther: true },
       )
-      const chosen = tierConfig.options.find((o) => o.label === tierAnswer)
+      const chosen = tierOptions.find((option) => option.label === tierAnswer)
       if (chosen) {
         const prev = loadUserConfig().modelReasoningEffort ?? {}
         saveUserConfig({ modelReasoningEffort: { ...prev, [modelId]: chosen.value } })

@@ -8,7 +8,9 @@
 // Provider capabilities describe the wire API. modelSupportsVision applies
 // the curated per-model flag on top, so text-only Qwen/GLM variants still
 // downgrade images even though their provider accepts multimodal content.
-import { MODEL_ALIASES, PROVIDER_MODELS } from './catalog.js'
+import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
+import { MODEL_ALIASES } from './catalog.js'
+import { getOpenAIChatGPTRuntimeModel, getProviderModels } from './openai-chatgpt-models.js'
 
 export interface ProviderCapabilities {
   /** Provider can receive inline image parts (base64 or URL) in user messages. */
@@ -122,7 +124,10 @@ export function capabilitiesOf(modelId: string): ProviderCapabilities {
  *  we don't block a vision model just because it isn't listed. */
 export function modelSupportsVision(modelId: string): boolean {
   const resolved = MODEL_ALIASES[modelId] ?? modelId
-  for (const models of Object.values(PROVIDER_MODELS)) {
+  if (getOpenAIAuthContext().mode === 'chatgpt' && resolved.startsWith('openai:')) {
+    return getOpenAIChatGPTRuntimeModel(resolved)?.vision ?? false
+  }
+  for (const models of Object.values(getProviderModels())) {
     for (const m of models) {
       if (m.id === resolved) return m.vision
     }

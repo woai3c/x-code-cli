@@ -4,7 +4,7 @@
 // availability, MCP server health, plugin load errors, custom agent parse
 // state, and knowledge file sizes. Modelled after Claude Code's /doctor
 // but scoped to what x-code-cli actually needs.
-import { getAvailableProviders, getEnvVarName } from '@x-code-cli/core'
+import { getAvailableProviders, getEnvVarName, getOpenAIAuthStatus } from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
 
 import { VERSION } from '../../../version.js'
@@ -41,13 +41,20 @@ export function createDoctorCommandHandler(deps: DoctorCommandDeps) {
       sections.push(lines.join('\n'))
     }
 
-    // ── API Keys ───────────────────────────────────────────────────────
+    // ── Providers ──────────────────────────────────────────────────────
     {
       const available = new Set(getAvailableProviders())
-      const lines = ['**API Keys**', '']
+      const openAIAuth = getOpenAIAuthStatus()
+      const lines = ['**Providers**', '']
       for (const p of ALL_PROVIDERS) {
         const envVar = getEnvVarName(p)
         const ok = available.has(p)
+        if (p === 'openai' && openAIAuth.mode === 'chatgpt') {
+          const suffix = openAIAuth.apiKeyConfigured ? '; OPENAI_API_KEY inactive' : ''
+          lines.push(`- openai: ✓ ChatGPT subscription${suffix}`)
+          if (openAIAuth.credentialError) lines.push(`  ⚠ ${openAIAuth.credentialError}`)
+          continue
+        }
         lines.push(`- ${p}: ${ok ? '✓' : `✗  (set \`${envVar}\`)`}`)
       }
       // Custom provider
@@ -57,7 +64,7 @@ export function createDoctorCommandHandler(deps: DoctorCommandDeps) {
       }
       const configuredCount = available.size
       if (configuredCount === 0) {
-        lines.push('', '⚠ No provider configured. Set at least one API key to use the CLI.')
+        lines.push('', '⚠ No provider configured. Run `xc login` or set a provider API key.')
       }
       sections.push(lines.join('\n'))
     }

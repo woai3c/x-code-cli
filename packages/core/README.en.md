@@ -8,7 +8,7 @@ This package is the headless runtime consumed by `@x-code-cli/cli` — agent loo
 
 > ⚠️ The public API is not yet stable — breaking changes may happen between minor versions. If you just want the CLI, install [`@x-code-cli/cli`](https://www.npmjs.com/package/@x-code-cli/cli) directly.
 
-For full installation, API key setup, and usage, see the [main repo README](https://github.com/woai3c/x-code-cli).
+For full installation, ChatGPT sign-in, API key setup, and usage, see the [main repo README](https://github.com/woai3c/x-code-cli).
 
 ## License
 
