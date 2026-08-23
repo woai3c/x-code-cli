@@ -34,6 +34,7 @@ import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions, MessageProvenance, PeerOrigin, QueuedAgentInput } from '../types/index.js'
 import { debugLog, errorMessage, isAbortError } from '../utils.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
+import { markExpectedCacheMiss } from './cache-stats.js'
 import { checkAndCompressContext, handleContextTooLong } from './compression.js'
 import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
 import { createLoopState } from './loop-state.js'
@@ -401,7 +402,10 @@ async function runTurnAttempt(
   // pairing and reject the whole request with confusing errors like
   // "tool must be a response to a preceding message with tool_calls".
   // Idempotent — running every turn is cheap and bulletproof.
+  const entriesBeforeRepair = [...state.trackedMessages]
   let transcriptChanged = repairOrphanTrackedToolCalls(state.trackedMessages)
+  let cachePrefixRewritten =
+    transcriptChanged && entriesBeforeRepair.some((entry, index) => state.trackedMessages[index] !== entry)
 
   // Browser sub-agents keep only their latest snapshot/screenshot. The root
   // visual-check image is even shorter-lived: once a later assistant message
@@ -410,13 +414,17 @@ async function runTurnAttempt(
     ? options.collapseStaleToolResults
     : [...new Set([...(options.collapseStaleToolResults ?? []), BROWSER_VISUAL_CHECK_TOOL_NAME])]
   if (collapsibleToolResults?.length) {
-    transcriptChanged = collapseStaleToolResults(state.messages, collapsibleToolResults) || transcriptChanged
+    const collapsed = collapseStaleToolResults(state.messages, collapsibleToolResults)
+    transcriptChanged = collapsed || transcriptChanged
+    cachePrefixRewritten ||= collapsed
   }
   if (!options.toolFilter) {
-    transcriptChanged =
-      collapseConsumedToolResults(state.messages, [BROWSER_VISUAL_CHECK_TOOL_NAME]) || transcriptChanged
+    const collapsed = collapseConsumedToolResults(state.messages, [BROWSER_VISUAL_CHECK_TOOL_NAME])
+    transcriptChanged = collapsed || transcriptChanged
+    cachePrefixRewritten ||= collapsed
   }
   if (transcriptChanged) {
+    if (cachePrefixRewritten) markExpectedCacheMiss(state, 'transcript-rewrite')
     recalculateContextSecurity(state)
     state.transcriptRequiresSnapshot = true
     await flushPendingMessages(state)
@@ -464,6 +472,7 @@ async function runTurnAttempt(
   const requestHeaders =
     options.modelId.split(':')[0] === 'zhipu' ? withZhipuReasoningHeader(cached.headers, effort) : cached.headers
 
+  const requestTimestamp = new Date().toISOString()
   let result: StreamResult
   try {
     result = streamText({
@@ -574,6 +583,7 @@ async function runTurnAttempt(
       turnMessages,
       recoveryText,
       tracker.suppressedReplay,
+      requestTimestamp,
     )
     debugLog(
       'turn.finish',

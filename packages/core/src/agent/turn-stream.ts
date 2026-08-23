@@ -145,6 +145,7 @@ export async function collectTurnResponse(
   turnMessages: ModelMessage[],
   recoveredText: string,
   suppressedReplay: boolean,
+  requestTimestamp: string,
 ): Promise<string> {
   const response = await result.response
   if (!suppressedReplay) prependRecoveredText(response.messages, recoveredText)
@@ -170,6 +171,7 @@ export async function collectTurnResponse(
       usage: raw,
       normalized,
       expectedMissReasons,
+      timestamp: requestTimestamp,
     })
     const cacheMiss = appendProviderTurnUsage(state, turnUsage)
     if (cacheMiss && !cacheMiss.expected) {

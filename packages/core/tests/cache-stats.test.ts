@@ -58,7 +58,7 @@ describe('cache miss estimation', () => {
     })
   })
 
-  it.each(['compaction', 'tool-activation', 'permission-mode-change'] as const)(
+  it.each(['compaction', 'tool-activation', 'permission-mode-change', 'transcript-rewrite'] as const)(
     'marks %s misses as expected',
     (reason) => {
       const previous = turn({ input: 8_000, cacheRead: 6_000 })
@@ -81,12 +81,20 @@ describe('cache miss estimation', () => {
     expect(estimateCacheMiss(previous, turn({ input: 8_500, cacheRead: 7_500 }))).toBeUndefined()
   })
 
-  it('records idle duration and only labels TTL expiry for a known provider', () => {
+  it('records idle duration and labels TTL expiry for known ephemeral-cache providers', () => {
     const start = '2026-08-07T00:00:00.000Z'
     const end = '2026-08-07T00:06:00.000Z'
     const anthropic = estimateCacheMiss(
       turn({ modelId: 'anthropic:test', input: 8_000, cacheRead: 6_000, timestamp: start }),
       turn({ modelId: 'anthropic:test', input: 9_000, cacheRead: 0, timestamp: end }),
+    )
+    const alibaba = estimateCacheMiss(
+      turn({ modelId: 'alibaba:test', input: 8_000, cacheRead: 6_000, timestamp: start }),
+      turn({ modelId: 'alibaba:test', input: 9_000, cacheRead: 0, timestamp: end }),
+    )
+    const switchedToAlibaba = estimateCacheMiss(
+      turn({ modelId: 'openai:test', input: 8_000, cacheRead: 6_000, timestamp: start }),
+      turn({ modelId: 'alibaba:test', input: 9_000, cacheRead: 0, timestamp: end }),
     )
     const custom = estimateCacheMiss(
       turn({ modelId: 'custom:test', input: 8_000, cacheRead: 6_000, timestamp: start }),
@@ -98,6 +106,18 @@ describe('cache miss estimation', () => {
       probableTtlExpiry: true,
       expected: true,
       reasons: ['ttl-expiry'],
+    })
+    expect(alibaba).toMatchObject({
+      idleMs: 360_000,
+      probableTtlExpiry: true,
+      expected: true,
+      reasons: ['ttl-expiry'],
+    })
+    expect(switchedToAlibaba).toMatchObject({
+      idleMs: 360_000,
+      probableTtlExpiry: false,
+      expected: true,
+      reasons: ['model-change'],
     })
     expect(custom).toMatchObject({ idleMs: 360_000, probableTtlExpiry: false, expected: false, reasons: [] })
 

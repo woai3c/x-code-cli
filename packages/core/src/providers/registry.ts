@@ -13,6 +13,7 @@ import { getOpenAIAuthSnapshot, refreshOpenAIAuthSnapshot } from '../auth/openai
 import type { OpenAIAuthSnapshot } from '../auth/openai-chatgpt/auth-resolver.js'
 import { getOpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
 import { getProviderOptions, loadUserConfig } from '../config/index.js'
+import { XAI_PROMPT_CACHE_KEY_HEADER } from './cache-control.js'
 import { createOpenAIChatGPTFetch } from './openai-chatgpt-fetch.js'
 
 const KIMI_CODING_MODEL_IDS = {
@@ -66,7 +67,7 @@ export function createModelRegistry() {
     })
   }
   if (opts.google) providers.google = createGoogle({ fetch: permanentErrorFetch })
-  if (opts.xai) providers.xai = createXai({ fetch: permanentErrorFetch })
+  if (opts.xai) providers.xai = createXai({ fetch: xaiPromptCacheFetch })
   if (opts.deepseek) providers.deepseek = createDeepSeek({ fetch: permanentErrorFetch })
   if (opts.alibaba) {
     providers.alibaba = createAlibaba({
@@ -197,11 +198,41 @@ export function withZhipuReasoningHeader(
   return { ...headers, [ZHIPU_REASONING_HEADER]: effort ?? '' }
 }
 
-/**
- * Inject `reasoning_effort` into Zhipu requests. Zhipu goes through
- * @ai-sdk/openai-compatible which doesn't auto-translate the SDK's
- * top-level `reasoning` parameter. We intercept the HTTP body and add it.
- */
+/** Move x-code's per-session affinity hint to the wire location required by
+ * xAI's selected transport. The AI SDK does not currently expose the Responses
+ * `prompt_cache_key` option, so the normal provider-options path cannot do this. */
+const xaiPromptCacheFetch: typeof fetch = async (input, init) => {
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+  const promptCacheKey = headers.get(XAI_PROMPT_CACHE_KEY_HEADER)
+  headers.delete(XAI_PROMPT_CACHE_KEY_HEADER)
+  const sanitizedInit = { ...init, headers }
+  if (!promptCacheKey) return permanentErrorFetch(input, sanitizedInit)
+
+  const url = input instanceof URL ? input : new URL(typeof input === 'string' ? input : input.url)
+  if (url.pathname.endsWith('/chat/completions')) {
+    headers.set('x-grok-conv-id', promptCacheKey)
+    return permanentErrorFetch(input, sanitizedInit)
+  }
+  if (!url.pathname.endsWith('/responses')) return permanentErrorFetch(input, sanitizedInit)
+
+  const rawBody = init?.body ?? (input instanceof Request ? await input.clone().text() : undefined)
+  if (typeof rawBody !== 'string') return permanentErrorFetch(input, sanitizedInit)
+  try {
+    const parsed = JSON.parse(rawBody) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return permanentErrorFetch(input, sanitizedInit)
+    }
+    const body = parsed as Record<string, unknown>
+    if (!body.prompt_cache_key) body.prompt_cache_key = promptCacheKey
+    return permanentErrorFetch(input, { ...sanitizedInit, body: JSON.stringify(body) })
+  } catch {
+    return permanentErrorFetch(input, sanitizedInit)
+  }
+}
+
+/** Inject `reasoning_effort` into Zhipu requests. Zhipu goes through
+ * @ai-sdk/openai-compatible which doesn't auto-translate the SDK's top-level
+ * `reasoning` parameter, so the fetch shim adds it to the HTTP body. */
 const zhipuReasoningFetch: typeof fetch = async (input, init) => {
   const headers = new Headers(init?.headers)
   const hasRequestEffort = headers.has(ZHIPU_REASONING_HEADER)

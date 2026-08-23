@@ -15,21 +15,20 @@
 //                 turn and runs into the thousands of tokens once the
 //                 full tool set is registered.
 //
-//   OpenAI      — automatic prefix caching, but setting `promptCacheKey`
-//                 (routes identical keys to the same cache shard) and `store`
-//                 (retains the call for later fetching) improves hit rates.
-//                 We send the sessionId as the key so every turn in a
-//                 conversation maps to the same shard.
+//   OpenAI      — automatic prefix caching, with `promptCacheKey` routing
+//                 identical keys to the same cache shard. We send the sessionId
+//                 as the key so every turn in a conversation maps to the same
+//                 shard. `store: false` independently disables response storage.
 //
 //   Moonshot    — automatic prefix caching + `prompt_cache_key: sessionId`
 //                 for session affinity (requests of one session hit the same
 //                 server-side cache shard), plus the byte-stable prefix below.
 //
-//   xAI         — automatic prefix caching. Chat Completions API uses the
-//                 `x-grok-conv-id` HTTP header to route requests with the
-//                 same conversation ID to the same server, maximizing cache
-//                 hits. Responses API uses `prompt_cache_key` in the body
-//                 instead. We use Chat Completions, so we send the header.
+//   xAI         — automatic prefix caching. The default AI SDK model uses the
+//                 Responses API, which requires `prompt_cache_key` in the body.
+//                 The SDK does not expose that option, so an internal header
+//                 carries the sessionId to the registry fetch adapter. The
+//                 adapter consumes it before sending the request.
 //
 //   Alibaba     — supports both implicit caching (automatic 80% discount,
 //                 no flags needed) and explicit caching via `cache_control:
@@ -57,6 +56,8 @@ import { providerOf } from './capabilities.js'
  *  breakpoint costs a cache-write against a region (the just-before-last
  *  message) that's about to be evicted anyway. */
 const MESSAGE_CACHE_BREAKPOINTS = 2
+
+export const XAI_PROMPT_CACHE_KEY_HEADER = 'x-x-code-prompt-cache-key'
 
 export interface CacheControlArgs {
   /** Instructions (system prompt) string. May be wrapped into a system-role
@@ -90,7 +91,7 @@ export interface CacheControlResult {
   tools?: Record<string, any>
   /** Top-level providerOptions to pass through to streamText. */
   providerOptions?: Record<string, unknown>
-  /** HTTP headers to pass through to streamText (e.g. xAI's x-grok-conv-id). */
+  /** HTTP headers to pass through to streamText, including internal fetch-adapter hints. */
   headers?: Record<string, string>
 }
 
@@ -183,16 +184,13 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
   }
 
   if (provider === 'xai') {
-    // xAI Chat Completions API uses the `x-grok-conv-id` HTTP header for
-    // sticky routing — requests with the same conv-id hit the same server
-    // where their cache entries live. Without it, requests may land on
-    // cache-cold servers. We use sessionId as the conv-id so every turn
-    // in a conversation routes to the same cache shard.
+    // The provider registry consumes this internal header and moves the key to
+    // the transport-specific location without leaking the header upstream.
     return {
       instructions: args.instructions,
       messages: args.messages,
       tools: args.tools,
-      headers: { 'x-grok-conv-id': args.sessionId },
+      headers: { [XAI_PROMPT_CACHE_KEY_HEADER]: args.sessionId },
     }
   }
 

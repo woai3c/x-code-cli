@@ -9,6 +9,7 @@ export type CacheMissReason =
   | 'tool-surface-change'
   | 'memory-context-change'
   | 'goal-change'
+  | 'transcript-rewrite'
   | 'ttl-expiry'
   | 'other'
 
@@ -117,7 +118,7 @@ export function createProviderTurnUsage(options: {
 }
 
 function cacheTtlMs(modelId: string): number | null {
-  return modelId.startsWith('anthropic:') ? 5 * 60 * 1000 : null
+  return modelId.startsWith('anthropic:') || modelId.startsWith('alibaba:') ? 5 * 60 * 1000 : null
 }
 
 export function estimateCacheMiss(
@@ -134,7 +135,7 @@ export function estimateCacheMiss(
   const reasons = [...current.expectedMissReasons]
   if (previous.modelId !== current.modelId && !reasons.includes('model-change')) reasons.push('model-change')
   const idleMs = Math.max(0, Date.parse(current.timestamp) - Date.parse(previous.timestamp))
-  const ttl = cacheTtlMs(current.modelId)
+  const ttl = previous.modelId === current.modelId ? cacheTtlMs(current.modelId) : null
   const probableTtlExpiry = ttl !== null && idleMs >= ttl
   if (probableTtlExpiry && !reasons.includes('ttl-expiry')) reasons.push('ttl-expiry')
   return {

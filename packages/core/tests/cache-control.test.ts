@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { applyCacheControl } from '../src/providers/cache-control.js'
+import { XAI_PROMPT_CACHE_KEY_HEADER, applyCacheControl } from '../src/providers/cache-control.js'
 
 function msg(role: 'user' | 'assistant', text: string): ModelMessage {
   return { role, content: text } as ModelMessage
@@ -215,14 +215,14 @@ describe('applyCacheControl', () => {
   })
 
   describe('xai', () => {
-    it('sends x-grok-conv-id header with sessionId', () => {
+    it('stages the Responses prompt cache key for the registry fetch adapter', () => {
       const out = applyCacheControl({
         instructions: 'sys',
         messages: baseMessages,
         modelId: 'xai:grok-4.5',
         sessionId: 'session-xyz',
       })
-      expect(out.headers).toEqual({ 'x-grok-conv-id': 'session-xyz' })
+      expect(out.headers).toEqual({ [XAI_PROMPT_CACHE_KEY_HEADER]: 'session-xyz' })
     })
 
     it('keeps system prompt, messages and tools untouched', () => {

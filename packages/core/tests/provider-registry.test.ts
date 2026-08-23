@@ -17,6 +17,7 @@ import {
 } from '../src/auth/openai-chatgpt/auth-resolver.js'
 import { writeOpenAIChatGPTCredentials } from '../src/auth/openai-chatgpt/credential-store.js'
 import { getProviderOptions, saveUserConfig } from '../src/config/index.js'
+import { XAI_PROMPT_CACHE_KEY_HEADER, applyCacheControl } from '../src/providers/cache-control.js'
 import { createModelRegistry, kimiCodingModelId } from '../src/providers/registry.js'
 
 function sseResponse(events: unknown[]): Response {
@@ -32,6 +33,7 @@ describe('Kimi endpoint model ids', () => {
     testHome = path.join(os.tmpdir(), `x-code-provider-registry-${Math.random().toString(36).slice(2)}`)
     process.env.X_CODE_HOME = testHome
     process.env.MOONSHOT_API_KEY = 'test-key'
+    process.env.XAI_API_KEY = 'test-key'
   })
 
   afterEach(() => {
@@ -40,6 +42,7 @@ describe('Kimi endpoint model ids', () => {
     delete process.env.X_CODE_HOME
     delete process.env.MOONSHOT_API_KEY
     delete process.env.OPENAI_API_KEY
+    delete process.env.XAI_API_KEY
     fs.rmSync(testHome, { recursive: true, force: true })
   })
 
@@ -62,6 +65,44 @@ describe('Kimi endpoint model ids', () => {
     registry = createModelRegistry()
     expect(registry.languageModel('moonshotai:kimi-k3').modelId).toBe('kimi-k3')
     expect(registry.languageModel('moonshotai:kimi-k2.7-code').modelId).toBe('kimi-k2.7-code')
+  })
+
+  it('moves xAI session affinity into the Responses prompt_cache_key body field', async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ error: { message: 'test stop' } }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const cache = applyCacheControl({
+      instructions: 'stable instructions',
+      messages: [{ role: 'user', content: 'hello' }],
+      modelId: 'xai:grok-4.5',
+      sessionId: 'session-1',
+    })
+    const result = streamText({
+      model: createModelRegistry().languageModel('xai:grok-4.5'),
+      instructions: cache.instructions,
+      messages: cache.messages,
+      headers: cache.headers,
+      abortSignal: controller.signal,
+      onError: () => undefined,
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://api.x.ai/v1/responses')
+    expect(JSON.parse(String(init?.body))).toMatchObject({ prompt_cache_key: 'session-1' })
+    const headers = new Headers(init?.headers)
+    expect(headers.get(XAI_PROMPT_CACHE_KEY_HEADER)).toBeNull()
+    expect(headers.get('x-grok-conv-id')).toBeNull()
+    expect(init?.signal).toBe(controller.signal)
   })
 
   it('registers one OpenAI provider with ChatGPT auth and keeps OPENAI_API_KEY out of the request', async () => {

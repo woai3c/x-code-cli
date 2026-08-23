@@ -724,6 +724,66 @@ describe('agent loop', () => {
     ).toBe(false)
   })
 
+  it('marks cache misses caused by consumed visual-result rewriting as expected', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'continued' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'continued' }] }),
+      usage: Promise.resolve({
+        inputTokens: 5_000,
+        outputTokens: 20,
+        inputTokenDetails: { cacheReadTokens: 0, cacheWriteTokens: 5_000 },
+      }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const initialState = createLoopState()
+    initialState.messages = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'visual-1',
+            toolName: 'browserVisualCheck',
+            input: { url: 'http://localhost:3000' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'visual-1',
+            toolName: 'browserVisualCheck',
+            output: {
+              type: 'content',
+              value: [{ type: 'media', data: 'AAAA', mediaType: 'image/jpeg' }],
+            },
+          },
+        ],
+      },
+      { role: 'assistant', content: 'The visual result has been inspected.' },
+    ] as any
+
+    const { state } = await agentLoop(
+      'Continue after the visual check',
+      {} as any,
+      { modelId: 'openai:gpt-5.6-sol', trustMode: false, maxTurns: 1, printMode: false },
+      mockCallbacks,
+      initialState,
+    )
+
+    expect(state.providerTurns).toHaveLength(1)
+    expect(state.providerTurns[0]?.expectedMissReasons).toContain('transcript-rewrite')
+    expect(JSON.stringify(vi.mocked(streamText).mock.calls[0]?.[0].messages)).not.toContain('AAAA')
+  })
+
   it('streams text from LLM and collects usage', async () => {
     const mockChunks = [
       { type: 'text-delta', text: 'Hello' },
