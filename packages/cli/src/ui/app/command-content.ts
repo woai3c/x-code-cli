@@ -6,9 +6,15 @@ import type { SlashCommand } from '../chat-input/types.js'
 export const SLASH_COMMANDS = [
   { name: '/help', description: 'Show this help message' },
   {
+    name: '/login',
+    description: 'Sign in with a ChatGPT subscription',
+    argumentHint: '[--device-auth|status]',
+  },
+  { name: '/logout', description: 'Sign out of the ChatGPT subscription' },
+  {
     name: '/model',
-    description: 'Pick a model (no-arg = interactive) — choice is saved',
-    argumentHint: '[model-id]',
+    description: 'Pick a preloaded model or explicitly refresh the ChatGPT catalog',
+    argumentHint: '[model-id|refresh]',
   },
   {
     name: '/thinking',

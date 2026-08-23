@@ -374,6 +374,16 @@ export interface AgentOptions {
    *  parent model (no independent model selection). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   modelRegistry?: { languageModel: (...args: any[]) => LanguageModel }
+  /** Request-boundary hook for replacing a live provider after an
+   *  out-of-process authentication change. Consumers must invoke
+   *  `onApplied` only after they can use the returned model. */
+  beforeModelRequest?: (currentModelId: string) => Promise<{
+    blockedMessage?: string
+    model?: LanguageModel
+    modelId?: string
+    notice?: string
+    onApplied?: () => void
+  } | void>
   /** Sub-agent registry. Injected by the CLI at startup after scanning
    *  built-in + custom agent definitions. Absent = task tool is not
    *  registered (no sub-agent support). */

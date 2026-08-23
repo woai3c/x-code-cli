@@ -31,7 +31,7 @@ function validateCredentials(value: unknown): OpenAIChatGPTCredentials {
     )
   }
   const item = value as Partial<OpenAIChatGPTCredentials>
-  const optionalStringsValid = [item.accountId, item.idToken, item.email, item.planType].every(
+  const optionalStringsValid = [item.authRevision, item.accountId, item.idToken, item.email, item.planType].every(
     (field) => field === undefined || typeof field === 'string',
   )
   if (

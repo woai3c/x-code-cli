@@ -1,5 +1,6 @@
 export interface OpenAIChatGPTCredentials {
   version: 1
+  authRevision?: string
   accessToken: string
   refreshToken: string
   expiresAt: number

@@ -9,7 +9,12 @@ import { streamText, tool } from 'ai'
 import { z } from 'zod'
 
 import { classifyApiError } from '../src/agent/api-errors.js'
-import { resetOpenAIAuthContextForTesting } from '../src/auth/openai-chatgpt/auth-resolver.js'
+import {
+  getOpenAIAuthSnapshot,
+  initializeOpenAIAuthContext,
+  refreshOpenAIAuthSnapshot,
+  resetOpenAIAuthContextForTesting,
+} from '../src/auth/openai-chatgpt/auth-resolver.js'
 import { writeOpenAIChatGPTCredentials } from '../src/auth/openai-chatgpt/credential-store.js'
 import { getProviderOptions, saveUserConfig } from '../src/config/index.js'
 import { createModelRegistry, kimiCodingModelId } from '../src/providers/registry.js'
@@ -96,6 +101,62 @@ describe('Kimi endpoint model ids', () => {
     expect(String(url)).toBe('https://chatgpt.com/backend-api/codex/responses')
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer oauth-access')
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('platform-key-must-never-leak')
+  })
+
+  it('fails closed before a stale API-key provider can send after an external ChatGPT login', async () => {
+    process.env.OPENAI_API_KEY = 'platform-key-must-never-send'
+    initializeOpenAIAuthContext()
+    const providerSnapshot = getOpenAIAuthSnapshot()
+    const staleModel = createModelRegistry().languageModel('openai:gpt-5.6-sol')
+    await writeOpenAIChatGPTCredentials({
+      version: 1,
+      accessToken: 'oauth-access',
+      refreshToken: 'oauth-refresh',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      accountId: 'account-1',
+      authRevision: 'external-login',
+    })
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
+    const errors: unknown[] = []
+    const result = streamText({
+      model: staleModel,
+      messages: [{ role: 'user', content: 'must not use the platform key' }],
+      onError: ({ error }) => {
+        errors.push(error)
+      },
+    })
+    for await (const _chunk of result.textStream) {
+      // The guarded provider returns a local 401 before the global fetch is reached.
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0])).toContain('authentication changed in another process')
+
+    const observedAfterGuard = await refreshOpenAIAuthSnapshot()
+    expect(observedAfterGuard.revision).not.toBe(providerSnapshot.revision)
+    expect(observedAfterGuard.context.mode).toBe('chatgpt')
+
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'test stop' } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const rebound = streamText({
+      model: createModelRegistry().languageModel('openai:gpt-5.6-sol'),
+      messages: [{ role: 'user', content: 'retry with the active authentication' }],
+      onError: () => undefined,
+    })
+    for await (const _chunk of rebound.textStream) {
+      // The rebound provider reaches the ChatGPT endpoint and stops at the mock response.
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://chatgpt.com/backend-api/codex/responses')
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('authorization')).toBe('Bearer oauth-access')
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('platform-key-must-never-send')
   })
 
   it('does not let the AI SDK retry a ChatGPT subscription usage limit', async () => {

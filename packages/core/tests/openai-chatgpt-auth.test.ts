@@ -1,12 +1,20 @@
+import { execFile } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs'
+import fsPromises from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 
 import {
   getOpenAIAuthContext,
+  getOpenAIAuthSnapshot,
   getOpenAIAuthStatus,
+  initializeOpenAIAuthContext,
+  refreshOpenAIAuthContextIfChanged,
+  refreshOpenAIAuthSnapshot,
   resetOpenAIAuthContextForTesting,
 } from '../src/auth/openai-chatgpt/auth-resolver.js'
 import {
@@ -40,6 +48,8 @@ function credentials(overrides: Partial<OpenAIChatGPTCredentials> = {}): OpenAIC
   }
 }
 
+const execFileAsync = promisify(execFile)
+
 describe('OpenAI ChatGPT authentication', () => {
   let testHome: string
 
@@ -51,6 +61,7 @@ describe('OpenAI ChatGPT authentication', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     resetOpenAIAuthContextForTesting()
     delete process.env.X_CODE_HOME
     delete process.env.OPENAI_API_KEY
@@ -106,6 +117,45 @@ describe('OpenAI ChatGPT authentication', () => {
     expect(getOpenAIAuthContext()).toEqual({ mode: 'api-key', apiKey: 'platform-key-must-stay-inactive' })
   })
 
+  it('detects an out-of-process ChatGPT login from its persisted revision', async () => {
+    process.env.OPENAI_API_KEY = 'platform-key-must-stay-inactive'
+    expect(initializeOpenAIAuthContext()).toEqual({ mode: 'api-key', apiKey: 'platform-key-must-stay-inactive' })
+    await execFileAsync(process.execPath, [
+      '-e',
+      "const fs=require('node:fs');const path=require('node:path');fs.mkdirSync(path.dirname(process.argv[1]),{recursive:true});fs.writeFileSync(process.argv[1],process.argv[2])",
+      openAIChatGPTCredentialPath(),
+      JSON.stringify(credentials({ authRevision: 'external-login' })),
+    ])
+
+    expect(getOpenAIAuthContext()).toEqual({ mode: 'api-key', apiKey: 'platform-key-must-stay-inactive' })
+    await expect(refreshOpenAIAuthContextIfChanged()).resolves.toMatchObject({
+      changed: true,
+      previous: { mode: 'api-key' },
+      current: { mode: 'chatgpt' },
+    })
+    expect(getOpenAIAuthContext()).toEqual({ mode: 'chatgpt' })
+  })
+
+  it('does not let an older asynchronous auth observation overwrite a newer one', async () => {
+    await writeOpenAIChatGPTCredentials(credentials({ authRevision: 'account-a' }))
+    initializeOpenAIAuthContext()
+    let releaseOlderRead: ((value: string) => void) | undefined
+    const olderRead = new Promise<string>((resolve) => {
+      releaseOlderRead = resolve
+    })
+    vi.spyOn(fsPromises, 'readFile')
+      .mockImplementationOnce(async () => olderRead)
+      .mockResolvedValueOnce(JSON.stringify(credentials({ authRevision: 'account-b' })))
+
+    const olderRefresh = refreshOpenAIAuthSnapshot()
+    const newerRefresh = refreshOpenAIAuthSnapshot()
+    await expect(newerRefresh).resolves.toMatchObject({ revision: 'chatgpt:account-b' })
+    releaseOlderRead!(JSON.stringify(credentials({ authRevision: 'account-a' })))
+
+    await expect(olderRefresh).resolves.toMatchObject({ revision: 'chatgpt:account-b' })
+    expect(getOpenAIAuthSnapshot().revision).toBe('chatgpt:account-b')
+  })
+
   it('does not fall back to the API key when stored ChatGPT credentials are corrupt', () => {
     process.env.OPENAI_API_KEY = 'platform-key-must-stay-inactive'
     fs.mkdirSync(path.dirname(openAIChatGPTCredentialPath()), { recursive: true })
@@ -130,6 +180,7 @@ describe('OpenAI ChatGPT authentication', () => {
         expiresAt: Date.now() + 60_000,
         email: { unexpected: true },
         isFedRamp: 'false',
+        authRevision: { unexpected: true },
       }),
     )
     await expect(readOpenAIChatGPTCredentials()).rejects.toMatchObject({ code: 'credentials-invalid' })
@@ -203,27 +254,180 @@ describe('OpenAI ChatGPT authentication', () => {
     expect(String(tokenRequest?.body)).toContain('code=test-code')
   })
 
-  it('rejects a browser callback whose OAuth state does not match', async () => {
-    await expect(
-      loginOpenAIChatGPTWithBrowser({
+  it('uses the registered fallback callback port when 1455 is occupied', async () => {
+    const blocker = createServer()
+    await new Promise<void>((resolve, reject) => {
+      blocker.once('error', reject)
+      blocker.listen(1455, '127.0.0.1', resolve)
+    })
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }),
+      )
+      const result = await loginOpenAIChatGPTWithBrowser({
+        fetch: fetchMock,
         timeoutMs: 5_000,
-        openBrowser: async () => {
-          expect((await fetch('http://127.0.0.1:1455/auth/callback?code=test-code&state=wrong')).status).toBe(400)
+        openBrowser: async (authorizationUrl) => {
+          const authorization = new URL(authorizationUrl)
+          const redirectUri = authorization.searchParams.get('redirect_uri')
+          expect(redirectUri).toBe('http://localhost:1457/auth/callback')
+          const callback = new URL(redirectUri!)
+          callback.searchParams.set('code', 'test-code')
+          callback.searchParams.set('state', authorization.searchParams.get('state') ?? '')
+          expect((await fetch(callback)).status).toBe(200)
         },
-      }),
-    ).rejects.toMatchObject({ code: 'state-mismatch' })
+      })
+
+      expect(result.accessToken).toBe('access')
+      expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain(
+        `redirect_uri=${encodeURIComponent('http://localhost:1457/auth/callback')}`,
+      )
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
+  })
+
+  it('ignores a mismatched state callback and still accepts the legitimate callback', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }),
+    )
+    const result = await loginOpenAIChatGPTWithBrowser({
+      fetch: fetchMock,
+      timeoutMs: 5_000,
+      openBrowser: async (authorizationUrl) => {
+        expect((await fetch('http://127.0.0.1:1455/auth/callback?code=test-code&state=wrong')).status).toBe(400)
+        const state = new URL(authorizationUrl).searchParams.get('state')
+        const missingCode = `http://127.0.0.1:1455/auth/callback?state=${encodeURIComponent(state ?? '')}`
+        expect((await fetch(missingCode)).status).toBe(400)
+        const callback = `http://127.0.0.1:1455/auth/callback?code=test-code&state=${encodeURIComponent(state ?? '')}`
+        expect((await fetch(callback)).status).toBe(200)
+      },
+    })
+
+    expect(result.accessToken).toBe('access')
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it('validates state before accepting an OAuth error callback and redacts its description', async () => {
     await expect(
       loginOpenAIChatGPTWithBrowser({
         timeoutMs: 5_000,
-        openBrowser: async () => {
+        openBrowser: async (authorizationUrl) => {
           const callback = 'http://127.0.0.1:1455/auth/callback?error=access_denied&error_description=secret-local-text'
-          expect((await fetch(callback)).status).toBe(400)
+          const invalidResponse = await fetch(callback).catch((error: unknown) => {
+            throw new Error('invalid-state callback request failed', { cause: error })
+          })
+          expect(invalidResponse.status).toBe(400)
+          expect(await invalidResponse.text()).not.toContain('secret-local-text')
+          const state = new URL(authorizationUrl).searchParams.get('state')
+          const legitimateError = `http://127.0.0.1:1455/auth/callback?error=access_denied&state=${encodeURIComponent(state ?? '')}`
+          const legitimateResponse = await fetch(legitimateError).catch((error: unknown) => {
+            throw new Error('legitimate error callback request failed', { cause: error })
+          })
+          expect(legitimateResponse.status).toBe(400)
+          await legitimateResponse.text()
         },
       }),
-    ).rejects.toMatchObject({ code: 'state-mismatch', message: expect.not.stringContaining('secret-local-text') })
+    ).rejects.toMatchObject({ code: 'oauth-failed', message: expect.not.stringContaining('secret-local-text') })
+  })
+
+  it('does not show browser success until credentials are persisted', async () => {
+    let persistenceStarted: (() => void) | undefined
+    let finishPersistence: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      persistenceStarted = resolve
+    })
+    const result = await loginOpenAIChatGPTWithBrowser({
+      timeoutMs: 5_000,
+      fetch: async () => Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }),
+      onCredentials: async () => {
+        persistenceStarted?.()
+        await new Promise<void>((resolve) => {
+          finishPersistence = resolve
+        })
+      },
+      openBrowser: async (authorizationUrl) => {
+        const state = new URL(authorizationUrl).searchParams.get('state')
+        const callback = `http://127.0.0.1:1455/auth/callback?code=test-code&state=${encodeURIComponent(state ?? '')}`
+        let callbackFinished = false
+        const callbackResponse = fetch(callback).then((response) => {
+          callbackFinished = true
+          return response
+        })
+        await started
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        expect(callbackFinished).toBe(false)
+        finishPersistence?.()
+        expect((await callbackResponse).status).toBe(200)
+      },
+    })
+
+    expect(result.accessToken).toBe('access')
+  })
+
+  it('lets an accepted credential commit win over late cancellation', async () => {
+    const controller = new AbortController()
+    let persistenceStarted: (() => void) | undefined
+    let finishPersistence: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      persistenceStarted = resolve
+    })
+    let persisted = false
+    const result = await loginOpenAIChatGPTWithBrowser({
+      signal: controller.signal,
+      timeoutMs: 5_000,
+      fetch: async () => Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }),
+      onCredentials: async () => {
+        persistenceStarted?.()
+        await new Promise<void>((resolve) => {
+          finishPersistence = resolve
+        })
+        persisted = true
+      },
+      openBrowser: async (authorizationUrl) => {
+        const state = new URL(authorizationUrl).searchParams.get('state')
+        const callback = `http://127.0.0.1:1455/auth/callback?code=test-code&state=${encodeURIComponent(state ?? '')}`
+        const callbackResponse = fetch(callback)
+        await started
+        controller.abort()
+        finishPersistence?.()
+        expect((await callbackResponse).status).toBe(200)
+      },
+    })
+
+    expect(result.accessToken).toBe('access')
+    expect(persisted).toBe(true)
+  })
+
+  it('completes browser login when the callback disconnects after credentials are persisted', async () => {
+    let persistenceStarted: (() => void) | undefined
+    let finishPersistence: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      persistenceStarted = resolve
+    })
+    const login = loginOpenAIChatGPTWithBrowser({
+      timeoutMs: 2_000,
+      fetch: async () => Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }),
+      onCredentials: async () => {
+        persistenceStarted?.()
+        await new Promise<void>((resolve) => {
+          finishPersistence = resolve
+        })
+      },
+      openBrowser: async (authorizationUrl) => {
+        const state = new URL(authorizationUrl).searchParams.get('state')
+        const socket = connect(1455, '127.0.0.1')
+        await once(socket, 'connect')
+        socket.write(
+          `GET /auth/callback?code=test-code&state=${encodeURIComponent(state ?? '')} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`,
+        )
+        await started
+        socket.destroy()
+        finishPersistence?.()
+      },
+    })
+
+    await expect(login).resolves.toMatchObject({ accessToken: 'access' })
   })
 
   it('applies the browser total timeout to a stalled token exchange', async () => {
@@ -246,7 +450,7 @@ describe('OpenAI ChatGPT authentication', () => {
       openBrowser: async (authorizationUrl) => {
         const state = new URL(authorizationUrl).searchParams.get('state')
         const callback = `http://127.0.0.1:1455/auth/callback?code=test-code&state=${encodeURIComponent(state ?? '')}`
-        expect((await fetch(callback)).status).toBe(200)
+        expect((await fetch(callback)).status).toBe(400)
       },
     })
     await started

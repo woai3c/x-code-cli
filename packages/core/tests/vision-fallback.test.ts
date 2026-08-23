@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateText } from 'ai'
 
 import { captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
-import { PROVIDER_ENV_VARS } from './provider-env.js'
+import { PROVIDER_ENV_VARS, isolateOpenAIAuth } from './provider-env.js'
 
 vi.mock('ai', async () => {
   const actual = await vi.importActual('ai')
@@ -27,8 +27,16 @@ function clearAllKeys(): void {
 }
 
 describe('pickVisionProvider', () => {
-  beforeEach(clearAllKeys)
-  afterEach(clearAllKeys)
+  let restoreOpenAIAuth: () => void
+
+  beforeEach(() => {
+    restoreOpenAIAuth = isolateOpenAIAuth()
+    clearAllKeys()
+  })
+  afterEach(() => {
+    clearAllKeys()
+    restoreOpenAIAuth()
+  })
 
   it('returns null when only custom OpenAI-compatible endpoint is configured', () => {
     // Custom is treated as text-only by default — even with both env vars set,

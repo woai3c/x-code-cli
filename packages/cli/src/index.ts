@@ -22,8 +22,6 @@ import {
   forceTerminateManagedShellsSync,
   getAvailableProviders,
   getEnvVarName,
-  getOpenAIAuthContext,
-  getProviderModels,
   getTokenStorage,
   initializeOpenAIAuthContext,
   listSessions,
@@ -32,7 +30,6 @@ import {
   loadSession,
   loadUserConfig,
   pickLatestSession,
-  refreshOpenAIChatGPTModels,
   resolveModelId,
   resolveStreamConfig,
   resolveWebSearchProvider,
@@ -49,7 +46,8 @@ import type {
 } from '@x-code-cli/core'
 
 import { startApp } from './app.js'
-import { runAuthCli } from './auth-cli.js'
+import { runAuthCli, shouldEnterProductAfterAuth } from './auth-cli.js'
+import { startChatGPTModelPreload } from './chatgpt-model-preload.js'
 import { getCleanupController } from './cleanup-controller.js'
 import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
@@ -215,15 +213,22 @@ async function main() {
     const exitCode = await runPluginCli(rawArgs.slice(1))
     process.exit(exitCode)
   }
+  let enteredAfterLogin = false
   if (rawArgs[0] === 'login' || rawArgs[0] === 'logout') {
     const exitCode = await runAuthCli(rawArgs)
-    process.exit(exitCode)
+    if (!shouldEnterProductAfterAuth(rawArgs, exitCode, !!process.stdin.isTTY, !!process.stdout.isTTY)) {
+      process.exit(exitCode)
+    }
+    enteredAfterLogin = true
   }
 
   const openAIAuth = initializeOpenAIAuthContext()
 
   // Parse CLI arguments
-  const argv = await parseCliArgs()
+  // `xc login` is an onboarding entry point: after successful interactive
+  // authentication, consume its auth-only arguments and continue into the
+  // product instead of making the user run a second `xc` command.
+  const argv = await parseCliArgs(enteredAfterLogin ? [] : rawArgs)
 
   const prompt = (argv._ as string[]).join(' ') || undefined
 
@@ -233,6 +238,15 @@ async function main() {
     stdinContent = await readStdin()
   }
   const printMode = argv.print || !process.stdin.isTTY || !process.stdout.isTTY
+
+  // Warm the subscription model catalog as soon as an interactive product
+  // launch knows ChatGPT is active. This is deliberately fire-and-forget:
+  // /model always reads the in-memory catalog (or its bundled fallback) and
+  // must never wait on network I/O. A fresh /login performs its own one
+  // forced refresh after the account credentials have changed.
+  if (openAIAuth.mode === 'chatgpt' && !printMode) {
+    startChatGPTModelPreload(openAIAuth.mode, VERSION)
+  }
 
   const availableProviders = getAvailableProviders()
 
@@ -295,33 +309,6 @@ async function main() {
     modelId = fallback.defaultModel
   }
 
-  if (openAIAuth.mode === 'chatgpt' && modelId.startsWith('openai:')) {
-    await refreshOpenAIChatGPTModels(VERSION, { signal: AbortSignal.timeout(8_000) })
-  }
-
-  if (getOpenAIAuthContext().mode === 'chatgpt' && modelId.startsWith('openai:')) {
-    const availableOpenAIModels = getProviderModels().openai ?? []
-    if (!availableOpenAIModels.some((candidate) => candidate.id === modelId)) {
-      if (argv.model) {
-        console.error(`Error: ${modelId} is not available for the signed-in ChatGPT account.`)
-        process.exit(1)
-      }
-      const fallback = availableOpenAIModels[0]
-      if (fallback) {
-        console.error(
-          chalk.yellow(
-            `Note: saved model '${modelId}' is not available for the signed-in ChatGPT account. ` +
-              `Falling back to '${fallback.id}'. Use /model to pick a different default.`,
-          ),
-        )
-        modelId = fallback.id
-      } else {
-        console.error('Error: no models are available for the signed-in ChatGPT account.')
-        process.exit(1)
-      }
-    }
-  }
-
   // Apply persisted UI theme. Done early (before startApp) so the very
   // first scrollback row — including any messages we hydrate from a
   // resumed session containing edit / write tool calls — already paints
@@ -349,7 +336,10 @@ async function main() {
   const providerRegistry = createModelRegistry()
   const model = providerRegistry.languageModel(modelId as `${string}:${string}`)
   const memoryService = new MemoryService({
-    resolveModel: (id) => providerRegistry.languageModel(id as `${string}:${string}`),
+    // Authentication can change inside the running product via /login or
+    // /logout, so resolve against a fresh provider registry when the memory
+    // worker starts a later background job.
+    resolveModel: (id) => createModelRegistry().languageModel(id as `${string}:${string}`),
   })
   memoryServiceForShutdown = memoryService
   memoryService.setActiveModelId(modelId)

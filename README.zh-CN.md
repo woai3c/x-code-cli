@@ -45,13 +45,17 @@ pnpm add -g @x-code-cli/cli
 使用 OpenAI 模型时，可以登录 ChatGPT 使用订阅权益：
 
 ```bash
-xc login                    # 浏览器登录
-xc login --device-auth      # 远程或无浏览器环境
+xc login                    # 浏览器登录，成功后直接进入交互产品
+xc login --device-auth      # 设备码登录，成功后直接进入交互产品
 xc login status             # 查看当前 OpenAI 认证方式
 xc logout                   # 退出并删除本地 ChatGPT 凭据
 ```
 
+在交互式终端中，`xc login`（包括 `--device-auth`）登录成功后会直接进入 X-Code CLI，无需再次执行 `xc`。进入产品后，也可以使用 `/login`、`/login --device-auth`、`/login status` 和 `/logout` 完成同一套认证操作。
+
 对于 `openai` provider，ChatGPT 登录和 `OPENAI_API_KEY` 严格互斥。ChatGPT 已登录时，请求使用 ChatGPT 订阅权益，API key 处于停用状态，认证失败也不会回退到 API key；执行 `xc logout` 后，已有的 `OPENAI_API_KEY` 才会恢复生效，其请求按 OpenAI Platform 账户用量计费。其他 provider 的 API key 不受影响。
+
+当前版本将 ChatGPT token 以明文凭据文件保存在 `~/.x-code/auth/`（或 `X_CODE_HOME`）下。请像保护密码一样保护该文件：保持目录私有，不要提交到版本库、分享给他人或同步到不可信位置。当前尚未实现系统凭据库（keyring）存储。
 
 也可以配置至少一个厂商的 API Key：
 
@@ -221,7 +225,7 @@ xc [options] [prompt]
 --help, -h            显示帮助信息
 ```
 
-### 非交互子命令
+### 命令行子命令
 
 ```text
 xc login [--device-auth]           登录 ChatGPT
@@ -234,34 +238,36 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 
 ## 斜杠命令
 
-| 命令                  | 说明                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------- |
-| `/help`               | 查看所有可用命令                                                                    |
-| `/model [alias]`      | 切换模型或查看可用模型列表                                                          |
-| `/thinking [on\|off]` | 启用 / 禁用思考模式                                                                 |
-| `/theme [name]`       | 切换 UI 主题                                                                        |
-| `/plan [on\|off]`     | 启用 / 禁用 Plan 模式                                                               |
-| `/goal [目标]`        | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)）                             |
-| `/usage`              | 查看 Token 用量：上下文构成分解、分步明细、归因与缓存命中                           |
-| `/usage-history`      | 列出历史会话用量                                                                    |
-| `/clear`              | 清空当前会话                                                                        |
-| `/ps`                 | 列出正在运行的后台终端及最近输出                                                    |
-| `/stop [shell-id]`    | 停止指定后台终端；不带 ID 时停止全部                                                |
-| `/clear-peer-context` | 确认后删除受 Peer 影响的对话后缀                                                    |
-| `/list-agents`        | 列出可访问的命名 X-Code Session                                                     |
-| `/compact`            | 手动压缩上下文                                                                      |
-| `/resume`             | 从历史会话中选择恢复                                                                |
-| `/fork [名称]`        | 分叉已完成的上下文，可选命名（仍共享当前工作区）                                    |
-| `/rewind`             | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
-| `/init`               | 分析代码库后创建或更新 `AGENTS.md`                                                  |
-| `/review [PR号]`      | 评审 GitHub PR（需本地装好 `gh`）                                                   |
-| `/memory [子命令]`    | 查看、搜索、解释或重载全局长期记忆（详见 [docs/knowledge.md](./docs/knowledge.md)） |
-| `/skill <sub>`        | 管理 Skills                                                                         |
-| `/mcp <sub>`          | 管理 MCP 服务器                                                                     |
-| `/plugin <sub>`       | 管理插件与 marketplace                                                              |
-| `/browser <sub>`      | 配置交互式 Browser Use 与本地 UI 自动截图检查                                       |
-| `/doctor`             | 一键诊断运行环境                                                                    |
-| `/exit`               | 保存会话并退出                                                                      |
+| 命令                             | 说明                                                                                |
+| -------------------------------- | ----------------------------------------------------------------------------------- |
+| `/help`                          | 查看所有可用命令                                                                    |
+| `/login [--device-auth\|status]` | 登录 ChatGPT 或查看认证状态                                                         |
+| `/logout`                        | 退出 ChatGPT 登录                                                                   |
+| `/model [model-id\|refresh]`     | 选择已预加载的模型，或显式刷新 ChatGPT 模型目录                                     |
+| `/thinking [on\|off]`            | 启用 / 禁用思考模式                                                                 |
+| `/theme [name]`                  | 切换 UI 主题                                                                        |
+| `/plan [on\|off]`                | 启用 / 禁用 Plan 模式                                                               |
+| `/goal [目标]`                   | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)）                             |
+| `/usage`                         | 查看 Token 用量：上下文构成分解、分步明细、归因与缓存命中                           |
+| `/usage-history`                 | 列出历史会话用量                                                                    |
+| `/clear`                         | 清空当前会话                                                                        |
+| `/ps`                            | 列出正在运行的后台终端及最近输出                                                    |
+| `/stop [shell-id]`               | 停止指定后台终端；不带 ID 时停止全部                                                |
+| `/clear-peer-context`            | 确认后删除受 Peer 影响的对话后缀                                                    |
+| `/list-agents`                   | 列出可访问的命名 X-Code Session                                                     |
+| `/compact`                       | 手动压缩上下文                                                                      |
+| `/resume`                        | 从历史会话中选择恢复                                                                |
+| `/fork [名称]`                   | 分叉已完成的上下文，可选命名（仍共享当前工作区）                                    |
+| `/rewind`                        | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
+| `/init`                          | 分析代码库后创建或更新 `AGENTS.md`                                                  |
+| `/review [PR号]`                 | 评审 GitHub PR（需本地装好 `gh`）                                                   |
+| `/memory [子命令]`               | 查看、搜索、解释或重载全局长期记忆（详见 [docs/knowledge.md](./docs/knowledge.md)） |
+| `/skill <sub>`                   | 管理 Skills                                                                         |
+| `/mcp <sub>`                     | 管理 MCP 服务器                                                                     |
+| `/plugin <sub>`                  | 管理插件与 marketplace                                                              |
+| `/browser <sub>`                 | 配置交互式 Browser Use 与本地 UI 自动截图检查                                       |
+| `/doctor`                        | 一键诊断运行环境                                                                    |
+| `/exit`                          | 保存会话并退出                                                                      |
 
 ## 详细文档
 

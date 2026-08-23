@@ -3,7 +3,12 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { classifyApiError } from '../src/agent/api-errors.js'
-import { resetOpenAIAuthContextForTesting } from '../src/auth/openai-chatgpt/auth-resolver.js'
+import {
+  getOpenAIAuthSnapshot,
+  initializeOpenAIAuthContext,
+  refreshOpenAIAuthSnapshot,
+  resetOpenAIAuthContextForTesting,
+} from '../src/auth/openai-chatgpt/auth-resolver.js'
 import {
   readOpenAIChatGPTCredentials,
   writeOpenAIChatGPTCredentials,
@@ -27,6 +32,7 @@ describe('OpenAIChatGPTTokenManager', () => {
       refreshToken: 'old-refresh',
       expiresAt: Date.now() - 1,
       accountId: 'account-1',
+      authRevision: 'stable-login-revision',
     })
   })
 
@@ -58,7 +64,98 @@ describe('OpenAIChatGPTTokenManager', () => {
       accessToken: left.accessToken,
       refreshToken: 'rotated-refresh',
       accountId: 'account-1',
+      authRevision: 'stable-login-revision',
     })
+  })
+
+  it('upgrades a legacy credential revision without looking like an account switch', async () => {
+    await writeOpenAIChatGPTCredentials({
+      version: 1,
+      accessToken: 'expired-access',
+      refreshToken: 'legacy-refresh',
+      expiresAt: Date.now() - 1,
+      accountId: 'account-1',
+    })
+    resetOpenAIAuthContextForTesting()
+    initializeOpenAIAuthContext()
+    const before = getOpenAIAuthSnapshot()
+    const manager = new OpenAIChatGPTTokenManager({
+      fetch: async () =>
+        Response.json({
+          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+          refresh_token: 'rotated-refresh',
+          id_token: jwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'account-1' } }),
+        }),
+    })
+
+    await manager.getRequestAuth()
+    const after = await refreshOpenAIAuthSnapshot()
+
+    expect(after.revision).toBe(before.revision)
+    expect((await readOpenAIChatGPTCredentials()).authRevision).toBe(before.revision.slice('chatgpt:'.length))
+  })
+
+  it('lets the first caller cancel only its own wait for a shared refresh', async () => {
+    let finishRefresh: (() => void) | undefined
+    let refreshSignal: AbortSignal | null | undefined
+    const refresh = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        new Promise<Response>((resolve) => {
+          refreshSignal = init?.signal
+          finishRefresh = () =>
+            resolve(
+              Response.json({
+                access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+                refresh_token: 'rotated-refresh',
+                id_token: jwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'account-1' } }),
+              }),
+            )
+        }),
+    )
+    const manager = new OpenAIChatGPTTokenManager({ fetch: refresh })
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const first = manager.getRequestAuth(firstController.signal)
+    const second = manager.getRequestAuth(secondController.signal)
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce())
+
+    firstController.abort(new Error('first caller aborted'))
+    await expect(first).rejects.toThrow('first caller aborted')
+    expect(refreshSignal?.aborted).not.toBe(true)
+
+    finishRefresh!()
+    await expect(second).resolves.toMatchObject({ accountId: 'account-1' })
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it('lets a later caller cancel without interrupting the refresh owner', async () => {
+    let finishRefresh: (() => void) | undefined
+    const refresh = vi.fn<typeof fetch>(
+      async () =>
+        new Promise<Response>((resolve) => {
+          finishRefresh = () =>
+            resolve(
+              Response.json({
+                access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+                refresh_token: 'rotated-refresh',
+                id_token: jwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'account-1' } }),
+              }),
+            )
+        }),
+    )
+    const manager = new OpenAIChatGPTTokenManager({ fetch: refresh })
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const first = manager.getRequestAuth(firstController.signal)
+    const second = manager.getRequestAuth(secondController.signal)
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce())
+
+    secondController.abort(new Error('second caller aborted'))
+    await expect(second).rejects.toThrow('second caller aborted')
+
+    finishRefresh!()
+    await expect(first).resolves.toMatchObject({ accountId: 'account-1' })
+    expect(refresh).toHaveBeenCalledOnce()
   })
 
   it('rejects a refreshed token for a different ChatGPT account', async () => {

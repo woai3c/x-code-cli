@@ -7,6 +7,15 @@ import {
   getContextWindow,
   getMaxOutputTokens,
 } from '../src/agent/context-window.js'
+import { isolateOpenAIAuth } from './provider-env.js'
+
+let restoreOpenAIAuth: () => void
+
+beforeEach(() => {
+  restoreOpenAIAuth = isolateOpenAIAuth()
+})
+
+afterEach(() => restoreOpenAIAuth())
 
 describe('getContextWindow', () => {
   it('returns exact value for known models', () => {

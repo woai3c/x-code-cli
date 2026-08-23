@@ -99,6 +99,11 @@ function getVisionModel(modelId: string): LanguageModel {
   return model
 }
 
+export function resetVisionModelProviders(): void {
+  cachedRegistry = null
+  resolvedModels.clear()
+}
+
 /** Default caption prompt: asks for both verbatim text AND visual elements
  *  (layout, colors, components) — OCR alone misses the latter, so the caption
  *  subsumes what OCR would have produced. Used for pasted-image ingest. */

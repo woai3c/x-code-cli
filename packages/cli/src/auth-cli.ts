@@ -1,6 +1,7 @@
 import {
   clearOpenAIChatGPTCredentials,
   getOpenAIAuthStatus,
+  initializeOpenAIAuthContext,
   loginOpenAIChatGPTWithBrowser,
   loginOpenAIChatGPTWithDevice,
   readOpenAIChatGPTCredentials,
@@ -10,6 +11,32 @@ import {
 } from '@x-code-cli/core'
 
 import { VERSION } from './version.js'
+
+export interface LoginChatGPTOptions {
+  deviceAuth?: boolean
+  signal?: AbortSignal
+  onAuthorizationUrl?: (url: string) => void
+  onUserCode?: (url: string, code: string) => void
+}
+
+export interface LoginChatGPTResult {
+  apiKeyConfigured: boolean
+}
+
+export interface LogoutChatGPTResult {
+  removed: boolean
+  revokeFailed: boolean
+  apiKeyConfigured: boolean
+}
+
+export function shouldEnterProductAfterAuth(
+  args: readonly string[],
+  exitCode: number,
+  stdinIsTTY: boolean,
+  stdoutIsTTY: boolean,
+): boolean {
+  return exitCode === 0 && args[0] === 'login' && args[1] !== 'status' && stdinIsTTY && stdoutIsTTY
+}
 
 function accountSummary(value: string | undefined): string | undefined {
   if (!value) return undefined
@@ -22,56 +49,55 @@ function accountSummary(value: string | undefined): string | undefined {
   return `${value.slice(0, 4)}…${value.slice(-2)}`
 }
 
-function printStatus(): void {
+export function formatOpenAIAuthStatus(): string {
   const status = getOpenAIAuthStatus()
   if (status.mode === 'none') {
-    console.log('OpenAI authentication: none')
-    console.log('Run `xc login` for ChatGPT subscription access, or set OPENAI_API_KEY for Platform access.')
-    return
+    return 'OpenAI authentication: none\nRun `/login` or `xc login` for ChatGPT subscription access, or set OPENAI_API_KEY for Platform access.'
   }
   if (status.mode === 'api-key') {
-    console.log('OpenAI authentication: API key (OPENAI_API_KEY)')
-    return
+    return 'OpenAI authentication: API key (OPENAI_API_KEY)'
   }
 
-  console.log('OpenAI authentication: ChatGPT subscription')
+  const lines = ['OpenAI authentication: ChatGPT subscription']
   const email = accountSummary(status.email)
-  if (email) console.log(`Account: ${email}`)
+  if (email) lines.push(`Account: ${email}`)
   const account = accountSummary(status.accountId)
-  if (account) console.log(`Workspace: ${account}`)
-  if (status.planType) console.log(`Plan: ${status.planType}`)
+  if (account) lines.push(`Workspace: ${account}`)
+  if (status.planType) lines.push(`Plan: ${status.planType}`)
   if (status.expiresAt)
-    console.log(`Access token expires: ${new Date(status.expiresAt).toISOString()} (auto-refresh enabled)`)
-  if (status.apiKeyConfigured) console.log('OPENAI_API_KEY: configured but inactive while ChatGPT is signed in')
-  if (status.credentialError) console.log(`Credential error: ${status.credentialError}`)
+    lines.push(`Access token expires: ${new Date(status.expiresAt).toISOString()} (auto-refresh enabled)`)
+  if (status.apiKeyConfigured) lines.push('OPENAI_API_KEY: configured but inactive while ChatGPT is signed in')
+  if (status.credentialError) lines.push(`Credential error: ${status.credentialError}`)
+  return lines.join('\n')
 }
 
-async function runLogin(deviceAuth: boolean, signal: AbortSignal): Promise<void> {
+export async function loginChatGPT(options: LoginChatGPTOptions = {}): Promise<LoginChatGPTResult> {
+  const signal = options.signal
   const userAgent = `x-code-cli/${VERSION}`
-  const credentials = deviceAuth
+  const persistCredentials = async (
+    credentials: Awaited<ReturnType<typeof loginOpenAIChatGPTWithBrowser>>,
+    persistSignal = signal,
+  ) => {
+    await withOpenAIChatGPTCredentialLock(() => writeOpenAIChatGPTCredentials(credentials), persistSignal)
+    initializeOpenAIAuthContext()
+  }
+  const credentials = options.deviceAuth
     ? await loginOpenAIChatGPTWithDevice({
         signal,
         userAgent,
-        onUserCode: (url, code) => {
-          console.log(`Open ${url}`)
-          console.log(`Enter code: ${code}`)
-        },
+        onUserCode: options.onUserCode ?? (() => undefined),
       })
     : await loginOpenAIChatGPTWithBrowser({
         signal,
         userAgent,
-        onAuthorizationUrl: (url) => {
-          console.log('Complete ChatGPT sign-in in your browser:')
-          console.log(url)
-        },
+        onAuthorizationUrl: options.onAuthorizationUrl,
+        onCredentials: persistCredentials,
       })
-  await withOpenAIChatGPTCredentialLock(() => writeOpenAIChatGPTCredentials(credentials), signal)
-  console.log('ChatGPT login successful. OpenAI requests will use your ChatGPT subscription.')
-  if (process.env.OPENAI_API_KEY)
-    console.log('OPENAI_API_KEY is now inactive for the OpenAI provider until `xc logout`.')
+  if (options.deviceAuth) await persistCredentials(credentials)
+  return { apiKeyConfigured: !!process.env.OPENAI_API_KEY }
 }
 
-async function runLogout(signal: AbortSignal): Promise<void> {
+export async function logoutChatGPT(signal?: AbortSignal): Promise<LogoutChatGPTResult> {
   const result = await withOpenAIChatGPTCredentialLock(async () => {
     let credentials
     try {
@@ -83,7 +109,7 @@ async function runLogout(signal: AbortSignal): Promise<void> {
     if (credentials) {
       try {
         await revokeOpenAIChatGPTCredentials(credentials, {
-          signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
           userAgent: `x-code-cli/${VERSION}`,
         })
       } catch {
@@ -92,13 +118,36 @@ async function runLogout(signal: AbortSignal): Promise<void> {
     }
     return { removed: await clearOpenAIChatGPTCredentials(), revokeFailed }
   }, signal)
+  initializeOpenAIAuthContext()
+  return { ...result, apiKeyConfigured: !!process.env.OPENAI_API_KEY }
+}
+
+async function runLogin(deviceAuth: boolean, signal: AbortSignal): Promise<void> {
+  const result = await loginChatGPT({
+    deviceAuth,
+    signal,
+    onUserCode: (url, code) => {
+      console.log(`Open ${url}`)
+      console.log(`Enter code: ${code}`)
+    },
+    onAuthorizationUrl: (url) => {
+      console.log('Complete ChatGPT sign-in in your browser:')
+      console.log(url)
+    },
+  })
+  console.log('ChatGPT login successful. OpenAI requests will use your ChatGPT subscription.')
+  if (result.apiKeyConfigured) console.log('OPENAI_API_KEY is now inactive for the OpenAI provider until `xc logout`.')
+}
+
+async function runLogout(signal: AbortSignal): Promise<void> {
+  const result = await logoutChatGPT(signal)
   if (!result.removed) {
     console.log('ChatGPT is already signed out.')
     return
   }
   console.log('ChatGPT logout complete.')
   if (result.revokeFailed) console.log('The remote revoke request failed, but local credentials were removed.')
-  if (process.env.OPENAI_API_KEY) console.log('OPENAI_API_KEY is now active for the OpenAI provider.')
+  if (result.apiKeyConfigured) console.log('OPENAI_API_KEY is now active for the OpenAI provider.')
 }
 
 export async function runAuthCli(args: string[]): Promise<number> {
@@ -107,7 +156,7 @@ export async function runAuthCli(args: string[]): Promise<number> {
   process.once('SIGINT', onInterrupt)
   try {
     if (args[0] === 'login' && args[1] === 'status' && args.length === 2) {
-      printStatus()
+      console.log(formatOpenAIAuthStatus())
       return 0
     }
     if (args[0] === 'login') {

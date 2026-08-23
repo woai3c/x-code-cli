@@ -4,13 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  getOpenAIAuthStatus,
   hasOpenAIChatGPTCredentials,
   resetOpenAIAuthContextForTesting,
   writeOpenAIChatGPTCredentials,
 } from '@x-code-cli/core'
 
 import { OpenAIChatGPTTokenManager } from '../../core/src/auth/openai-chatgpt/token-manager.js'
-import { runAuthCli } from '../src/auth-cli.js'
+import { runAuthCli, shouldEnterProductAfterAuth } from '../src/auth-cli.js'
 
 describe('ChatGPT auth CLI', () => {
   let testHome: string
@@ -125,6 +126,7 @@ describe('ChatGPT auth CLI', () => {
 
       await expect(login).resolves.toBe(0)
       expect(hasOpenAIChatGPTCredentials()).toBe(true)
+      expect(getOpenAIAuthStatus().mode).toBe('chatgpt')
       expect(output.mock.calls.flat().join('\n')).toContain('ABCD-EFGH')
     } finally {
       vi.useRealTimers()
@@ -141,5 +143,14 @@ describe('ChatGPT auth CLI', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('OpenAI authentication: none')
     expect(result.stdout).not.toContain('No API key')
+  })
+
+  it('continues into the interactive product only after a successful login', () => {
+    expect(shouldEnterProductAfterAuth(['login'], 0, true, true)).toBe(true)
+    expect(shouldEnterProductAfterAuth(['login', '--device-auth'], 0, true, true)).toBe(true)
+    expect(shouldEnterProductAfterAuth(['login', 'status'], 0, true, true)).toBe(false)
+    expect(shouldEnterProductAfterAuth(['logout'], 0, true, true)).toBe(false)
+    expect(shouldEnterProductAfterAuth(['login'], 1, true, true)).toBe(false)
+    expect(shouldEnterProductAfterAuth(['login'], 0, false, true)).toBe(false)
   })
 })

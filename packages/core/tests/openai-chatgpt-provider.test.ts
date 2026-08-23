@@ -339,7 +339,12 @@ describe('OpenAI ChatGPT provider fetch', () => {
       force: true,
     })
     const catalogFetch = vi.fn<typeof fetch>(async () =>
-      Response.json({ models: [{ slug: 'after-sse-404', visibility: 'list' }] }),
+      Response.json({
+        models: [
+          { slug: 'before-sse-404', visibility: 'list' },
+          { slug: 'after-sse-404', visibility: 'list' },
+        ],
+      }),
     )
     vi.stubGlobal('fetch', catalogFetch)
     const chatGPTFetch = createOpenAIChatGPTFetch({
@@ -355,7 +360,7 @@ describe('OpenAI ChatGPT provider fetch', () => {
 
     const response = await chatGPTFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
-      body: JSON.stringify({ input: [] }),
+      body: JSON.stringify({ model: 'before-sse-404', input: [] }),
     })
     expect(catalogFetch).toHaveBeenCalledOnce()
     expect(getProviderModels().openai.map((model) => model.id)).toEqual(['openai:after-sse-404'])

@@ -45,13 +45,17 @@ After installation, launch with the `xc` or `x-code` command.
 For OpenAI models, you can sign in with ChatGPT to use your subscription:
 
 ```bash
-xc login                    # Browser sign-in
-xc login --device-auth      # Remote or headless environment
+xc login                    # Browser sign-in, then enter the interactive product
+xc login --device-auth      # Device sign-in, then enter the interactive product
 xc login status             # Show the active OpenAI authentication method
 xc logout                   # Sign out and remove the stored ChatGPT credentials
 ```
 
+On an interactive terminal, a successful `xc login` (including `--device-auth`) continues directly into X-Code CLI. Inside the product, use `/login`, `/login --device-auth`, `/login status`, and `/logout` for the same authentication lifecycle.
+
 ChatGPT login and `OPENAI_API_KEY` are mutually exclusive for the `openai` provider. While ChatGPT is signed in, requests use ChatGPT subscription access; the API key is inactive and is never used as a fallback. After `xc logout`, an existing `OPENAI_API_KEY` becomes active again and its requests are billed through the OpenAI Platform account. API keys for every other provider are unaffected.
+
+The current release stores ChatGPT tokens in a plaintext credential file under `~/.x-code/auth/` (or `X_CODE_HOME`). Treat that file like a password: keep the directory private and do not commit, share, or synchronize it to an untrusted location. System-keyring storage is not implemented yet.
 
 Alternatively, configure at least one provider API key:
 
@@ -221,7 +225,7 @@ xc [options] [prompt]
 --help, -h            Show help
 ```
 
-### Non-interactive subcommands
+### CLI subcommands
 
 ```text
 xc login [--device-auth]           Sign in with ChatGPT
@@ -234,34 +238,36 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 
 ## Slash Commands
 
-| Command                | Description                                                          |
-| ---------------------- | -------------------------------------------------------------------- |
-| `/help`                | Show available commands                                              |
-| `/model [alias]`       | Switch model or list available models                                |
-| `/thinking [on\|off]`  | Enable / disable thinking mode                                       |
-| `/theme [name]`        | Switch UI theme                                                      |
-| `/plan [on\|off]`      | Enable / disable plan mode                                           |
-| `/goal [objective]`    | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
-| `/usage`               | Token usage: context split, per-step detail, attribution, cache hits |
-| `/usage-history`       | List past session usage                                              |
-| `/clear`               | Clear the current conversation                                       |
-| `/ps`                  | List running background terminals and recent output                  |
-| `/stop [shell-id]`     | Stop one background terminal, or all when no ID is given             |
-| `/clear-peer-context`  | Remove the peer-influenced conversation suffix after confirmation    |
-| `/list-agents`         | List reachable named X-Code sessions                                 |
-| `/compact`             | Manually compress context                                            |
-| `/resume`              | Pick a past session to resume                                        |
-| `/fork [name]`         | Branch completed context with an optional name (working tree shared) |
-| `/rewind`              | Roll back to a previous message (restores files + truncates history) |
-| `/init`                | Create or update `AGENTS.md` at project root                         |
-| `/review [PR#]`        | Review a GitHub PR (requires `gh`)                                   |
-| `/memory [subcommand]` | Inspect, search, explain, or reload global long-term memory          |
-| `/skill <sub>`         | Manage Skills                                                        |
-| `/mcp <sub>`           | Manage MCP servers                                                   |
-| `/plugin <sub>`        | Manage plugins and marketplaces                                      |
-| `/browser <sub>`       | Configure Browser Use and automatic local visual checks              |
-| `/doctor`              | Diagnose the runtime environment                                     |
-| `/exit`                | Save session and exit                                                |
+| Command                          | Description                                                          |
+| -------------------------------- | -------------------------------------------------------------------- |
+| `/help`                          | Show available commands                                              |
+| `/login [--device-auth\|status]` | Sign in with ChatGPT or show authentication status                   |
+| `/logout`                        | Sign out from ChatGPT                                                |
+| `/model [model-id\|refresh]`     | Pick a preloaded model or explicitly refresh the ChatGPT catalog     |
+| `/thinking [on\|off]`            | Enable / disable thinking mode                                       |
+| `/theme [name]`                  | Switch UI theme                                                      |
+| `/plan [on\|off]`                | Enable / disable plan mode                                           |
+| `/goal [objective]`              | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |
+| `/usage`                         | Token usage: context split, per-step detail, attribution, cache hits |
+| `/usage-history`                 | List past session usage                                              |
+| `/clear`                         | Clear the current conversation                                       |
+| `/ps`                            | List running background terminals and recent output                  |
+| `/stop [shell-id]`               | Stop one background terminal, or all when no ID is given             |
+| `/clear-peer-context`            | Remove the peer-influenced conversation suffix after confirmation    |
+| `/list-agents`                   | List reachable named X-Code sessions                                 |
+| `/compact`                       | Manually compress context                                            |
+| `/resume`                        | Pick a past session to resume                                        |
+| `/fork [name]`                   | Branch completed context with an optional name (working tree shared) |
+| `/rewind`                        | Roll back to a previous message (restores files + truncates history) |
+| `/init`                          | Create or update `AGENTS.md` at project root                         |
+| `/review [PR#]`                  | Review a GitHub PR (requires `gh`)                                   |
+| `/memory [subcommand]`           | Inspect, search, explain, or reload global long-term memory          |
+| `/skill <sub>`                   | Manage Skills                                                        |
+| `/mcp <sub>`                     | Manage MCP servers                                                   |
+| `/plugin <sub>`                  | Manage plugins and marketplaces                                      |
+| `/browser <sub>`                 | Configure Browser Use and automatic local visual checks              |
+| `/doctor`                        | Diagnose the runtime environment                                     |
+| `/exit`                          | Save session and exit                                                |
 
 ## Detailed Docs
 

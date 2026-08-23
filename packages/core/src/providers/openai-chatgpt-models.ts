@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
+import { getOpenAIAuthContext, getOpenAIAuthGeneration } from '../auth/openai-chatgpt/auth-resolver.js'
 import { readOpenAIChatGPTCredentials } from '../auth/openai-chatgpt/credential-store.js'
 import { OPENAI_CHATGPT_OAUTH } from '../auth/openai-chatgpt/oauth.js'
 import { getOpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
@@ -11,6 +11,13 @@ import { PROVIDER_MODELS } from './catalog.js'
 import type { ProviderModel, ReasoningTierOption } from './catalog.js'
 
 const CACHE_TTL_MS = 5 * 60 * 1000
+const SHARED_MODEL_REFRESH_TIMEOUT_MS = 8 * 1000
+
+// The ChatGPT models endpoint interprets `client_version` as an official
+// Codex protocol compatibility version, not this product's package version.
+// GPT-5.6 requires at least 0.144.0; sending x-code's independent 0.x version
+// makes the endpoint legitimately return an empty picker catalog.
+const OPENAI_CODEX_COMPATIBILITY_VERSION = '0.144.0'
 
 export interface OpenAIChatGPTRuntimeModel extends ProviderModel {
   contextWindow?: number
@@ -20,29 +27,25 @@ export interface OpenAIChatGPTRuntimeModel extends ProviderModel {
   supportedReasoningLevels?: Array<{ effort: string; description?: string }>
 }
 
-interface RemoteModel {
-  slug?: string
-  display_name?: string
-  description?: string
-  input_modalities?: string[]
-  context_window?: number
-  default_reasoning_level?: string
-  max_context_window?: number
-  max_output_tokens?: number
-  supports_reasoning_summary_parameter?: boolean
-  supported_reasoning_levels?: Array<{ effort?: string; description?: string }>
-  visibility?: string
-  priority?: number
-}
-
-interface ModelsResponse {
-  models?: RemoteModel[]
+export interface OpenAIChatGPTModelCatalogState {
+  error?: string
+  errorCode?: string
+  models: readonly OpenAIChatGPTRuntimeModel[]
+  source: 'cache' | 'fallback' | 'remote'
+  verifiedAt?: number
 }
 
 interface ModelsCache {
   accountKey: string
+  codexCompatibilityVersion: string
   fetchedAt: number
   models: OpenAIChatGPTRuntimeModel[]
+}
+
+interface AuthSnapshot {
+  accountKey?: string
+  accountReadError?: unknown
+  generation: number
 }
 
 const FALLBACK_MODELS: OpenAIChatGPTRuntimeModel[] = [
@@ -110,8 +113,16 @@ const FALLBACK_MODELS: OpenAIChatGPTRuntimeModel[] = [
 
 let runtimeModels: OpenAIChatGPTRuntimeModel[] | undefined
 let runtimeAccountKey: string | undefined
+let runtimeAuthGeneration: number | undefined
+let runtimeError: string | undefined
+let runtimeErrorCode: string | undefined
+let runtimeSource: OpenAIChatGPTModelCatalogState['source'] | undefined
 let fetchedAt = 0
 let lastClientVersion: string | undefined
+const catalogRefreshPromises = new Map<
+  string,
+  { force: boolean; promise: Promise<readonly OpenAIChatGPTRuntimeModel[]> }
+>()
 
 function cachePath(): string {
   return path.join(userXcodeDir(), 'cache', 'openai-chatgpt-models.json')
@@ -158,11 +169,67 @@ async function currentAccountKey(): Promise<string> {
     .digest('hex')
 }
 
+async function captureAuthSnapshot(): Promise<AuthSnapshot> {
+  const generation = getOpenAIAuthGeneration()
+  try {
+    return { generation, accountKey: await currentAccountKey() }
+  } catch (accountReadError) {
+    return { generation, accountReadError }
+  }
+}
+
+async function authSnapshotIsCurrent(snapshot: AuthSnapshot): Promise<boolean> {
+  if (getOpenAIAuthContext().mode !== 'chatgpt' || getOpenAIAuthGeneration() !== snapshot.generation) return false
+  try {
+    return (await currentAccountKey()) === snapshot.accountKey
+  } catch {
+    return snapshot.accountKey === undefined
+  }
+}
+
+function activeCatalogState(): OpenAIChatGPTModelCatalogState {
+  if (runtimeAuthGeneration !== getOpenAIAuthGeneration()) {
+    return { models: FALLBACK_MODELS, source: 'fallback' }
+  }
+  return {
+    models: runtimeModels ?? FALLBACK_MODELS,
+    source: runtimeSource ?? 'fallback',
+    ...(fetchedAt > 0 ? { verifiedAt: fetchedAt } : {}),
+    ...(runtimeError ? { error: runtimeError } : {}),
+    ...(runtimeErrorCode ? { errorCode: runtimeErrorCode } : {}),
+  }
+}
+
+function activeRuntimeModels(): readonly OpenAIChatGPTRuntimeModel[] {
+  return activeCatalogState().models
+}
+
+async function commitRuntimeModels(
+  snapshot: AuthSnapshot,
+  models: OpenAIChatGPTRuntimeModel[],
+  accountKey: string | undefined,
+  timestamp: number,
+  source: OpenAIChatGPTModelCatalogState['source'],
+  error?: string,
+  errorCode?: string,
+): Promise<boolean> {
+  if (!(await authSnapshotIsCurrent(snapshot))) return false
+  runtimeModels = models
+  runtimeAccountKey = accountKey
+  runtimeAuthGeneration = snapshot.generation
+  runtimeError = error
+  runtimeErrorCode = errorCode
+  runtimeSource = source
+  fetchedAt = timestamp
+  return true
+}
+
 async function loadCache(accountKey: string): Promise<ModelsCache | undefined> {
   try {
     const value = JSON.parse(await fs.readFile(cachePath(), 'utf-8')) as Partial<ModelsCache>
     if (
       value.accountKey === accountKey &&
+      value.codexCompatibilityVersion === OPENAI_CODEX_COMPATIBILITY_VERSION &&
       typeof value.fetchedAt === 'number' &&
       Array.isArray(value.models) &&
       value.models.every(isRuntimeModel)
@@ -175,50 +242,85 @@ async function loadCache(accountKey: string): Promise<ModelsCache | undefined> {
   return undefined
 }
 
-async function writeCache(cache: ModelsCache): Promise<void> {
+async function writeCache(cache: ModelsCache, snapshot: AuthSnapshot): Promise<void> {
   const target = cachePath()
-  const temp = `${target}.${process.pid}.tmp`
+  const temp = `${target}.${process.pid}.${randomUUID()}.tmp`
   try {
     await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.writeFile(temp, JSON.stringify(cache, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 })
+    if (!(await authSnapshotIsCurrent(snapshot))) return
     await fs.rename(temp, target)
   } finally {
     await fs.rm(temp, { force: true }).catch(() => undefined)
   }
 }
 
-function normalizeRemoteModels(response: ModelsResponse): OpenAIChatGPTRuntimeModel[] {
-  return (response.models ?? [])
-    .filter((model) => !!model.slug && (model.visibility === undefined || model.visibility === 'list'))
-    .sort((left, right) => (left.priority ?? Number.MAX_SAFE_INTEGER) - (right.priority ?? Number.MAX_SAFE_INTEGER))
-    .map((model) => {
-      const supportedReasoningLevels = Array.isArray(model.supported_reasoning_levels)
-        ? model.supported_reasoning_levels
-            .filter((level): level is { effort: string; description?: string } => !!level.effort)
-            .map((level) => ({
-              effort: level.effort,
-              ...(level.description ? { description: level.description } : {}),
-            }))
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
+function normalizeRemoteModels(response: unknown): OpenAIChatGPTRuntimeModel[] {
+  const values = asRecord(response)?.models
+  if (!Array.isArray(values)) throw new Error('ChatGPT model catalog response is invalid.')
+
+  const normalized: Array<{ model: OpenAIChatGPTRuntimeModel; priority: number }> = []
+  let recognizedEntries = 0
+  for (const value of values) {
+    const item = asRecord(value)
+    const slug = typeof item?.slug === 'string' ? item.slug.trim() : ''
+    if (!item || !slug) continue
+    recognizedEntries += 1
+    if (item.visibility !== undefined && item.visibility !== 'list') continue
+
+    const supportedReasoningLevels = Array.isArray(item.supported_reasoning_levels)
+      ? item.supported_reasoning_levels.flatMap((level) => {
+          const candidate = asRecord(level)
+          if (typeof candidate?.effort !== 'string' || !candidate.effort) return []
+          return [
+            {
+              effort: candidate.effort,
+              ...(typeof candidate.description === 'string' && candidate.description
+                ? { description: candidate.description }
+                : {}),
+            },
+          ]
+        })
+      : undefined
+    const modalities =
+      Array.isArray(item.input_modalities) && item.input_modalities.every((value) => typeof value === 'string')
+        ? item.input_modalities
         : undefined
-      return {
-        id: `openai:${model.slug!}`,
-        label: model.display_name || model.slug!,
-        description: model.description || 'ChatGPT subscription model',
-        vision: !Array.isArray(model.input_modalities) || model.input_modalities.includes('image'),
-        supportsReasoningSummaryParameter: model.supports_reasoning_summary_parameter !== false,
-        ...(typeof (model.context_window ?? model.max_context_window) === 'number' &&
-        (model.context_window ?? model.max_context_window)! > 0
-          ? { contextWindow: model.context_window ?? model.max_context_window }
+    const contextWindow = isPositiveSafeInteger(item.context_window)
+      ? item.context_window
+      : isPositiveSafeInteger(item.max_context_window)
+        ? item.max_context_window
+        : undefined
+    normalized.push({
+      priority:
+        typeof item.priority === 'number' && Number.isFinite(item.priority) ? item.priority : Number.MAX_SAFE_INTEGER,
+      model: {
+        id: `openai:${slug}`,
+        label: typeof item.display_name === 'string' && item.display_name ? item.display_name : slug,
+        description:
+          typeof item.description === 'string' && item.description ? item.description : 'ChatGPT subscription model',
+        vision: !modalities || modalities.includes('image'),
+        supportsReasoningSummaryParameter:
+          typeof item.supports_reasoning_summary_parameter === 'boolean'
+            ? item.supports_reasoning_summary_parameter
+            : true,
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(typeof item.default_reasoning_level === 'string' && item.default_reasoning_level
+          ? { defaultReasoningLevel: item.default_reasoning_level }
           : {}),
-        ...(typeof model.default_reasoning_level === 'string' && model.default_reasoning_level
-          ? { defaultReasoningLevel: model.default_reasoning_level }
-          : {}),
-        ...(typeof model.max_output_tokens === 'number' && model.max_output_tokens > 0
-          ? { maxOutputTokens: model.max_output_tokens }
-          : {}),
+        ...(isPositiveSafeInteger(item.max_output_tokens) ? { maxOutputTokens: item.max_output_tokens } : {}),
         ...(supportedReasoningLevels ? { supportedReasoningLevels } : {}),
-      }
+      },
     })
+  }
+  if (values.length > 0 && recognizedEntries === 0) {
+    throw new Error('ChatGPT model catalog contained no valid model entries.')
+  }
+  return normalized.sort((left, right) => left.priority - right.priority).map(({ model }) => model)
 }
 
 async function fetchRemoteModels(
@@ -230,16 +332,19 @@ async function fetchRemoteModels(
   const manager = getOpenAIChatGPTTokenManager()
   let auth = await manager.getRequestAuth(signal)
   const request = async () =>
-    fetchImpl(`${OPENAI_CHATGPT_OAUTH.modelsEndpoint}?client_version=${encodeURIComponent(clientVersion)}`, {
-      headers: {
-        Authorization: `Bearer ${auth.accessToken}`,
-        ...(auth.accountId ? { 'ChatGPT-Account-ID': auth.accountId } : {}),
-        ...(auth.isFedRamp ? { 'X-OpenAI-Fedramp': 'true' } : {}),
-        originator: 'x-code-cli',
-        'User-Agent': `x-code-cli/${clientVersion}`,
+    fetchImpl(
+      `${OPENAI_CHATGPT_OAUTH.modelsEndpoint}?client_version=${encodeURIComponent(OPENAI_CODEX_COMPATIBILITY_VERSION)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.accessToken}`,
+          ...(auth.accountId ? { 'ChatGPT-Account-ID': auth.accountId } : {}),
+          ...(auth.isFedRamp ? { 'X-OpenAI-Fedramp': 'true' } : {}),
+          originator: 'x-code-cli',
+          'User-Agent': `x-code-cli/${clientVersion}`,
+        },
+        signal,
       },
-      signal,
-    })
+    )
 
   let response = await request()
   if (response.status === 401) {
@@ -247,66 +352,149 @@ async function fetchRemoteModels(
     response = await request()
   }
   if (!response.ok) throw new Error(`ChatGPT model catalog request failed (${response.status})`)
-  const models = normalizeRemoteModels((await response.json()) as ModelsResponse)
-  return { accountKey, fetchedAt: Date.now(), models }
+  const models = normalizeRemoteModels(await response.json())
+  return {
+    accountKey,
+    codexCompatibilityVersion: OPENAI_CODEX_COMPATIBILITY_VERSION,
+    fetchedAt: Date.now(),
+    models,
+  }
 }
 
-export async function refreshOpenAIChatGPTModels(
+async function refreshOpenAIChatGPTModelsInternal(
   clientVersion: string,
+  snapshot: AuthSnapshot,
   options: { fetch?: typeof fetch; signal?: AbortSignal; force?: boolean } = {},
 ): Promise<readonly OpenAIChatGPTRuntimeModel[]> {
-  if (getOpenAIAuthContext().mode !== 'chatgpt') return PROVIDER_MODELS.openai ?? []
-  lastClientVersion = clientVersion
-  let accountKey: string
-  try {
-    accountKey = await currentAccountKey()
-  } catch (err) {
-    debugLog('openai-chatgpt.models-account-read-failed', err instanceof Error ? err.message : String(err))
-    runtimeModels = FALLBACK_MODELS
-    runtimeAccountKey = undefined
-    fetchedAt = Date.now()
-    return runtimeModels
+  const accountKey = snapshot.accountKey
+  if (!accountKey) {
+    const err = snapshot.accountReadError
+    const message = err instanceof Error ? err.message : String(err)
+    const errorCode =
+      err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
+        ? (err as { code: string }).code
+        : undefined
+    debugLog('openai-chatgpt.models-account-read-failed', message)
+    await commitRuntimeModels(snapshot, FALLBACK_MODELS, undefined, 0, 'fallback', message, errorCode)
+    return activeRuntimeModels()
   }
-  if (!options.force && runtimeModels && runtimeAccountKey === accountKey && Date.now() - fetchedAt < CACHE_TTL_MS) {
+  if (
+    !options.force &&
+    runtimeModels &&
+    runtimeAccountKey === accountKey &&
+    runtimeAuthGeneration === snapshot.generation &&
+    runtimeError === undefined &&
+    Date.now() - fetchedAt < CACHE_TTL_MS
+  ) {
     return runtimeModels
   }
 
   const cached = await loadCache(accountKey)
-  if (!options.force && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    runtimeModels = cached.models
-    runtimeAccountKey = accountKey
-    fetchedAt = cached.fetchedAt
-    return runtimeModels
+  const retryingAfterFailure = runtimeAuthGeneration === snapshot.generation && runtimeError !== undefined
+  if (!options.force && !retryingAfterFailure && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    await commitRuntimeModels(snapshot, cached.models, accountKey, cached.fetchedAt, 'cache')
+    return activeRuntimeModels()
   }
 
   try {
     const remote = await fetchRemoteModels(clientVersion, accountKey, options.fetch ?? fetch, options.signal)
-    runtimeModels = remote.models
-    runtimeAccountKey = accountKey
-    fetchedAt = remote.fetchedAt
-    await writeCache(remote).catch((err) => debugLog('openai-chatgpt.models-cache-write-failed', String(err)))
+    if (!(await commitRuntimeModels(snapshot, remote.models, accountKey, remote.fetchedAt, 'remote')))
+      return activeRuntimeModels()
+    await writeCache(remote, snapshot).catch((err) => debugLog('openai-chatgpt.models-cache-write-failed', String(err)))
   } catch (err) {
-    debugLog('openai-chatgpt.models-refresh-failed', err instanceof Error ? err.message : String(err))
-    runtimeModels = cached?.models ?? FALLBACK_MODELS
-    runtimeAccountKey = accountKey
-    fetchedAt = cached?.fetchedAt ?? Date.now()
+    if (!(await authSnapshotIsCurrent(snapshot))) return activeRuntimeModels()
+    const message = err instanceof Error ? err.message : String(err)
+    const errorCode =
+      err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
+        ? (err as { code: string }).code
+        : undefined
+    debugLog('openai-chatgpt.models-refresh-failed', message)
+    await commitRuntimeModels(
+      snapshot,
+      cached?.models ?? FALLBACK_MODELS,
+      accountKey,
+      cached?.fetchedAt ?? 0,
+      cached ? 'cache' : 'fallback',
+      message,
+      errorCode,
+    )
   }
-  return runtimeModels
+  return activeRuntimeModels()
 }
 
-export async function refreshOpenAIChatGPTModelsAfterNotFound(signal?: AbortSignal): Promise<void> {
+export function refreshOpenAIChatGPTModels(
+  clientVersion: string,
+  options: { fetch?: typeof fetch; signal?: AbortSignal; force?: boolean } = {},
+): Promise<readonly OpenAIChatGPTRuntimeModel[]> {
+  if (getOpenAIAuthContext().mode !== 'chatgpt') return Promise.resolve(PROVIDER_MODELS.openai ?? [])
+  if (options.signal?.aborted) {
+    return Promise.reject(options.signal.reason ?? new Error('ChatGPT model catalog wait was cancelled.'))
+  }
+  lastClientVersion = clientVersion
+  return captureAuthSnapshot().then((snapshot) => {
+    const refreshKey = `${snapshot.generation}:${snapshot.accountKey ?? 'unavailable'}`
+    const existing = catalogRefreshPromises.get(refreshKey)
+    if (existing) {
+      const joined = waitForModelRefresh(existing.promise, options.signal)
+      if (!options.force || existing.force) return joined
+      return joined.then(() => refreshOpenAIChatGPTModels(clientVersion, options))
+    }
+
+    const pending = refreshOpenAIChatGPTModelsInternal(clientVersion, snapshot, {
+      ...options,
+      signal: AbortSignal.timeout(SHARED_MODEL_REFRESH_TIMEOUT_MS),
+    })
+    const shared = pending.finally(() => {
+      if (catalogRefreshPromises.get(refreshKey)?.promise === shared) catalogRefreshPromises.delete(refreshKey)
+    })
+    catalogRefreshPromises.set(refreshKey, { force: options.force === true, promise: shared })
+    return waitForModelRefresh(shared, options.signal)
+  })
+}
+
+function waitForModelRefresh<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('ChatGPT model catalog wait was cancelled.'))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error('ChatGPT model catalog wait was cancelled.'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+export async function refreshOpenAIChatGPTModelsAfterNotFound(
+  rejectedModelId?: string,
+  signal?: AbortSignal,
+): Promise<void> {
   if (!lastClientVersion) return
+  const generation = getOpenAIAuthGeneration()
   await refreshOpenAIChatGPTModels(lastClientVersion, { signal, force: true })
+  if (!rejectedModelId || generation !== getOpenAIAuthGeneration() || runtimeAuthGeneration !== generation) return
+  runtimeModels = activeRuntimeModels().filter((model) => model.id !== rejectedModelId)
 }
 
 export function getProviderModels(): Record<string, readonly ProviderModel[]> {
   if (getOpenAIAuthContext().mode !== 'chatgpt') return PROVIDER_MODELS
-  return { ...PROVIDER_MODELS, openai: runtimeModels ?? FALLBACK_MODELS }
+  return { ...PROVIDER_MODELS, openai: activeRuntimeModels() }
+}
+
+export function getOpenAIChatGPTModelCatalogState(): OpenAIChatGPTModelCatalogState | undefined {
+  if (getOpenAIAuthContext().mode !== 'chatgpt') return undefined
+  return activeCatalogState()
 }
 
 export function getOpenAIChatGPTRuntimeModel(modelId: string): OpenAIChatGPTRuntimeModel | undefined {
   if (getOpenAIAuthContext().mode !== 'chatgpt') return undefined
-  return (runtimeModels ?? FALLBACK_MODELS).find((model) => model.id === modelId)
+  return activeRuntimeModels().find((model) => model.id === modelId)
 }
 
 function reasoningLabel(effort: string): string {
@@ -330,6 +518,11 @@ export function getOpenAIChatGPTReasoningTiers(modelId: string): readonly Reason
 export function resetOpenAIChatGPTModelsForTesting(): void {
   runtimeModels = undefined
   runtimeAccountKey = undefined
+  runtimeAuthGeneration = undefined
+  runtimeError = undefined
+  runtimeErrorCode = undefined
+  runtimeSource = undefined
   fetchedAt = 0
   lastClientVersion = undefined
+  catalogRefreshPromises.clear()
 }

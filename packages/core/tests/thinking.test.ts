@@ -1,4 +1,13 @@
 import { getReasoningLevel, getThinkingProviderOptions, supportsReasoningTier } from '../src/providers/thinking.js'
+import { isolateOpenAIAuth } from './provider-env.js'
+
+let restoreOpenAIAuth: () => void
+
+beforeEach(() => {
+  restoreOpenAIAuth = isolateOpenAIAuth()
+})
+
+afterEach(() => restoreOpenAIAuth())
 
 describe('supportsReasoningTier', () => {
   it('is true for tier-capable models', () => {

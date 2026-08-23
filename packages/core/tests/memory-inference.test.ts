@@ -6,9 +6,16 @@ import {
   resetMemoryInferenceState,
   runMemoryInference,
 } from '../src/knowledge/memory/inference.js'
+import { isolateOpenAIAuth } from './provider-env.js'
+
+let restoreOpenAIAuth: () => void
 
 describe('memory inference policy', () => {
-  beforeEach(() => resetMemoryInferenceState())
+  beforeEach(() => {
+    restoreOpenAIAuth = isolateOpenAIAuth()
+    resetMemoryInferenceState()
+  })
+  afterEach(() => restoreOpenAIAuth())
 
   it('starts ordinary models with thinking off and deterministic sampling', async () => {
     const generate = vi.fn().mockResolvedValue({ output: {} })

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 
@@ -13,6 +13,7 @@ export const OPENAI_CHATGPT_OAUTH = {
   browserRedirectUri: 'http://localhost:1455/auth/callback',
   browserBindHost: '127.0.0.1',
   browserPort: 1455,
+  browserFallbackPort: 1457,
   scopes: 'openid profile email offline_access api.connectors.read api.connectors.invoke',
   responsesEndpoint: 'https://chatgpt.com/backend-api/codex/responses',
   modelsEndpoint: 'https://chatgpt.com/backend-api/codex/models',
@@ -29,6 +30,7 @@ export interface OpenAIChatGPTOAuthOptions {
 
 export interface OpenAIChatGPTBrowserLoginOptions extends OpenAIChatGPTOAuthOptions {
   onAuthorizationUrl?: (url: string) => void
+  onCredentials?: (credentials: OpenAIChatGPTCredentials, signal: AbortSignal) => Promise<void>
   openBrowser?: (url: string) => Promise<void>
   timeoutMs?: number
 }
@@ -114,8 +116,16 @@ export function openAIChatGPTCredentialsFromTokens(
     typeof tokens.expires_in === 'number' && Number.isFinite(tokens.expires_in)
       ? Date.now() + tokens.expires_in * 1000
       : (metadata.jwtExpiresAt ?? Date.now() + 60 * 60 * 1000)
+  const previousRevision = previous?.authRevision
+    ? previous.authRevision
+    : previous
+      ? `legacy-${createHash('sha256')
+          .update(previous.accountId ?? previous.refreshToken)
+          .digest('hex')}`
+      : undefined
   return {
     version: 1,
+    authRevision: previousRevision ?? randomUUID(),
     accessToken: tokens.access_token,
     refreshToken,
     expiresAt,
@@ -127,11 +137,15 @@ export function openAIChatGPTCredentialsFromTokens(
   }
 }
 
-export function buildOpenAIChatGPTAuthorizeUrl(pkce: PkceCodes, state: string): string {
+export function buildOpenAIChatGPTAuthorizeUrl(
+  pkce: PkceCodes,
+  state: string,
+  redirectUri: string = OPENAI_CHATGPT_OAUTH.browserRedirectUri,
+): string {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: OPENAI_CHATGPT_OAUTH.clientId,
-    redirect_uri: OPENAI_CHATGPT_OAUTH.browserRedirectUri,
+    redirect_uri: redirectUri,
     scope: OPENAI_CHATGPT_OAUTH.scopes,
     code_challenge: pkce.challenge,
     code_challenge_method: 'S256',
@@ -284,7 +298,7 @@ function callbackPage(title: string, message: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></body></html>`
 }
 
-async function listen(server: Server, signal?: AbortSignal): Promise<void> {
+async function listen(server: Server, port: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) throw signal.reason ?? aborted()
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => {
@@ -305,15 +319,32 @@ async function listen(server: Server, signal?: AbortSignal): Promise<void> {
     server.once('error', onError)
     server.once('listening', onListening)
     signal?.addEventListener('abort', onAbort, { once: true })
-    server.listen(OPENAI_CHATGPT_OAUTH.browserPort, OPENAI_CHATGPT_OAUTH.browserBindHost)
+    server.listen(port, OPENAI_CHATGPT_OAUTH.browserBindHost)
   })
+}
+
+async function listenForBrowserCallback(server: Server, signal?: AbortSignal): Promise<number> {
+  const ports = [OPENAI_CHATGPT_OAUTH.browserPort, OPENAI_CHATGPT_OAUTH.browserFallbackPort]
+  for (const port of ports) {
+    try {
+      await listen(server, port, signal)
+      return port
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || port === ports.at(-1)) throw error
+    }
+  }
+  throw new OpenAIChatGPTAuthError('oauth-failed', 'No ChatGPT browser callback port is available.')
 }
 
 function closeServer(server: Server): Promise<void> {
   if (!server.listening) return Promise.resolve()
   return new Promise((resolve) => {
-    server.close(() => resolve())
-    server.closeAllConnections()
+    const forceCloseTimer = setTimeout(() => server.closeAllConnections(), 10)
+    forceCloseTimer.unref()
+    server.close(() => {
+      clearTimeout(forceCloseTimer)
+      resolve()
+    })
   })
 }
 
@@ -375,10 +406,13 @@ function normalizeFlowError(
   return err
 }
 
-function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+function abortable<T>(promise: Promise<T>, signal: AbortSignal, shouldIgnoreAbort?: () => boolean): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason ?? aborted())
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? aborted())
+    const onAbort = () => {
+      if (shouldIgnoreAbort?.()) return
+      reject(signal.reason ?? aborted())
+    }
     signal.addEventListener('abort', onAbort, { once: true })
     promise.then(
       (value) => {
@@ -415,77 +449,131 @@ export async function loginOpenAIChatGPTWithBrowser(
   const flow = createFlowSignal(options.signal, options.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS)
   const pkce = generateOpenAIChatGPTPkce()
   const state = base64Url(randomBytes(32))
-  let resolveCode: ((code: string) => void) | undefined
-  let rejectCode: ((err: Error) => void) | undefined
-  const codePromise = new Promise<string>((resolve, reject) => {
-    resolveCode = resolve
-    rejectCode = reject
+  let resolveCredentials: ((credentials: OpenAIChatGPTCredentials) => void) | undefined
+  let rejectCredentials: ((err: Error) => void) | undefined
+  const credentialsPromise = new Promise<OpenAIChatGPTCredentials>((resolve, reject) => {
+    resolveCredentials = resolve
+    rejectCredentials = reject
   })
-  void codePromise.catch(() => undefined)
+  void credentialsPromise.catch(() => undefined)
   let settled = false
+  let callbackAccepted = false
+  let credentialCommitInProgress = false
+  let redirectUri: string = OPENAI_CHATGPT_OAUTH.browserRedirectUri
   const settleError = (err: Error) => {
     if (settled) return
     settled = true
-    rejectCode?.(err)
+    rejectCredentials?.(err)
   }
-  const settleCode = (code: string) => {
+  const settleCredentials = (credentials: OpenAIChatGPTCredentials) => {
     if (settled) return
     settled = true
-    resolveCode?.(code)
+    resolveCredentials?.(credentials)
   }
 
   const server = createServer((request, response) => {
-    const requestUrl = new URL(request.url ?? '/', OPENAI_CHATGPT_OAUTH.browserRedirectUri)
+    const requestUrl = new URL(request.url ?? '/', redirectUri)
     response.setHeader('Content-Type', 'text/html; charset=utf-8')
     response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('Connection', 'close')
     if (request.method !== 'GET' || requestUrl.pathname !== '/auth/callback') {
       response.writeHead(404)
       response.end(callbackPage('Not found', 'This callback URL is not valid.'))
       return
     }
     if (requestUrl.searchParams.get('state') !== state) {
-      settleError(new OpenAIChatGPTAuthError('state-mismatch', 'The ChatGPT authorization state did not match.'))
       response.writeHead(400)
       response.end(callbackPage('ChatGPT login failed', 'The authorization state did not match.'))
+      return
+    }
+    if (settled || callbackAccepted) {
+      response.writeHead(409)
+      response.end(callbackPage('ChatGPT login already handled', 'Return to x-code-cli to continue.'))
       return
     }
     const error = requestUrl.searchParams.get('error')
     if (error) {
       const safeError = /^[a-z0-9_.-]{1,80}$/i.test(error) ? error : 'authorization_failed'
-      settleError(new OpenAIChatGPTAuthError('oauth-failed', `ChatGPT authorization failed: ${safeError}`))
+      const authError = new OpenAIChatGPTAuthError('oauth-failed', `ChatGPT authorization failed: ${safeError}`)
+      const finish = () => settleError(authError)
       response.writeHead(400)
-      response.end(callbackPage('ChatGPT login failed', safeError))
+      response.once('close', finish)
+      response.end(callbackPage('ChatGPT login failed', safeError), finish)
       return
     }
     const code = requestUrl.searchParams.get('code')
     if (!code) {
-      settleError(new OpenAIChatGPTAuthError('oauth-failed', 'The ChatGPT authorization code was missing.'))
       response.writeHead(400)
       response.end(callbackPage('ChatGPT login failed', 'The authorization code was missing.'))
       return
     }
-    settleCode(code)
-    response.writeHead(200)
-    response.end(callbackPage('ChatGPT login complete', 'You can close this window and return to x-code-cli.'))
+    callbackAccepted = true
+    void (async () => {
+      try {
+        const credentials = await exchangeOpenAIChatGPTCode(code, redirectUri, pkce.verifier, {
+          ...options,
+          signal: flow.signal,
+        })
+        if (settled) return
+        credentialCommitInProgress = true
+        await options.onCredentials?.(credentials, flow.signal)
+        if (settled) return
+        const finish = () => settleCredentials(credentials)
+        if (response.destroyed) {
+          finish()
+        } else {
+          try {
+            response.writeHead(200)
+            response.once('close', finish)
+            response.end(
+              callbackPage('ChatGPT login complete', 'You can close this window and return to x-code-cli.'),
+              finish,
+            )
+          } catch {
+            finish()
+          }
+        }
+      } catch (err) {
+        credentialCommitInProgress = false
+        const authError =
+          err instanceof Error
+            ? err
+            : new OpenAIChatGPTAuthError('oauth-failed', 'ChatGPT login failed during token exchange.')
+        if (!response.destroyed && !response.writableEnded) {
+          const finish = () => settleError(authError)
+          response.writeHead(400)
+          response.once('close', finish)
+          response.end(
+            callbackPage('ChatGPT login failed', 'Return to x-code-cli for details, then try again.'),
+            finish,
+          )
+          return
+        }
+        settleError(authError)
+      }
+    })()
   })
 
-  const onAbort = () => settleError(flow.timedOut() ? flowTimeout('ChatGPT browser login timed out.') : aborted())
+  const onAbort = () => {
+    if (credentialCommitInProgress) return
+    settleError(flow.timedOut() ? flowTimeout('ChatGPT browser login timed out.') : aborted())
+  }
   flow.signal.addEventListener('abort', onAbort, { once: true })
   try {
-    await listen(server, flow.signal)
-    const url = buildOpenAIChatGPTAuthorizeUrl(pkce, state)
+    const port = await listenForBrowserCallback(server, flow.signal)
+    redirectUri = `http://localhost:${port}/auth/callback`
+    const url = buildOpenAIChatGPTAuthorizeUrl(pkce, state, redirectUri)
     options.onAuthorizationUrl?.(url)
-    await abortable((options.openBrowser ?? defaultOpenBrowser)(url), flow.signal)
-    const code = await codePromise
-    return await exchangeOpenAIChatGPTCode(code, OPENAI_CHATGPT_OAUTH.browserRedirectUri, pkce.verifier, {
-      ...options,
-      signal: flow.signal,
-    })
+    await abortable((options.openBrowser ?? defaultOpenBrowser)(url), flow.signal, () => credentialCommitInProgress)
+    return await credentialsPromise
   } catch (err) {
+    settleError(
+      err instanceof Error ? err : new OpenAIChatGPTAuthError('oauth-failed', 'ChatGPT browser login failed.'),
+    )
     if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
       throw new OpenAIChatGPTAuthError(
         'oauth-failed',
-        'Port 1455 is already in use. Close the other login process or run `xc login --device-auth`.',
+        'Ports 1455 and 1457 are already in use. Close another login process or run `xc login --device-auth`.',
         { cause: err },
       )
     }

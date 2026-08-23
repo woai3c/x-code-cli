@@ -9,7 +9,8 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createXai } from '@ai-sdk/xai'
 import { createProviderRegistry, customProvider } from 'ai'
 
-import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
+import { getOpenAIAuthSnapshot, refreshOpenAIAuthSnapshot } from '../auth/openai-chatgpt/auth-resolver.js'
+import type { OpenAIAuthSnapshot } from '../auth/openai-chatgpt/auth-resolver.js'
 import { getOpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
 import { getProviderOptions, loadUserConfig } from '../config/index.js'
 import { createOpenAIChatGPTFetch } from './openai-chatgpt-fetch.js'
@@ -27,6 +28,29 @@ export function kimiCodingModelId(modelId: string): string {
   return KIMI_CODING_MODEL_IDS[modelId as keyof typeof KIMI_CODING_MODEL_IDS] ?? modelId
 }
 
+function unavailableOpenAIResponse(message: string): Response {
+  return Response.json({ error: { message } }, { status: 401 })
+}
+
+function createOpenAIAuthFetch(providerSnapshot: OpenAIAuthSnapshot): typeof fetch {
+  const chatGPTFetch = createOpenAIChatGPTFetch({
+    tokenManager: getOpenAIChatGPTTokenManager(),
+    fetch: permanentErrorFetch,
+    userAgent: 'x-code-cli',
+  })
+  return async (input, init) => {
+    const current = await refreshOpenAIAuthSnapshot()
+    if (current.revision !== providerSnapshot.revision) {
+      return unavailableOpenAIResponse(
+        'OpenAI authentication changed in another process before this request was sent. Retry the request with the active authentication method.',
+      )
+    }
+    if (providerSnapshot.context.mode === 'chatgpt') return chatGPTFetch(input, init)
+    if (providerSnapshot.context.mode === 'api-key') return permanentErrorFetch(input, init)
+    return unavailableOpenAIResponse('No active OpenAI credentials remain. Run /login.')
+  }
+}
+
 export function createModelRegistry() {
   const opts = getProviderOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,18 +58,12 @@ export function createModelRegistry() {
   const config = loadUserConfig()
 
   if (opts.anthropic) providers.anthropic = createAnthropic({ fetch: permanentErrorFetch })
-  const openAIAuth = getOpenAIAuthContext()
-  if (openAIAuth.mode === 'chatgpt') {
+  const openAIAuth = getOpenAIAuthSnapshot()
+  if (openAIAuth.context.mode !== 'none') {
     providers.openai = createOpenAI({
-      apiKey: 'x-code-chatgpt-oauth',
-      fetch: createOpenAIChatGPTFetch({
-        tokenManager: getOpenAIChatGPTTokenManager(),
-        fetch: permanentErrorFetch,
-        userAgent: 'x-code-cli',
-      }),
+      apiKey: openAIAuth.context.mode === 'api-key' ? openAIAuth.context.apiKey : 'x-code-dynamic-openai-auth',
+      fetch: createOpenAIAuthFetch(openAIAuth),
     })
-  } else if (opts.openai) {
-    providers.openai = createOpenAI({ fetch: permanentErrorFetch })
   }
   if (opts.google) providers.google = createGoogle({ fetch: permanentErrorFetch })
   if (opts.xai) providers.xai = createXai({ fetch: permanentErrorFetch })

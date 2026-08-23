@@ -9,6 +9,8 @@ type AgentController = ReturnType<typeof useAgent>
 type AsyncHandler = (commandText: string, argument: string) => Promise<void>
 
 interface SlashCommandHandlers {
+  login: AsyncHandler
+  logout: AsyncHandler
   model: AsyncHandler
   thinking: AsyncHandler
   theme: AsyncHandler
@@ -60,6 +62,14 @@ export async function routeSlashCommand(text: string, router: SlashCommandRouter
     case 'help':
       agent.echoCommand(text)
       agent.addInfoMessage(buildHelpText(router.skillCommands, router.fileCommands))
+      return
+
+    case 'login':
+      await handlers.login(text, argument)
+      return
+
+    case 'logout':
+      await handlers.logout(text, argument)
       return
 
     case 'model':

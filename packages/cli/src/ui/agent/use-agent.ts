@@ -398,6 +398,37 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     }
   }, [])
 
+  const applyModelRequestPreflight = useCallback(
+    async (currentModelId: string): Promise<LanguageModel> => {
+      const preflight = await options.beforeModelRequest?.(currentModelId)
+      if (preflight?.model || preflight?.modelId) {
+        if (!preflight.model || !preflight.modelId)
+          throw new Error('Model request preflight returned an incomplete model switch.')
+        if (!preflight.onApplied) {
+          modelRef.current = preflight.model
+          modelIdRef.current = preflight.modelId
+          options.modelId = preflight.modelId
+          invalidateModelDependentState(loopStateRef.current)
+          options.memoryService?.setActiveModelId(preflight.modelId)
+          setState((prev) => ({ ...prev, modelId: preflight.modelId! }))
+        }
+      }
+      preflight?.onApplied?.()
+      if (preflight?.notice) {
+        appendMessage({
+          id: `auth-change-${Date.now()}`,
+          role: 'assistant',
+          content: preflight.notice,
+          timestamp: Date.now(),
+          kind: 'command-result',
+        })
+      }
+      if (preflight?.blockedMessage) throw new Error(preflight.blockedMessage)
+      return preflight?.model ?? modelRef.current
+    },
+    [appendMessage, options],
+  )
+
   /** Submit a user message.
    *
    *  `silent: true` skips appending the text to the UI scrollback while still
@@ -610,6 +641,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
       try {
         await initialize()
+        await applyModelRequestPreflight(modelIdRef.current)
         // Resolve any @path / bare-path references in the input into proper
         // content parts (images for multimodal providers, extracted text for
         // PDF/Office/non-vision providers). Falls through to the plain-string
@@ -819,6 +851,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       scheduleIdleDrain,
       bindShellSessionEvents,
       flushShellWaitUi,
+      applyModelRequestPreflight,
     ],
   )
 
@@ -1248,6 +1281,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     debugLog('compression.manual.start', `messages=${ls.messages.length} tokens=${before}`)
 
     try {
+      const compressionModel = await applyModelRequestPreflight(modelIdRef.current)
       // Extract previous summary for incremental update + file tracking
       const firstMsg = ls.messages[0]
       const prefix = '[Previous conversation summary]\n'
@@ -1262,7 +1296,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       const originalTrackedMessages = ls.trackedMessages
       const compressed = await compressTrackedMessagesWithUsage(
         originalTrackedMessages,
-        modelRef.current,
+        compressionModel,
         previousSummary,
         filesTracked,
         controller.signal,
@@ -1334,7 +1368,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       restoreQueueToDraft()
       lease.release()
     }
-  }, [currentAuthority, restoreQueueToDraft])
+  }, [applyModelRequestPreflight, currentAuthority, restoreQueueToDraft])
 
   /** Switch model at runtime */
   const switchModel = useCallback(

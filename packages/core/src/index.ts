@@ -57,10 +57,14 @@ export {
 // OpenAI authentication
 export {
   getOpenAIAuthContext,
+  getOpenAIAuthSnapshot,
   getOpenAIAuthStatus,
   initializeOpenAIAuthContext,
+  refreshOpenAIAuthContextIfChanged,
+  refreshOpenAIAuthSnapshot,
   resetOpenAIAuthContextForTesting,
 } from './auth/openai-chatgpt/auth-resolver.js'
+export type { OpenAIAuthSnapshot } from './auth/openai-chatgpt/auth-resolver.js'
 export {
   clearOpenAIChatGPTCredentials,
   hasOpenAIChatGPTCredentials,
@@ -85,7 +89,12 @@ export type {
 
 // Provider Registry
 export { createModelRegistry, setZhipuReasoningEffort } from './providers/registry.js'
-export { getProviderModels, refreshOpenAIChatGPTModels } from './providers/openai-chatgpt-models.js'
+export {
+  getOpenAIChatGPTModelCatalogState,
+  getProviderModels,
+  refreshOpenAIChatGPTModels,
+} from './providers/openai-chatgpt-models.js'
+export type { OpenAIChatGPTModelCatalogState } from './providers/openai-chatgpt-models.js'
 
 // Agent
 export {
@@ -160,7 +169,7 @@ export { buildUserContent, extractFileReferences, ingestFile, classifyFile } fro
 export type { FileKind, FileReference, IngestedPart } from './agent/file-ingest.js'
 export { formatTranscription, isAudioFile, isWhisperAvailable, transcribeAudio } from './agent/audio-transcribe.js'
 export type { TranscribeAudioResult, TranscribeSegment } from './agent/audio-transcribe.js'
-export { captionImage, pickVisionProvider } from './agent/vision-fallback.js'
+export { captionImage, pickVisionProvider, resetVisionModelProviders } from './agent/vision-fallback.js'
 export type { VisionProvider, VisionUsageEvent } from './agent/vision-fallback.js'
 export {
   admitGoalInput,

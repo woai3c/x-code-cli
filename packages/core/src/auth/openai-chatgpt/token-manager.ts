@@ -8,6 +8,7 @@ import { OpenAIChatGPTAuthError } from './types.js'
 import type { OpenAIChatGPTCredentials } from './types.js'
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000
+const SHARED_REFRESH_TIMEOUT_MS = 30 * 1000
 
 export interface OpenAIChatGPTTokenManagerOptions {
   fetch?: typeof fetch
@@ -18,6 +19,25 @@ export interface OpenAIChatGPTRequestAuth {
   accessToken: string
   accountId?: string
   isFedRamp?: boolean
+}
+
+function waitForSharedRefresh<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('ChatGPT token refresh wait was cancelled.'))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error('ChatGPT token refresh wait was cancelled.'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
 }
 
 export class OpenAIChatGPTTokenManager {
@@ -55,7 +75,9 @@ export class OpenAIChatGPTTokenManager {
   }
 
   private refresh(failedAccessToken: string, force: boolean, signal?: AbortSignal): Promise<OpenAIChatGPTCredentials> {
+    if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('ChatGPT token refresh wait was cancelled.'))
     if (!this.refreshPromise) {
+      const refreshSignal = AbortSignal.timeout(SHARED_REFRESH_TIMEOUT_MS)
       this.refreshPromise = withOpenAIChatGPTCredentialLock(async () => {
         const current = await readOpenAIChatGPTCredentials()
         if (current.accessToken !== failedAccessToken) return current
@@ -64,7 +86,7 @@ export class OpenAIChatGPTTokenManager {
         const refreshed = await refreshOpenAIChatGPTAccessToken(current, {
           fetch: this.fetchImpl,
           userAgent: this.userAgent,
-          signal,
+          signal: refreshSignal,
         })
         if (current.accountId && refreshed.accountId && current.accountId !== refreshed.accountId) {
           throw new OpenAIChatGPTAuthError(
@@ -74,11 +96,11 @@ export class OpenAIChatGPTTokenManager {
         }
         await writeOpenAIChatGPTCredentials(refreshed)
         return refreshed
-      }, signal).finally(() => {
+      }, refreshSignal).finally(() => {
         this.refreshPromise = undefined
       })
     }
-    return this.refreshPromise
+    return waitForSharedRefresh(this.refreshPromise, signal)
   }
 }
 

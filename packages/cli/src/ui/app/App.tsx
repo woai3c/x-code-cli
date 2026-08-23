@@ -12,7 +12,9 @@ import {
   estimateTokenCount,
   getAvailableProviders,
   getContextWindow,
+  getOpenAIAuthSnapshot,
   getOpenAIAuthStatus,
+  getOpenAIChatGPTModelCatalogState,
   getProviderModels,
   getReasoningTierOptions,
   listSessions,
@@ -20,7 +22,9 @@ import {
   loadUserConfig,
   pickLatestSession,
   providerOf,
+  refreshOpenAIAuthSnapshot,
   refreshOpenAIChatGPTModels,
+  resetVisionModelProviders,
   resolveModelId,
   saveUserConfig,
   supportsReasoningTier,
@@ -29,6 +33,7 @@ import {
 import type { AgentOptions, CacheMissSummary, DiffStats, LanguageModel, LoadedSession } from '@x-code-cli/core'
 import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-code-cli/core'
 
+import { formatOpenAIAuthStatus, loginChatGPT, logoutChatGPT } from '../../auth-cli.js'
 import type { CliCleanupController } from '../../cleanup-controller.js'
 import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
 import { VERSION } from '../../version.js'
@@ -53,6 +58,7 @@ import {
 } from '../render/theme.js'
 import { formatCompactionResult, formatTokenCount, parseBooleanArg } from '../utils.js'
 import { getHeaderRowCount } from './AppHeader.js'
+import { refreshCatalogAfterCommittedLogin } from './chatgpt-login-postflight.js'
 import { SLASH_COMMANDS } from './command-content.js'
 import { formatStopResult } from './commands/background-terminal.js'
 import { createBrowserCommandHandler } from './commands/browser.js'
@@ -62,6 +68,15 @@ import { createMcpCommandHandler } from './commands/mcp.js'
 import { createPluginCommandHandler } from './commands/plugin.js'
 import { routeSlashCommand } from './commands/router.js'
 import { createSkillCommandHandler } from './commands/skill.js'
+import { replaceActiveModelProvider } from './model-activation.js'
+import {
+  commitOpenAIAuthTransition,
+  createOpenAIAuthTransitionState,
+  needsOpenAIAuthTransition,
+  needsOpenAIModelEntitlementCheck,
+  openAIModelEntitlementKey,
+  planOpenAIModelReconciliation,
+} from './openai-auth-transition.js'
 import type { SessionExitInfo } from './session-exit.js'
 import {
   canResumeGoalStatus,
@@ -72,6 +87,8 @@ import {
   formatRelativeTime,
 } from './session-format.js'
 import { formatUsageReport } from './usage-report.js'
+
+type ModelRequestPreflightResult = Awaited<ReturnType<NonNullable<AgentOptions['beforeModelRequest']>>>
 
 interface AppProps {
   model: LanguageModel
@@ -153,6 +170,7 @@ export function App({
     askQuestion,
     setPermissionMode,
   } = useAgent(model, options, initialSession)
+  options.beforeModelRequest = handleExternalAuthChange
 
   const peerInbox = usePeerInboxAdapter({
     service: options.peerService,
@@ -171,6 +189,12 @@ export function App({
   // visible skill list changed — without this counter the memoized
   // skillCommands array would stay stale.
   const [skillRegistryVersion, setSkillRegistryVersion] = useState(0)
+  const [authOperation, setAuthOperation] = useState<'login' | 'logout' | null>(null)
+  const authControllerRef = useRef<AbortController | null>(null)
+  const modelRefreshInProgressRef = useRef(false)
+  const unavailableModelRef = useRef<{ authRevision: string; message: string; modelId: string } | null>(null)
+  const openAIAuthTransitionRef = useRef(createOpenAIAuthTransitionState(getOpenAIAuthSnapshot()))
+  const checkedOpenAIEntitlementKeyRef = useRef<string | null>(null)
 
   // Reasoning-effort tier label for the current model (e.g. "High", "Max"),
   // shown in the footer next to the model name. Kept in state instead of
@@ -267,16 +291,30 @@ export function App({
       return
     }
     ctrlCArmedAtRef.current = now
-    if (state.isLoading) {
+    if (authControllerRef.current) {
+      authControllerRef.current.abort()
+    } else if (state.isLoading) {
       abort()
     }
     setNotice('Press Ctrl+C again to exit')
   }, [exit, abort, state.isLoading])
 
+  const cancelActiveOperation = useCallback(() => {
+    if (authControllerRef.current) authControllerRef.current.abort()
+    else abort()
+  }, [abort])
+
   // Register cleanup function for graceful exit (SIGINT)
   useEffect(() => {
     onCleanupReady?.({ quiesce, terminateShells: cleanupShells, drain: cleanup })
   }, [cleanup, cleanupShells, quiesce]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(
+    () => () => {
+      authControllerRef.current?.abort()
+    },
+    [],
+  )
 
   // Register the post-exit session-info getter. Index.ts uses it after
   // resetTerminal to print "Resume: xc --resume <id>" to the shell.
@@ -641,6 +679,19 @@ export function App({
       setNotice(null)
     }
 
+    if (authControllerRef.current) {
+      addInfoMessage('Wait for the ChatGPT authentication operation to finish, or press Esc to cancel it.')
+      return
+    }
+    if (!text.startsWith('/') && unavailableModelRef.current?.modelId === state.modelId) {
+      const unavailable = unavailableModelRef.current
+      const observed = await refreshOpenAIAuthSnapshot()
+      if (unavailable.authRevision === observed.revision) {
+        addInfoMessage(unavailable.message)
+        return
+      }
+    }
+
     // Mid-turn queue: while a turn is in flight, plain text doesn't start
     // a competing agentLoop (concurrent loops would corrupt the shared
     // message history) — it lands in the pending queue and gets injected
@@ -688,6 +739,8 @@ export function App({
         fileCommands,
         pendingSkillRef,
         handlers: {
+          login: handleLogin,
+          logout: handleLogout,
           model: handleModelSwitch,
           thinking: handleThinkingToggle,
           theme: handleThemeSwitch,
@@ -746,31 +799,443 @@ export function App({
    * reference, persist to the user config, and echo a confirmation message.
    */
   function commitModelChange(commandText: string, newModelId: string) {
-    if (
-      getOpenAIAuthStatus().mode === 'chatgpt' &&
-      newModelId.startsWith('openai:') &&
-      !(getProviderModels().openai ?? []).some((model) => model.id === newModelId)
-    ) {
-      addCommandMessage(commandText, `${newModelId} is not available for the signed-in ChatGPT account.`)
-      return
+    if (getOpenAIAuthStatus().mode === 'chatgpt' && newModelId.startsWith('openai:')) {
+      const catalog = getOpenAIChatGPTModelCatalogState()
+      if (catalog?.errorCode === 'login-required' || catalog?.errorCode === 'credentials-invalid') {
+        addCommandMessage(commandText, 'ChatGPT authentication needs attention. Run /login again.')
+        return
+      }
+      if (!(getProviderModels().openai ?? []).some((model) => model.id === newModelId)) {
+        addCommandMessage(commandText, `${newModelId} is not available for the signed-in ChatGPT account.`)
+        return
+      }
     }
     try {
-      const registry = createModelRegistry()
-      const newModel = registry.languageModel(newModelId as `${string}:${string}`)
-      switchModel(newModelId, newModel)
-      setReasoningTierLabel(resolveReasoningTierLabel(newModelId))
-      saveUserConfig({ model: newModelId })
+      activateModel(newModelId)
+      if (getOpenAIAuthStatus().mode === 'chatgpt' && newModelId.startsWith('openai:')) {
+        const snapshot = getOpenAIAuthSnapshot()
+        checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(
+          snapshot,
+          getOpenAIChatGPTModelCatalogState(),
+        )
+      }
       addCommandMessage(commandText, `Set model to ${renderModelLabel(newModelId)}`)
     } catch (err) {
       addCommandMessage(commandText, `Failed to switch model: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
-  async function handleModelSwitch(commandText: string, arg: string) {
-    const requestedModel = arg ? resolveModelId(arg) : undefined
-    if (getOpenAIAuthStatus().mode === 'chatgpt' && (!requestedModel || requestedModel.startsWith('openai:'))) {
-      await refreshOpenAIChatGPTModels(VERSION, { signal: AbortSignal.timeout(8_000) })
+  function activateModel(newModelId: string) {
+    replaceActiveModelProvider(newModelId, options, switchModel)
+    options.modelId = newModelId
+    unavailableModelRef.current = null
+    setReasoningTierLabel(resolveReasoningTierLabel(newModelId))
+    saveUserConfig({ model: newModelId })
+  }
+
+  function formatChatGPTCatalogStatus(): string {
+    const catalog = getOpenAIChatGPTModelCatalogState()
+    if (!catalog) return 'The ChatGPT model catalog is not active.'
+    const count = `${catalog.models.length} GPT model${catalog.models.length === 1 ? '' : 's'}`
+    if (catalog.errorCode === 'login-required' || catalog.errorCode === 'credentials-invalid') {
+      const source = catalog.source === 'cache' ? 'the last verified cache' : 'the bundled fallback'
+      return `${count} loaded from ${source}; ChatGPT authentication needs attention. Run /login again.`
     }
+    if (catalog.source === 'remote') return `${count} verified for this ChatGPT account.`
+    if (catalog.source === 'cache') {
+      return catalog.error
+        ? `${count} loaded from the last verified cache; the latest refresh failed. Run /model refresh to retry.`
+        : `${count} loaded from the verified cache.`
+    }
+    return catalog.error
+      ? `${count} shown from the bundled fallback; the latest refresh failed. Run /model refresh to retry.`
+      : `${count} shown from the bundled fallback and not yet verified. Run /model refresh to verify this account.`
+  }
+
+  function reconcileCurrentOpenAIModel(models: readonly { id: string }[]): string {
+    if (!state.modelId.startsWith('openai:')) return ''
+    const plan = planOpenAIModelReconciliation(
+      state.modelId,
+      models,
+      getAvailableProviders(),
+      'The signed-in ChatGPT account has no available models. Use /logout or configure another provider.',
+      renderModelLabel,
+    )
+    if (plan.modelId) {
+      activateModel(plan.modelId)
+      const snapshot = getOpenAIAuthSnapshot()
+      checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(snapshot, getOpenAIChatGPTModelCatalogState())
+      return plan.note
+    }
+    const snapshot = getOpenAIAuthSnapshot()
+    unavailableModelRef.current = {
+      authRevision: snapshot.revision,
+      message: plan.blockedMessage!,
+      modelId: state.modelId,
+    }
+    checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(snapshot, getOpenAIChatGPTModelCatalogState())
+    return plan.note
+  }
+
+  async function prepareInitialOpenAIEntitlementCheck(
+    currentModelId: string,
+    observed: ReturnType<typeof getOpenAIAuthSnapshot>,
+  ): Promise<ModelRequestPreflightResult> {
+    let catalog = getOpenAIChatGPTModelCatalogState()
+    let models = catalog?.models ?? []
+    if (!catalog || (catalog.source === 'fallback' && !catalog.error)) {
+      models = await refreshOpenAIChatGPTModels(VERSION)
+      catalog = getOpenAIChatGPTModelCatalogState()
+    }
+    const latest = await refreshOpenAIAuthSnapshot()
+    if (latest.revision !== observed.revision) return handleExternalAuthChange(currentModelId)
+    const candidates =
+      catalog?.errorCode === 'login-required' || catalog?.errorCode === 'credentials-invalid' ? [] : models
+    const plan = planOpenAIModelReconciliation(
+      currentModelId,
+      candidates,
+      getAvailableProviders(),
+      'The active ChatGPT credentials cannot provide a usable model. Run /login again or configure another provider.',
+      renderModelLabel,
+    )
+    const registry = createModelRegistry()
+    const nextModel = plan.modelId ? registry.languageModel(plan.modelId as `${string}:${string}`) : undefined
+    const notice =
+      plan.modelId !== currentModelId || plan.blockedMessage
+        ? `The saved OpenAI model was checked against the active ChatGPT account. ${formatChatGPTCatalogStatus()}${plan.note}`
+        : undefined
+    return {
+      ...(nextModel && plan.modelId ? { model: nextModel, modelId: plan.modelId } : {}),
+      ...(plan.blockedMessage ? { blockedMessage: plan.blockedMessage } : {}),
+      ...(notice ? { notice } : {}),
+      onApplied: () => {
+        options.modelRegistry = registry
+        resetVisionModelProviders()
+        if (nextModel && plan.modelId) {
+          switchModel(plan.modelId, nextModel)
+          options.modelId = plan.modelId
+          unavailableModelRef.current = null
+          setReasoningTierLabel(resolveReasoningTierLabel(plan.modelId))
+          if (plan.modelId !== currentModelId) saveUserConfig({ model: plan.modelId })
+        } else if (plan.blockedMessage) {
+          unavailableModelRef.current = {
+            authRevision: observed.revision,
+            message: plan.blockedMessage,
+            modelId: currentModelId,
+          }
+        }
+        checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(
+          observed,
+          getOpenAIChatGPTModelCatalogState(),
+        )
+      },
+    }
+  }
+
+  async function handleExternalAuthChange(
+    currentModelId: string,
+    retryCount = 0,
+  ): Promise<ModelRequestPreflightResult> {
+    const observed = await refreshOpenAIAuthSnapshot()
+    const transition = openAIAuthTransitionRef.current
+    const applied = transition.applied
+    if (!needsOpenAIAuthTransition(transition, observed)) {
+      const unavailable = unavailableModelRef.current
+      if (unavailable?.modelId === currentModelId && unavailable.authRevision === observed.revision) {
+        return { blockedMessage: unavailable.message }
+      }
+      if (
+        needsOpenAIModelEntitlementCheck(
+          checkedOpenAIEntitlementKeyRef.current,
+          observed,
+          currentModelId,
+          getOpenAIChatGPTModelCatalogState(),
+        )
+      ) {
+        return prepareInitialOpenAIEntitlementCheck(currentModelId, observed)
+      }
+      return undefined
+    }
+
+    let notice = 'OpenAI authentication changed in another process.'
+    if (observed.context.mode === 'chatgpt') {
+      notice =
+        applied.context.mode === 'chatgpt'
+          ? 'The ChatGPT account changed in another process.'
+          : 'OpenAI now uses ChatGPT authentication from another process.'
+    } else if (observed.context.mode === 'api-key') {
+      notice = 'ChatGPT was signed out in another process; OPENAI_API_KEY is now active.'
+    } else {
+      notice = 'OpenAI authentication was removed in another process.'
+    }
+
+    let plan: { blockedMessage?: string; modelId?: string; note: string } = { note: '' }
+    if (currentModelId.startsWith('openai:')) {
+      if (observed.context.mode === 'chatgpt') {
+        const models = await refreshOpenAIChatGPTModels(VERSION, { signal: AbortSignal.timeout(8_000) })
+        const latest = await refreshOpenAIAuthSnapshot()
+        if (latest.revision !== observed.revision) {
+          if (retryCount >= 2) {
+            return {
+              blockedMessage:
+                'OpenAI authentication is changing in another process. Wait for it to settle, then retry.',
+            }
+          }
+          return handleExternalAuthChange(currentModelId, retryCount + 1)
+        }
+        const catalog = getOpenAIChatGPTModelCatalogState()
+        const candidates =
+          catalog?.errorCode === 'login-required' || catalog?.errorCode === 'credentials-invalid' ? [] : models
+        plan = planOpenAIModelReconciliation(
+          currentModelId,
+          candidates,
+          getAvailableProviders(),
+          'The active ChatGPT credentials cannot provide a usable model. Run /login again or configure another provider.',
+          renderModelLabel,
+        )
+        notice += ` ${formatChatGPTCatalogStatus()}`
+      } else if (observed.context.mode === 'none') {
+        plan = planOpenAIModelReconciliation(
+          currentModelId,
+          [],
+          getAvailableProviders(),
+          'No authenticated model is available. Run /login or configure another provider.',
+          renderModelLabel,
+        )
+      } else {
+        plan = { modelId: currentModelId, note: '' }
+      }
+      notice += plan.note
+    }
+
+    const registry = createModelRegistry()
+    const nextModel = plan.modelId ? registry.languageModel(plan.modelId as `${string}:${string}`) : undefined
+    return {
+      ...(nextModel && plan.modelId ? { model: nextModel, modelId: plan.modelId } : {}),
+      ...(plan.blockedMessage ? { blockedMessage: plan.blockedMessage } : {}),
+      notice,
+      onApplied: () => {
+        options.modelRegistry = registry
+        resetVisionModelProviders()
+        if (nextModel && plan.modelId) {
+          switchModel(plan.modelId, nextModel)
+          options.modelId = plan.modelId
+          unavailableModelRef.current = null
+          setReasoningTierLabel(resolveReasoningTierLabel(plan.modelId))
+          if (plan.modelId !== currentModelId) saveUserConfig({ model: plan.modelId })
+        } else if (plan.blockedMessage) {
+          unavailableModelRef.current = {
+            authRevision: observed.revision,
+            message: plan.blockedMessage,
+            modelId: currentModelId,
+          }
+        }
+        checkedOpenAIEntitlementKeyRef.current =
+          observed.context.mode === 'chatgpt' && currentModelId.startsWith('openai:')
+            ? openAIModelEntitlementKey(observed, getOpenAIChatGPTModelCatalogState())
+            : null
+        commitOpenAIAuthTransition(transition, observed)
+      },
+    }
+  }
+
+  async function handleLogin(commandText: string, arg: string) {
+    const option = arg.trim().toLowerCase()
+    if (option === 'status') {
+      await refreshOpenAIAuthSnapshot()
+      addCommandMessage(commandText, formatOpenAIAuthStatus())
+      return
+    }
+    if (option && option !== '--device-auth') {
+      addCommandMessage(commandText, 'Usage: /login [--device-auth|status]')
+      return
+    }
+    if (authControllerRef.current) {
+      addCommandMessage(commandText, 'A ChatGPT authentication operation is already in progress.')
+      return
+    }
+    if (modelRefreshInProgressRef.current) {
+      addCommandMessage(commandText, 'Wait for the ChatGPT model refresh to finish before signing in.')
+      return
+    }
+
+    echoCommand(commandText)
+    const controller = new AbortController()
+    authControllerRef.current = controller
+    setAuthOperation('login')
+    try {
+      const deviceAuth = option === '--device-auth'
+      addCommandResult(deviceAuth ? 'Starting ChatGPT device sign-in…' : 'Opening ChatGPT sign-in in your browser…')
+      let result: Awaited<ReturnType<typeof loginChatGPT>>
+      try {
+        result = await loginChatGPT({
+          deviceAuth,
+          signal: controller.signal,
+          onAuthorizationUrl: (url) => addCommandResult(`Complete ChatGPT sign-in in your browser:\n${url}`),
+          onUserCode: (url, code) => addCommandResult(`Open ${url}\nEnter code: ${code}`),
+        })
+      } catch (error) {
+        addCommandResult(
+          controller.signal.aborted ? 'ChatGPT login cancelled.' : `ChatGPT login failed: ${errorMessage(error)}`,
+        )
+        return
+      }
+
+      let modelNote = 'The model catalog has not been refreshed yet. Run /model refresh to retry.'
+      try {
+        if (state.modelId.startsWith('openai:')) activateModel(state.modelId)
+        else options.modelRegistry = createModelRegistry()
+        resetVisionModelProviders()
+        commitOpenAIAuthTransition(openAIAuthTransitionRef.current, getOpenAIAuthSnapshot())
+
+        const catalogResult = await refreshCatalogAfterCommittedLogin((signal) =>
+          refreshOpenAIChatGPTModels(VERSION, { signal, force: true }),
+        )
+        if ('error' in catalogResult) {
+          modelNote = `The model catalog could not be refreshed: ${errorMessage(catalogResult.error)} Run /model refresh to retry.`
+          if (state.modelId.startsWith('openai:')) {
+            const snapshot = getOpenAIAuthSnapshot()
+            checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(
+              snapshot,
+              getOpenAIChatGPTModelCatalogState(),
+            )
+          }
+        } else {
+          options.modelRegistry = createModelRegistry()
+          const catalog = getOpenAIChatGPTModelCatalogState()
+          const candidates =
+            catalog?.errorCode === 'login-required' || catalog?.errorCode === 'credentials-invalid'
+              ? []
+              : catalogResult.models
+          modelNote = `${formatChatGPTCatalogStatus()}${reconcileCurrentOpenAIModel(candidates)}`
+        }
+      } catch (error) {
+        modelNote = `The active model could not be updated: ${errorMessage(error)} Run /model to choose another model.`
+      }
+
+      addCommandResult(
+        `ChatGPT login successful. ${modelNote}${
+          result.apiKeyConfigured ? '\nOPENAI_API_KEY is inactive until /logout.' : ''
+        }`,
+      )
+    } finally {
+      if (authControllerRef.current === controller) authControllerRef.current = null
+      setAuthOperation(null)
+    }
+  }
+
+  async function handleLogout(commandText: string, arg: string) {
+    if (arg.trim()) {
+      addCommandMessage(commandText, 'Usage: /logout')
+      return
+    }
+    if (authControllerRef.current) {
+      addCommandMessage(commandText, 'A ChatGPT authentication operation is already in progress.')
+      return
+    }
+    if (modelRefreshInProgressRef.current) {
+      addCommandMessage(commandText, 'Wait for the ChatGPT model refresh to finish before signing out.')
+      return
+    }
+
+    echoCommand(commandText)
+    const controller = new AbortController()
+    authControllerRef.current = controller
+    setAuthOperation('logout')
+    try {
+      addCommandResult('Signing out of ChatGPT…')
+      let result: Awaited<ReturnType<typeof logoutChatGPT>>
+      try {
+        result = await logoutChatGPT(controller.signal)
+      } catch (error) {
+        addCommandResult(
+          controller.signal.aborted ? 'ChatGPT logout cancelled.' : `ChatGPT logout failed: ${errorMessage(error)}`,
+        )
+        return
+      }
+
+      const snapshot = getOpenAIAuthSnapshot()
+      let modelNote = ''
+      try {
+        options.modelRegistry = createModelRegistry()
+        resetVisionModelProviders()
+        if (state.modelId.startsWith('openai:')) {
+          const availableProviders = new Set(getAvailableProviders())
+          if (availableProviders.has('openai')) {
+            activateModel(state.modelId)
+            modelNote = ' OPENAI_API_KEY is now active for the current model.'
+          } else {
+            const plan = planOpenAIModelReconciliation(
+              state.modelId,
+              [],
+              getAvailableProviders(),
+              'No authenticated model is available. Run /login or configure another provider.',
+              renderModelLabel,
+            )
+            if (plan.modelId) activateModel(plan.modelId)
+            else if (plan.blockedMessage) {
+              unavailableModelRef.current = {
+                authRevision: snapshot.revision,
+                message: plan.blockedMessage,
+                modelId: state.modelId,
+              }
+            }
+            modelNote = plan.note
+          }
+        }
+        commitOpenAIAuthTransition(openAIAuthTransitionRef.current, snapshot)
+        checkedOpenAIEntitlementKeyRef.current = null
+      } catch (error) {
+        modelNote = ` Authentication was removed, but the active model could not be updated: ${errorMessage(error)}`
+      }
+
+      if (!result.removed) {
+        addCommandResult(`ChatGPT is already signed out.${modelNote}`)
+      } else {
+        addCommandResult(
+          `ChatGPT logout complete.${
+            result.revokeFailed ? ' The remote revoke request failed, but local credentials were removed.' : ''
+          }${modelNote}`,
+        )
+      }
+    } finally {
+      if (authControllerRef.current === controller) authControllerRef.current = null
+      setAuthOperation(null)
+    }
+  }
+
+  async function handleModelSwitch(commandText: string, arg: string) {
+    if (arg.trim().toLowerCase() === 'refresh') {
+      if (getOpenAIAuthStatus().mode !== 'chatgpt') {
+        addCommandMessage(commandText, 'ChatGPT model refresh requires /login first.')
+        return
+      }
+      if (modelRefreshInProgressRef.current) {
+        addCommandMessage(commandText, 'A ChatGPT model refresh is already in progress.')
+        return
+      }
+      echoCommand(commandText)
+      addCommandResult('Refreshing the ChatGPT model catalog…')
+      modelRefreshInProgressRef.current = true
+      try {
+        const models = await refreshOpenAIChatGPTModels(VERSION, {
+          signal: AbortSignal.timeout(8_000),
+          force: true,
+        })
+        options.modelRegistry = createModelRegistry()
+        const catalog = getOpenAIChatGPTModelCatalogState()
+        const candidates =
+          catalog?.errorCode === 'login-required' || catalog?.errorCode === 'credentials-invalid' ? [] : models
+        addCommandResult(`${formatChatGPTCatalogStatus()}${reconcileCurrentOpenAIModel(candidates)}`)
+      } catch (error) {
+        addCommandResult(`ChatGPT model refresh failed: ${errorMessage(error)}`)
+      } finally {
+        modelRefreshInProgressRef.current = false
+      }
+      return
+    }
+
+    const requestedModel = arg ? resolveModelId(arg) : undefined
     // With an explicit arg: keep the old scriptable path (alias or full id).
     if (arg) {
       const newModelId = requestedModel
@@ -785,9 +1250,13 @@ export function App({
     // No arg → interactive picker. Enumerate models whose provider has an
     // active authentication method so the list is actionable, not aspirational.
     const availableProviders = new Set(getAvailableProviders())
+    const chatGPTCatalog = getOpenAIChatGPTModelCatalogState()
+    const openAIUnavailable =
+      chatGPTCatalog?.errorCode === 'login-required' || chatGPTCatalog?.errorCode === 'credentials-invalid'
     const choices: { id: string; label: string; description: string }[] = []
     for (const [provider, models] of Object.entries(getProviderModels())) {
       if (!availableProviders.has(provider)) continue
+      if (provider === 'openai' && openAIUnavailable) continue
       for (const m of models) {
         const marker = m.id === state.modelId ? `${GLYPH_BULLET} ` : '  '
         choices.push({ id: m.id, label: `${marker}${m.label}`, description: `${m.id} — ${m.description}` })
@@ -795,18 +1264,17 @@ export function App({
     }
 
     if (choices.length === 0) {
-      addCommandMessage(
-        commandText,
-        'No models available — run `xc login` for ChatGPT or configure a provider API key, then restart.',
-      )
+      addCommandMessage(commandText, 'No models available — run `/login` for ChatGPT or configure a provider API key.')
       return
     }
 
     // askQuestion resolves to the chosen option's LABEL (not id). The
     // SelectOptions dialog is designed for human-readable choices, so we
     // look the id back up via the label we pushed.
+    const catalogHint =
+      getOpenAIAuthStatus().mode === 'chatgpt' ? `\nChatGPT catalog: ${formatChatGPTCatalogStatus()}` : ''
     const answer = await askQuestion(
-      `Current: ${state.modelId}\nPick a model (${GLYPH_BULLET} = current):`,
+      `Current: ${state.modelId}${catalogHint}\nPick a model (${GLYPH_BULLET} = current):`,
       choices.map((c) => ({ label: c.label, description: c.description })),
       { noOther: true },
     )
@@ -1503,9 +1971,9 @@ export function App({
       initialContentRows={getHeaderRowCount(state.modelId)}
       onSubmit={handleSubmit}
       onInterrupt={handleCtrlC}
-      onEscapeCancel={abort}
+      onEscapeCancel={cancelActiveOperation}
       permissionMode={state.permissionMode}
-      isLoading={state.isLoading}
+      isLoading={state.isLoading || authOperation !== null}
       notice={notice}
       peerInfluenced={state.peerInfluenced}
       trustMode={options.trustMode}
@@ -1519,7 +1987,7 @@ export function App({
       // nulling spinner hides those Running indicators — the user sees a
       // frozen screen with no visible permission prompt.
       spinner={
-        state.isLoading && !selectActive
+        (state.isLoading || authOperation !== null) && !selectActive
           ? {
               // While a chain of collapsible read tools is in flight the
               // per-tool live indicator is suppressed (would flash
@@ -1530,14 +1998,19 @@ export function App({
               // the label would flicker Reading-Working-Reading on
               // every tool. Updated by useAgent on tool-call /
               // text-delta / loop-end / abort.
-              label: state.reconnectLabel
-                ? state.reconnectLabel
-                : state.compressionLabel
-                  ? `Compressing — ${state.compressionLabel}`
-                  : state.bufferingReads
-                    ? 'Reading'
-                    : 'Working',
-              mode: state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
+              label:
+                authOperation === 'login'
+                  ? 'Signing in'
+                  : authOperation === 'logout'
+                    ? 'Signing out'
+                    : state.reconnectLabel
+                      ? state.reconnectLabel
+                      : state.compressionLabel
+                        ? `Compressing — ${state.compressionLabel}`
+                        : state.bufferingReads
+                          ? 'Reading'
+                          : 'Working',
+              mode: authOperation === null && state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
             }
           : null
       }

@@ -10,8 +10,8 @@ import { hideBin } from 'yargs/helpers'
 
 import { VERSION } from './version.js'
 
-export async function parseCliArgs() {
-  return yargs(hideBin(process.argv))
+export async function parseCliArgs(args: string[] = hideBin(process.argv)) {
+  return yargs(args)
     .scriptName('x-code')
     .usage('$0 [options] [prompt]')
     .option('model', {

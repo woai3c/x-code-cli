@@ -290,6 +290,16 @@ async function runSubAgentVerifier(input: {
     .join('\n\n')
 
   try {
+    const preflight = await options.beforeModelRequest?.(options.modelId)
+    if (preflight?.model || preflight?.modelId) {
+      if (!preflight.model || !preflight.modelId) {
+        throw new Error('Model request preflight returned an incomplete model switch.')
+      }
+    }
+    preflight?.onApplied?.()
+    if (preflight?.blockedMessage) throw new Error(preflight.blockedMessage)
+    if (preflight?.modelId) options.modelId = preflight.modelId
+    const verifierModel = preflight?.model ?? model
     const result = await runSubAgent(
       {
         parentState: state,
@@ -302,7 +312,7 @@ async function runSubAgentVerifier(input: {
         knowledgeContext: state.knowledgeContext ?? '',
         isGitRepo: state.isGitRepo ?? false,
       },
-      model,
+      verifierModel,
       agentLoop,
     )
     if (hasDeniedSubAgentRestriction(result.resultText)) {

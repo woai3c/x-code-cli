@@ -41,7 +41,7 @@ function textFromDeveloperInput(item: ResponsesInputItem): string | undefined {
   return text || undefined
 }
 
-export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; sessionId?: string } {
+export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; modelId?: string; sessionId?: string } {
   let body: ResponsesRequestBody
   try {
     body = JSON.parse(raw) as ResponsesRequestBody
@@ -88,7 +88,7 @@ export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; 
     body.tools = body.tools.map((tool) => (tool.type === 'function' ? { ...tool, strict: false } : tool))
   }
 
-  return { body: JSON.stringify(body), sessionId: body.prompt_cache_key }
+  return { body: JSON.stringify(body), modelId, sessionId: body.prompt_cache_key }
 }
 
 function originalRequestUrl(input: FetchInput): URL {
@@ -329,7 +329,9 @@ export function createOpenAIChatGPTFetch(options: OpenAIChatGPTFetchOptions): ty
     let rawBody = init?.body
     if (rawBody === undefined && input instanceof Request) rawBody = await input.clone().text()
     const transformed =
-      typeof rawBody === 'string' ? transformOpenAIChatGPTRequestBody(rawBody) : { body: rawBody, sessionId: undefined }
+      typeof rawBody === 'string'
+        ? transformOpenAIChatGPTRequestBody(rawBody)
+        : { body: rawBody, modelId: undefined, sessionId: undefined }
     const baseHeaders = requestHeaders(input, init)
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
 
@@ -350,7 +352,7 @@ export function createOpenAIChatGPTFetch(options: OpenAIChatGPTFetchOptions): ty
     let prepared = await send(auth, true)
     let response = prepared.response
     if (response.status === 404 || prepared.sseStatus === 404) {
-      await refreshOpenAIChatGPTModelsAfterNotFound(signal ?? undefined)
+      await refreshOpenAIChatGPTModelsAfterNotFound(transformed.modelId, signal ?? undefined)
       return response
     }
     if (response.status !== 401 && !prepared.earlyUnauthorized) return response
@@ -360,7 +362,7 @@ export function createOpenAIChatGPTFetch(options: OpenAIChatGPTFetchOptions): ty
     prepared = await send(auth, false)
     response = prepared.response
     if (response.status === 404 || prepared.sseStatus === 404) {
-      await refreshOpenAIChatGPTModelsAfterNotFound(signal ?? undefined)
+      await refreshOpenAIChatGPTModelsAfterNotFound(transformed.modelId, signal ?? undefined)
     }
     return response
   }

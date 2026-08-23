@@ -160,6 +160,33 @@ describe('goal verifier', () => {
     expect(cb.onAskUser).not.toHaveBeenCalled()
   })
 
+  it('applies authentication preflight before a semantic verifier model request', async () => {
+    const state = createLoopState()
+    const goal = createGoal(state, { objective: 'verify' })
+    const reboundModel = { modelId: 'rebound' } as any
+    const onApplied = vi.fn()
+    const agentOptions = options()
+    agentOptions.beforeModelRequest = vi.fn(async () => ({
+      model: reboundModel,
+      modelId: 'openai:rebound',
+      onApplied,
+    }))
+
+    const result = await runVerifierLadder({
+      goal,
+      state,
+      options: agentOptions,
+      callbacks: callbacks(),
+      model: {} as any,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(agentOptions.beforeModelRequest).toHaveBeenCalledWith('test:model')
+    expect(onApplied).toHaveBeenCalledOnce()
+    expect(agentOptions.modelId).toBe('openai:rebound')
+    expect(runSubAgent.mock.calls[0]?.[1]).toBe(reboundModel)
+  })
+
   it('allows explicit user confirmation when no deterministic verifier is configured', async () => {
     const state = createLoopState()
     const goal = createGoal(state, { objective: 'verify', requiresUserConfirmation: true })
