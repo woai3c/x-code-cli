@@ -2,7 +2,10 @@
 import type { ModelMessage } from 'ai'
 
 import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
-import { getOpenAIChatGPTRuntimeModel } from '../providers/openai-chatgpt-models.js'
+import {
+  getOpenAIChatGPTRuntimeModel,
+  resolveOpenAIChatGPTEffectiveContextWindow,
+} from '../providers/openai-chatgpt-models.js'
 
 /**
  * Compress context when usage exceeds this fraction of the model's context
@@ -84,7 +87,7 @@ const PROVIDER_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
 /** Resolve context window (tokens) for a model id like `provider:model`. */
 export function getContextWindow(modelId: string): number {
   const runtimeModel = getOpenAIChatGPTRuntimeModel(modelId)
-  if (runtimeModel) return runtimeModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW
+  if (runtimeModel) return resolveOpenAIChatGPTEffectiveContextWindow(runtimeModel) ?? DEFAULT_CONTEXT_WINDOW
   if (getOpenAIAuthContext().mode === 'chatgpt' && modelId.startsWith('openai:')) return DEFAULT_CONTEXT_WINDOW
   const exact = MODEL_CONTEXT_WINDOWS.get(modelId)
   if (exact !== undefined) return exact

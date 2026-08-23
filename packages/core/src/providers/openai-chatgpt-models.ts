@@ -12,6 +12,7 @@ import type { ProviderModel, ReasoningTierOption } from './catalog.js'
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const SHARED_MODEL_REFRESH_TIMEOUT_MS = 8 * 1000
+const DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
 
 // The ChatGPT models endpoint interprets `client_version` as an official
 // Codex protocol compatibility version, not this product's package version.
@@ -20,8 +21,10 @@ const SHARED_MODEL_REFRESH_TIMEOUT_MS = 8 * 1000
 const OPENAI_CODEX_COMPATIBILITY_VERSION = '0.144.0'
 
 export interface OpenAIChatGPTRuntimeModel extends ProviderModel {
+  /** Raw `context_window` advertised by the ChatGPT Codex model catalog. */
   contextWindow?: number
   defaultReasoningLevel?: string
+  effectiveContextWindowPercent?: number
   maxOutputTokens?: number
   supportsReasoningSummaryParameter?: boolean
   supportedReasoningLevels?: Array<{ effort: string; description?: string }>
@@ -132,6 +135,10 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
+function isContextWindowPercent(value: unknown): value is number {
+  return isPositiveSafeInteger(value) && value <= 100
+}
+
 function isReasoningLevel(value: unknown): value is { effort: string; description?: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const level = value as Record<string, unknown>
@@ -152,6 +159,7 @@ function isRuntimeModel(value: unknown): value is OpenAIChatGPTRuntimeModel {
     typeof item.description === 'string' &&
     typeof item.vision === 'boolean' &&
     (item.contextWindow === undefined || isPositiveSafeInteger(item.contextWindow)) &&
+    (item.effectiveContextWindowPercent === undefined || isContextWindowPercent(item.effectiveContextWindowPercent)) &&
     (item.defaultReasoningLevel === undefined ||
       (typeof item.defaultReasoningLevel === 'string' && item.defaultReasoningLevel.length > 0)) &&
     (item.maxOutputTokens === undefined || isPositiveSafeInteger(item.maxOutputTokens)) &&
@@ -295,6 +303,9 @@ function normalizeRemoteModels(response: unknown): OpenAIChatGPTRuntimeModel[] {
       : isPositiveSafeInteger(item.max_context_window)
         ? item.max_context_window
         : undefined
+    const effectiveContextWindowPercent = isContextWindowPercent(item.effective_context_window_percent)
+      ? item.effective_context_window_percent
+      : DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT
     normalized.push({
       priority:
         typeof item.priority === 'number' && Number.isFinite(item.priority) ? item.priority : Number.MAX_SAFE_INTEGER,
@@ -309,6 +320,7 @@ function normalizeRemoteModels(response: unknown): OpenAIChatGPTRuntimeModel[] {
             ? item.supports_reasoning_summary_parameter
             : true,
         ...(contextWindow ? { contextWindow } : {}),
+        effectiveContextWindowPercent,
         ...(typeof item.default_reasoning_level === 'string' && item.default_reasoning_level
           ? { defaultReasoningLevel: item.default_reasoning_level }
           : {}),
@@ -495,6 +507,12 @@ export function getOpenAIChatGPTModelCatalogState(): OpenAIChatGPTModelCatalogSt
 export function getOpenAIChatGPTRuntimeModel(modelId: string): OpenAIChatGPTRuntimeModel | undefined {
   if (getOpenAIAuthContext().mode !== 'chatgpt') return undefined
   return activeRuntimeModels().find((model) => model.id === modelId)
+}
+
+export function resolveOpenAIChatGPTEffectiveContextWindow(model: OpenAIChatGPTRuntimeModel): number | undefined {
+  if (!model.contextWindow) return undefined
+  const percent = model.effectiveContextWindowPercent ?? DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT
+  return Math.floor((model.contextWindow * percent) / 100)
 }
 
 function reasoningLabel(effort: string): string {

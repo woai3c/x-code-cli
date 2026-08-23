@@ -3,7 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getContextWindow, getMaxOutputTokens } from '../src/agent/context-window.js'
+import {
+  COMPRESSION_TRIGGER_RATIO,
+  getCompressionThreshold,
+  getContextWindow,
+  getMaxOutputTokens,
+} from '../src/agent/context-window.js'
 import {
   initializeOpenAIAuthContext,
   resetOpenAIAuthContextForTesting,
@@ -100,6 +105,44 @@ describe('OpenAI ChatGPT model catalog', () => {
     expect(headers.get('chatgpt-account-id')).toBe('account-1')
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('client_version=0.144.0')
     expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('client_version=test')
+  })
+
+  it('uses the ChatGPT effective context window ahead of the static OpenAI model table', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        models: [
+          {
+            slug: 'gpt-5.6-sol',
+            context_window: 272000,
+            effective_context_window_percent: 95,
+            visibility: 'list',
+          },
+        ],
+      }),
+    )
+
+    await refreshOpenAIChatGPTModels('test', { fetch: fetchMock, force: true })
+
+    expect(getOpenAIChatGPTRuntimeModel('openai:gpt-5.6-sol')).toMatchObject({
+      contextWindow: 272000,
+      effectiveContextWindowPercent: 95,
+    })
+    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(258400)
+    expect(getCompressionThreshold('openai:gpt-5.6-sol')).toBe(Math.floor(258400 * COMPRESSION_TRIGGER_RATIO))
+  })
+
+  it('defaults ChatGPT effective context headroom to the Codex-compatible 95 percent', async () => {
+    await refreshOpenAIChatGPTModels('test', {
+      fetch: async () =>
+        Response.json({ models: [{ slug: 'default-headroom', context_window: 200000, visibility: 'list' }] }),
+      force: true,
+    })
+
+    expect(getOpenAIChatGPTRuntimeModel('openai:default-headroom')).toMatchObject({
+      contextWindow: 200000,
+      effectiveContextWindowPercent: 95,
+    })
+    expect(getContextWindow('openai:default-headroom')).toBe(190000)
   })
 
   it('invalidates a fresh cache created for an older Codex compatibility version', async () => {
@@ -332,6 +375,7 @@ describe('OpenAI ChatGPT model catalog', () => {
     ['invalid default reasoning level', { defaultReasoningLevel: 42 }],
     ['invalid summary support flag', { supportsReasoningSummaryParameter: 'false' }],
     ['non-positive context window', { contextWindow: -1 }],
+    ['invalid effective context percentage', { effectiveContextWindowPercent: 101 }],
     ['non-positive output limit', { maxOutputTokens: 0 }],
   ])('rejects a fresh disk cache with %s', async (_label, invalidFields) => {
     const target = path.join(testHome, 'cache', 'openai-chatgpt-models.json')
@@ -402,6 +446,7 @@ describe('OpenAI ChatGPT model catalog', () => {
               display_name: 42,
               context_window: -1,
               max_context_window: 196000,
+              effective_context_window_percent: 0,
               max_output_tokens: Number.MAX_SAFE_INTEGER + 1,
               input_modalities: ['text', 42],
               supported_reasoning_levels: [null, { effort: 42 }, { effort: 'high', description: 42 }],
@@ -415,9 +460,11 @@ describe('OpenAI ChatGPT model catalog', () => {
     expect(getOpenAIChatGPTRuntimeModel('openai:schema-tolerant')).toMatchObject({
       label: 'schema-tolerant',
       contextWindow: 196000,
+      effectiveContextWindowPercent: 95,
       vision: true,
       supportedReasoningLevels: [{ effort: 'high' }],
     })
+    expect(getContextWindow('openai:schema-tolerant')).toBe(186200)
     expect(getOpenAIChatGPTRuntimeModel('openai:schema-tolerant')).not.toHaveProperty('maxOutputTokens')
   })
 
