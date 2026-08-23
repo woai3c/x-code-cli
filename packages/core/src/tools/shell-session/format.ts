@@ -8,6 +8,14 @@ function outputBlock(output: string): string {
   return `Output:\n${output.trimEnd() || '(no new output)'}`
 }
 
+function appendFullOutput(lines: string[], result: ShellExecutionResult): void {
+  if (result.fullOutputPath) {
+    lines.push(`Full output: ${result.fullOutputPath}`)
+  } else if (result.fullOutputError) {
+    lines.push(`Full output could not be saved: ${result.fullOutputError}`)
+  }
+}
+
 /** One model-facing representation shared by shell, shellOutput, and killShell. */
 export function formatShellExecutionResult(result: ShellExecutionResult): string {
   if (result.cleanupResidual && result.running) {
@@ -18,6 +26,7 @@ export function formatShellExecutionResult(result: ShellExecutionResult): string
     ]
     if (result.failure?.message) lines.push(`Failure: ${result.failure.message}`)
     if (result.output) lines.push(outputBlock(result.output))
+    appendFullOutput(lines, result)
     return lines.join('\n')
   }
 
@@ -32,6 +41,7 @@ export function formatShellExecutionResult(result: ShellExecutionResult): string
     if (result.managerDraining) lines.push('Shell manager is draining this process tree.')
     if (result.failure?.message) lines.push(`Failure: ${result.failure.message}`)
     lines.push(outputBlock(result.output))
+    appendFullOutput(lines, result)
     return lines.join('\n')
   }
 
@@ -45,5 +55,6 @@ export function formatShellExecutionResult(result: ShellExecutionResult): string
     lines.push(`Process exited with code ${result.exitCode ?? 0}`)
   }
   lines.push(outputBlock(result.output || (result.isError ? '' : 'Done')))
+  appendFullOutput(lines, result)
   return lines.join('\n')
 }

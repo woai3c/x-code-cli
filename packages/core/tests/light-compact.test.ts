@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { lightCompactMessages } from '../src/agent/light-compact.js'
+import { lightCompactMessages, truncateOldToolResults } from '../src/agent/light-compact.js'
 
 function toolResultMsg(toolCallId: string, text: string): ModelMessage {
   return {
@@ -108,5 +108,22 @@ describe('lightCompactMessages', () => {
     const before = messages.length
     lightCompactMessages(messages)
     expect(messages.length).toBe(before)
+  })
+})
+
+describe('truncateOldToolResults', () => {
+  it('preserves the recovery path when compacting an old shell result', () => {
+    const fullOutputLine = 'Full output: temporary-shell-output.log'
+    const messages: ModelMessage[] = [
+      toolResultMsg('tc1', `Chunk ID: abc\nProcess exited with code 0\nOutput:\n${'x'.repeat(600)}\n${fullOutputLine}`),
+      ...Array.from({ length: 10 }, (_, index) => ({ role: 'user', content: `message ${index}` }) as ModelMessage),
+    ]
+
+    const result = truncateOldToolResults(messages)
+
+    expect(result.truncatedCount).toBe(1)
+    const output = (messages[0]!.content as Array<{ output: { value: string } }>)[0]!.output.value
+    expect(output.startsWith('[Truncated: shell output')).toBe(true)
+    expect(output).toContain(fullOutputLine)
   })
 })

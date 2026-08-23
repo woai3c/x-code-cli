@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder'
 
 import { HeadTailOutputBuffer } from './output-buffer.js'
+import { ShellOutputSpill } from './output-spill.js'
 import type { ManagedProcess, ManagedSpawnAttempt } from './provider.js'
 import type {
   ShellFailure,
@@ -123,6 +124,7 @@ export interface ShellSession {
   completion: Deferred<ShellCompletion>
   unreadOutput: HeadTailOutputBuffer
   transcript: HeadTailOutputBuffer
+  outputSpill: ShellOutputSpill
   streamDecoders: Record<'stdout' | 'stderr', StringDecoder>
   streamsEnded: Set<'stdout' | 'stderr'>
   trailingOutputTimer?: ReturnType<typeof setTimeout>
@@ -143,6 +145,7 @@ export function createShellSession(input: {
   effectiveCwd: string
   tty: boolean
   maxOutputBytes: number
+  spillMaxInlineBytes?: number
   hookOrigin: ShellHookOrigin
   now: number
   monotonicNow: number
@@ -176,6 +179,7 @@ export function createShellSession(input: {
     completion: createDeferred<ShellCompletion>(),
     unreadOutput: new HeadTailOutputBuffer(input.maxOutputBytes),
     transcript: new HeadTailOutputBuffer(input.maxOutputBytes),
+    outputSpill: new ShellOutputSpill({ maxInlineBytes: input.spillMaxInlineBytes }),
     streamDecoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') },
     streamsEnded: new Set(),
     hookOrigin: input.hookOrigin,

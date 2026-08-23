@@ -300,7 +300,7 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
   readonly handle: WindowsManagedProcess
   readonly ready: Promise<SpawnReadyResult>
   private readonly readyState = createDeferred<SpawnReadyResult>()
-  private readonly frames = new ActivationFrameBuffer()
+  private readonly frames: ActivationFrameBuffer
   private helper?: ChildProcessWithoutNullStreams
   private cancelled = false
 
@@ -310,6 +310,7 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
     artifact: Promise<WindowsSupervisorArtifact>,
     private readonly powerShellExecutable: string,
   ) {
+    this.frames = new ActivationFrameBuffer(options.outputCapture)
     this.handle = new WindowsManagedProcess(() => this.cancelPendingSpawn())
     this.ready = this.readyState.promise
     void this.initialize(artifact)

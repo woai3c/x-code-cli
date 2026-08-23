@@ -6,6 +6,7 @@ import { type Server, type Socket, createServer } from 'node:net'
 import { errorMessage } from '../../../utils.js'
 import type {
   ManagedExitStatus,
+  ManagedOutputCapture,
   ManagedProcess,
   ManagedProcessFrame,
   ManagedSpawnAttempt,
@@ -33,6 +34,7 @@ export interface WindowsPtySpawnOptions {
   env: Record<string, string>
   cols: number
   rows: number
+  outputCapture?: ManagedOutputCapture
 }
 
 const MIN_CONTROL_WAIT_MS = 25
@@ -314,7 +316,7 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
   readonly handle: WindowsPtyManagedProcess
   readonly ready: Promise<SpawnReadyResult>
   private readonly readyState = createDeferred<SpawnReadyResult>()
-  private readonly frames = new ActivationFrameBuffer()
+  private readonly frames: ActivationFrameBuffer
   private readonly pipePrefix = `\\\\.\\pipe\\x-code-pty-${process.pid}-${randomBytes(16).toString('hex')}`
   private readonly decoder = new WindowsSupervisorFrameDecoder()
   private eventServer?: Server
@@ -328,6 +330,7 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
   private cancelled = false
 
   constructor(private readonly options: WindowsPtySpawnOptions) {
+    this.frames = new ActivationFrameBuffer(options.outputCapture)
     this.handle = new WindowsPtyManagedProcess(() => this.cancelPendingSpawn())
     this.ready = this.readyState.promise
     void this.initialize()

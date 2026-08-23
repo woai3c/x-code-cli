@@ -6,6 +6,7 @@ export const shellOutput = tool({
   description: `Read new output from a shell session returned by shell, and interact with PTY sessions.
 
 - Returns only output produced since the previous read, plus structured running or exit status.
+- When output is truncated, the complete shell transcript is saved to a temporary log. Use readFile with the returned path and offset/limit to inspect it.
 - By default an empty read waits up to 5 seconds for output or completion without polling.
 - For a shell started with tty: true, chars writes terminal input. Use \\u0003 for Ctrl+C.
 - For a non-TTY shell, \\u0003 terminates the managed process tree; other non-empty input is rejected.

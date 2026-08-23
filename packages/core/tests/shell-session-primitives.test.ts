@@ -1,4 +1,5 @@
 import { ShellSessionEventHub } from '../src/tools/shell-session/event-hub.js'
+import type { ManagedProcessFrame } from '../src/tools/shell-session/provider.js'
 import { ActivationFrameBuffer } from '../src/tools/shell-session/providers/activation-frames.js'
 import type { ShellSessionSummary } from '../src/tools/shell-session/types.js'
 import { AsyncMutex, VersionedAsyncSignal } from '../src/tools/shell-session/wait-notifier.js'
@@ -127,6 +128,25 @@ describe('ActivationFrameBuffer', () => {
     })
 
     expect(Buffer.concat(output).toString('utf8')).toBe('中文')
+  })
+
+  it('captures complete output before bounded activation replay drops its middle', () => {
+    const captured: string[] = []
+    const buffer = new ActivationFrameBuffer({ append: (text) => captured.push(text) })
+    const completeOutput = `head-${'a'.repeat(600 * 1024)}${'b'.repeat(600 * 1024)}-tail`
+    const frames: ManagedProcessFrame[] = []
+    buffer.push({ kind: 'output', stream: 'stdout', chunk: Buffer.from(completeOutput) })
+
+    buffer.activate((frame) => frames.push(frame))
+
+    expect(captured.join('')).toBe(completeOutput)
+    const outputFrames = frames.filter(
+      (frame): frame is Extract<ManagedProcessFrame, { kind: 'output' }> => frame.kind === 'output',
+    )
+    expect(outputFrames.every((frame) => frame.fullOutputCaptured === true)).toBe(true)
+    expect(Buffer.concat(outputFrames.map((frame) => frame.chunk)).toString('utf8')).toMatch(
+      /bytes omitted before shell activation/,
+    )
   })
 })
 

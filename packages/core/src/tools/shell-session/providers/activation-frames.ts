@@ -1,6 +1,6 @@
 import { StringDecoder } from 'node:string_decoder'
 
-import type { ManagedProcessFrame } from '../provider.js'
+import type { ManagedOutputCapture, ManagedProcessFrame } from '../provider.js'
 
 const ACTIVATION_OUTPUT_MAX_BYTES = 1024 * 1024
 const ACTIVATION_HEAD_BYTES = Math.ceil(ACTIVATION_OUTPUT_MAX_BYTES / 2)
@@ -87,6 +87,8 @@ export class ActivationFrameBuffer {
     stderr: new StringDecoder('utf8'),
   }
 
+  constructor(private readonly outputCapture?: ManagedOutputCapture) {}
+
   push(frame: ManagedProcessFrame): void {
     if (this.state === 'discarded') return
     for (const normalized of this.normalize(frame)) this.pushNormalized(normalized)
@@ -113,11 +115,25 @@ export class ActivationFrameBuffer {
   private normalize(frame: ManagedProcessFrame): ManagedProcessFrame[] {
     if (frame.kind === 'output') {
       const value = this.decoders[frame.stream].write(Buffer.from(frame.chunk))
-      return value ? [{ ...frame, chunk: Buffer.from(value, 'utf8') }] : []
+      return value ? [this.captureOutput({ ...frame, chunk: Buffer.from(value, 'utf8') }, value)] : []
     }
     if (frame.kind !== 'stream-end') return [frame]
     const trailing = this.decoders[frame.stream].end()
-    return trailing ? [{ kind: 'output', stream: frame.stream, chunk: Buffer.from(trailing, 'utf8') }, frame] : [frame]
+    return trailing
+      ? [
+          this.captureOutput({ kind: 'output', stream: frame.stream, chunk: Buffer.from(trailing, 'utf8') }, trailing),
+          frame,
+        ]
+      : [frame]
+  }
+
+  private captureOutput(
+    frame: Extract<ManagedProcessFrame, { kind: 'output' }>,
+    text: string,
+  ): Extract<ManagedProcessFrame, { kind: 'output' }> {
+    if (!this.outputCapture) return frame
+    this.outputCapture.append(text)
+    return { ...frame, fullOutputCaptured: true }
   }
 
   private pushNormalized(frame: ManagedProcessFrame): void {
@@ -182,7 +198,7 @@ export class ActivationFrameBuffer {
   }
 
   private omissionFrame(): ManagedProcessFrame {
-    return {
+    const frame: Extract<ManagedProcessFrame, { kind: 'output' }> = {
       kind: 'output',
       stream: 'stderr',
       chunk: Buffer.from(
@@ -190,5 +206,6 @@ export class ActivationFrameBuffer {
         'utf8',
       ),
     }
+    return this.outputCapture ? { ...frame, fullOutputCaptured: true } : frame
   }
 }

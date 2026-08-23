@@ -206,14 +206,21 @@ const KEEP_RECENT_MESSAGES = 10
 /** Max chars to keep from the original output as a preview in the stub. */
 const PREVIEW_LINES = 3
 
+const RECOVERABLE_SHELL_TOOLS = new Set(['shell', 'shellOutput', 'killShell'])
+
 function buildStub(toolName: string | undefined, value: string): string {
-  const lineCount = value.split('\n').length
-  const preview = value.split('\n').slice(0, PREVIEW_LINES).join('\n')
+  const lines = value.split('\n')
+  const lineCount = lines.length
+  const preview = lines.slice(0, PREVIEW_LINES).join('\n')
   const name = toolName ?? 'unknown'
+  const fullOutputLine = RECOVERABLE_SHELL_TOOLS.has(name)
+    ? lines.find((line) => line.startsWith('Full output: '))
+    : undefined
   return (
     `[Truncated: ${name} output — ${lineCount} lines, ${value.length} chars. ` +
     `Content removed to save context. Re-run the tool if you need the full output.]\n` +
-    preview
+    preview +
+    (fullOutputLine ? `\n${fullOutputLine}` : '')
   )
 }
 

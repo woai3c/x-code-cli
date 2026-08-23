@@ -1,5 +1,9 @@
+import fs from 'node:fs/promises'
+
 import { emptyHookBus } from '../src/hooks/bus.js'
+import { formatShellExecutionResult } from '../src/tools/shell-session/format.js'
 import { UnifiedShellSessionManager } from '../src/tools/shell-session/manager.js'
+import { ShellOutputSpill } from '../src/tools/shell-session/output-spill.js'
 import type {
   ManagedProcess,
   ManagedProcessFrame,
@@ -278,6 +282,73 @@ describe('UnifiedShellSessionManager', () => {
     expect(shellManager.list()).toEqual([])
   })
 
+  it('spills complete output before the in-memory transcript drops its middle', async () => {
+    const provider = new FakeProvider()
+    const completeOutput = `${'a'.repeat(30 * 1024)}${'b'.repeat(30 * 1024)}`
+    provider.nextAttempt = new FakeAttempt({
+      frames: [
+        { kind: 'output', stream: 'stdout', chunk: Buffer.from(completeOutput) },
+        { kind: 'stream-end', stream: 'stdout' },
+        { kind: 'stream-end', stream: 'stderr' },
+        { kind: 'root-exit', exitCode: 0 },
+        { kind: 'tree-exit' },
+      ],
+    })
+    const shellManager = manager(provider)
+    const observation = await shellManager.start(startRequest({ kind: 'timed', ms: 1_000 }))
+
+    expect(observation.kind).toBe('terminal')
+    const fullOutputPath = observation.result.fullOutputPath
+    expect(fullOutputPath).toBeDefined()
+    try {
+      expect(await fs.readFile(fullOutputPath!, 'utf8')).toBe(completeOutput)
+      expect(formatShellExecutionResult(observation.result)).toContain(`Full output: ${fullOutputPath}`)
+    } finally {
+      if (observation.kind === 'terminal') observation.lease.ack()
+      if (fullOutputPath) await fs.rm(fullOutputPath, { force: true })
+    }
+  })
+
+  it('does not duplicate output captured by a provider before bounded activation replay', async () => {
+    const provider = new FakeProvider()
+    const attempt = new FakeAttempt()
+    provider.nextAttempt = attempt
+    const shellManager = manager(provider)
+    const started = await shellManager.start(startRequest({ kind: 'immediate' }))
+    const completeOutput = `${'a'.repeat(30 * 1024)}${'b'.repeat(30 * 1024)}`
+    const outputCapture = provider.spawnOptions[0]!.outputCapture
+    expect(outputCapture).toBeDefined()
+
+    outputCapture!.append(completeOutput)
+    attempt.emit({
+      kind: 'output',
+      stream: 'stdout',
+      chunk: Buffer.from(completeOutput),
+      fullOutputCaptured: true,
+    })
+    attempt.emit({ kind: 'stream-end', stream: 'stdout' })
+    attempt.emit({ kind: 'stream-end', stream: 'stderr' })
+    attempt.emit({ kind: 'root-exit', exitCode: 0 })
+    attempt.emit({ kind: 'tree-exit' })
+
+    const observation = await shellManager.interact({
+      shellId: started.result.shellId!,
+      toolCallId: 'call-final',
+      chars: '',
+      wait: { kind: 'immediate' },
+      maxOutputBytes: 1024,
+    })
+    expect(observation.kind).toBe('terminal')
+    const fullOutputPath = observation.result.fullOutputPath
+    expect(fullOutputPath).toBeDefined()
+    try {
+      expect(await fs.readFile(fullOutputPath!, 'utf8')).toBe(completeOutput)
+    } finally {
+      if (observation.kind === 'terminal') observation.lease.ack()
+      if (fullOutputPath) await fs.rm(fullOutputPath, { force: true })
+    }
+  })
+
   it('automatically yields a live command and uses an opaque manager-scoped id', async () => {
     const provider = new FakeProvider()
     const attempt = new FakeAttempt()
@@ -304,6 +375,54 @@ describe('UnifiedShellSessionManager', () => {
     })
     expect(read.kind).toBe('running')
     expect(read.result.output).toBe('incremental')
+  })
+
+  it('keeps a running observation internally consistent when the process exits during spill flush', async () => {
+    const provider = new FakeProvider()
+    const attempt = new FakeAttempt()
+    provider.nextAttempt = attempt
+    const shellManager = manager(provider)
+    const originalFlush = ShellOutputSpill.prototype.flush
+    let releaseFlush!: () => void
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve
+    })
+    let flushStarted = false
+    const flush = vi.spyOn(ShellOutputSpill.prototype, 'flush').mockImplementation(async function (
+      this: ShellOutputSpill,
+    ) {
+      flushStarted = true
+      await flushGate
+      return originalFlush.call(this)
+    })
+
+    try {
+      const starting = shellManager.start(startRequest({ kind: 'immediate' }))
+      await waitUntil(() => flushStarted)
+      attempt.emit({ kind: 'stream-end', stream: 'stdout' })
+      attempt.emit({ kind: 'stream-end', stream: 'stderr' })
+      attempt.emit({ kind: 'root-exit', exitCode: 0 })
+      attempt.emit({ kind: 'tree-exit' })
+      releaseFlush()
+
+      const running = await starting
+      expect(running.kind).toBe('running')
+      expect(running.result).toMatchObject({ running: true, shellId: expect.any(String), lifecycle: 'running' })
+    } finally {
+      releaseFlush()
+      flush.mockRestore()
+    }
+
+    const shellId = shellManager.list()[0]!.shellId
+    const terminal = await shellManager.interact({
+      shellId,
+      toolCallId: 'call-final',
+      chars: '',
+      wait: { kind: 'immediate' },
+      maxOutputBytes: 1024,
+    })
+    expect(terminal.kind).toBe('terminal')
+    if (terminal.kind === 'terminal') terminal.lease.ack()
   })
 
   it('writes and resizes PTY sessions under an interaction and emits transport events for immediate input', async () => {

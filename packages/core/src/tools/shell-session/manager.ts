@@ -189,6 +189,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       effectiveCwd: request.prepared.effectiveCwd,
       tty: request.prepared.tty,
       maxOutputBytes: request.prepared.maxOutputBytes,
+      spillMaxInlineBytes: request.prepared.spillMaxInlineBytes,
       hookOrigin: request.hookOrigin,
       now: this.now(),
       monotonicNow: this.monotonicNow(),
@@ -202,6 +203,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
         buffer: false,
         isolatedProcessTree: true,
         tty: request.prepared.tty,
+        outputCapture: session.outputSpill,
       })
     } catch (error) {
       return this.completeFailedBeforeHandle(session, error, request.originToolCallId)
@@ -288,6 +290,9 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     const adopted = this.adoptedControllerFor(request.shellId)
     if (adopted) return adopted.interact(request)
     const session = this.requireSession(request.shellId)
+    if (request.spillMaxInlineBytes !== undefined) {
+      session.outputSpill.lowerMaxInlineBytes(request.spillMaxInlineBytes)
+    }
     if (!session.tty && request.resize) {
       throw new ShellSessionManagerError(
         'stdin-unavailable',
@@ -371,7 +376,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       if (outcome === 'aborted') {
         return {
           kind: 'running',
-          result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+          result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
             waitInterrupted: true,
             forceError: true,
           }),
@@ -380,7 +385,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       if (!session.treeConfirmedExited) {
         return {
           kind: 'running',
-          result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+          result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
             forceError: true,
           }),
         }
@@ -685,7 +690,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     attempt.activate((frame) => this.onFrame(session, frame))
     return {
       kind: 'running',
-      result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+      result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
         forceError: true,
       }),
     }
@@ -702,6 +707,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     session.treeConfirmedExited = true
     session.treeConfirmedAt = this.now()
     session.outputFinalized = true
+    void session.outputSpill.close()
     this.maybeFinalizeSession(session)
     return this.claimTerminalObservation(session, observerToolCallId, {
       output: '',
@@ -712,8 +718,9 @@ export class UnifiedShellSessionManager implements ShellSessionController {
 
   private consumeDiscardedFrames(session: ShellSession, frames: ManagedProcessFrame[]): void {
     for (const frame of frames) {
-      if (frame.kind === 'output') this.appendOutput(session, frame.stream, frame.chunk, false)
-      else if (frame.kind === 'stream-end') this.endStream(session, frame.stream, false)
+      if (frame.kind === 'output') {
+        this.appendOutput(session, frame.stream, frame.chunk, false, frame.fullOutputCaptured === true)
+      } else if (frame.kind === 'stream-end') this.endStream(session, frame.stream, false)
       else if (frame.kind === 'root-exit') this.commitRootExit(session, frame.exitCode, frame.signal, false)
       else if (frame.kind === 'tree-exit') this.commitTreeConfirmed(session)
     }
@@ -722,7 +729,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
   private onFrame(session: ShellSession, frame: ManagedProcessFrame): void {
     if (session.activation !== 'active') return
     if (frame.kind === 'output') {
-      this.appendOutput(session, frame.stream, frame.chunk, true)
+      this.appendOutput(session, frame.stream, frame.chunk, true, frame.fullOutputCaptured === true)
       return
     }
     if (frame.kind === 'stream-end') {
@@ -746,10 +753,17 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     })
   }
 
-  private appendOutput(session: ShellSession, stream: 'stdout' | 'stderr', chunk: Uint8Array, publish: boolean): void {
+  private appendOutput(
+    session: ShellSession,
+    stream: 'stdout' | 'stderr',
+    chunk: Uint8Array,
+    publish: boolean,
+    fullOutputCaptured = false,
+  ): void {
     if (session.outputFinalized) return
     const text = session.streamDecoders[stream].write(Buffer.from(chunk))
     if (!text) return
+    if (!fullOutputCaptured) session.outputSpill.append(text)
     session.unreadOutput.append(text)
     session.transcript.append(text)
     session.outputAvailable.notify(undefined)
@@ -760,6 +774,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     if (session.streamsEnded.has(stream)) return
     const tail = session.streamDecoders[stream].end()
     if (tail) {
+      session.outputSpill.append(tail)
       session.unreadOutput.append(tail)
       session.transcript.append(tail)
       session.outputAvailable.notify(undefined)
@@ -768,6 +783,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     session.streamsEnded.add(stream)
     if (session.streamsEnded.size === 2) {
       session.outputFinalized = true
+      void session.outputSpill.close()
       if (session.trailingOutputTimer) clearTimeout(session.trailingOutputTimer)
       this.maybeFinalizeSession(session)
     }
@@ -827,6 +843,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       if (session.streamsEnded.has(stream)) continue
       const tail = session.streamDecoders[stream].end()
       if (tail) {
+        session.outputSpill.append(tail)
         session.unreadOutput.append(tail)
         session.transcript.append(tail)
         session.outputAvailable.notify(undefined)
@@ -837,6 +854,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       session.streamsEnded.add(stream)
     }
     session.outputFinalized = true
+    void session.outputSpill.close()
     this.maybeFinalizeSession(session)
   }
 
@@ -903,7 +921,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
             this.exposeInitialNonTerminal(session, context, 'termination-failed')
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
                 forceError: true,
               }),
             }
@@ -916,7 +934,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
             this.exposeInitialNonTerminal(session, context, 'termination-failed')
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
                 forceError: true,
               }),
             }
@@ -925,7 +943,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
             this.exposeInitialNonTerminal(session, context, 'manager-draining')
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
                 waitInterrupted: true,
                 forceError: true,
               }),
@@ -935,7 +953,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
             this.exposeInitialNonTerminal(session, context, 'turn-abort')
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
                 waitInterrupted: true,
                 forceError: true,
               }),
@@ -945,7 +963,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
             if (context.source === 'initial') this.transitionToYielded(session, 'explicit-background', 0)
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt),
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt),
             }
           }
 
@@ -977,14 +995,14 @@ export class UnifiedShellSessionManager implements ShellSessionController {
             this.exposeInitialNonTerminal(session, context, 'deadline')
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt),
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt),
             }
           }
           if (winner === 'abort' && !session.treeConfirmedExited) {
             this.exposeInitialNonTerminal(session, context, 'turn-abort')
             return {
               kind: 'running',
-              result: this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
+              result: await this.executionResult(session, session.unreadOutput.drain(), session.spawnMonotonicAt, {
                 waitInterrupted: true,
                 forceError: true,
               }),
@@ -1081,7 +1099,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     const settled = createDeferred<'acked' | 'released' | 'abandoned'>()
     session.finalObservation = { status: 'claimed', claimId, observerToolCallId, settled }
     const originalIsError = this.terminalIsError(session)
-    const result = this.executionResult(session, output, session.spawnMonotonicAt, {
+    const result = await this.executionResult(session, output, session.spawnMonotonicAt, {
       forceError: killToolResult ? false : originalIsError,
     })
     const lease: FinalObservationLease = {
@@ -1107,12 +1125,12 @@ export class UnifiedShellSessionManager implements ShellSessionController {
     return { kind: 'terminal', result, lease }
   }
 
-  private executionResult(
+  private async executionResult(
     session: ShellSession,
     output: ShellOutputSnapshot,
     startedMonotonicAt: number,
     options: { waitInterrupted?: boolean; forceError?: boolean } = {},
-  ): ShellExecutionResult {
+  ): Promise<ShellExecutionResult> {
     const lifecycle =
       session.spawnOutcome === 'failed' && session.treeConfirmedExited
         ? 'spawn-failed'
@@ -1125,7 +1143,7 @@ export class UnifiedShellSessionManager implements ShellSessionController {
               : session.rootExited
                 ? 'root-exited'
                 : 'running'
-    return {
+    const result: ShellExecutionResult = {
       chunkId: `${this.managerInstanceId.slice(0, 6)}-${++this.chunkCounter}`,
       wallTimeMs: Math.max(0, this.monotonicNow() - startedMonotonicAt),
       output: output.output,
@@ -1146,6 +1164,12 @@ export class UnifiedShellSessionManager implements ShellSessionController {
       failure: session.failure,
       terminationReason: session.terminationReason,
       terminationConfirmed: session.terminationConfirmed,
+    }
+    const spill = await session.outputSpill.flush()
+    return {
+      ...result,
+      fullOutputPath: spill.fullOutputPath,
+      fullOutputError: spill.error,
     }
   }
 

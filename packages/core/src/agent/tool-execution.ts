@@ -16,7 +16,7 @@ import {
 import { checkPermissionDetailed } from '../permissions/index.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME } from '../tools/browser-visual-check.js'
 import { applyBatchEdits, normalizeEditInput, normalizedEditRecord } from '../tools/edit-apply.js'
-import { truncateToolResult } from '../tools/index.js'
+import { MAX_TOOL_RESULT_BYTES, truncateToolResult } from '../tools/index.js'
 import { clearProgressReporter, reportProgress } from '../tools/progress.js'
 import { applySedSubstitution, parseSedEditCommand } from '../tools/sed-edit-parser.js'
 import { formatShellExecutionResult } from '../tools/shell-session/format.js'
@@ -194,6 +194,12 @@ type HandlerCtx = ToolHandlerContext
 
 const SHELL_OUTPUT_MAX_BYTES = 1024 * 1024
 
+function shellResultMaxBytes(maxOutputTokens: number | undefined): number {
+  const normalized = normalizeMaxOutputTokens(maxOutputTokens)
+  if (normalized === undefined) return MAX_TOOL_RESULT_BYTES
+  return Math.max(1, Math.min(SHELL_OUTPUT_MAX_BYTES, normalized * 4))
+}
+
 function emptyToolHookSnapshot(toolName: string): ToolHookSnapshot {
   return Object.freeze({
     generation: 0,
@@ -317,6 +323,7 @@ async function prepareShellRequest(ctx: HandlerCtx): Promise<boolean> {
     hardTimeoutMs: effective.hardTimeoutMs,
     tty: effective.tty,
     maxOutputBytes: SHELL_OUTPUT_MAX_BYTES,
+    spillMaxInlineBytes: Math.min(MAX_TOOL_RESULT_BYTES, shellResultMaxBytes(effective.maxOutputTokens)),
     hookInput: Object.freeze({ ...ctx.input }),
   }
   return true
@@ -491,10 +498,9 @@ function createShellHookOrigin(ctx: HandlerCtx): ShellHookOrigin {
 }
 
 function truncateShellResult(ctx: HandlerCtx, output: string): string {
-  const normalized = normalizeMaxOutputTokens(ctx.input.maxOutputTokens as number | undefined)
-  if (normalized === undefined) return truncateToolResult(output)
-  const maxBytes = Math.max(1, Math.min(SHELL_OUTPUT_MAX_BYTES, normalized * 4))
-  return truncateToolResult(output, { maxBytes })
+  const maxOutputTokens = ctx.input.maxOutputTokens as number | undefined
+  if (maxOutputTokens === undefined) return truncateToolResult(output)
+  return truncateToolResult(output, { maxBytes: shellResultMaxBytes(maxOutputTokens) })
 }
 
 async function runOriginalShellPost(
@@ -608,6 +614,10 @@ async function handleShellOutput(ctx: HandlerCtx): Promise<void> {
       hasInput,
     ),
     maxOutputBytes: SHELL_OUTPUT_MAX_BYTES,
+    spillMaxInlineBytes: Math.min(
+      MAX_TOOL_RESULT_BYTES,
+      shellResultMaxBytes(ctx.input.maxOutputTokens as number | undefined),
+    ),
     turnAbortSignal: ctx.options.abortSignal,
   })
   await commitShellObservation(ctx, observation)

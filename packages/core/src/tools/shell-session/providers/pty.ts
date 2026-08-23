@@ -360,10 +360,11 @@ export class PtyShellProvider implements ManagedShellProvider {
         env,
         cols,
         rows,
+        outputCapture: options.outputCapture,
       })
     }
 
-    const frames = new ActivationFrameBuffer()
+    const frames = new ActivationFrameBuffer(options.outputCapture)
     const terminal = nodePty.spawn(executable, args, {
       name: 'xterm-256color',
       cols,

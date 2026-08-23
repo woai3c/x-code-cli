@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises'
+
 import type { ModelMessage } from 'ai'
 
 import { createLoopState } from '../src/agent/loop-state.js'
@@ -27,6 +29,12 @@ const CONFIRMED_TERMINATION: ProcessTerminationResult = {
   treeConfirmedExited: true,
   exitCode: 0,
 }
+
+const temporaryFiles: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryFiles.splice(0).map((filePath) => fs.rm(filePath, { force: true })))
+})
 
 class FakeProcess implements ManagedProcess {
   readonly rootPid = 4321
@@ -379,6 +387,8 @@ describe.each(['shellOutput', 'killShell'] as const)('%s shell transport hooks',
     })
     expect(canonicalPostOutput).toContain('Chunk ID:')
     expect(canonicalPostOutput).toContain('Output:\ndone')
+    const fullOutputPath = canonicalPostOutput.match(/^Full output: (.+)$/m)?.[1]
+    if (fullOutputPath) temporaryFiles.push(fullOutputPath)
     expect(capture).toHaveBeenCalledTimes(1)
     expect(emitCurrent).not.toHaveBeenCalled()
     expect(resultPart(state, 'call-repeat')?.output).toMatchObject({ type: 'error-text' })

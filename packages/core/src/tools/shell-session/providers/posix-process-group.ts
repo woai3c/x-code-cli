@@ -280,7 +280,7 @@ export class PosixProcessGroupProvider implements ManagedShellProvider {
   constructor(private readonly executable = process.env.SHELL ?? '/bin/bash') {}
 
   spawnManaged(command: string, options: ManagedShellSpawnOptions): ManagedSpawnAttempt {
-    const frames = new ActivationFrameBuffer()
+    const frames = new ActivationFrameBuffer(options.outputCapture)
     const child = spawn(this.executable, ['-c', command], {
       cwd: options.cwd,
       env: { ...(options.env ?? process.env), PYTHONIOENCODING: 'utf-8' },

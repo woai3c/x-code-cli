@@ -106,6 +106,7 @@ export interface PreparedShellRequest {
   hardTimeoutMs?: number
   tty: boolean
   maxOutputBytes: number
+  spillMaxInlineBytes?: number
   hookInput: Record<string, unknown>
 }
 
@@ -123,6 +124,7 @@ export interface InteractShellRequest {
   resize?: { cols: number; rows: number }
   wait: WaitPolicy
   maxOutputBytes: number
+  spillMaxInlineBytes?: number
   turnAbortSignal?: AbortSignal
 }
 
@@ -133,6 +135,8 @@ export interface ShellExecutionResult {
   isError: boolean
   originalBytes: number
   omittedBytes: number
+  fullOutputPath?: string
+  fullOutputError?: string
   shellId?: string
   exitCode?: number
   signal?: string

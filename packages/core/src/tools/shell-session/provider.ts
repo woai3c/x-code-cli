@@ -2,6 +2,10 @@ import type { Readable, Writable } from 'node:stream'
 
 import type { ProcessTerminationResult, TerminationBudget, TerminationReason } from './types.js'
 
+export interface ManagedOutputCapture {
+  append(text: string): void
+}
+
 export interface ManagedShellSpawnOptions {
   cwd: string
   env?: NodeJS.ProcessEnv
@@ -10,6 +14,7 @@ export interface ManagedShellSpawnOptions {
   tty: boolean
   cols?: number
   rows?: number
+  outputCapture?: ManagedOutputCapture
 }
 
 export interface SpawnReadyResult {
@@ -23,7 +28,7 @@ export interface ManagedExitStatus {
 }
 
 export type ManagedProcessFrame =
-  | { kind: 'output'; stream: 'stdout' | 'stderr'; chunk: Uint8Array }
+  | { kind: 'output'; stream: 'stdout' | 'stderr'; chunk: Uint8Array; fullOutputCaptured?: true }
   | { kind: 'stream-end'; stream: 'stdout' | 'stderr' }
   | ({ kind: 'root-exit' } & ManagedExitStatus)
   | { kind: 'tree-exit' }
