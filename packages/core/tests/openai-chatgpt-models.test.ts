@@ -107,7 +107,7 @@ describe('OpenAI ChatGPT model catalog', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('client_version=test')
   })
 
-  it('uses the ChatGPT effective context window ahead of the static OpenAI model table', async () => {
+  it('uses the raw ChatGPT context window ahead of the static OpenAI model table', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       Response.json({
         models: [
@@ -127,22 +127,22 @@ describe('OpenAI ChatGPT model catalog', () => {
       contextWindow: 272000,
       effectiveContextWindowPercent: 95,
     })
-    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(258400)
-    expect(getCompressionThreshold('openai:gpt-5.6-sol')).toBe(Math.floor(258400 * COMPRESSION_TRIGGER_RATIO))
+    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(272000)
+    expect(getCompressionThreshold('openai:gpt-5.6-sol')).toBe(Math.floor(272000 * COMPRESSION_TRIGGER_RATIO))
   })
 
-  it('defaults ChatGPT effective context headroom to the Codex-compatible 95 percent', async () => {
+  it('does not apply implicit headroom to the ChatGPT context window', async () => {
     await refreshOpenAIChatGPTModels('test', {
       fetch: async () =>
-        Response.json({ models: [{ slug: 'default-headroom', context_window: 200000, visibility: 'list' }] }),
+        Response.json({ models: [{ slug: 'no-implicit-headroom', context_window: 200000, visibility: 'list' }] }),
       force: true,
     })
 
-    expect(getOpenAIChatGPTRuntimeModel('openai:default-headroom')).toMatchObject({
+    expect(getOpenAIChatGPTRuntimeModel('openai:no-implicit-headroom')).toMatchObject({
       contextWindow: 200000,
-      effectiveContextWindowPercent: 95,
     })
-    expect(getContextWindow('openai:default-headroom')).toBe(190000)
+    expect(getContextWindow('openai:no-implicit-headroom')).toBe(200000)
+    expect(getCompressionThreshold('openai:no-implicit-headroom')).toBe(160000)
   })
 
   it('invalidates a fresh cache created for an older Codex compatibility version', async () => {
@@ -198,7 +198,17 @@ describe('OpenAI ChatGPT model catalog', () => {
 
   it('uses a fresh same-account disk cache without a network request', async () => {
     await refreshOpenAIChatGPTModels('test', {
-      fetch: async () => Response.json({ models: [{ slug: 'cached-model', visibility: 'list' }] }),
+      fetch: async () =>
+        Response.json({
+          models: [
+            {
+              slug: 'cached-model',
+              visibility: 'list',
+              context_window: 200000,
+              effective_context_window_percent: 95,
+            },
+          ],
+        }),
       force: true,
     })
     resetOpenAIChatGPTModelsForTesting()
@@ -206,6 +216,11 @@ describe('OpenAI ChatGPT model catalog', () => {
 
     const models = await refreshOpenAIChatGPTModels('test', { fetch: offlineFetch })
     expect(models.map((model) => model.id)).toEqual(['openai:cached-model'])
+    expect(getOpenAIChatGPTRuntimeModel('openai:cached-model')).toMatchObject({
+      contextWindow: 200000,
+      effectiveContextWindowPercent: 95,
+    })
+    expect(getContextWindow('openai:cached-model')).toBe(200000)
     expect(offlineFetch).not.toHaveBeenCalled()
   })
 
@@ -460,11 +475,10 @@ describe('OpenAI ChatGPT model catalog', () => {
     expect(getOpenAIChatGPTRuntimeModel('openai:schema-tolerant')).toMatchObject({
       label: 'schema-tolerant',
       contextWindow: 196000,
-      effectiveContextWindowPercent: 95,
       vision: true,
       supportedReasoningLevels: [{ effort: 'high' }],
     })
-    expect(getContextWindow('openai:schema-tolerant')).toBe(186200)
+    expect(getContextWindow('openai:schema-tolerant')).toBe(196000)
     expect(getOpenAIChatGPTRuntimeModel('openai:schema-tolerant')).not.toHaveProperty('maxOutputTokens')
   })
 

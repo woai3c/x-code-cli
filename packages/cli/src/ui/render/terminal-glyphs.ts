@@ -3,7 +3,7 @@
 // Legacy ConHost (cmd.exe / Windows PowerShell host outside Windows Terminal)
 // defaults to fonts (Lucida Console, Consolas, SimSun, NSimSun, MS Gothic)
 // that lack many Unicode glyphs outside the CP437 / Latin-1 Supplement range.
-// Characters like ●, ›, ⎿, ✢, ✶, ⏸, ⚡, ✓, ◼, •, ▎ either render as
+// Characters like ●, ›, ⎿, ✢, ✶, ✓, ◼, •, ▎ either render as
 // missing-glyph boxes (□) or at incorrect widths, producing visual artifacts
 // the user described as "ugly" / "broken".
 //
@@ -49,12 +49,6 @@ export const GLYPH_RESULT_BRACKET = IS_LEGACY_TERMINAL ? '|' : '⎿'
 /** Permission / select-option pointer: `›` (U+203A) → `>`. Matches
  *  GLYPH_PROMPT_ARROW and the codex CLI selection pointer. */
 export const GLYPH_SELECT_POINTER = IS_LEGACY_TERMINAL ? '>' : '\u203a'
-
-/** Plan mode indicator: `⏸` (U+23F8) → `=` */
-export const GLYPH_PLAN_MODE = IS_LEGACY_TERMINAL ? '=' : '\u23f8'
-
-/** Accept-edits indicator: `⚡` (U+26A1) → `*` */
-export const GLYPH_ACCEPT_EDITS = IS_LEGACY_TERMINAL ? '*' : '\u26a1'
 
 /** Todo completed check: `✓` (U+2713) → `+` */
 export const GLYPH_TODO_CHECK = IS_LEGACY_TERMINAL ? '+' : '\u2713'

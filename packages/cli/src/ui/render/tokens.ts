@@ -6,7 +6,7 @@
 //
 //   - `paint(token)`      → chalk styler for the scrollback/commit path
 //                           (stdout-writer, render-markdown, AppHeader)
-//   - `cellFg/cellBadge()` → raw SGR escapes for ChatInput's cell-diff
+//   - `cellFg()`           → raw SGR escapes for ChatInput's cell-diff
 //                           renderer (which can't run chalk)
 //
 // Every token has three values: dark hex, light hex, and a 16-color ANSI
@@ -45,7 +45,6 @@ export type ChromeToken =
   | 'textDim'
   | 'textMuted'
   | 'border'
-  | 'borderFocus'
   | 'success'
   | 'warning'
   | 'error'
@@ -83,7 +82,6 @@ const TOKENS: Record<ChromeToken, TokenDef> = {
   textDim: { dark: '#b3b3b3', light: '#6a737d', ansi: 'white' },
   textMuted: { dark: '#8f8f8f', light: '#959da5', ansi: 'gray' },
   border: { dark: '#a0a0a0', light: '#c8cdd3', ansi: 'gray' },
-  borderFocus: { dark: '#89b4fa', light: '#2f6fdd', ansi: 'blueBright' },
   success: { dark: '#4eba65', light: '#248a3d', ansi: 'green' },
   warning: { dark: '#ffc107', light: '#9a6700', ansi: 'yellow' },
   error: { dark: '#ff6b80', light: '#cf222e', ansi: 'red' },
@@ -193,28 +191,4 @@ export function cellFg(token: ChromeToken, mods: CellMods = {}): string {
   }
   const [r, g, b] = hexToRgb(def[kind])
   return `\x1b[0m\x1b[38;2;${r};${g};${b}${attrs}m`
-}
-
-// ── Mode badges (footer pills) ─────────────────────────────────────────
-// Dark text on the token's own bright pastel. Both theme kinds use
-// full-brightness badge backgrounds, so one fixed dark fg keeps contrast
-// (catppuccin base; ~10:1 against #89b4fa / #ffc107).
-const BADGE_FG = '#1e1e2e'
-
-/** Raw SGR escape for a filled "pill" badge: token color as BACKGROUND,
- *  fixed dark foreground, bold. Used by the footer's mode badges
- *  (` plan mode `, ` accept edits `). NO_COLOR strips the colors but keeps
- *  bold — the convention governs color, not emphasis. */
-export function cellBadge(token: ChromeToken): string {
-  const def = TOKENS[token]
-  const kind = themeKind()
-  if (!COLORS_ENABLED) return '\x1b[0m\x1b[1m'
-  if (kind === 'ansi') {
-    if (def.ansi === null) return '\x1b[0m\x1b[1m'
-    // ANSI bg codes are the fg codes + 10 (34→44, 94→104); fg 30 = black.
-    return `\x1b[0m\x1b[1;30;${ANSI_FG[def.ansi] + 10}m`
-  }
-  const [r, g, b] = hexToRgb(def[kind])
-  const [fr, fg, fb] = hexToRgb(BADGE_FG)
-  return `\x1b[0m\x1b[1;38;2;${fr};${fg};${fb};48;2;${r};${g};${b}m`
 }

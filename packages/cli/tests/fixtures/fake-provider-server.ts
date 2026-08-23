@@ -19,9 +19,14 @@ export interface CapturedProviderRequest {
   responseClosed: boolean
 }
 
+interface ScriptedUsage {
+  promptTokens: number
+  completionTokens: number
+}
+
 export type ScriptedResponse =
-  | { type: 'completion'; text: string; chunks?: string[]; chunkDelayMs?: number }
-  | { type: 'tool-call'; name: string; input: unknown; id?: string; finalText?: string }
+  | { type: 'completion'; text: string; chunks?: string[]; chunkDelayMs?: number; usage?: ScriptedUsage }
+  | { type: 'tool-call'; name: string; input: unknown; id?: string; finalText?: string; usage?: ScriptedUsage }
   | {
       type: 'http-error'
       status: 401 | 403 | 429 | 500 | 503
@@ -68,14 +73,18 @@ function completionChunk(delta: Record<string, unknown>, finishReason: string | 
   })
 }
 
-function usageChunk(): string {
+function usageChunk(usage: ScriptedUsage = { promptTokens: 10, completionTokens: 2 }): string {
   return chunk({
     id: 'chatcmpl-x-code-test',
     object: 'chat.completion.chunk',
     created: 1,
     model: 'test-model',
     choices: [],
-    usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    usage: {
+      prompt_tokens: usage.promptTokens,
+      completion_tokens: usage.completionTokens,
+      total_tokens: usage.promptTokens + usage.completionTokens,
+    },
   })
 }
 
@@ -230,7 +239,7 @@ export async function startFakeProvider(initialResponses: ScriptedResponse[] = [
         const id = next.id ?? 'call_x_code_test'
         response.write(toolCallSseEvent(next.name, next.input, id))
         response.write(completionChunk({}, 'tool_calls'))
-        response.write(usageChunk())
+        response.write(usageChunk(next.usage))
         response.end('data: [DONE]\n\n')
         if (next.finalText !== undefined) scripted.unshift({ type: 'completion', text: next.finalText })
         return
@@ -242,7 +251,7 @@ export async function startFakeProvider(initialResponses: ScriptedResponse[] = [
         if (next.chunkDelayMs) await wait(next.chunkDelayMs)
       }
       response.write(completionChunk({}, 'stop'))
-      response.write(usageChunk())
+      response.write(usageChunk(next.usage))
       response.end('data: [DONE]\n\n')
     })().catch((error) => {
       if (response.headersSent) {

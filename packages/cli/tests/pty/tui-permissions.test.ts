@@ -141,6 +141,33 @@ describe('TUI permissions', () => {
     })
   })
 
+  it('updates plan-mode context usage without leaving stale digits', async () => {
+    await withTui(
+      'permissions-plan-footer',
+      [
+        { type: 'completion', text: 'first-footer', usage: { promptTokens: 189000, completionTokens: 100 } },
+        { type: 'completion', text: 'second-footer', usage: { promptTokens: 191700, completionTokens: 100 } },
+      ],
+      async ({ harness }) => {
+        expect(harness.text()).toContain('plan mode')
+        expect(harness.text()).not.toContain('\u23f8')
+
+        await submitInput(harness, '/context 258400')
+        await harness.waitForText('Context window forced to')
+        await submitInput(harness, 'first context sample')
+        await harness.waitForText('first-footer')
+        await harness.waitForText('ctx 189.1k / 258.4k · 73%')
+
+        await submitInput(harness, 'second context sample')
+        await harness.waitForText('second-footer')
+        await harness.waitForText('ctx 191.8k / 258.4k · 74%')
+        expect(harness.text()).not.toContain('1891.8k')
+        harness.key('ctrl-c')
+      },
+      { args: ['--plan'] },
+    )
+  })
+
   it('rejects workspace writes before approval in plan mode', async () => {
     await withTui(
       'permissions-plan-mode',

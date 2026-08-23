@@ -40,9 +40,7 @@ import {
   writeMessageToStdout,
 } from '../render/stdout-writer.js'
 import {
-  GLYPH_ACCEPT_EDITS,
   GLYPH_ELLIPSIS,
-  GLYPH_PLAN_MODE,
   GLYPH_PROMPT_ARROW,
   GLYPH_RESULT_BRACKET,
   GLYPH_SELECT_POINTER,
@@ -76,11 +74,8 @@ import { useInputHistory } from './input-history.js'
 import {
   BSU,
   ESU_HIDE,
-  S_BADGE_PRIMARY,
-  S_BADGE_WARNING,
   S_BOLD,
   S_BORDER,
-  S_BORDER_FOCUS,
   S_CURSOR,
   S_DIM,
   S_ERROR,
@@ -1436,10 +1431,9 @@ export function ChatInput({
     // U+2500–U+257F range, so legacy ConHost needs no glyph fallback.
     const boxWidth = Math.max(2, termWidth - 1)
     const boxRule = '─'.repeat(Math.max(0, boxWidth - 2))
-    // Frame color follows the approval mode (CC's promptBorder state):
-    // plan → primary, acceptEdits → warning, default → border gray.
-    const frameStyle =
-      permissionMode === 'plan' ? S_BORDER_FOCUS : permissionMode === 'acceptEdits' ? S_WARNING : S_BORDER
+    // Keep the frame neutral so persistent permission modes do not turn the
+    // whole composer into a warning banner. The footer label carries the mode.
+    const frameStyle = S_BORDER
 
     // Wraps content cells in a full-width `│ … │` row: clips overflow,
     // then pads with trailing spaces so the right rail lands on the box's
@@ -2185,8 +2179,7 @@ export function ChatInput({
       // Same `›` glyph the committed echo uses (stdout-writer) — the
       // plain ASCII `>` reads pointier and out of place next to it.
       // U+203A is width-1 per text-width.ts, so the prompt keeps its
-      // two-cell footprint (arrow + space). The arrow takes the frame
-      // color so plan/acceptEdits modes tint it along with the box.
+      // two-cell footprint (arrow + space).
       const prompt = i === 0 ? `${GLYPH_PROMPT_ARROW} ` : '  '
       const showCursor = !disabled && i === cursorLine && cursorLine >= 0
       const cells: Cell[] = []
@@ -2230,29 +2223,18 @@ export function ChatInput({
     // Bottom box rule
     frame.push(textToCells(`╰${boxRule}╯`, frameStyle))
 
-    // Footer row — same layout pattern Claude Code / Codex / Gemini CLI
-    // use: left text and right text on a SINGLE row, with the right
-    // text right-aligned at the row's bottom-right corner. Built as one
-    // cell sequence (left + padding spaces + right) inside the cell
-    // buffer's frame, so the cell-diff loop owns the entire row's
-    // contents — no out-of-band overlay writes.
-    //
-    // Width is capped at `termWidth - 1` cells (same width the bottom
-    // separator above uses) so this row's geometry never lands on the
-    // terminal's auto-wrap column boundary.
+    // Footer row — compact mode/model/context status owned entirely by the
+    // cell-diff buffer. Its width is capped at `termWidth - 1` so it never
+    // lands on the terminal's auto-wrap boundary.
     //
     // Left side  — notice / mode indicator (mutually exclusive). Priority:
     //              notice > plan > acceptEdits. Mode switching via slash
     //              commands only (/plan); the Shift+Tab keybinding was
     //              removed because Windows needs Node ≥22.17 VT input mode
     //              and Alt+M is too easily clobbered by IDE menus.
-    // Right side — the active model label is always shown (makes the
-    //              footer row permanent); context-window occupancy
-    //              (`6.6k / 200k · 3%`) appends after it whenever a usage
-    //              snapshot is available. Styled after Codex CLI's default
-    //              statusline: model label (with reasoning-tier suffix) in
-    //              pastel yellow, usage in pastel green — full-brightness
-    //              pastels so the row reads as live status.
+    // Right side — active model plus `ctx 6.6k / 200k · 3%` when usage is
+    //              available. Context is green normally, amber from 70%,
+    //              and red at the 80% compression threshold.
     let leftCells: Cell[] | null = null
     if (notice) {
       const cells: Cell[] = []
@@ -2278,18 +2260,15 @@ export function ChatInput({
       }
       leftCells = cells
     } else if (permissionMode === 'plan') {
-      // Filled pill badge (Crush/Kimi-style): mode color as background,
-      // dark bold text — the same hue the prompt box's frame takes, so
-      // border + badge read as one mode signal. Hint stays on the dim rung.
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(` ${GLYPH_PLAN_MODE} plan mode `, S_BADGE_PRIMARY))
+      cells.push(...textToCells('plan mode', S_PRIMARY_BOLD))
       cells.push(...textToCells('  /plan to toggle', S_DIM))
       leftCells = cells
     } else if (permissionMode === 'acceptEdits') {
       const cells: Cell[] = []
       cells.push({ char: ' ', style: S_NONE, width: 1 })
-      cells.push(...textToCells(` ${GLYPH_ACCEPT_EDITS} accept edits `, S_BADGE_WARNING))
+      cells.push(...textToCells('accept edits', S_WARNING_BOLD))
       leftCells = cells
     }
 
@@ -2298,8 +2277,10 @@ export function ChatInput({
     if (contextUsage && contextUsage.used > 0 && contextUsage.window > 0) {
       const pct = Math.round((contextUsage.used / contextUsage.window) * 100)
       const usage = `${formatTokenCount(contextUsage.used)} / ${formatTokenCount(contextUsage.window)} · ${pct}%`
+      const usageStyle = pct >= 80 ? S_ERROR : pct >= 70 ? S_WARNING : S_USAGE
       if (modelLabel) rightCells.push(...textToCells(' · ', S_DIM))
-      rightCells.push(...textToCells(usage, S_USAGE))
+      rightCells.push(...textToCells('ctx ', S_DIM))
+      rightCells.push(...textToCells(usage, usageStyle))
     }
 
     if (leftCells || rightCells.length > 0) {
