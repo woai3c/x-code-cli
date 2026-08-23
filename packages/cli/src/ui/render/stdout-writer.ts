@@ -565,10 +565,13 @@ function writeUserMessage(write: InkWrite, content: string, compact = false): vo
     chunks.push(remaining)
     return chunks.map((chunk, i) => paintRow(chunk, isFirst && i === 0))
   }
-  // Full-width blank bg rows as vertical padding — a bare BCE erase inside
-  // the bg span paints the whole row on capable terminals (see paintRow).
+  // Full-width blank bg rows as vertical padding. Keep one printable space
+  // inside the bg span before the BCE erase: terminals may discard the
+  // background attributes of erase-only rows during resize/reflow, which
+  // makes the card's top and bottom padding disappear. One cell anchors the
+  // row without restoring old-width space padding (and its phantom wraps).
   // Skipped when the terminal width is unknown (piped output).
-  const padRow = cols > 0 ? bg('\x1b[K') : null
+  const padRow = cols > 0 ? bg(' \x1b[K') : null
   const rows = lines.flatMap((line, i) => renderLine(line, i === 0))
   if (padRow !== null) rows.unshift(padRow)
   if (padRow !== null) rows.push(padRow)
