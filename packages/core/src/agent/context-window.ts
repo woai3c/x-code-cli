@@ -31,6 +31,24 @@ const BYTES_PER_TOKEN_ESTIMATE = 3.0
 /** Default context window when both model- and provider-level lookups miss. */
 const DEFAULT_CONTEXT_WINDOW = 128000
 
+/** Smallest override that remains compatible with the compactor's 20k recent-message budget. */
+export const MIN_CONTEXT_WINDOW_OVERRIDE = 32768
+
+let contextWindowOverride: number | undefined
+
+/** Return the user-defined context window applied uniformly to every model. */
+export function getContextWindowOverride(): number | undefined {
+  return contextWindowOverride
+}
+
+/** Replace or clear the process-wide user context window override. Invalid
+ *  hand-edited config values are treated as unset. */
+export function setContextWindowOverride(value: unknown): number | undefined {
+  contextWindowOverride =
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= MIN_CONTEXT_WINDOW_OVERRIDE ? value : undefined
+  return contextWindowOverride
+}
+
 /** Context window sizes per model (tokens). */
 const MODEL_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   // Anthropic
@@ -86,6 +104,7 @@ const PROVIDER_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
 
 /** Resolve context window (tokens) for a model id like `provider:model`. */
 export function getContextWindow(modelId: string): number {
+  if (contextWindowOverride !== undefined) return contextWindowOverride
   const runtimeModel = getOpenAIChatGPTRuntimeModel(modelId)
   if (runtimeModel) return resolveOpenAIChatGPTEffectiveContextWindow(runtimeModel) ?? DEFAULT_CONTEXT_WINDOW
   if (getOpenAIAuthContext().mode === 'chatgpt' && modelId.startsWith('openai:')) return DEFAULT_CONTEXT_WINDOW

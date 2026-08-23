@@ -62,6 +62,7 @@ import { refreshCatalogAfterCommittedLogin } from './chatgpt-login-postflight.js
 import { SLASH_COMMANDS } from './command-content.js'
 import { formatStopResult } from './commands/background-terminal.js'
 import { createBrowserCommandHandler } from './commands/browser.js'
+import { createContextCommandHandler } from './commands/context.js'
 import { createDoctorCommandHandler } from './commands/doctor.js'
 import { parseGoalCreateArgs, tokenizeArgs } from './commands/goal.js'
 import { createMcpCommandHandler } from './commands/mcp.js'
@@ -742,6 +743,7 @@ export function App({
           login: handleLogin,
           logout: handleLogout,
           model: handleModelSwitch,
+          context: handleContext,
           thinking: handleThinkingToggle,
           theme: handleThemeSwitch,
           plan: handlePlanToggle,
@@ -1929,6 +1931,11 @@ export function App({
     addCommandResult,
     askQuestion,
     invalidateSystemPromptCache,
+  })
+
+  const { handleContext } = createContextCommandHandler({
+    modelId: state.modelId,
+    addCommandMessage,
   })
 
   const { handleBrowser } = createBrowserCommandHandler({

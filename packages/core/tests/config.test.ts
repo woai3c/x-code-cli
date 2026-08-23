@@ -1,6 +1,7 @@
 // Tests for config module
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -12,13 +13,39 @@ import {
   DEFAULT_STREAM_CONFIG,
   getAvailableProviders,
   getProviderOptions,
+  getUserConfigPath,
+  loadUserConfig,
   resolveBrowserConfig,
   resolveMemoryConfig,
   resolveModelId,
   resolvePeerMessagingConfig,
   resolveStreamConfig,
+  saveUserConfig,
 } from '../src/config/index.js'
 import { PROVIDER_ENV_VARS } from './provider-env.js'
+
+describe('context window config', () => {
+  let home: string
+
+  beforeEach(() => {
+    isolateUserConfig()
+    home = process.env.X_CODE_HOME!
+  })
+
+  afterEach(() => {
+    delete process.env.X_CODE_HOME
+    fs.rmSync(home, { recursive: true, force: true })
+  })
+
+  it('persists and removes the override without clobbering other preferences', () => {
+    expect(saveUserConfig({ model: 'openai:gpt-5.6-sol', contextWindow: 128000 })).toBe(true)
+    expect(loadUserConfig()).toMatchObject({ model: 'openai:gpt-5.6-sol', contextWindow: 128000 })
+
+    expect(saveUserConfig({ contextWindow: undefined })).toBe(true)
+    expect(loadUserConfig()).toEqual({ model: 'openai:gpt-5.6-sol' })
+    expect(JSON.parse(fs.readFileSync(getUserConfigPath(), 'utf8'))).not.toHaveProperty('contextWindow')
+  })
+})
 
 describe('resolvePeerMessagingConfig', () => {
   it('falls back safely for malformed policy values', () => {

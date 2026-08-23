@@ -17,6 +17,11 @@ export const SLASH_COMMANDS = [
     argumentHint: '[model-id|refresh]',
   },
   {
+    name: '/context',
+    description: 'Override the context window for every model (no-arg = show status) — saved',
+    argumentHint: '[tokens|reset]',
+  },
+  {
     name: '/thinking',
     description: 'Toggle extended thinking on/off (no-arg = show status) — saved',
     argumentHint: '[on|off]',

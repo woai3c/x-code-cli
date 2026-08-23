@@ -138,11 +138,14 @@ export type { EditDiffHunk, EditDiffPayload } from './agent/diff.js'
 export { generateTaskSlug, makePlanFilePath } from './agent/plan-storage.js'
 export {
   COMPRESSION_TRIGGER_RATIO,
+  MIN_CONTEXT_WINDOW_OVERRIDE,
   estimateMessageTokenCount,
   estimateTextTokenCount,
   estimateTokenCount,
   getCompressionThreshold,
   getContextWindow,
+  getContextWindowOverride,
+  setContextWindowOverride,
 } from './agent/context-window.js'
 export {
   buildContextBreakdownInput,

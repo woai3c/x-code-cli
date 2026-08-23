@@ -349,6 +349,9 @@ export function resolveStreamConfig(config: UserConfig = loadUserConfig()): Stre
 export interface UserConfig {
   model?: string
   thinking?: boolean
+  /** User-forced context window in tokens. Overrides model/provider metadata
+   *  uniformly until cleared with `/context reset`. */
+  contextWindow?: number
   /** Explicit opt-in for the smaller standard tool surface. */
   experimentalToolProfile?: 'full' | 'standard'
   /** Persisted UI theme name. Drives both diff bg colors and the
@@ -407,8 +410,9 @@ export function loadUserConfig(): UserConfig {
   return {}
 }
 
-/** Write a partial update into the user config, preserving other keys. */
-export function saveUserConfig(update: Partial<UserConfig>): void {
+/** Write a partial update into the user config, preserving other keys. Returns
+ *  whether the new config reached disk so interactive commands can report failures. */
+export function saveUserConfig(update: Partial<UserConfig>): boolean {
   const merged: UserConfig = { ...loadUserConfig(), ...update }
   try {
     // mkdir the SAME root getUserConfigPath() points at — otherwise an
@@ -416,8 +420,10 @@ export function saveUserConfig(update: Partial<UserConfig>): void {
     // and the write silently fails on a missing parent.
     fsSync.mkdirSync(userXcodeDir(), { recursive: true })
     fsSync.writeFileSync(getUserConfigPath(), JSON.stringify(merged, null, 2) + '\n', 'utf-8')
+    return true
   } catch {
     // Best-effort: don't crash the UI if the config dir is read-only.
+    return false
   }
 }
 

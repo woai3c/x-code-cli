@@ -33,6 +33,7 @@ import {
   resolveModelId,
   resolveStreamConfig,
   resolveWebSearchProvider,
+  setContextWindowOverride,
   setPluginDebugMirror,
   shutdownBrowserMcp,
 } from '@x-code-cli/core'
@@ -420,6 +421,7 @@ async function main() {
   await mcpPermissionStore.preload()
 
   const userConfig = loadUserConfig()
+  setContextWindowOverride(userConfig.contextWindow)
   const streamConfig = resolveStreamConfig(userConfig)
   const options: AgentOptions = {
     modelId,

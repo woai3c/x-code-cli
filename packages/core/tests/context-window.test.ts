@@ -5,7 +5,9 @@ import {
   estimateTokenCount,
   getCompressionThreshold,
   getContextWindow,
+  getContextWindowOverride,
   getMaxOutputTokens,
+  setContextWindowOverride,
 } from '../src/agent/context-window.js'
 import { isolateOpenAIAuth } from './provider-env.js'
 
@@ -13,9 +15,13 @@ let restoreOpenAIAuth: () => void
 
 beforeEach(() => {
   restoreOpenAIAuth = isolateOpenAIAuth()
+  setContextWindowOverride(undefined)
 })
 
-afterEach(() => restoreOpenAIAuth())
+afterEach(() => {
+  setContextWindowOverride(undefined)
+  restoreOpenAIAuth()
+})
 
 describe('getContextWindow', () => {
   it('returns exact value for known models', () => {
@@ -35,12 +41,32 @@ describe('getContextWindow', () => {
   it('returns global default for completely unknown providers', () => {
     expect(getContextWindow('unknownprovider:somemodel')).toBe(128000)
   })
+
+  it('forces the user override for every model and provider', () => {
+    expect(setContextWindowOverride(64000)).toBe(64000)
+    expect(getContextWindowOverride()).toBe(64000)
+    expect(getContextWindow('anthropic:claude-opus-4-8')).toBe(64000)
+    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(64000)
+    expect(getContextWindow('unknownprovider:somemodel')).toBe(64000)
+  })
+
+  it('clears or ignores an invalid override', () => {
+    setContextWindowOverride(64000)
+    expect(setContextWindowOverride(32767)).toBeUndefined()
+    expect(setContextWindowOverride('invalid')).toBeUndefined()
+    expect(getContextWindow('alibaba:qwen-max')).toBe(32768)
+  })
 })
 
 describe('getCompressionThreshold', () => {
   it('is context window * COMPRESSION_TRIGGER_RATIO', () => {
     const window = getContextWindow('anthropic:claude-opus-4-8')
     expect(getCompressionThreshold('anthropic:claude-opus-4-8')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
+  })
+
+  it('uses the forced context window', () => {
+    setContextWindowOverride(40000)
+    expect(getCompressionThreshold('anthropic:claude-opus-4-8')).toBe(32000)
   })
 })
 
