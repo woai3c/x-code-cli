@@ -2,7 +2,7 @@
 // vision flag that gates the browser agent's visual mode.
 import { describe, expect, it } from 'vitest'
 
-import { capabilitiesOf, modelSupportsVision } from '../src/providers/capabilities.js'
+import { capabilitiesOf, isModelAcceptedImageMime, modelSupportsVision } from '../src/providers/capabilities.js'
 
 describe('modelSupportsVision', () => {
   it('returns the catalog vision flag for listed vision models', () => {
@@ -40,6 +40,17 @@ describe('modelSupportsVision', () => {
     expect(capabilitiesOf('alibaba:qwen3-vl-flash').image).toBe(true)
     expect(modelSupportsVision('alibaba:qwen3.7-max')).toBe(false)
     expect(modelSupportsVision('alibaba:qwen3-vl-flash')).toBe(true)
+  })
+})
+
+describe('provider image MIME policy', () => {
+  it('limits xAI to JPEG/PNG while retaining GIF/WebP for providers that support them', () => {
+    expect(isModelAcceptedImageMime('image/png', 'xai:grok-4.3')).toBe(true)
+    expect(isModelAcceptedImageMime('image/jpeg', 'xai:grok-4.3')).toBe(true)
+    expect(isModelAcceptedImageMime('image/gif', 'xai:grok-4.3')).toBe(false)
+    expect(isModelAcceptedImageMime('image/webp', 'xai:grok-4.3')).toBe(false)
+    expect(isModelAcceptedImageMime('image/gif', 'moonshotai:kimi-k3')).toBe(true)
+    expect(isModelAcceptedImageMime('image/webp', 'moonshotai:kimi-k3')).toBe(true)
   })
 })
 

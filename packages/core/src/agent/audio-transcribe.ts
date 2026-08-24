@@ -15,79 +15,20 @@
 // When the native binding is unavailable (unsupported OS/arch, broken install),
 // transcribeAudio returns a descriptive error string instead of throwing —
 // callers can surface it to the model and the user.
-import { closeSync, openSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 
 import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
-
-// ── stderr suppression ───────────────────────────────────────────────────
-// whisper.cpp's C layer (and ggml_metal) writes directly to fd 2 via
-// fprintf(stderr, ...).  toggleNativeLog(false) only suppresses the
-// whisper-level log callback; lower-level ggml prints (device init,
-// metal library load, deallocation, read_audio_data) bypass it entirely.
-//
-// The only reliable fix: dup the real fd 2 to a backup, then close fd 2
-// and open /dev/null so it claims fd 2 (POSIX guarantees open() returns
-// the lowest available fd).  Restore by closing fd 2 (/dev/null), then
-// reopening the backup via /dev/fd/<N> so it reclaims fd 2.
-//
-// On Windows (no /dev/fd, no reliable dup-via-open trick), we fall back
-// to a no-op — the native logs are not a fatal problem, just visual noise.
-
-const DEV_NULL = process.platform === 'win32' ? 'NUL' : '/dev/null'
-const FD_SELF_PREFIX = process.platform === 'linux' ? '/proc/self/fd/' : '/dev/fd/'
-let savedStderrFd: number | null = null
-let stderrMuted = false
-
-function muteStderr(): void {
-  if (stderrMuted || process.platform === 'win32') return
-  try {
-    // 1. dup(2) → savedStderrFd  (opening /dev/fd/2 is equivalent to dup(2))
-    savedStderrFd = openSync(`${FD_SELF_PREFIX}2`, 'w')
-    // 2. close(2)
-    closeSync(2)
-    // 3. open /dev/null → gets fd 2 (lowest available)
-    const nullFd = openSync(DEV_NULL, 'w')
-    if (nullFd !== 2) {
-      // Unexpected: fd 2 wasn't the lowest available. Undo and bail.
-      closeSync(nullFd)
-      // Reopen stderr from the backup
-      const restored = openSync(`${FD_SELF_PREFIX}${savedStderrFd}`, 'w')
-      if (restored !== 2) closeSync(restored)
-      closeSync(savedStderrFd!)
-      savedStderrFd = null
-      return
-    }
-    stderrMuted = true
-  } catch {
-    savedStderrFd = null
-    stderrMuted = false
-  }
-}
-
-function unmuteStderr(): void {
-  if (!stderrMuted || savedStderrFd === null) return
-  try {
-    // 1. close fd 2 (/dev/null)
-    closeSync(2)
-    // 2. reopen from backup → gets fd 2
-    const restored = openSync(`${FD_SELF_PREFIX}${savedStderrFd}`, 'w')
-    if (restored !== 2) {
-      // Shouldn't happen, but close the stray fd
-      closeSync(restored)
-    }
-  } catch {
-    /* best-effort */
-  }
-  try {
-    closeSync(savedStderrFd)
-  } catch {
-    /* ignore */
-  }
-  savedStderrFd = null
-  stderrMuted = false
-}
+import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.js'
+import { acquireFileLock } from '../utils/file-lock.js'
+import { WHISPER_MODELS, WHISPER_MODEL_REVISION } from './audio-transcribe-models.js'
+import type { WhisperModelName, WhisperModelSpec } from './audio-transcribe-models.js'
+import { WhisperProcessError, runWhisperTranscription } from './audio-transcribe-runner.js'
 
 // ── Supported audio formats ──────────────────────────────────────────────
 const AUDIO_EXTENSIONS = new Set([
@@ -112,26 +53,16 @@ export function isAudioFile(filePath: string): boolean {
  *  Default is `tiny` — only ~75 MB to download, fast on CPU, and good
  *  enough for a CLI assistant. Users who need better accuracy for
  *  non-English or complex audio can override via env or option. */
-const WHISPER_MODELS = {
-  'tiny.en': 'ggml-tiny.en.bin',
-  tiny: 'ggml-tiny.bin',
-  'base.en': 'ggml-base.en.bin',
-  base: 'ggml-base.bin',
-  'small.en': 'ggml-small.en.bin',
-  small: 'ggml-small.bin',
-} as const
-
-type WhisperModelName = keyof typeof WHISPER_MODELS
-
 const DEFAULT_MODEL: WhisperModelName = (process.env.X_CODE_WHISPER_MODEL as WhisperModelName | undefined) ?? 'tiny'
-const HUGGINGFACE_BASE = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main'
+const HUGGINGFACE_BASE = `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}`
+export const MAX_AUDIO_SOURCE_BYTES = 25 * 1024 * 1024
 
 function modelsDir(): string {
   return path.join(userXcodeDir(), 'whisper-models')
 }
 
 function modelPath(model: WhisperModelName): string {
-  return path.join(modelsDir(), WHISPER_MODELS[model])
+  return path.join(modelsDir(), WHISPER_MODELS[model].filename)
 }
 
 // ── Model download ───────────────────────────────────────────────────────
@@ -141,6 +72,7 @@ function modelPath(model: WhisperModelName): string {
 // slow-but-steady 75 MB download is fine; only a fully stalled network
 // triggers this.
 const STALL_TIMEOUT_MS = 30_000
+const MODEL_LOCK_WAIT_MS = 30 * 60_000
 
 interface EnsureModelOptions {
   abortSignal?: AbortSignal
@@ -152,101 +84,187 @@ interface EnsureModelOptions {
   onProgress?: (message: string) => void
 }
 
+interface VerifiedModelIdentity {
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+  ino: number
+}
+
+const verifiedModels = new Map<string, VerifiedModelIdentity>()
+const MODEL_HASH_CHUNK_BYTES = 1024 * 1024
+
+async function validateModelFile(
+  filePath: string,
+  spec: WhisperModelSpec,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  abortSignal?.throwIfAborted()
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    handle = await fs.open(filePath, 'r')
+    const before = await handle.stat()
+    const cached = verifiedModels.get(filePath)
+    if (
+      cached &&
+      cached.size === before.size &&
+      cached.mtimeMs === before.mtimeMs &&
+      cached.ctimeMs === before.ctimeMs &&
+      cached.ino === before.ino
+    ) {
+      return true
+    }
+    if (before.size !== spec.bytes) return false
+
+    const hash = createHash('sha256')
+    let position = 0
+    while (position < spec.bytes) {
+      abortSignal?.throwIfAborted()
+      const chunk = Buffer.allocUnsafe(Math.min(MODEL_HASH_CHUNK_BYTES, spec.bytes - position))
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position)
+      if (bytesRead === 0) return false
+      hash.update(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    const after = await handle.stat()
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) return false
+    if (hash.digest('hex') !== spec.sha256) return false
+    verifiedModels.set(filePath, {
+      size: after.size,
+      mtimeMs: after.mtimeMs,
+      ctimeMs: after.ctimeMs,
+      ino: after.ino,
+    })
+    return true
+  } catch {
+    abortSignal?.throwIfAborted()
+    return false
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
 async function ensureModel(model: WhisperModelName, options?: EnsureModelOptions): Promise<string> {
   const dest = modelPath(model)
-  try {
-    await fs.access(dest)
-    return dest
-  } catch {
-    // not downloaded yet
-  }
-
-  // Clean up a stale partial download from a previous interrupted attempt.
-  const tmpDest = `${dest}.tmp`
-  await fs.rm(tmpDest, { force: true })
+  const spec = WHISPER_MODELS[model]
+  if (await validateModelFile(dest, spec, options?.abortSignal)) return dest
 
   await fs.mkdir(modelsDir(), { recursive: true })
-
-  const filename = WHISPER_MODELS[model]
-  const url = `${HUGGINGFACE_BASE}/${filename}`
-  debugLog('audio-transcribe', `downloading model ${filename} from ${url}`)
-
-  const dlCmd =
-    process.platform === 'win32'
-      ? `  curl.exe -L -o "${dest}" "${url}"\n` +
-        `  # Or in PowerShell:\n` +
-        `  Invoke-WebRequest -Uri "${url}" -OutFile "${dest}"`
-      : `  curl -L -o "${dest}" "${url}"`
-  const manualHint =
-    `You can also download it manually:\n${dlCmd}\n` +
-    `Or set X_CODE_WHISPER_MODEL=tiny.en for a smaller (~39 MB) English-only model.`
-
-  options?.onProgress?.(`First-time setup: downloading whisper model "${model}" — press Esc to cancel.\n${manualHint}`)
-
-  const response = await fetch(url, { signal: options?.abortSignal })
-  if (!response.ok || !response.body) {
-    throw new Error(
-      `Failed to download whisper model ${filename}: ${response.status} ${response.statusText}\n${manualHint}`,
-    )
-  }
-
-  const totalBytes = Number(response.headers.get('content-length') || 0)
-  let downloadedBytes = 0
-  let lastPctReported = -1
-
-  const writer = (await import('node:fs')).createWriteStream(tmpDest)
-  const reader = response.body.getReader()
+  const lease = await acquireFileLock(`${dest}.lock`, {
+    waitMs: MODEL_LOCK_WAIT_MS,
+    timeoutError: `Timed out waiting for another process to download whisper model ${model}`,
+    signal: options?.abortSignal,
+  })
+  if (!lease) throw new Error(`Could not acquire the whisper model download lock for ${model}`)
   try {
-    for (;;) {
-      if (options?.abortSignal?.aborted) {
-        throw new DOMException('Download aborted', 'AbortError')
-      }
+    if (await validateModelFile(dest, spec, options?.abortSignal)) return dest
+    verifiedModels.delete(dest)
+    await fs.rm(dest, { force: true })
 
-      // Stall detection: if no data arrives within STALL_TIMEOUT_MS the
-      // connection is dead — don't hang forever.
-      let stallTimer: ReturnType<typeof setTimeout> | undefined
-      const chunk = await Promise.race([
-        reader.read(),
-        new Promise<never>((_, reject) => {
-          stallTimer = setTimeout(
-            () =>
-              reject(new Error(`Download stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s.\n${manualHint}`)),
-            STALL_TIMEOUT_MS,
-          )
-        }),
-      ])
+    // The fixed temporary name is safe while the cross-process lock is held;
+    // removing it also recovers an interrupted download from an earlier run.
+    const tmpDest = `${dest}.tmp`
+    await fs.rm(tmpDest, { recursive: true, force: true })
+
+    const filename = spec.filename
+    const url = `${HUGGINGFACE_BASE}/${filename}`
+    debugLog('audio-transcribe', `downloading model ${filename} from ${url}`)
+
+    const dlCmd =
+      process.platform === 'win32'
+        ? `  curl.exe -L -o "${dest}" "${url}"\n` +
+          `  # Or in PowerShell:\n` +
+          `  Invoke-WebRequest -Uri "${url}" -OutFile "${dest}"`
+        : `  curl -L -o "${dest}" "${url}"`
+    const manualHint =
+      `You can also download it manually:\n${dlCmd}\n` +
+      `Or set X_CODE_WHISPER_MODEL=tiny.en for an English-only model.`
+
+    options?.onProgress?.(
+      `First-time setup: downloading whisper model "${model}" — press Esc to cancel.\n${manualHint}`,
+    )
+
+    const response = await fetch(url, { signal: options?.abortSignal })
+    if (!response.ok || !response.body) {
+      throw new Error(
+        `Failed to download whisper model ${filename}: ${response.status} ${response.statusText}\n${manualHint}`,
+      )
+    }
+
+    const declaredBytes = Number(response.headers.get('content-length') || 0)
+    if (declaredBytes > 0 && declaredBytes !== spec.bytes) {
+      throw new Error(
+        `Whisper model download returned ${declaredBytes} bytes; expected ${spec.bytes}. Refusing unexpected content.`,
+      )
+    }
+    let downloadedBytes = 0
+    let lastPctReported = -1
+    const downloadHash = createHash('sha256')
+    let stallError: Error | null = null
+    let stallTimer: ReturnType<typeof setTimeout> | undefined
+    const stallController = new AbortController()
+    const downloadSignal = options?.abortSignal
+      ? AbortSignal.any([options.abortSignal, stallController.signal])
+      : stallController.signal
+    const resetStallTimer = () => {
       clearTimeout(stallTimer)
-      const { done, value } = chunk
-      if (done) break
-      writer.write(value)
-      downloadedBytes += value.byteLength
-      if (totalBytes > 0) {
-        const pct = Math.floor((downloadedBytes / totalBytes) * 100)
+      stallTimer = setTimeout(() => {
+        stallError = new Error(`Download stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s.\n${manualHint}`)
+        stallController.abort(stallError)
+      }, STALL_TIMEOUT_MS)
+      stallTimer.unref()
+    }
+    const progress = new Transform({
+      transform(chunk, _encoding, callback) {
+        resetStallTimer()
+        downloadedBytes += chunk.byteLength
+        if (downloadedBytes > spec.bytes) {
+          callback(new Error(`Whisper model download exceeds the expected ${spec.bytes}-byte limit`))
+          return
+        }
+        downloadHash.update(chunk)
+        const pct = Math.floor((downloadedBytes / spec.bytes) * 100)
         if (pct >= lastPctReported + 5) {
           lastPctReported = pct
           const mb = (downloadedBytes / 1024 / 1024).toFixed(1)
-          const totalMb = (totalBytes / 1024 / 1024).toFixed(1)
+          const totalMb = (spec.bytes / 1024 / 1024).toFixed(1)
           debugLog('audio-transcribe', `download progress: ${mb}/${totalMb} MB (${pct}%)`)
           options?.onProgress?.(`Downloading whisper model: ${mb}/${totalMb} MB (${pct}%)`)
         }
-      }
-    }
-  } catch (err) {
-    writer.destroy()
-    await fs.rm(tmpDest, { force: true })
-    throw err
-  } finally {
-    writer.end()
-    await new Promise<void>((resolve, reject) => {
-      writer.on('finish', resolve)
-      writer.on('error', reject)
+        callback(null, chunk)
+      },
     })
-  }
 
-  await fs.rename(tmpDest, dest)
-  debugLog('audio-transcribe', `model saved to ${dest}`)
-  options?.onProgress?.(`Whisper model downloaded successfully`)
-  return dest
+    resetStallTimer()
+    try {
+      const source = Readable.fromWeb(response.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>)
+      await pipeline(source, progress, createWriteStream(tmpDest), { signal: downloadSignal })
+      options?.abortSignal?.throwIfAborted()
+      if (downloadedBytes !== spec.bytes) {
+        throw new Error(`Whisper model download ended at ${downloadedBytes} bytes; expected ${spec.bytes}.`)
+      }
+      if (downloadHash.digest('hex') !== spec.sha256) {
+        throw new Error('Whisper model checksum verification failed; the response was not cached.')
+      }
+      await fs.rename(tmpDest, dest)
+      verifiedModels.delete(dest)
+      if (!(await validateModelFile(dest, spec, options?.abortSignal))) {
+        await fs.rm(dest, { force: true })
+        throw new Error('Whisper model failed post-download verification.')
+      }
+    } catch (error) {
+      await fs.rm(tmpDest, { recursive: true, force: true }).catch(() => {})
+      if (stallError && !options?.abortSignal?.aborted) throw stallError
+      throw error
+    } finally {
+      clearTimeout(stallTimer)
+    }
+    debugLog('audio-transcribe', `model saved to ${dest}`)
+    options?.onProgress?.(`Whisper model downloaded successfully`)
+    return dest
+  } finally {
+    await lease.release()
+  }
 }
 
 // ── Transcription result ─────────────────────────────────────────────────
@@ -298,60 +316,35 @@ export function formatTranscription(result: TranscribeAudioResult, filePath: str
   return [header, langLine, '', ...lines].filter(Boolean).join('\n')
 }
 
-// ── whisper.node context pool ────────────────────────────────────────────
-// Lazy-loaded, auto-released after idle timeout. Similar pattern to the
-// shared tesseract.js worker in file-ingest.ts.
-
-type WhisperCtx = Awaited<ReturnType<(typeof import('@fugood/whisper.node'))['initWhisper']>>
-
-const IDLE_MS = 60_000
-let sharedCtx: WhisperCtx | null = null
-let idleTimer: ReturnType<typeof setTimeout> | null = null
-let loadedModelPath: string | null = null
-
-async function getContext(model: WhisperModelName, opts?: EnsureModelOptions): Promise<WhisperCtx> {
-  const target = await ensureModel(model, opts)
-
-  if (sharedCtx && loadedModelPath === target) {
-    if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(releaseContext, IDLE_MS)
-    return sharedCtx
-  }
-
-  await releaseContext()
-
-  opts?.onProgress?.('Loading whisper model…')
-  const whisperModule = await import('@fugood/whisper.node')
-  await whisperModule.loadWhisperModule()
-  await whisperModule.toggleNativeLog(false)
-  // Redirect fd 2 → /dev/null for the duration of initWhisper, which
-  // triggers ggml_metal_device_init / whisper_init_from_file prints that
-  // bypass the whisper log callback.
-  muteStderr()
+async function removeModelIfInvalid(model: WhisperModelName): Promise<void> {
+  const dest = modelPath(model)
+  verifiedModels.delete(dest)
+  const lease = await acquireFileLock(`${dest}.lock`, {
+    waitMs: MODEL_LOCK_WAIT_MS,
+    timeoutError: `Timed out rechecking whisper model ${model}`,
+  })
+  if (!lease) return
   try {
-    sharedCtx = await whisperModule.initWhisper({ filePath: target, useGpu: true })
+    if (!(await validateModelFile(dest, WHISPER_MODELS[model]))) await fs.rm(dest, { force: true })
   } finally {
-    unmuteStderr()
+    await lease.release()
   }
-  loadedModelPath = target
-  idleTimer = setTimeout(releaseContext, IDLE_MS)
-  return sharedCtx
 }
 
-async function releaseContext(): Promise<void> {
-  if (idleTimer) {
-    clearTimeout(idleTimer)
-    idleTimer = null
-  }
-  if (sharedCtx) {
-    muteStderr()
-    try {
-      await sharedCtx.release().catch(() => {})
-    } finally {
-      unmuteStderr()
-    }
-    sharedCtx = null
-    loadedModelPath = null
+async function stageAudioFile(
+  filePath: string,
+  abortSignal?: AbortSignal,
+): Promise<{ directory: string; path: string }> {
+  const bytes = await readFileWithinLimit(filePath, MAX_AUDIO_SOURCE_BYTES, abortSignal)
+  abortSignal?.throwIfAborted()
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-audio-'))
+  const stagedPath = path.join(directory, `input${path.extname(filePath).toLowerCase() || '.audio'}`)
+  try {
+    await fs.writeFile(stagedPath, bytes, { signal: abortSignal })
+    return { directory, path: stagedPath }
+  } catch (error) {
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => {})
+    throw error
   }
 }
 
@@ -368,7 +361,7 @@ export async function isWhisperAvailable(): Promise<boolean> {
 }
 
 export interface TranscribeOptions {
-  /** Override the default model. Defaults to 'base'. */
+  /** Override the default model. Defaults to 'tiny'. */
   model?: WhisperModelName
   /** Force a specific language (ISO 639-1 code, e.g. 'en', 'zh'). Auto-detect if omitted. */
   language?: string
@@ -388,6 +381,11 @@ export async function transcribeAudio(
   options?: TranscribeOptions,
 ): Promise<TranscribeAudioResult | string> {
   const model = options?.model ?? DEFAULT_MODEL
+  let stagedDirectory: string | null = null
+  if (options?.abortSignal?.aborted) return '[Audio transcription was cancelled.]'
+  if (!Object.hasOwn(WHISPER_MODELS, model)) {
+    return `[Audio transcription failed: unknown Whisper model "${model}".]`
+  }
 
   // Pre-flight: file exists?
   try {
@@ -410,54 +408,26 @@ export async function transcribeAudio(
   try {
     debugLog('audio-transcribe', `starting transcription: ${filePath} (model: ${model})`)
 
+    const staged = await stageAudioFile(filePath, options?.abortSignal)
+    stagedDirectory = staged.directory
+
     // onNotice fires for every progress tick — fine for tool-progress
     // (overwrites the same spinner line), but file-ingest appends a new
     // UI message each time. So use onNotice for key milestones only
     // when no dedicated progress sink exists; downstream download ticks
     // always go to onNotice so the readFile spinner stays live.
-    const ctx = await getContext(model, {
+    const targetModel = await ensureModel(model, {
       abortSignal: options?.abortSignal,
       onProgress: options?.onNotice,
     })
+    options?.abortSignal?.throwIfAborted()
     options?.onNotice?.(`Transcribing audio: ${path.basename(filePath)}…`)
-
-    const transcribeOpts: Parameters<WhisperCtx['transcribeFile']>[1] = {
-      temperature: 0,
+    const result = await runWhisperTranscription(targetModel, staged.path, {
+      language: options?.language,
+      abortSignal: options?.abortSignal,
       onProgress: options?.onProgress,
-    }
-    if (options?.language) {
-      transcribeOpts.language = options.language
-    }
-
-    // Mute stderr around transcribeFile() — the native layer prints
-    // "read_audio_data: trying to decode with miniaudio" (and similar)
-    // directly to fd 2 during audio loading. The mute is scoped to
-    // the synchronous portion; the returned promise runs on a worker
-    // thread inside the native addon and doesn't write to our fd 2.
-    muteStderr()
-    let transcribeRet: ReturnType<WhisperCtx['transcribeFile']>
-    try {
-      transcribeRet = ctx.transcribeFile(filePath, transcribeOpts)
-    } finally {
-      unmuteStderr()
-    }
-    const { stop, promise } = transcribeRet
-
-    // Wire abort signal to cancel whisper transcription
-    const abortHandler = options?.abortSignal
-      ? () => {
-          void stop()
-        }
-      : undefined
-    if (abortHandler) {
-      options!.abortSignal!.addEventListener('abort', abortHandler, { once: true })
-    }
-
-    const result = await promise
-
-    if (abortHandler) {
-      options!.abortSignal!.removeEventListener('abort', abortHandler)
-    }
+      onNotice: options?.onNotice,
+    })
 
     if (result.isAborted) {
       return '[Audio transcription was cancelled.]'
@@ -471,11 +441,25 @@ export async function transcribeAudio(
       language: result.language,
     }
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (options?.abortSignal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
       return '[Audio transcription was cancelled.]'
+    }
+    if (err instanceof FileSizeLimitError) {
+      return (
+        `[Audio transcription failed: source file is too large (${err.observedBytes} bytes, ` +
+        `cap ${err.limitBytes} bytes).]`
+      )
+    }
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return `[Audio transcription failed: file not found — ${filePath}]`
+    }
+    if (err instanceof WhisperProcessError && err.phase === 'initialize') {
+      await removeModelIfInvalid(model).catch(() => {})
     }
     const msg = errorMessage(err)
     debugLog('audio-transcribe', `error: ${msg}`)
     return `[Audio transcription failed: ${msg}]`
+  } finally {
+    if (stagedDirectory) await fs.rm(stagedDirectory, { recursive: true, force: true }).catch(() => {})
   }
 }

@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
 import type { ModelMessage } from 'ai'
 
-import { reattachToolResultImagesForProvider, stripBinaryPartsFromMessages } from '../src/agent/provider-compat.js'
+import { ocrImage } from '../src/agent/image-ocr.js'
+import {
+  downgradeBinaryPartsForProvider,
+  reattachToolResultImagesForProvider,
+  stripBinaryPartsFromMessages,
+} from '../src/agent/provider-compat.js'
 import { collapseStaleToolResults } from '../src/agent/tool-result-pruning.js'
+
+vi.mock('../src/agent/image-ocr.js', () => ({
+  ocrImage: vi.fn(async () => 'mock compatibility OCR'),
+}))
 
 function imageToolResult(toolCallId: string, data: string, toolName = 'readFile'): ModelMessage {
   return {
@@ -218,5 +227,248 @@ describe('reattachToolResultImagesForProvider', () => {
         image_url: { url: 'data:image/png;base64,QUFBQQ==' },
       },
     ])
+  })
+})
+
+describe('downgradeBinaryPartsForProvider', () => {
+  it('removes legacy PDF/audio files for every provider without mutating canonical messages', async () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'old session' },
+          { type: 'file', data: 'JVBERi0=', mediaType: 'application/pdf', filename: 'old.pdf' },
+          { type: 'file', data: 'UklGRg==', mediaType: 'audio/wav', filename: 'old.wav' },
+        ],
+      },
+    ] as ModelMessage[]
+    const canonical = structuredClone(messages)
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+
+    expect(messages).toEqual(canonical)
+    expect(projected).not.toBe(messages)
+    expect(JSON.stringify(projected)).not.toContain('application/pdf')
+    expect(JSON.stringify(projected)).not.toContain('audio/wav')
+    expect(JSON.stringify(projected)).toContain('Legacy file attachment omitted')
+  })
+
+  it('keeps a nested-base64 image FilePart for vision models and OCRs it for text models', async () => {
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII='
+    const imagePart = {
+      type: 'file' as const,
+      data: { type: 'data' as const, data: pngBase64 },
+      mediaType: 'image/png',
+      filename: 'image.png',
+    }
+    const messages = [{ role: 'user', content: [{ type: 'text', text: 'look' }, imagePart] }] as ModelMessage[]
+    const canonical = structuredClone(messages)
+
+    const vision = await downgradeBinaryPartsForProvider(messages, 'moonshotai:kimi-k3')
+    expect(vision[0]).toEqual(messages[0])
+    const text = await downgradeBinaryPartsForProvider(messages, 'deepseek:deepseek-v4-flash')
+    expect(JSON.stringify(text)).toContain('mock compatibility OCR')
+    expect(JSON.stringify(text)).not.toContain('"type":"file"')
+    expect(messages).toEqual(canonical)
+  })
+
+  it('does not share OCR for images with matching length, head, and tail', async () => {
+    const { Jimp } = await import('jimp')
+    const first = await new Jimp({ width: 16, height: 16, color: 0xff0000ff }).getBuffer('image/bmp')
+    const second = Buffer.from(first)
+    second[Math.floor(second.length / 2)]! ^= 1
+    const asMessages = (data: Buffer) =>
+      [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'file',
+              data: { type: 'data', data: data.toString('base64') },
+              mediaType: 'image/bmp',
+              filename: 'legacy.bmp',
+            },
+          ],
+        },
+      ] as ModelMessage[]
+    const callsBefore = vi.mocked(ocrImage).mock.calls.length
+
+    await downgradeBinaryPartsForProvider(asMessages(first), 'deepseek:deepseek-v4-flash')
+    await downgradeBinaryPartsForProvider(asMessages(second), 'deepseek:deepseek-v4-flash')
+
+    expect(vi.mocked(ocrImage).mock.calls.length - callsBefore).toBe(2)
+  })
+
+  it('normalizes a legacy BMP FilePart for vision models without mutating canonical history', async () => {
+    const { Jimp } = await import('jimp')
+    const bmp = await new Jimp({ width: 2, height: 2, color: 0xff0000ff }).getBuffer('image/bmp')
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            data: { type: 'data', data: bmp.toString('base64') },
+            mediaType: 'image/bmp',
+            filename: 'legacy.bmp',
+          },
+        ],
+      },
+    ] as ModelMessage[]
+    const canonical = structuredClone(messages)
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'moonshotai:kimi-k3')
+    const part = (projected[0]!.content as Array<{ type: string; data?: { data?: string }; mediaType?: string }>)[0]!
+
+    expect(part).toMatchObject({ type: 'file', mediaType: 'image/png' })
+    expect(Buffer.from(part.data!.data!, 'base64').subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    )
+    expect(messages).toEqual(canonical)
+  })
+
+  it('omits a legacy GIF from an xAI request without mutating canonical history', async () => {
+    const { Jimp } = await import('jimp')
+    const gif = await new Jimp({ width: 2, height: 2, color: 0xff0000ff }).getBuffer('image/gif')
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            data: { type: 'data', data: gif.toString('base64') },
+            mediaType: 'image/gif',
+            filename: 'legacy.gif',
+          },
+        ],
+      },
+    ] as ModelMessage[]
+    const canonical = structuredClone(messages)
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'xai:grok-4.3')
+
+    expect(JSON.stringify(projected)).toContain('accepts only PNG, JPEG')
+    expect(JSON.stringify(projected)).not.toContain('"type":"file"')
+    expect(messages).toEqual(canonical)
+  })
+
+  it('omits a corrupt legacy image from a vision request without mutating canonical history', async () => {
+    const corruptPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ', 'base64')
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            data: { type: 'data', data: corruptPng.toString('base64') },
+            mediaType: 'image/png',
+            filename: 'broken.png',
+          },
+        ],
+      },
+    ] as ModelMessage[]
+    const canonical = structuredClone(messages)
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'moonshotai:kimi-k3')
+
+    expect(JSON.stringify(projected)).toContain('Image')
+    expect(JSON.stringify(projected)).not.toContain('"type":"file"')
+    expect(messages).toEqual(canonical)
+  })
+
+  it('cleans legacy tool file-data while retaining ordinary tool text', async () => {
+    const messages = [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-legacy',
+            toolName: 'readFile',
+            output: {
+              type: 'content',
+              value: [
+                { type: 'text', text: 'before' },
+                { type: 'file-data', data: 'JVBERi0=', mediaType: 'application/pdf', filename: 'old.pdf' },
+              ],
+            },
+          },
+        ],
+      },
+    ] as unknown as ModelMessage[]
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+    expect(JSON.stringify(projected)).toContain('before')
+    expect(JSON.stringify(projected)).toContain('Legacy file attachment omitted')
+    expect(JSON.stringify(projected)).not.toContain('file-data')
+    expect(JSON.stringify(messages)).toContain('file-data')
+  })
+
+  it('cleans legacy non-image media entries for every provider', async () => {
+    const messages = [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-legacy-media',
+            toolName: 'readFile',
+            output: {
+              type: 'content',
+              value: [{ type: 'media', data: 'JVBERi0=', mediaType: 'application/pdf', filename: 'old.pdf' }],
+            },
+          },
+        ],
+      },
+    ] as unknown as ModelMessage[]
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+    expect(JSON.stringify(projected)).toContain('Legacy file attachment omitted')
+    expect(JSON.stringify(projected)).not.toContain('application/pdf')
+    expect(JSON.stringify(messages)).toContain('application/pdf')
+  })
+
+  it('serializes an image FilePart as image_url rather than input_file', async () => {
+    let requestBody: { messages?: Array<{ content?: unknown }> } = {}
+    const provider = createOpenAICompatible({
+      name: 'compatible',
+      baseURL: 'https://example.test/v1',
+      apiKey: 'test-key',
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body))
+        return new Response(
+          JSON.stringify({
+            id: 'response-image-file',
+            object: 'chat.completion',
+            created: 0,
+            model: 'vision',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      },
+    })
+
+    await generateText({
+      model: provider('vision'),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'look' },
+            {
+              type: 'file',
+              data: { type: 'data', data: 'aW1hZ2U=' },
+              mediaType: 'image/png',
+              filename: 'image.png',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(JSON.stringify(requestBody)).toContain('image_url')
+    expect(JSON.stringify(requestBody)).not.toContain('input_file')
   })
 })

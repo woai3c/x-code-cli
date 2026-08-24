@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { LruCache } from '../src/utils/lru-cache.js'
+import { LruCache, bufferFingerprint } from '../src/utils/lru-cache.js'
+
+it('fingerprints the complete buffer rather than only matching edges', () => {
+  const first = Buffer.alloc(256, 0x61)
+  const second = Buffer.from(first)
+  first[128] = 0x31
+  second[128] = 0x32
+
+  expect(bufferFingerprint(first)).not.toBe(bufferFingerprint(second))
+})
 
 describe('LruCache', () => {
   it('stores and retrieves values', () => {

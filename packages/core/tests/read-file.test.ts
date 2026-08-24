@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { type ReadFileCache, createReadFileTool, readFile } from '../src/tools/read-file.js'
+import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../src/agent/notebook-render.js'
+import { type ReadFileCache, createReadFileTool, parsePdfPageRange, readFile } from '../src/tools/read-file.js'
+
+vi.mock('../src/agent/image-ocr.js', () => ({
+  ocrImage: vi.fn(async () => 'mock readFile OCR'),
+}))
 
 const exec = (input: Record<string, unknown>) =>
   readFile.execute!(input as any, { toolCallId: 'test', messages: [], abortSignal: undefined } as any)
@@ -20,6 +25,25 @@ describe('readFile tool', () => {
     expect(result).toContain('2\tconst b = 2')
     expect(result).toContain('3\tconst c = 3')
 
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('decodes UTF-16LE and UTF-16BE BOM text with line numbers', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-utf16-'))
+    const littlePath = path.join(tmpDir, 'little.txt')
+    const bigPath = path.join(tmpDir, 'big.txt')
+    const littleBody = Buffer.from('你好\nsecond', 'utf16le')
+    const bigBody = Buffer.from(littleBody)
+    for (let index = 0; index < bigBody.length; index += 2) {
+      const first = bigBody[index]!
+      bigBody[index] = bigBody[index + 1]!
+      bigBody[index + 1] = first
+    }
+    await fs.writeFile(littlePath, Buffer.concat([Buffer.from([0xff, 0xfe]), littleBody]))
+    await fs.writeFile(bigPath, Buffer.concat([Buffer.from([0xfe, 0xff]), bigBody]))
+
+    expect(await exec({ filePath: littlePath })).toContain('1\t你好\n2\tsecond')
+    expect(await exec({ filePath: bigPath })).toContain('1\t你好\n2\tsecond')
     await fs.rm(tmpDir, { recursive: true })
   })
 
@@ -117,6 +141,74 @@ describe('readFile tool', () => {
     const result = (await exec({ filePath: '/tmp/nonexistent-xc-test-file.ts' })) as string
     expect(result).toContain('Error')
   })
+
+  it('fails closed for an unknown binary instead of decoding it as UTF-8', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-bin-'))
+    const filePath = path.join(tmpDir, 'archive.txt')
+    await fs.writeFile(filePath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]))
+    const result = (await exec({ filePath })) as string
+    expect(result).toContain('Unsupported binary file')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('normalizes BMP tool output to PNG image-data', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-image-'))
+    const filePath = path.join(tmpDir, 'disguised.png')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(filePath, await new Jimp({ width: 3, height: 2, color: 0xffffffff }).getBuffer('image/bmp'))
+    const result = await exec({ filePath })
+    expect(result).toMatchObject({
+      type: 'content',
+      value: expect.arrayContaining([expect.objectContaining({ type: 'image-data', mediaType: 'image/png' })]),
+    })
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('does not return GIF image-data to an xAI model', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-xai-image-'))
+    const filePath = path.join(tmpDir, 'unsupported.gif')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(filePath, await new Jimp({ width: 2, height: 2, color: 0xffffffff }).getBuffer('image/gif'))
+    const tool = createReadFileTool(undefined, { modelId: 'xai:grok-4.3' })
+
+    const result = await tool.execute!({ filePath }, {
+      toolCallId: 'xai-gif-test',
+      messages: [],
+      abortSignal: undefined,
+    } as never)
+
+    expect(result).toContain('accepts only PNG, JPEG')
+    expect(JSON.stringify(result)).not.toContain('image-data')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('returns local OCR directly for a text-only model instead of persisting image-data', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-image-ocr-'))
+    const filePath = path.join(tmpDir, 'image.png')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(filePath, await new Jimp({ width: 3, height: 2, color: 0xffffffff }).getBuffer('image/png'))
+    const tool = createReadFileTool(undefined, { modelId: 'deepseek:deepseek-v4-flash' })
+    const result = await tool.execute!({ filePath }, {
+      toolCallId: 'image-ocr-test',
+      messages: [],
+      abortSignal: undefined,
+    } as never)
+
+    expect(result).toContain('mock readFile OCR')
+    expect(JSON.stringify(result)).not.toContain('image-data')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+})
+
+describe('parsePdfPageRange', () => {
+  it('accepts a page or inclusive range up to 20 pages', () => {
+    expect(parsePdfPageRange('3')).toEqual({ first: 3, last: 3 })
+    expect(parsePdfPageRange(' 1-20 ')).toEqual({ first: 1, last: 20 })
+  })
+
+  it('rejects malformed, reverse, zero and over-limit ranges', () => {
+    for (const value of ['x', '3-', '4-2', '0', '1-21']) expect(parsePdfPageRange(value), value).toBeNull()
+  })
 })
 
 describe('readFile — Jupyter notebooks', () => {
@@ -159,6 +251,26 @@ describe('readFile — Jupyter notebooks', () => {
     await fs.writeFile(filePath, 'not json {')
     const result = (await exec({ filePath })) as string
     expect(result).toContain('not json {')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('still bounds malformed notebook output', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-nb-'))
+    const filePath = path.join(tmpDir, 'huge-broken.ipynb')
+    await fs.writeFile(filePath, `not-json ${'x'.repeat(300 * 1024)}`)
+    const result = (await exec({ filePath })) as string
+    expect(result).toContain('Notebook output truncated at 256 KB')
+    expect(Buffer.byteLength(result, 'utf-8')).toBeLessThan(257 * 1024)
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('stops the notebook source read at its byte limit', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-nb-'))
+    const filePath = path.join(tmpDir, 'oversized.ipynb')
+    await fs.writeFile(filePath, '{}')
+    await fs.truncate(filePath, MAX_NOTEBOOK_SOURCE_BYTES + 1)
+
+    await expect(renderNotebookFile(filePath)).rejects.toMatchObject({ name: 'FileSizeLimitError' })
     await fs.rm(tmpDir, { recursive: true })
   })
 })

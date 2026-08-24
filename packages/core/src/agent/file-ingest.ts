@@ -4,13 +4,12 @@
 // absolute paths), resolve each reference into an AI-SDK content part:
 //
 //   text / code  → TextPart with file body
-//   PDF          → TextPart with extracted text (local, no tokens wasted on binary)
+//   PDF          → page-ordered local text and standard page images
 //   docx/xlsx/pptx → TextPart via bounded format-specific parsers
-//   image        → ImagePart for multimodal providers; OCR'd TextPart for DeepSeek
+//   image        → image FilePart for the active vision model; otherwise local OCR
 //
-// PDF is deliberately NOT sent as a FilePart even to multimodal providers
-// when we can extract text locally — a 100-page text PDF becomes a few KB
-// of prompt instead of tens of thousands of tokens of rendered pages.
+// PDF, audio, Office, and unknown binary source bytes never leave the local
+// processing pipeline.
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -23,37 +22,32 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { debugLog, errorMessage, truncateUtf8, userXcodeDir } from '../utils.js'
+import { debugLog, errorMessage, truncateUtf8 } from '../utils.js'
+import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.js'
 import {
   ATTACH_BYTE_BUDGET,
   MAX_EDGE_PX,
   buildCompressionCaption,
+  buildImageProcessingFailureNotice,
   compressImage,
   formatBytes,
 } from '../utils/image-compress.js'
-import { mediaTypeFor } from '../utils/media-type.js'
 import { formatTranscription, transcribeAudio } from './audio-transcribe.js'
-import { captionImage, pickVisionProvider } from './vision-fallback.js'
+import { classifyFile, decodeTextBuffer, inspectFile } from './file-classifier.js'
+import type { FileKind, InspectedFileKind } from './file-classifier.js'
+import { ocrImage } from './image-ocr.js'
+import { openMediaTag, toUserContentParts, wrapLocalText } from './local-media.js'
+import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from './notebook-render.js'
+import { MAX_PDF_SOURCE_BYTES, formatPdfReference, processPdf } from './pdf-ingest.js'
 import type { VisionUsageEvent } from './vision-fallback.js'
-
-/** Where tesseract.js caches its language model weights (`eng.traineddata`,
- *  `chi_sim.traineddata`, ~7.6 MB total). Without this the worker writes
- *  them into process.cwd() — which means each project the user runs `xc` in
- *  re-downloads the same files, and untracked binaries leak into git status.
- *  Centralizing under `~/.x-code/tessdata/` makes the download a one-time
- *  cost shared across every project on the machine. */
-async function tesseractCacheDir(): Promise<string> {
-  const dir = path.join(userXcodeDir(), 'tessdata')
-  await fs.mkdir(dir, { recursive: true })
-  return dir
-}
 
 /** A content part resolved from a file reference. Same types the AI SDK
  *  accepts in user message `content` arrays, so callers can splice these
  *  directly into a UserModelMessage. */
 export type IngestedPart = TextPart | ImagePart | FilePart
 
-export type FileKind = 'text' | 'image' | 'pdf' | 'office' | 'audio' | 'unknown'
+export { classifyFile }
+export type { FileKind }
 
 /** Paths the user pointed at, either via `@file` or a bare absolute path. */
 export interface FileReference {
@@ -62,88 +56,6 @@ export interface FileReference {
   /** Resolved absolute path. */
   absolutePath: string
 }
-
-/** Extensions we treat as inline text without inspection. Order doesn't
- *  matter; this is just a membership check. */
-const TEXT_EXTENSIONS = new Set([
-  '.txt',
-  '.md',
-  '.mdx',
-  '.rst',
-  '.log',
-  '.csv',
-  '.tsv',
-  '.json',
-  '.jsonc',
-  '.yaml',
-  '.yml',
-  '.toml',
-  '.ini',
-  '.env',
-  '.cfg',
-  '.conf',
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-  '.py',
-  '.rb',
-  '.go',
-  '.rs',
-  '.java',
-  '.kt',
-  '.swift',
-  '.c',
-  '.h',
-  '.cpp',
-  '.cc',
-  '.hpp',
-  '.cs',
-  '.php',
-  '.pl',
-  '.lua',
-  '.sh',
-  '.bash',
-  '.zsh',
-  '.fish',
-  '.ps1',
-  '.sql',
-  '.graphql',
-  '.gql',
-  '.proto',
-  '.html',
-  '.htm',
-  '.css',
-  '.scss',
-  '.sass',
-  '.less',
-  '.vue',
-  '.svelte',
-  '.xml',
-  '.svg',
-  '.dockerfile',
-  '.makefile',
-  '.gitignore',
-  '.editorconfig',
-])
-
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
-const AUDIO_EXTENSIONS = new Set([
-  '.mp3',
-  '.wav',
-  '.m4a',
-  '.ogg',
-  '.flac',
-  '.aac',
-  '.aiff',
-  '.aif',
-  '.wma',
-  '.webm',
-  '.opus',
-])
-const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp'])
 
 /** Max bytes a single inlined file can contribute to a user message before
  *  we replace its content with a help message. Picked at 256 KB to mirror
@@ -159,16 +71,18 @@ const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.
  *  sees a short hint instead and can call readFile with offset/limit or
  *  grep to narrow down. */
 export const MAX_INGEST_BYTES = 256 * 1024
+export const MAX_ATTACHMENT_TEXT_BYTES = 1024 * 1024
+export const MAX_ATTACHMENT_MEDIA_PARTS = 10
+export const MAX_ATTACHMENT_WIRE_BYTES = 21 * 1024 * 1024
 export const MAX_OFFICE_SOURCE_BYTES = 20 * 1024 * 1024
-export const MAX_PDF_SOURCE_BYTES = 20 * 1024 * 1024
 export const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024
-const MAX_PDF_TEXT_PAGES = 200
-const MAX_PDF_OCR_PAGES = 20
 const MAX_SPREADSHEET_SHEETS = 32
 const MAX_SPREADSHEET_ROWS = 10_000
 const MAX_SPREADSHEET_CELLS = 100_000
 const MAX_OFFICE_ARCHIVE_ENTRIES = 1_000
 const MAX_OFFICE_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
+
+export { MAX_PDF_SOURCE_BYTES }
 
 /** The human/model-facing message we substitute when an attachment is too
  *  large to inline. Mirrors Claude Code's `MaxFileReadTokenExceededError`
@@ -188,30 +102,50 @@ function tooLargeMessage(filePath: string, sizeBytes: number, cap: number = MAX_
   )
 }
 
-/** Classify a file by extension first, falling back to magic-byte detection
- *  when the extension is missing or unrecognized. */
-export async function classifyFile(filePath: string): Promise<FileKind> {
-  const ext = path.extname(filePath).toLowerCase()
-  if (TEXT_EXTENSIONS.has(ext)) return 'text'
-  if (IMAGE_EXTENSIONS.has(ext)) return 'image'
-  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
-  if (OFFICE_EXTENSIONS.has(ext)) return 'office'
-  if (ext === '.pdf') return 'pdf'
-
-  // Unknown extension — peek magic bytes.
-  try {
-    const { fileTypeFromFile } = await import('file-type')
-    const detected = await fileTypeFromFile(filePath)
-    if (!detected) return 'text' // Empty signature → assume plain text.
-    if (detected.mime.startsWith('image/')) return 'image'
-    if (detected.mime.startsWith('audio/')) return 'audio'
-    if (detected.mime === 'application/pdf') return 'pdf'
-    if (detected.mime.includes('officedocument') || detected.mime.includes('opendocument')) return 'office'
-    if (detected.mime.startsWith('text/')) return 'text'
-    return 'unknown'
-  } catch {
-    return 'unknown'
+function checkedTextAttachment(filePath: string, text: string): IngestedPart[] {
+  const outputBytes = Buffer.byteLength(text, 'utf-8')
+  if (outputBytes > MAX_INGEST_BYTES) {
+    return [{ type: 'text', text: tooLargeMessage(filePath, outputBytes) }]
   }
+  return [{ type: 'text', text }]
+}
+
+interface AttachmentUsage {
+  mediaParts: number
+  textBytes: number
+  wireBytes: number
+}
+
+function measureAttachment(parts: IngestedPart[]): AttachmentUsage {
+  return {
+    mediaParts: parts.filter((part) => part.type === 'file' || part.type === 'image').length,
+    textBytes: parts.reduce(
+      (total, part) => total + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf-8') : 0),
+      0,
+    ),
+    // This is the persisted/session representation and therefore includes
+    // Base64 expansion, JSON escaping, filenames, and media-type metadata.
+    wireBytes: Buffer.byteLength(JSON.stringify(parts), 'utf-8'),
+  }
+}
+
+function attachmentBudgetReason(current: AttachmentUsage, added: AttachmentUsage): string | null {
+  if (current.mediaParts + added.mediaParts > MAX_ATTACHMENT_MEDIA_PARTS) {
+    return `${MAX_ATTACHMENT_MEDIA_PARTS}-media-part limit`
+  }
+  if (current.textBytes + added.textBytes > MAX_ATTACHMENT_TEXT_BYTES) {
+    return `${formatBytes(MAX_ATTACHMENT_TEXT_BYTES)} cumulative text limit`
+  }
+  if (current.wireBytes + added.wireBytes > MAX_ATTACHMENT_WIRE_BYTES) {
+    return `${formatBytes(MAX_ATTACHMENT_WIRE_BYTES)} serialized attachment limit`
+  }
+  return null
+}
+
+function addUsage(current: AttachmentUsage, added: AttachmentUsage): void {
+  current.mediaParts += added.mediaParts
+  current.textBytes += added.textBytes
+  current.wireBytes += added.wireBytes
 }
 
 /**
@@ -259,33 +193,15 @@ export function extractFileReferences(input: string): FileReference[] {
 /** Read a file as a numbered text block — the same format the read-file
  *  tool produces, so the model sees a consistent representation whether
  *  the file was inlined up-front or fetched on demand. */
-async function readTextFile(filePath: string): Promise<string> {
-  const content = await fs.readFile(filePath, 'utf-8')
+async function readTextFile(filePath: string, abortSignal?: AbortSignal): Promise<string> {
+  const classification = await inspectFile(filePath)
+  if (classification.kind !== 'text' && classification.kind !== 'notebook') {
+    throw new Error('File content is not valid text')
+  }
+  const buffer = await fs.readFile(filePath, { signal: abortSignal })
+  const content = decodeTextBuffer(buffer, classification.textEncoding ?? 'utf-8')
   const lines = content.split('\n')
   return lines.map((line, i) => `${i + 1}\t${line}`).join('\n')
-}
-
-/** Extract plain text from a PDF. Uses pdf-parse's class-based v2 API
- *  (PDFParse.getText). Returns an empty string on failure; the caller
- *  decides whether to fall back to OCR. */
-async function extractPdfText(filePath: string, abortSignal?: AbortSignal): Promise<string> {
-  try {
-    abortSignal?.throwIfAborted()
-    const { PDFParse } = await import('pdf-parse')
-    const buffer = await fs.readFile(filePath, { signal: abortSignal })
-    const parser = new PDFParse({ data: new Uint8Array(buffer) })
-    try {
-      const result = await parser.getText({ first: MAX_PDF_TEXT_PAGES })
-      const suffix =
-        result.total > MAX_PDF_TEXT_PAGES ? `\n\n[PDF text limited to first ${MAX_PDF_TEXT_PAGES} pages.]` : ''
-      return (result.text ?? '') + suffix
-    } finally {
-      await parser.destroy().catch(() => {})
-    }
-  } catch {
-    abortSignal?.throwIfAborted()
-    return ''
-  }
 }
 
 function decodeXmlText(value: string): string {
@@ -344,13 +260,30 @@ function officeXmlToText(xml: string): string {
   return truncateUtf8(normalized, MAX_INGEST_BYTES)
 }
 
-async function extractZippedOfficeText(filePath: string, ext: string, abortSignal?: AbortSignal): Promise<string> {
+type OfficeKind = 'docx' | 'xlsx' | 'pptx' | 'odt' | 'ods' | 'odp'
+
+function officeKindFromMediaType(mediaType?: string | null): OfficeKind | null {
+  const normalized = mediaType?.toLowerCase() ?? ''
+  if (normalized.includes('wordprocessingml')) return 'docx'
+  if (normalized.includes('spreadsheetml')) return 'xlsx'
+  if (normalized.includes('presentationml')) return 'pptx'
+  if (normalized === 'application/vnd.oasis.opendocument.text') return 'odt'
+  if (normalized === 'application/vnd.oasis.opendocument.spreadsheet') return 'ods'
+  if (normalized === 'application/vnd.oasis.opendocument.presentation') return 'odp'
+  return null
+}
+
+function officeKindFromExtension(filePath: string): OfficeKind | null {
+  const extension = path.extname(filePath).toLowerCase().slice(1)
+  return ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp'].includes(extension) ? (extension as OfficeKind) : null
+}
+
+async function extractZippedOfficeText(archive: Buffer, kind: OfficeKind, abortSignal?: AbortSignal): Promise<string> {
   const { strFromU8, unzip } = await import('fflate')
-  const archive = await fs.readFile(filePath, { signal: abortSignal })
   let entryCount = 0
   let uncompressedBytes = 0
   const wanted = (name: string): boolean =>
-    ext === '.pptx' ? /^ppt\/slides\/slide\d+\.xml$/i.test(name) : name === 'content.xml'
+    kind === 'pptx' ? /^ppt\/slides\/slide\d+\.xml$/i.test(name) : name === 'content.xml'
   const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
     let settled = false
     let terminate = (): void => {}
@@ -400,7 +333,7 @@ async function extractZippedOfficeText(filePath: string, ext: string, abortSigna
     const text = officeXmlToText(strFromU8(files[name]!))
     if (!text) continue
     const prefix =
-      ext === '.pptx' ? `--- Slide ${Number(/slide(\d+)\.xml$/i.exec(name)?.[1] ?? parts.length + 1)} ---\n` : ''
+      kind === 'pptx' ? `--- Slide ${Number(/slide(\d+)\.xml$/i.exec(name)?.[1] ?? parts.length + 1)} ---\n` : ''
     const available = MAX_INGEST_BYTES - outputBytes - Buffer.byteLength(prefix, 'utf8')
     if (available <= 0) break
     const bounded = truncateUtf8(text, available)
@@ -410,23 +343,77 @@ async function extractZippedOfficeText(filePath: string, ext: string, abortSigna
   return parts.join('\n\n')
 }
 
+async function validateOfficeArchive(archive: Buffer, abortSignal?: AbortSignal): Promise<OfficeKind | null> {
+  const { unzip } = await import('fflate')
+  let entryCount = 0
+  let uncompressedBytes = 0
+  const detectedKinds = new Set<OfficeKind>()
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    let terminate = (): void => {}
+    const finish = (error?: Error | null): void => {
+      if (settled) return
+      settled = true
+      abortSignal?.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve()
+    }
+    const onAbort = (): void => {
+      terminate()
+      finish(abortSignal?.reason instanceof Error ? abortSignal.reason : new Error('Office validation aborted'))
+    }
+    terminate = unzip(
+      archive,
+      {
+        filter: (entry) => {
+          entryCount++
+          if (entryCount > MAX_OFFICE_ARCHIVE_ENTRIES) {
+            throw new Error('Office archive exceeds the safe entry-count limit')
+          }
+          uncompressedBytes += entry.originalSize
+          if (!Number.isSafeInteger(uncompressedBytes) || uncompressedBytes > MAX_OFFICE_UNCOMPRESSED_BYTES) {
+            throw new Error('Office archive exceeds the safe decompression limit')
+          }
+          const name = entry.name.replace(/^\/+/, '').toLowerCase()
+          if (name === 'word/document.xml') detectedKinds.add('docx')
+          else if (name === 'xl/workbook.xml') detectedKinds.add('xlsx')
+          else if (name === 'ppt/presentation.xml' || /^ppt\/slides\/slide\d+\.xml$/.test(name)) {
+            detectedKinds.add('pptx')
+          }
+          return false
+        },
+      },
+      (error) => finish(error),
+    )
+    if (!settled) {
+      abortSignal?.addEventListener('abort', onAbort, { once: true })
+      if (abortSignal?.aborted) onAbort()
+    }
+  })
+  if (detectedKinds.size > 1) throw new Error('Office archive contains conflicting document structures')
+  return detectedKinds.values().next().value ?? null
+}
+
 /** Extract text from an Office document with bounded, format-specific parsers. */
-export async function extractOfficeText(filePath: string, abortSignal?: AbortSignal): Promise<string> {
-  const ext = path.extname(filePath).toLowerCase()
+export async function extractOfficeText(
+  filePath: string,
+  abortSignal?: AbortSignal,
+  detectedMediaType?: string | null,
+): Promise<string> {
   try {
     abortSignal?.throwIfAborted()
-    const stats = await fs.stat(filePath)
-    if (stats.size > MAX_OFFICE_SOURCE_BYTES) {
-      return `[Office file is too large to parse safely: ${formatBytes(stats.size)} (cap ${formatBytes(MAX_OFFICE_SOURCE_BYTES)}).]`
-    }
-    if (ext === '.docx') {
+    const archive = await readFileWithinLimit(filePath, MAX_OFFICE_SOURCE_BYTES, abortSignal)
+    const structureKind = await validateOfficeArchive(archive, abortSignal)
+    const kind = structureKind ?? officeKindFromMediaType(detectedMediaType) ?? officeKindFromExtension(filePath)
+    if (!kind) return `[Failed to extract text from ${path.basename(filePath)}: unknown Office document type]`
+    if (kind === 'docx') {
       const mammoth = await import('mammoth')
-      const result = await mammoth.extractRawText({ path: filePath })
+      const result = await mammoth.extractRawText({ buffer: archive })
       return result.value
     }
-    if (ext === '.xlsx') {
+    if (kind === 'xlsx') {
       const { default: readExcelFile } = await import('read-excel-file/node')
-      const sheets = await readExcelFile(filePath)
+      const sheets = await readExcelFile(archive)
       const parts: string[] = []
       let outputBytes = 0
       let rowCount = 0
@@ -468,107 +455,14 @@ export async function extractOfficeText(filePath: string, abortSignal?: AbortSig
       if (truncated) parts.push('[Spreadsheet extraction truncated at configured sheet, row, cell, or byte limit.]')
       return parts.join('\n\n')
     }
-    return extractZippedOfficeText(filePath, ext, abortSignal)
+    return extractZippedOfficeText(archive, kind, abortSignal)
   } catch (err) {
+    if (err instanceof FileSizeLimitError) {
+      return `[Office file is too large to parse safely: ${formatBytes(err.observedBytes)} (cap ${formatBytes(err.limitBytes)}).]`
+    }
     abortSignal?.throwIfAborted()
     const msg = errorMessage(err)
     return `[Failed to extract text from ${path.basename(filePath)}: ${msg}]`
-  }
-}
-
-// ── Shared tesseract.js worker pool ──
-// A single worker is reused across ocrImage / ocrPdf calls within a session.
-// Auto-terminates after WORKER_IDLE_MS of inactivity to avoid holding WASM
-// memory indefinitely. The worker accepts both file paths and Buffers, so
-// callers never need to write temp files.
-
-const WORKER_IDLE_MS = 30_000
-let sharedWorker: Awaited<ReturnType<(typeof import('tesseract.js'))['createWorker']>> | null = null
-let workerIdleTimer: ReturnType<typeof setTimeout> | null = null
-
-async function getOcrWorker() {
-  if (sharedWorker) {
-    if (workerIdleTimer) clearTimeout(workerIdleTimer)
-    workerIdleTimer = setTimeout(terminateWorker, WORKER_IDLE_MS)
-    return sharedWorker
-  }
-  const { createWorker } = await import('tesseract.js')
-  sharedWorker = await createWorker(['eng', 'chi_sim'], 1, {
-    cachePath: await tesseractCacheDir(),
-  })
-  workerIdleTimer = setTimeout(terminateWorker, WORKER_IDLE_MS)
-  return sharedWorker
-}
-
-function terminateWorker() {
-  if (sharedWorker) {
-    void sharedWorker.terminate().catch(() => {})
-    sharedWorker = null
-  }
-  if (workerIdleTimer) {
-    clearTimeout(workerIdleTimer)
-    workerIdleTimer = null
-  }
-}
-
-/** OCR an image via tesseract.js. Accepts a file path OR an in-memory Buffer.
- *  Uses a shared worker that auto-terminates after 30 s idle. Loads Chinese +
- *  English language packs on first call. Accuracy is limited, especially for
- *  handwriting or stylized text — intended as a text-extraction fallback for
- *  providers that can't natively see images. */
-export async function ocrImage(input: string | Buffer): Promise<string> {
-  try {
-    const worker = await getOcrWorker()
-    const { data } = await worker.recognize(input)
-    return data.text ?? ''
-  } catch (err) {
-    const msg = errorMessage(err)
-    return `[OCR failed: ${msg}]`
-  }
-}
-
-/** OCR every page of a PDF by rasterizing first. Used for scanned PDFs when
- *  pdf-parse's text extraction returns little/no text. Rasterization uses
- *  pdf-parse's own getScreenshot (pdfjs under the hood), so we don't need
- *  a separate pdf-to-img dependency. */
-async function ocrPdf(filePath: string, abortSignal?: AbortSignal): Promise<string> {
-  try {
-    abortSignal?.throwIfAborted()
-    const { PDFParse } = await import('pdf-parse')
-    const buffer = await fs.readFile(filePath, { signal: abortSignal })
-    const parser = new PDFParse({ data: new Uint8Array(buffer) })
-    let screenshots: { pages: Array<{ pageNumber: number; data?: Uint8Array }>; total: number }
-    try {
-      screenshots = (await parser.getScreenshot({
-        first: MAX_PDF_OCR_PAGES,
-        scale: 1.5,
-        imageDataUrl: false,
-        imageBuffer: true,
-      })) as typeof screenshots
-    } finally {
-      await parser.destroy().catch(() => {})
-    }
-
-    const out: string[] = []
-    let outputBytes = 0
-    for (const page of screenshots.pages) {
-      abortSignal?.throwIfAborted()
-      if (!page.data) continue
-      const text = await ocrImage(Buffer.from(page.data))
-      const block = `--- Page ${page.pageNumber} ---\n${text}`
-      outputBytes += Buffer.byteLength(block, 'utf-8')
-      if (outputBytes > MAX_INGEST_BYTES) {
-        out.push('[PDF OCR output truncated at attachment byte limit.]')
-        break
-      }
-      out.push(block)
-    }
-    if (screenshots.total > MAX_PDF_OCR_PAGES) out.push(`[PDF OCR limited to first ${MAX_PDF_OCR_PAGES} pages.]`)
-    return out.join('\n\n')
-  } catch (err) {
-    abortSignal?.throwIfAborted()
-    const msg = errorMessage(err)
-    return `[PDF OCR failed: ${msg}]`
   }
 }
 
@@ -579,10 +473,10 @@ async function ocrPdf(filePath: string, abortSignal?: AbortSignal): Promise<stri
  * Contract:
  *  - Text, Office, and text-bearing PDFs always collapse to a single
  *    TextPart — cheapest path, works for every provider.
- *  - Images: ImagePart if the provider can see images; otherwise OCR'd
- *    TextPart annotated as a fallback.
- *  - Scanned PDFs (pdf-parse yields near-empty text): FilePart for providers
- *    with PDF support; OCR'd TextPart otherwise.
+ *  - Images: image-only FilePart if the provider can see images; otherwise
+ *    OCR'd TextPart annotated as a fallback.
+ *  - Scanned/visual PDF pages: standard images for the active vision model,
+ *    local OCR otherwise.
  *  - Missing/unreadable files return a TextPart carrying the error so the
  *    model can acknowledge the failure rather than silently ignore it.
  */
@@ -592,16 +486,21 @@ export async function ingestFile(
   onNotice?: (msg: string) => void,
   abortSignal?: AbortSignal,
   onVisionUsage?: (event: VisionUsageEvent) => void,
+  modelId?: string,
 ): Promise<IngestedPart[]> {
+  void onVisionUsage
   if (abortSignal?.aborted) {
     return [{ type: 'text', text: `[File ingest cancelled: ${ref.raw}]` }]
   }
 
-  let kind: FileKind
+  let kind: InspectedFileKind
+  let mediaType: string | null
   let stats: Awaited<ReturnType<typeof fs.stat>>
   try {
     stats = await fs.stat(ref.absolutePath)
-    kind = await classifyFile(ref.absolutePath)
+    const classification = await inspectFile(ref.absolutePath)
+    kind = classification.kind
+    mediaType = classification.mediaType
   } catch (err) {
     const msg = errorMessage(err)
     return [{ type: 'text', text: `[Cannot read ${ref.raw}: ${msg}]` }]
@@ -617,17 +516,39 @@ export async function ingestFile(
     return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size, MAX_IMAGE_SOURCE_BYTES) }]
   }
 
-  if (kind === 'text' || kind === 'unknown') {
-    // For text files, on-disk byte size is a tight upper bound on the
-    // inlined text size (numbered-line wrapper adds <1% overhead). Check
-    // before reading so we don't pull a multi-MB file into memory just to
-    // discard it.
+  if (kind === 'binary') {
+    return [
+      {
+        type: 'text',
+        text: `[Unsupported binary file: ${ref.absolutePath} (${mediaType ?? 'unknown media type'}, ${formatBytes(stats.size)}).]`,
+      },
+    ]
+  }
+
+  if (kind === 'notebook') {
+    if (stats.size > MAX_NOTEBOOK_SOURCE_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size, MAX_NOTEBOOK_SOURCE_BYTES) }]
+    }
+    try {
+      const { text } = await renderNotebookFile(ref.absolutePath, abortSignal)
+      return checkedTextAttachment(
+        ref.absolutePath,
+        wrapLocalText('file', text, { kind: 'notebook', path: ref.absolutePath }),
+      )
+    } catch (err) {
+      return [{ type: 'text', text: `[Failed to read ${ref.raw}: ${errorMessage(err)}]` }]
+    }
+  }
+
+  if (kind === 'text') {
+    // Source size is only a cheap precheck. Line numbers, UTF conversion and
+    // the source wrapper are measured again before the result is admitted.
     if (stats.size > MAX_INGEST_BYTES) {
       return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size) }]
     }
     try {
-      const body = await readTextFile(ref.absolutePath)
-      return [{ type: 'text', text: `<<file path="${ref.absolutePath}">>\n${body}\n<</file>>` }]
+      const body = await readTextFile(ref.absolutePath, abortSignal)
+      return checkedTextAttachment(ref.absolutePath, wrapLocalText('file', body, { path: ref.absolutePath }))
     } catch (err) {
       const msg = errorMessage(err)
       return [{ type: 'text', text: `[Failed to read ${ref.raw}: ${msg}]` }]
@@ -635,7 +556,7 @@ export async function ingestFile(
   }
 
   if (kind === 'office') {
-    const text = await extractOfficeText(ref.absolutePath, abortSignal)
+    const text = await extractOfficeText(ref.absolutePath, abortSignal, mediaType)
     // Office binaries are usually much larger than their extracted text
     // (compression + media), so check post-extraction. A book-length .docx
     // can still exceed the cap.
@@ -643,85 +564,37 @@ export async function ingestFile(
     if (textBytes > MAX_INGEST_BYTES) {
       return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, textBytes) }]
     }
-    return [{ type: 'text', text: `<<file path="${ref.absolutePath}" kind="office">>\n${text}\n<</file>>` }]
+    return checkedTextAttachment(
+      ref.absolutePath,
+      wrapLocalText('file', text, { kind: 'office', path: ref.absolutePath }),
+    )
   }
 
   if (kind === 'pdf') {
-    const extracted = await extractPdfText(ref.absolutePath, abortSignal)
-    // Heuristic: a "real" text PDF yields at least a couple hundred chars.
-    // Scanned PDFs typically yield empty strings or a few stray ligatures.
-    if (extracted.trim().length > 200) {
-      const textBytes = Buffer.byteLength(extracted, 'utf-8')
-      if (textBytes > MAX_INGEST_BYTES) {
-        return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, textBytes) }]
-      }
-      return [{ type: 'text', text: `<<file path="${ref.absolutePath}" kind="pdf-text">>\n${extracted}\n<</file>>` }]
+    const result = await processPdf(ref.absolutePath, {
+      vision: caps.image,
+      mode: 'auto',
+      maxTextBytes: MAX_INGEST_BYTES - 8 * 1024,
+      abortSignal,
+      onNotice,
+    })
+    if (result.type === 'error') return [{ type: 'text', text: `[PDF processing failed: ${result.message}]` }]
+    if (result.type === 'reference') return [{ type: 'text', text: formatPdfReference(result) }]
+    const parts = toUserContentParts(result.parts)
+    if (result.continuation) parts.push({ type: 'text', text: formatPdfReference(result.continuation) })
+    const totalTextBytes = parts.reduce(
+      (total, part) => total + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf-8') : 0),
+      0,
+    )
+    if (totalTextBytes > MAX_INGEST_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, totalTextBytes) }]
     }
-    // Scanned / image-based PDF.
-    if (caps.pdf) {
-      try {
-        const buffer = await fs.readFile(ref.absolutePath, { signal: abortSignal })
-        // base64 string, not the Buffer: this part is persisted to the session
-        // jsonl via JSON.stringify, and a Buffer round-trips as
-        // {"type":"Buffer","data":[...]} — which fails the SDK's ModelMessage
-        // schema on resume.
-        return [
-          {
-            type: 'file',
-            data: buffer.toString('base64'),
-            mediaType: 'application/pdf',
-            filename: path.basename(ref.absolutePath),
-          },
-        ]
-      } catch (err) {
-        const msg = errorMessage(err)
-        return [{ type: 'text', text: `[Failed to attach PDF ${ref.raw}: ${msg}]` }]
-      }
-    }
-    // DeepSeek + scanned PDF: OCR locally.
-    const ocr = await ocrPdf(ref.absolutePath, abortSignal)
-    const ocrBytes = Buffer.byteLength(ocr, 'utf-8')
-    if (ocrBytes > MAX_INGEST_BYTES) {
-      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, ocrBytes) }]
-    }
-    return [
-      {
-        type: 'text',
-        text: `<<file path="${ref.absolutePath}" kind="pdf-ocr">>\n${ocr}\n<</file>>\n[Note: this PDF was OCR'd locally because the current model does not support PDF input; accuracy is limited.]`,
-      },
-    ]
+    return parts
   }
 
-  // Audio — two strategies depending on provider capabilities:
-  //  1. Provider supports audio input (OpenAI, Google) → send the raw audio
-  //     as a FilePart so the model handles speech recognition natively.
-  //     This is higher quality: captures pauses, tone, speaker identity, etc.
-  //  2. Provider does NOT support audio → transcribe locally via whisper.cpp
-  //     and send only the timestamped text. Still useful, just lower fidelity.
+  // Audio always stays local: only timestamped transcription text enters the
+  // model message, regardless of provider wire capabilities.
   if (kind === 'audio') {
-    if (caps.audio) {
-      if (stats.size > MAX_INGEST_BYTES) {
-        return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, stats.size) }]
-      }
-      try {
-        const buffer = await fs.readFile(ref.absolutePath, { signal: abortSignal })
-        const mime = (await import('../utils/media-type.js')).mediaTypeFor(ref.absolutePath)
-        return [
-          { type: 'text', text: `<<file path="${ref.absolutePath}" kind="audio">>` },
-          {
-            type: 'file',
-            data: buffer.toString('base64'),
-            mediaType: mime,
-            filename: path.basename(ref.absolutePath),
-          },
-        ]
-      } catch (err) {
-        const msg = errorMessage(err)
-        return [{ type: 'text', text: `[Failed to attach audio ${ref.raw}: ${msg}]` }]
-      }
-    }
-
-    // Provider doesn't support audio input — fall back to local whisper transcription.
     // onNotice appends a new UI line each call, so only forward key milestones
     // (first-time download notice, "transcribing…", "done"). Download
     // percentage ticks go to debugLog only.
@@ -747,102 +620,75 @@ export async function ingestFile(
     if (textBytes > MAX_INGEST_BYTES) {
       return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, textBytes) }]
     }
-    return [
-      {
-        type: 'text',
-        text:
-          `<<file path="${ref.absolutePath}" kind="audio-transcription">>\n${formatted}\n<</file>>\n` +
-          `[Note: this audio was transcribed locally via whisper.cpp because the current model does not support audio input. ` +
-          `Only the timestamped text is visible; pauses, tone, and speaker identity are not captured.]`,
-      },
-    ]
+    return checkedTextAttachment(
+      ref.absolutePath,
+      `${wrapLocalText('file', formatted, { kind: 'audio-transcription', path: ref.absolutePath })}\n` +
+        `[Note: this audio was transcribed locally via whisper.cpp. ` +
+        `Only the timestamped text is visible; pauses, tone, and speaker identity are not captured.]`,
+    )
   }
 
-  // Image.
-  if (caps.image) {
-    try {
-      const buffer = await fs.readFile(ref.absolutePath, { signal: abortSignal })
-      // Gate on the sniffed bytes, not the extension: an unsupported format
-      // (AVIF, BMP, TIFF, HEIC) or a mislabeled file would be rejected by the
-      // provider with a 400 — and since the message persists in the session,
-      // every later request would fail too (session poisoning).
-      const sniffed = await sniffImageMime(buffer)
-      const effectiveMime = sniffed ?? mediaTypeFor(ref.absolutePath)
-      if (!isModelAcceptedImageMime(effectiveMime)) {
-        return [{ type: 'text', text: buildUnsupportedImageNotice(effectiveMime, ref.absolutePath) }]
-      }
+  // Image bytes are normalized before either model delivery or OCR. This is
+  // the shared safety gate for disguised formats, decompression bombs and
+  // provider-rejected BMP/TIFF payloads.
+  try {
+    const buffer = await readFileWithinLimit(ref.absolutePath, MAX_IMAGE_SOURCE_BYTES, abortSignal)
+    const effectiveMime = (await sniffImageMime(buffer)) ?? mediaType ?? 'application/octet-stream'
+    const compressed = await compressImage(buffer, effectiveMime, {
+      byteBudget: ATTACH_BYTE_BUDGET,
+      abortSignal,
+    })
+    const finalMime = normalizeImageMime(compressed.mimeType)
+    if (caps.image && !isModelAcceptedImageMime(finalMime, modelId)) {
+      return [{ type: 'text', text: buildUnsupportedImageNotice(finalMime, ref.absolutePath, modelId) }]
+    }
+    if (
+      compressed.failureReason ||
+      compressed.data.length > ATTACH_BYTE_BUDGET ||
+      compressed.width > MAX_EDGE_PX ||
+      compressed.height > MAX_EDGE_PX
+    ) {
+      return [{ type: 'text', text: buildImageProcessingFailureNotice(ref.absolutePath, compressed) }]
+    }
 
-      // Compress oversized images to fit pixel + byte budget.
-      const compressed = await compressImage(buffer, effectiveMime, { byteBudget: ATTACH_BYTE_BUDGET })
-      if (
-        compressed.data.length > ATTACH_BYTE_BUDGET ||
-        compressed.width > MAX_EDGE_PX ||
-        compressed.height > MAX_EDGE_PX
-      ) {
-        return [
-          {
-            type: 'text',
-            text: `[Image ${ref.absolutePath} could not be reduced to provider limits (${formatBytes(compressed.data.length)}, ${compressed.width}x${compressed.height}).]`,
-          },
-        ]
-      }
-      const finalMime = normalizeImageMime(compressed.changed ? compressed.mimeType : effectiveMime)
-
+    if (caps.image) {
+      const extension = finalMime === 'image/jpeg' ? 'jpg' : finalMime.slice('image/'.length)
+      const originalName = path.parse(ref.absolutePath).name
       const parts: IngestedPart[] = [
-        { type: 'text', text: `<<file path="${ref.absolutePath}" kind="image">>` },
-        { type: 'image', image: compressed.data.toString('base64'), mediaType: finalMime },
+        { type: 'text', text: openMediaTag('file', { kind: 'image', path: ref.absolutePath }) },
+        {
+          type: 'file',
+          data: { type: 'data', data: compressed.data.toString('base64') },
+          mediaType: finalMime,
+          filename: `${originalName}.${extension}`,
+        },
       ]
       if (compressed.changed) {
         parts.push({ type: 'text', text: buildCompressionCaption(compressed) })
-        onNotice?.(`Compressed image: ${formatBytes(buffer.length)} → ${formatBytes(compressed.data.length)}`)
+        onNotice?.(`Normalized image: ${formatBytes(buffer.length)} → ${formatBytes(compressed.data.length)}`)
       }
       return parts
-    } catch (err) {
-      const msg = errorMessage(err)
-      return [{ type: 'text', text: `[Failed to attach image ${ref.raw}: ${msg}]` }]
     }
-  }
 
-  // Text-only provider (DeepSeek, custom). Prefer a vision sub-agent if any
-  // other multimodal provider has a key configured — caption captures both
-  // text and visual content, OCR only catches text. Falls through to OCR
-  // when no sub-agent is available, or when the sub-agent call fails.
-  const sub = pickVisionProvider()
-  if (sub) {
-    try {
-      const caption = await captionImage(ref.absolutePath, sub, { abortSignal, onUsage: onVisionUsage })
-      const captionBytes = Buffer.byteLength(caption, 'utf-8')
-      if (captionBytes > MAX_INGEST_BYTES) {
-        return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, captionBytes) }]
-      }
-      onNotice?.(`Captioned image via ${sub.modelId}`)
-      return [
-        {
-          type: 'text',
-          text: `<<file path="${ref.absolutePath}" kind="image-caption" via="${sub.modelId}">>\n${caption}\n<</file>>\n[Note: the current model cannot see images. The above description was generated by ${sub.label} (vision sub-agent), not the current model. For complex visual tasks, /model switch to a vision-capable model and ask follow-ups directly.]`,
-        },
-      ]
-    } catch (err) {
-      const msg = errorMessage(err)
-      onNotice?.(`Vision sub-agent (${sub.label}) failed: ${msg} — falling back to OCR`)
-      // fall through to OCR
+    // Text-only providers receive local OCR. The file is not forwarded to a
+    // different configured provider without an explicit product-level opt-in.
+    const ocr = await ocrImage(compressed.data, { abortSignal })
+    const ocrBytes = Buffer.byteLength(ocr, 'utf-8')
+    if (ocrBytes > MAX_INGEST_BYTES) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, ocrBytes) }]
     }
+    return checkedTextAttachment(
+      ref.absolutePath,
+      `${wrapLocalText('file', ocr, { kind: 'image-ocr', path: ref.absolutePath })}\n[Note: the current model cannot natively see images. Only OCR text is available; visual content (layout, diagrams, photos) is NOT visible.]`,
+    )
+  } catch (err) {
+    if (err instanceof FileSizeLimitError) {
+      return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, err.observedBytes, err.limitBytes) }]
+    }
+    abortSignal?.throwIfAborted()
+    const msg = errorMessage(err)
+    return [{ type: 'text', text: `[Failed to attach image ${ref.raw}: ${msg}]` }]
   }
-
-  // DeepSeek + image, no sub-agent (or sub-agent failed): OCR. Warn the model
-  // that this is not true image understanding so it doesn't confidently
-  // describe colors/layout/etc.
-  const ocr = await ocrImage(ref.absolutePath)
-  const ocrBytes = Buffer.byteLength(ocr, 'utf-8')
-  if (ocrBytes > MAX_INGEST_BYTES) {
-    return [{ type: 'text', text: tooLargeMessage(ref.absolutePath, ocrBytes) }]
-  }
-  return [
-    {
-      type: 'text',
-      text: `<<file path="${ref.absolutePath}" kind="image-ocr">>\n${ocr}\n<</file>>\n[Note: the current model cannot natively see images. Only OCR text is available; visual content (layout, diagrams, photos) is NOT visible.]`,
-    },
-  ]
 }
 
 /**
@@ -857,15 +703,31 @@ export async function buildUserContent(
   onNotice?: (msg: string) => void,
   abortSignal?: AbortSignal,
   onVisionUsage?: (event: VisionUsageEvent) => void,
-): Promise<string | Array<TextPart | ImagePart | FilePart>> {
+  modelId?: string,
+): Promise<string | IngestedPart[]> {
   const refs = extractFileReferences(text)
   if (refs.length === 0) return text
 
   const parts: IngestedPart[] = [{ type: 'text', text }]
+  const usage: AttachmentUsage = { mediaParts: 0, textBytes: 0, wireBytes: 0 }
   for (const ref of refs) {
     if (abortSignal?.aborted) break
-    const ingested = await ingestFile(ref, caps, onNotice, abortSignal, onVisionUsage)
+    const ingested = await ingestFile(ref, caps, onNotice, abortSignal, onVisionUsage, modelId)
+    const added = measureAttachment(ingested)
+    const reason = attachmentBudgetReason(usage, added)
+    if (reason) {
+      const notice: IngestedPart[] = [
+        { type: 'text', text: `[Attachment ${ref.raw} omitted: cumulative attachment budget exceeded (${reason}).]` },
+      ]
+      const noticeUsage = measureAttachment(notice)
+      if (!attachmentBudgetReason(usage, noticeUsage)) {
+        parts.push(...notice)
+        addUsage(usage, noticeUsage)
+      }
+      continue
+    }
     parts.push(...ingested)
+    addUsage(usage, added)
   }
   return parts
 }

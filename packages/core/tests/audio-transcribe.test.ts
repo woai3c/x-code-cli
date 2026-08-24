@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { type TranscribeAudioResult, formatTranscription, isAudioFile } from '../src/agent/audio-transcribe.js'
+import {
+  MAX_AUDIO_SOURCE_BYTES,
+  type TranscribeAudioResult,
+  formatTranscription,
+  isAudioFile,
+  transcribeAudio,
+} from '../src/agent/audio-transcribe.js'
 import { classifyFile } from '../src/agent/file-ingest.js'
 
 // Don't load the actual native whisper module in unit tests — only test
 // the pure-logic helpers (isAudioFile, formatTranscription, classifyFile).
+vi.mock('@fugood/whisper.node', () => ({}))
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -40,24 +47,31 @@ describe('isAudioFile', () => {
 })
 
 describe('classifyFile', () => {
-  it('classifies audio files by extension', async () => {
+  it('classifies audio from magic bytes and rejects empty extension-only claims', async () => {
     const fs = await import('node:fs/promises')
     const os = await import('node:os')
     const path = await import('node:path')
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-audio-classify-'))
-    const mp3File = path.join(tmpDir, 'test.mp3')
     const wavFile = path.join(tmpDir, 'test.wav')
-    const m4aFile = path.join(tmpDir, 'test.m4a')
+    const emptyMp3 = path.join(tmpDir, 'empty.mp3')
+    const wav = Buffer.alloc(44)
+    wav.write('RIFF', 0, 'ascii')
+    wav.writeUInt32LE(36, 4)
+    wav.write('WAVEfmt ', 8, 'ascii')
+    wav.writeUInt32LE(16, 16)
+    wav.writeUInt16LE(1, 20)
+    wav.writeUInt16LE(1, 22)
+    wav.writeUInt32LE(16_000, 24)
+    wav.writeUInt32LE(32_000, 28)
+    wav.writeUInt16LE(2, 32)
+    wav.writeUInt16LE(16, 34)
+    wav.write('data', 36, 'ascii')
+    await fs.writeFile(wavFile, wav)
+    await fs.writeFile(emptyMp3, '')
 
-    // Create empty files — classifyFile checks extension first
-    await fs.writeFile(mp3File, '')
-    await fs.writeFile(wavFile, '')
-    await fs.writeFile(m4aFile, '')
-
-    expect(await classifyFile(mp3File)).toBe('audio')
     expect(await classifyFile(wavFile)).toBe('audio')
-    expect(await classifyFile(m4aFile)).toBe('audio')
+    expect(await classifyFile(emptyMp3)).toBe('audio')
 
     await fs.rm(tmpDir, { recursive: true })
   })
@@ -111,5 +125,28 @@ describe('formatTranscription', () => {
 
     const formatted = formatTranscription(result, '/test.mp3')
     expect(formatted).not.toContain('Language:')
+  })
+})
+
+describe('transcribeAudio cancellation', () => {
+  it('returns immediately for an already-aborted request without loading the native runtime', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      transcribeAudio('/path/that/does/not/need/to/exist.wav', { abortSignal: controller.signal }),
+    ).resolves.toBe('[Audio transcription was cancelled.]')
+  })
+
+  it('rejects an oversized source before model loading or native decoding', async () => {
+    const fs = await import('node:fs/promises')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-audio-limit-'))
+    const audio = path.join(tmpDir, 'large.wav')
+    await fs.writeFile(audio, 'RIFF')
+    await fs.truncate(audio, MAX_AUDIO_SOURCE_BYTES + 1)
+
+    await expect(transcribeAudio(audio)).resolves.toMatch(/source file is too large/i)
+    await fs.rm(tmpDir, { recursive: true, force: true })
   })
 })

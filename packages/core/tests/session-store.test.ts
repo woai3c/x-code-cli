@@ -427,6 +427,24 @@ describe('session-store: orphan tool-call sanitisation', () => {
 })
 
 describe('session-store: serialized binary part repair', () => {
+  it('preserves nested-base64 image FileParts across a JSONL round trip', async () => {
+    const state = createLoopState()
+    state.sessionId = '20260101-120000-000'
+    state.taskSlug = 'nested-image-file'
+    const imagePart = {
+      type: 'file',
+      data: { type: 'data', data: 'iVBORw0KGgo=' },
+      mediaType: 'image/png',
+      filename: 'image.png',
+    }
+    state.messages = [{ role: 'user', content: [{ type: 'text', text: 'look' }, imagePart] }] as never[]
+    await appendHeader(state, 'anthropic:claude-sonnet-5', 'look')
+    await flushPendingMessages(state)
+
+    const loaded = await loadSession(getSessionFilePath(state))
+    expect((loaded!.messages[0]!.content as unknown[])[1]).toEqual(imagePart)
+  })
+
   // Older builds put raw Buffer instances into attachment parts;
   // JSON.stringify turned them into {"type":"Buffer","data":[...]} (or the
   // numeric-keys Uint8Array form), which fails the SDK's ModelMessage schema

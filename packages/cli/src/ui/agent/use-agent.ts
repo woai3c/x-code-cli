@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   accumulateUsage,
   agentLoop,
-  appendHeader,
   appendInterrupted,
   appendUsage,
   attributedModelId,
@@ -23,7 +22,6 @@ import {
   estimateContextBreakdown,
   flushPendingMessages,
   formatQueuedAgentInput,
-  generateTaskSlug,
   hydrateLoopState,
   loadPersistedRules,
   markBoundaryAndReflush,
@@ -54,7 +52,6 @@ import type {
   TerminateAllResult,
   TerminationBudget,
   TerminationReason,
-  VisionUsageEvent,
 } from '@x-code-cli/core'
 
 import { cloneCacheMissSummary, initialAgentState } from './agent-state.js'
@@ -647,13 +644,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // PDF/Office/non-vision providers). Falls through to the plain-string
         // fast path when nothing attachable is detected.
         //
-        // The onNotice callback surfaces ingest-time events (currently:
-        // vision sub-agent caption emitted) as `⎿`-prefixed gray lines so
-        // the user can see when a non-vision model's image was forwarded
-        // to a sub-agent (Gemini, GLM-4V, etc.) instead of being OCR'd.
+        // Ingest notices surface local media milestones as `⎿`-prefixed lines.
         const modelId = modelIdRef.current
         const providerCaps = capabilitiesOf(modelId)
-        const pendingVisionUsage: VisionUsageEvent[] = []
         const content = submitOptions?.rawContent
           ? text
           : await buildUserContent(
@@ -669,32 +662,14 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
                 })
               },
               abortControllerRef.current.signal,
-              (event) => pendingVisionUsage.push(event),
+              undefined,
+              modelId,
             )
 
         const activeLoopState =
           loopStateRef.current ?? createLoopState(permissionModeRef.current, { projectCwd: process.cwd() })
         loopStateRef.current = activeLoopState
         bindShellSessionEvents(activeLoopState)
-        for (const event of pendingVisionUsage) {
-          accumulateUsage(activeLoopState, {
-            source: 'vision',
-            modelId: event.modelId,
-            usage: normalizeLanguageModelUsage(event.usage),
-          })
-        }
-        if (pendingVisionUsage.length > 0) {
-          callbacks.onUsageUpdate(activeLoopState.tokenUsage)
-
-          // The vision caption request has already been billed before the main
-          // agent loop starts. Persist it now so an abort or provider failure in
-          // the main request cannot silently drop that cost from session usage.
-          const firstPrompt = text.replace(/<activated_skill\b[^>]*>[\s\S]*?<\/activated_skill>/gi, '').trim() || text
-          if (!activeLoopState.taskSlug) activeLoopState.taskSlug = generateTaskSlug(firstPrompt)
-          await appendHeader(activeLoopState, modelId, firstPrompt)
-          await appendUsage(activeLoopState, pendingVisionUsage.at(-1)!.modelId)
-        }
-
         // agentLoop returns { state, turnCount } — we only keep the state
         // (long-lived session). turnCount is per-invocation and the main
         // interactive loop has no use for it (the cap mechanism is what

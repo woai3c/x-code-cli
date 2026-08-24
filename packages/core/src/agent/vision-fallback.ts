@@ -1,29 +1,30 @@
-// @x-code-cli/core — Vision sub-agent for text-only providers
+// @x-code-cli/core — Explicit vision compatibility helper
 //
-// When the user attaches an image but the active model can't natively see
-// images (DeepSeek today, custom by default), automatically borrow any
-// other configured provider that DOES have a vision model and use it as
-// a caption sub-agent. The caption is injected as a TextPart into the
-// user message so the main model sees a description without ever
-// receiving the binary.
-//
-// Why this exists: DeepSeek users were stuck with local tesseract OCR,
-// which is fine for code screenshots but useless for UI mockups, diagrams,
-// or photos. Most users who set up DeepSeek also have a key for at least
-// one free-tier provider (Gemini or GLM-4V-Flash); detecting that and
-// reusing it removes the need for a manual /model switch every time the
-// user pastes a screenshot.
+// Used by product surfaces that explicitly request a caption, such as tool
+// image delivery. Ordinary local attachments never call this helper: they go
+// only to the active vision model or stay local for OCR.
 import fs from 'node:fs/promises'
 
 import { generateText } from 'ai'
 import type { LanguageModel, LanguageModelUsage } from 'ai'
 
 import { getAvailableProviders } from '../config/index.js'
+import {
+  buildUnsupportedImageNotice,
+  isModelAcceptedImageMime,
+  normalizeImageMime,
+  sniffImageMime,
+} from '../providers/capabilities.js'
 import { createModelRegistry } from '../providers/registry.js'
 import { debugLog } from '../utils.js'
-import { ATTACH_BYTE_BUDGET, compressImage } from '../utils/image-compress.js'
+import {
+  ATTACH_BYTE_BUDGET,
+  MAX_EDGE_PX,
+  buildImageProcessingFailureNotice,
+  compressImage,
+} from '../utils/image-compress.js'
 import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
-import { mediaTypeFor } from '../utils/media-type.js'
+import { knownMediaTypeFor } from '../utils/media-type.js'
 import { attributedModelId } from './usage.js'
 
 export interface VisionProvider {
@@ -79,8 +80,7 @@ export function pickVisionProvider(): VisionProvider | null {
 
 /** In-memory cache so re-attaching the same image (or the same image across
  *  multiple submits in one session) doesn't re-burn tokens on the sub-agent.
- *  Keyed by `${providerId}:${file size}:${first-64-bytes-base64}` — same
- *  cheap collision-resistant key strategy provider-compat.ts uses for OCR. */
+ *  The complete image SHA-256 is namespaced by model and prompt. */
 const captionCache = new LruCache<string>({ maxEntries: 50 })
 
 /** Cached registry + resolved model instances. The registry is expensive to
@@ -104,9 +104,7 @@ export function resetVisionModelProviders(): void {
   resolvedModels.clear()
 }
 
-/** Default caption prompt: asks for both verbatim text AND visual elements
- *  (layout, colors, components) — OCR alone misses the latter, so the caption
- *  subsumes what OCR would have produced. Used for pasted-image ingest. */
+/** Default caption prompt asks for both verbatim text and visual elements. */
 const DEFAULT_CAPTION_PROMPT =
   'Describe this image in detail so a text-only AI can act on it. ' +
   'Include: (1) any visible text transcribed verbatim, ' +
@@ -145,9 +143,23 @@ export async function captionImageBuffer(
   // Compress before sending to the vision sub-agent — same budget as
   // user-attached images. The sub-agent is a cheap caption model; there's
   // no point pushing multi-MB originals through it.
-  const compressed = await compressImage(buffer, mediaType, { byteBudget: ATTACH_BYTE_BUDGET })
+  const compressed = await compressImage(buffer, mediaType, {
+    byteBudget: ATTACH_BYTE_BUDGET,
+    abortSignal: opts.abortSignal,
+  })
   const finalBuf = compressed.data
-  const finalMime = compressed.changed ? compressed.mimeType : mediaType
+  const finalMime = normalizeImageMime(compressed.mimeType)
+  if (!isModelAcceptedImageMime(finalMime, modelId)) {
+    throw new Error(buildUnsupportedImageNotice(finalMime, 'vision input', modelId))
+  }
+  if (
+    compressed.failureReason ||
+    finalBuf.length > ATTACH_BYTE_BUDGET ||
+    compressed.width > MAX_EDGE_PX ||
+    compressed.height > MAX_EDGE_PX
+  ) {
+    throw new Error(buildImageProcessingFailureNotice('vision input', compressed))
+  }
   if (compressed.changed) {
     debugLog('vision-fallback.compressed', `${buffer.length}B → ${finalBuf.length}B (${finalMime})`)
   }
@@ -187,8 +199,10 @@ export async function captionImage(
   sub: VisionProvider,
   opts?: { abortSignal?: AbortSignal; onUsage?: (event: VisionUsageEvent) => void },
 ): Promise<string> {
-  const buffer = await fs.readFile(filePath)
-  return captionImageBuffer(buffer, mediaTypeFor(filePath), sub.modelId, {
+  const buffer = await fs.readFile(filePath, { signal: opts?.abortSignal })
+  const mediaType = (await sniffImageMime(buffer)) ?? knownMediaTypeFor(filePath)
+  if (!mediaType?.startsWith('image/')) throw new Error('Unsupported or unrecognized image format')
+  return captionImageBuffer(buffer, mediaType, sub.modelId, {
     abortSignal: opts?.abortSignal,
     onUsage: opts?.onUsage,
   })

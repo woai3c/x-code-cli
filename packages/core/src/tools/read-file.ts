@@ -1,16 +1,9 @@
 // @x-code-cli/core — readFile tool
 //
-// Text files are returned as numbered-line strings (the format agents have
-// been trained against). Binary files (images, PDFs) are returned as an
-// AI-SDK `content` tool result so providers that accept inline media
-// receive proper `image-data` / `file-data` parts instead of a base64 blob
-// stuffed inside a text string.
-//
-// The tool itself does NOT branch on provider capability — that would
-// couple the tool layer to the currently-active model. Instead, every
-// binary result goes out as content parts and the provider-compat layer
-// either keeps it in the tool result, reattaches it as a user image, or
-// replaces it with OCR for a text-only model.
+// Text files are returned with line numbers. Images and locally rendered PDF
+// pages use image-data tool content only when the injected model supports
+// vision; otherwise the shared pipeline returns local OCR text. Original
+// PDF/audio/general binary bytes are never emitted as file-data.
 import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -20,9 +13,29 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { formatTranscription, transcribeAudio } from '../agent/audio-transcribe.js'
-import { MAX_IMAGE_SOURCE_BYTES, classifyFile, extractOfficeText } from '../agent/file-ingest.js'
-import { ATTACH_BYTE_BUDGET, MAX_EDGE_PX, compressImage } from '../utils/image-compress.js'
-import { mediaTypeFor } from '../utils/media-type.js'
+import { inspectFile } from '../agent/file-classifier.js'
+import type { TextEncoding } from '../agent/file-classifier.js'
+import { MAX_IMAGE_SOURCE_BYTES, extractOfficeText } from '../agent/file-ingest.js'
+import { ocrImage } from '../agent/image-ocr.js'
+import { toToolResultContent } from '../agent/local-media.js'
+import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../agent/notebook-render.js'
+import { PDF_AUTO_MAX_RENDERED_PAGES, PDF_READ_MAX_PAGES, formatPdfReference, processPdf } from '../agent/pdf-ingest.js'
+import {
+  buildUnsupportedImageNotice,
+  isModelAcceptedImageMime,
+  modelSupportsVision,
+  normalizeImageMime,
+  sniffImageMime,
+} from '../providers/capabilities.js'
+import { truncateUtf8 } from '../utils.js'
+import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.js'
+import {
+  ATTACH_BYTE_BUDGET,
+  MAX_EDGE_PX,
+  buildImageProcessingFailureNotice,
+  compressImage,
+} from '../utils/image-compress.js'
+import { knownMediaTypeFor } from '../utils/media-type.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 
@@ -44,14 +57,6 @@ const LARGE_FILE_LINE_THRESHOLD = 2000
  *  `validateContentTokens`. */
 const MAX_READ_BYTES = 256 * 1024
 
-/** Max raw bytes for a PDF sent as a FilePart in a tool result. Claude Code
- *  uses 3 MB (`PDF_EXTRACT_SIZE_THRESHOLD`); we pick a tighter default
- *  because our readFile result persists in `state.messages` and accumulates
- *  on every subsequent turn. 5 MB raw ≈ 6.67 MB base64 — within the
- *  per-request ceiling of all major providers. */
-const MAX_PDF_BYTES = 5 * 1024 * 1024
-const MAX_NOTEBOOK_SOURCE_BYTES = 5 * 1024 * 1024
-
 /** Per-file fingerprint used by the read de-dup cache. */
 export interface ReadFileCacheEntry {
   mtimeMs: number
@@ -63,11 +68,26 @@ export interface ReadFileCacheEntry {
  *  another agent's reads return a stub for a file it never saw. */
 export type ReadFileCache = Map<string, ReadFileCacheEntry>
 
+export interface ReadFileToolOptions {
+  modelId?: string
+}
+
+export function parsePdfPageRange(value: string): { first: number; last: number } | null {
+  const match = /^(\d+)(?:-(\d+))?$/.exec(value.trim())
+  if (!match) return null
+  const first = Number(match[1])
+  const last = Number(match[2] ?? match[1])
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 1 || last < first) return null
+  if (last - first + 1 > PDF_READ_MAX_PAGES) return null
+  return { first, last }
+}
+
 async function readTextResult(
   filePath: string,
   offset?: number,
   limit?: number,
   abortSignal?: AbortSignal,
+  encoding: TextEncoding = 'utf-8',
 ): Promise<{ text: string; complete: boolean }> {
   const userSpecifiedRange = offset != null || limit != null
   const startLine = offset ?? 1
@@ -76,21 +96,22 @@ async function readTextResult(
   const stream = createReadStream(filePath, { signal: abortSignal })
   let outputBytes = 0
   let lineNumber = 1
-  let lineParts: Buffer[] = []
+  let lineParts: string[] = []
   let lineBytes = 0
   let stopped = false
   let hasMoreLines = false
   let byteCapped = false
   let partialLine = false
 
-  const collectSegment = (segment: Buffer): void => {
+  const collectSegment = (segment: string): void => {
     if (lineNumber < startLine || formatted.length >= maxLines) return
     const separatorBytes = formatted.length > 0 ? 1 : 0
     const prefixBytes = Buffer.byteLength(`${lineNumber}\t`, 'utf-8')
     const remaining = MAX_READ_BYTES - outputBytes - separatorBytes - prefixBytes - lineBytes
-    if (segment.byteLength <= remaining) {
-      if (segment.byteLength > 0) lineParts.push(segment)
-      lineBytes += segment.byteLength
+    const segmentBytes = Buffer.byteLength(segment, 'utf-8')
+    if (segmentBytes <= remaining) {
+      if (segment.length > 0) lineParts.push(segment)
+      lineBytes += segmentBytes
       return
     }
     if (formatted.length > 0) {
@@ -101,8 +122,9 @@ async function readTextResult(
       return
     }
     if (remaining > 0) {
-      lineParts.push(segment.subarray(0, remaining))
-      lineBytes += remaining
+      const truncated = truncateUtf8(segment, remaining)
+      lineParts.push(truncated)
+      lineBytes += Buffer.byteLength(truncated, 'utf-8')
     }
     byteCapped = true
     partialLine = true
@@ -116,7 +138,7 @@ async function readTextResult(
         stopped = true
         return
       }
-      const text = Buffer.concat(lineParts, lineBytes).toString('utf-8')
+      const text = lineParts.join('').replace(/\r$/, '')
       const numbered = `${lineNumber}\t${text}`
       const addedBytes = Buffer.byteLength(numbered, 'utf-8') + (formatted.length > 0 ? 1 : 0)
       formatted.push(numbered)
@@ -127,28 +149,35 @@ async function readTextResult(
     lineNumber++
   }
 
+  const decoder = new TextDecoder(encoding)
+  const consume = (decoded: string): void => {
+    let cursor = 0
+    while (cursor < decoded.length && !stopped) {
+      const newline = decoded.indexOf('\n', cursor)
+      const end = newline === -1 ? decoded.length : newline
+      collectSegment(decoded.slice(cursor, end))
+      if (stopped || newline === -1) break
+      finishLine()
+      cursor = newline + 1
+    }
+  }
+
   try {
     for await (const value of stream) {
       const chunk = value as Buffer
-      let cursor = 0
-      while (cursor < chunk.length && !stopped) {
-        const newline = chunk.indexOf(0x0a, cursor)
-        const end = newline === -1 ? chunk.length : newline
-        collectSegment(chunk.subarray(cursor, end))
-        if (stopped) break
-        if (newline === -1) break
-        finishLine()
-        cursor = newline + 1
-      }
+      consume(decoder.decode(chunk, { stream: true }))
       if (stopped) break
     }
-    if (!stopped) finishLine()
+    if (!stopped) {
+      consume(decoder.decode())
+      finishLine()
+    }
   } finally {
     stream.destroy()
   }
 
   if (partialLine) {
-    let text = Buffer.concat(lineParts, lineBytes).toString('utf-8')
+    let text = lineParts.join('')
     const separatorBytes = formatted.length > 0 ? 1 : 0
     while (Buffer.byteLength(`${lineNumber}\t${text}`, 'utf-8') + separatorBytes > MAX_READ_BYTES) {
       text = text.slice(0, -1)
@@ -222,151 +251,67 @@ async function checkReadCache(
   return { hit: false, entry: { mtimeMs: stat.mtimeMs, size: stat.size } }
 }
 
-// ── Jupyter notebook rendering ──
-// A .ipynb file is JSON; reading it raw dumps base64 image outputs and
-// metadata noise that burns context for no benefit. We parse it and render
-// each cell as source + text outputs, omitting binary (image/*) outputs.
-interface NotebookOutput {
-  output_type?: string
-  text?: string | string[]
-  data?: Record<string, unknown>
-  ename?: string
-  evalue?: string
-  traceback?: string[]
-}
-interface NotebookCell {
-  cell_type?: string
-  source?: string | string[]
-  execution_count?: number | null
-  outputs?: NotebookOutput[]
-}
-
-/** Notebook source/text fields are either a string or an array of line
- *  strings (nbformat allows both). Normalize to a single string. */
-function joinNotebookSource(src: string | string[] | undefined): string {
-  if (Array.isArray(src)) return src.join('')
-  if (typeof src === 'string') return src
-  return ''
-}
-
-// Built via `new RegExp` (not a literal) to dodge eslint's no-control-regex
-// on the ESC byte. Strips SGR color codes from error tracebacks.
-const ANSI_ESCAPE = new RegExp('\\u001b\\[[0-9;]*m', 'g')
-
-function renderNotebookOutput(o: NotebookOutput): string {
-  switch (o.output_type) {
-    case 'stream':
-      return joinNotebookSource(o.text).trimEnd()
-    case 'error': {
-      const trace = Array.isArray(o.traceback) ? o.traceback.join('\n') : ''
-      const head = [o.ename, o.evalue].filter(Boolean).join(': ')
-      return (trace || head).replace(ANSI_ESCAPE, '').trimEnd()
-    }
-    case 'execute_result':
-    case 'display_data': {
-      const data = o.data ?? {}
-      const parts: string[] = []
-      const plain = data['text/plain']
-      if (plain !== undefined) parts.push(joinNotebookSource(plain as string | string[]).trimEnd())
-      // Binary / rich outputs (image/png, application/json, …) are noise to a
-      // text model — note their presence but don't dump the payload.
-      for (const mime of Object.keys(data)) {
-        if (mime !== 'text/plain') parts.push(`[${mime} output omitted]`)
-      }
-      return parts.join('\n')
-    }
-    default:
-      return ''
-  }
-}
-
-async function readNotebookResult(
-  filePath: string,
-  abortSignal?: AbortSignal,
-): Promise<{ text: string; complete: boolean }> {
-  const raw = await fs.readFile(filePath, { encoding: 'utf-8', signal: abortSignal })
-  let parsed: { cells?: NotebookCell[] }
-  try {
-    parsed = JSON.parse(raw) as { cells?: NotebookCell[] }
-  } catch {
-    // Malformed JSON — fall back to raw text so the model still sees content.
-    return { text: raw, complete: true }
-  }
-  const cells = Array.isArray(parsed.cells) ? parsed.cells : []
-  const out: string[] = [`# Jupyter Notebook: ${filePath} (${cells.length} cell${cells.length === 1 ? '' : 's'})`]
-
-  cells.forEach((cell, i) => {
-    const type = cell.cell_type ?? 'unknown'
-    const execCount = type === 'code' && cell.execution_count != null ? ` (exec ${cell.execution_count})` : ''
-    out.push('', `## Cell ${i + 1} [${type}]${execCount}`)
-    const source = joinNotebookSource(cell.source).trimEnd()
-    if (source) out.push(source)
-    const outputs = Array.isArray(cell.outputs) ? cell.outputs : []
-    for (const o of outputs) {
-      const rendered = renderNotebookOutput(o)
-      if (rendered) out.push('### Output:', rendered)
-    }
-  })
-
-  let body = out.join('\n')
-  // Same 256 KB ceiling as text reads — a notebook with huge text outputs
-  // shouldn't blow the next request's context.
-  const buf = Buffer.from(body, 'utf-8')
-  if (buf.byteLength > MAX_READ_BYTES) {
-    body =
-      buf.subarray(0, MAX_READ_BYTES).toString('utf-8') +
-      `\n\n[readFile: notebook output truncated at ${MAX_READ_BYTES / 1024} KB. Use grep on the .ipynb to find specific cells/symbols.]`
-    return { text: body, complete: false }
-  }
-  return { text: body, complete: true }
-}
-
 /** Build the readFile tool. The optional `cache` enables session-scoped
  *  read de-dup (see checkReadCache). buildTools injects the per-session
  *  cache from LoopState; the bare `readFile` export below passes none, so
  *  it behaves exactly as before (no de-dup) for any caller that imports it
  *  directly (tests, etc.). */
-export function createReadFileTool(cache?: ReadFileCache) {
+export function createReadFileTool(cache?: ReadFileCache, options: ReadFileToolOptions = {}) {
   return tool({
     description: `Read a file from the local filesystem. Assume this tool can read all files on the machine.
 
 Usage:
 - The filePath parameter must be an absolute path, not a relative path.
 - You can optionally specify offset and limit (especially handy for long files), but it's recommended to read the whole file first.
+- PDFs are processed locally. Use pages such as "1-5" for a maximum of 20 pages, and pdfMode="visual" for layouts, charts, or signatures.
 - Results are returned with line numbers starting at 1.
 - This tool can read images (PNG, JPG, etc.) and PDFs — their content is presented inline.
 - This tool can read audio files (MP3, WAV, M4A, OGG, FLAC, AAC, etc.) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
 - This tool renders Jupyter notebooks (.ipynb) as readable cells (source + text outputs), skipping binary image outputs.
 - This tool can only read files, not directories. To list a directory, use listDir or shell with ls.
 - If a file path is provided by the user, assume it is valid.`,
-    inputSchema: z.object({
-      filePath: z.string().describe('Absolute path to the file'),
-      offset: z.number().int().min(1).optional().describe('Start line (1-based, text files only)'),
-      limit: z.number().int().min(1).optional().describe('Max lines to read (text files only)'),
-    }),
-    execute: async ({ filePath, offset, limit }, { toolCallId, abortSignal }) => {
+    inputSchema: z
+      .object({
+        filePath: z.string().describe('Absolute path to the file'),
+        offset: z.number().int().min(1).optional().describe('Start line (1-based, text files only)'),
+        limit: z.number().int().min(1).optional().describe('Max lines to read (text files only)'),
+        pages: z
+          .string()
+          .optional()
+          .describe('PDF page or inclusive range, for example "3" or "1-5"; maximum 20 pages'),
+        pdfMode: z.enum(['auto', 'text-only', 'visual']).optional().describe('PDF processing mode; defaults to auto'),
+      })
+      .superRefine((value, ctx) => {
+        if ((value.pages || value.pdfMode) && (value.offset != null || value.limit != null)) {
+          ctx.addIssue({ code: 'custom', message: 'PDF pages/pdfMode cannot be combined with offset or limit' })
+        }
+      }),
+    execute: async ({ filePath, offset, limit, pages, pdfMode }, { toolCallId, abortSignal }) => {
       try {
         abortSignal?.throwIfAborted()
         reportProgress(toolCallId, `Reading ${filePath}`)
         const isRangeRead = offset != null || limit != null
 
+        const classification = await inspectFile(filePath)
+        const kind = classification.kind
+        abortSignal?.throwIfAborted()
+
+        if ((pages || pdfMode) && kind !== 'pdf') return 'pages and pdfMode are only valid for PDF files.'
+
         // Jupyter notebooks are JSON — render cells instead of dumping raw
-        // base64-laden JSON. Checked before classifyFile, which would otherwise
-        // treat .ipynb as plain text.
-        if (filePath.toLowerCase().endsWith('.ipynb')) {
+        // base64-laden JSON. Classification first ensures a renamed binary is
+        // never decoded as notebook text.
+        if (kind === 'notebook') {
           const stats = await fs.stat(filePath)
           if (stats.size > MAX_NOTEBOOK_SOURCE_BYTES) {
             return `[Notebook ${filePath} is too large to parse safely (${(stats.size / (1024 * 1024)).toFixed(1)} MB, cap ${MAX_NOTEBOOK_SOURCE_BYTES / (1024 * 1024)} MB). Use grep or shell tools to inspect selected cells.]`
           }
           const verdict = await checkReadCache(cache, filePath, false)
           if (verdict && verdict.hit) return verdict.stub
-          const { text, complete } = await readNotebookResult(filePath, abortSignal)
+          const { text, complete } = await renderNotebookFile(filePath, abortSignal)
           if (verdict && !verdict.hit && complete) cache?.set(filePath, verdict.entry)
           return text
         }
-
-        const kind = await classifyFile(filePath).catch(() => 'text' as const)
-        abortSignal?.throwIfAborted()
 
         if (kind === 'audio') {
           const result = await transcribeAudio(filePath, {
@@ -390,18 +335,42 @@ Usage:
           if (stats.size > MAX_IMAGE_SOURCE_BYTES) {
             return `[Image ${filePath} is too large to process safely (${(stats.size / (1024 * 1024)).toFixed(1)} MB, cap ${MAX_IMAGE_SOURCE_BYTES / (1024 * 1024)} MB).]`
           }
-          const buffer = await fs.readFile(filePath, { signal: abortSignal })
-          const mime = mediaTypeFor(filePath)
+          let buffer: Buffer
+          try {
+            buffer = await readFileWithinLimit(filePath, MAX_IMAGE_SOURCE_BYTES, abortSignal)
+          } catch (error) {
+            if (!(error instanceof FileSizeLimitError)) throw error
+            return `[Image ${filePath} is too large to process safely (${(error.observedBytes / (1024 * 1024)).toFixed(1)} MB, cap ${error.limitBytes / (1024 * 1024)} MB).]`
+          }
+          const mime = (await sniffImageMime(buffer)) ?? classification.mediaType ?? knownMediaTypeFor(filePath)
+          if (!mime?.startsWith('image/')) return `[Image ${filePath} has an unsupported or unrecognized format.]`
           // Same byte budget as user-attached images (ATTACH_BYTE_BUDGET).
-          const compressed = await compressImage(buffer, mime, { byteBudget: ATTACH_BYTE_BUDGET })
+          const compressed = await compressImage(buffer, mime, {
+            byteBudget: ATTACH_BYTE_BUDGET,
+            abortSignal,
+          })
+          const finalMime = normalizeImageMime(compressed.mimeType)
           if (
+            compressed.failureReason ||
+            !isModelAcceptedImageMime(finalMime) ||
             compressed.data.length > ATTACH_BYTE_BUDGET ||
             compressed.width > MAX_EDGE_PX ||
             compressed.height > MAX_EDGE_PX
           ) {
-            return `[Image ${filePath} could not be reduced to provider limits (${compressed.data.length} bytes, ${compressed.width}x${compressed.height}).]`
+            return buildImageProcessingFailureNotice(filePath, compressed)
           }
-          const finalMime = compressed.changed ? compressed.mimeType : mime
+          if (options.modelId && !modelSupportsVision(options.modelId)) {
+            const ocr = await ocrImage(compressed.data, { abortSignal })
+            const rendered =
+              `[Local OCR for image ${filePath}; the current model cannot see layout, diagrams, or photos.]\n` + ocr
+            if (Buffer.byteLength(rendered, 'utf-8') > MAX_READ_BYTES) {
+              return `[Image OCR output for ${filePath} exceeds the ${MAX_READ_BYTES / 1024} KB tool-result limit.]`
+            }
+            return rendered
+          }
+          if (!isModelAcceptedImageMime(finalMime, options.modelId)) {
+            return buildUnsupportedImageNotice(finalMime, filePath, options.modelId)
+          }
           const header = compressed.changed
             ? `Loaded image: ${filePath} (compressed from ${buffer.length} to ${compressed.data.length} bytes)`
             : `Loaded image: ${filePath}`
@@ -419,32 +388,33 @@ Usage:
         }
 
         if (kind === 'pdf') {
-          const stats = await fs.stat(filePath)
-          if (stats.size > MAX_PDF_BYTES) {
-            return (
-              `[PDF ${filePath} is too large to read (${(stats.size / (1024 * 1024)).toFixed(1)} MB, ` +
-              `cap ${MAX_PDF_BYTES / (1024 * 1024)} MB). ` +
-              `The user can attach it via @path instead, or use shell to extract specific pages ` +
-              `(e.g. pdftotext with page ranges).]`
-            )
+          let pageRange: { first: number; last: number } | undefined
+          if (pages !== undefined) {
+            const parsed = parsePdfPageRange(pages)
+            if (!parsed) {
+              return `Invalid PDF pages value "${pages}". Use a single page or inclusive range of at most ${PDF_READ_MAX_PAGES} pages, for example "3" or "1-5".`
+            }
+            pageRange = parsed
           }
-          const buffer = await fs.readFile(filePath, { signal: abortSignal })
-          return {
-            type: 'content',
-            value: [
-              { type: 'text', text: `Loaded PDF: ${filePath}` },
-              {
-                type: 'file-data',
-                data: buffer.toString('base64'),
-                mediaType: 'application/pdf',
-                filename: path.basename(filePath),
-              },
-            ],
+          const result = await processPdf(filePath, {
+            pageRange,
+            vision: options.modelId ? modelSupportsVision(options.modelId) : false,
+            mode: pdfMode ?? 'auto',
+            maxRenderedPages: pageRange ? PDF_READ_MAX_PAGES : PDF_AUTO_MAX_RENDERED_PAGES,
+            abortSignal,
+            onNotice: (message) => reportProgress(toolCallId, message),
+          })
+          if (result.type === 'error') return `[PDF processing failed: ${result.message}]`
+          if (result.type === 'reference') return formatPdfReference(result)
+          const content = toToolResultContent(result.parts)
+          if (result.continuation) {
+            content.value.push({ type: 'text', text: formatPdfReference(result.continuation) })
           }
+          return content
         }
 
         if (kind === 'office') {
-          const text = await extractOfficeText(filePath, abortSignal)
+          const text = await extractOfficeText(filePath, abortSignal, classification.mediaType)
           abortSignal?.throwIfAborted()
           const textBytes = Buffer.byteLength(text, 'utf-8')
           if (textBytes > MAX_READ_BYTES) {
@@ -457,10 +427,21 @@ Usage:
           return `Extracted text from ${path.basename(filePath)}:\n\n${text}`
         }
 
-        // Text / unknown → read as text.
+        if (kind === 'binary') {
+          const stats = await fs.stat(filePath)
+          return `[Unsupported binary file: ${filePath} (${classification.mediaType ?? 'unknown media type'}, ${stats.size} bytes).]`
+        }
+
+        // Text → read with bounded output.
         const verdict = await checkReadCache(cache, filePath, isRangeRead)
         if (verdict && verdict.hit) return verdict.stub
-        const { text, complete } = await readTextResult(filePath, offset, limit, abortSignal)
+        const { text, complete } = await readTextResult(
+          filePath,
+          offset,
+          limit,
+          abortSignal,
+          classification.textEncoding ?? 'utf-8',
+        )
         if (verdict && !verdict.hit && complete) cache?.set(filePath, verdict.entry)
         return text
       } catch (err) {

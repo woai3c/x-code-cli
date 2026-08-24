@@ -1,30 +1,23 @@
 import { strToU8, zipSync } from 'fflate'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { crc32 } from 'node:zlib'
 
 import {
+  MAX_ATTACHMENT_TEXT_BYTES,
   MAX_IMAGE_SOURCE_BYTES,
   MAX_INGEST_BYTES,
+  MAX_OFFICE_SOURCE_BYTES,
   buildUserContent,
   classifyFile,
   extractFileReferences,
   extractOfficeText,
   ingestFile,
 } from '../src/agent/file-ingest.js'
-import { captionImage, pickVisionProvider } from '../src/agent/vision-fallback.js'
-
-// Mock vision-fallback so the image-path test can prove the onNotice plumbing
-// fires with the right provider id WITHOUT making a real Gemini/GLM API call.
-// pickVisionProvider defaults to null (matches the "no key configured"
-// scenario the existing tests rely on); individual tests opt in to a
-// non-null sub-agent via mockReturnValue.
-vi.mock('../src/agent/vision-fallback.js', () => ({
-  pickVisionProvider: vi.fn(() => null),
-  captionImage: vi.fn(),
-}))
+import { disposeOcrWorker } from '../src/agent/image-ocr.js'
 
 // Mock tesseract so the OCR fallback path doesn't spawn a real worker
 // thread on test images. Without this, when the sub-agent test forces
@@ -34,7 +27,7 @@ vi.mock('../src/agent/vision-fallback.js', () => ({
 // the assertion focused on the notice + plumbing behavior.
 vi.mock('tesseract.js', () => ({
   createWorker: vi.fn(async () => ({
-    recognize: vi.fn(async () => ({ data: { text: '' } })),
+    recognize: vi.fn(async () => ({ data: { text: 'mock local OCR result' } })),
     terminate: vi.fn(async () => {}),
   })),
 }))
@@ -43,21 +36,39 @@ let tmpDir: string
 let textFile: string
 let jsonFile: string
 let imageFile: string
+let pdfFile: string
+let officeFile: string
+
+function addPngAncillaryChunk(png: Buffer, dataBytes: number): Buffer {
+  const iendOffset = png.lastIndexOf(Buffer.from('IEND')) - 4
+  const type = Buffer.from('rAND')
+  const data = Buffer.alloc(dataBytes, 0x61)
+  const chunk = Buffer.allocUnsafe(data.length + 12)
+  chunk.writeUInt32BE(data.length, 0)
+  type.copy(chunk, 4)
+  data.copy(chunk, 8)
+  chunk.writeUInt32BE(crc32(data, crc32(type)), data.length + 8)
+  return Buffer.concat([png.subarray(0, iendOffset), chunk, png.subarray(iendOffset)])
+}
 
 beforeAll(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xcc-ingest-'))
   textFile = path.join(tmpDir, 'hello.md')
   jsonFile = path.join(tmpDir, 'data.json')
-  imageFile = path.join(tmpDir, 'fake.png')
+  imageFile = path.join(tmpDir, 'real-image.bin')
+  pdfFile = path.join(tmpDir, 'renamed-pdf.bin')
+  officeFile = path.join(tmpDir, 'document.docx')
   await fs.writeFile(textFile, '# Hello\nLine 2')
   await fs.writeFile(jsonFile, '{"ok":true}')
-  // Empty file is fine — classifyFile picks .png by extension and the
-  // mocked captionImage never reads the bytes. ingestFile only reads the
-  // buffer for the multimodal-provider path, which we don't exercise here.
-  await fs.writeFile(imageFile, '')
+  const { Jimp } = await import('jimp')
+  const image = new Jimp({ width: 4, height: 3, color: 0xff0000ff })
+  await fs.writeFile(imageFile, await image.getBuffer('image/png'))
+  await fs.writeFile(pdfFile, '%PDF-1.4\n')
+  await fs.writeFile(officeFile, Buffer.from(zipSync({ '[Content_Types].xml': strToU8('<Types/>') })))
 })
 
 afterAll(async () => {
+  await disposeOcrWorker()
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -94,21 +105,40 @@ describe('classifyFile', () => {
     expect(await classifyFile(jsonFile)).toBe('text')
   })
 
-  it('recognizes .png as image by extension', async () => {
-    // Doesn't need the file to exist — extension-only check.
-    expect(await classifyFile('/does/not/exist.png')).toBe('image')
+  it('recognizes image magic even when the extension is .bin', async () => {
+    expect(await classifyFile(imageFile)).toBe('image')
   })
 
-  it('recognizes .pdf as pdf by extension', async () => {
-    expect(await classifyFile('/does/not/exist.pdf')).toBe('pdf')
+  it('recognizes PDF magic even when the extension is .bin', async () => {
+    expect(await classifyFile(pdfFile)).toBe('pdf')
   })
 
-  it('recognizes .docx as office by extension', async () => {
-    expect(await classifyFile('/does/not/exist.docx')).toBe('office')
+  it('requires an Office ZIP rather than trusting the extension alone', async () => {
+    expect(await classifyFile(officeFile)).toBe('office')
+    const fake = path.join(tmpDir, 'fake.docx')
+    await fs.writeFile(fake, 'plain text')
+    expect(await classifyFile(fake)).toBe('office')
   })
 })
 
 describe('extractOfficeText', () => {
+  it('bounds the source read before Office decompression', async () => {
+    const archive = path.join(tmpDir, 'oversized-source.docx')
+    await fs.writeFile(archive, Buffer.from(zipSync({ 'word/document.xml': strToU8('<w:document/>') })))
+    await fs.truncate(archive, MAX_OFFICE_SOURCE_BYTES + 1)
+
+    expect(await extractOfficeText(archive)).toContain('too large to parse safely')
+  })
+
+  it('rejects a DOCX whose declared uncompressed content exceeds the archive budget', async () => {
+    const archive = path.join(tmpDir, 'oversized-content.docx')
+    await fs.writeFile(archive, Buffer.from(zipSync({ 'word/document.xml': new Uint8Array(32 * 1024 * 1024 + 1) })))
+
+    const text = await extractOfficeText(archive)
+
+    expect(text).toContain('safe decompression limit')
+  })
+
   it('reads xlsx sheets without the vulnerable SheetJS runtime', async () => {
     const workbook = path.join(tmpDir, 'sample.xlsx')
     const files = {
@@ -135,6 +165,13 @@ describe('extractOfficeText', () => {
     expect(text).toContain('--- Sheet: Data ---')
     expect(text).toContain('Name,Value')
     expect(text).toContain('alpha,42')
+
+    const renamed = path.join(tmpDir, 'renamed-workbook.bin')
+    const misleading = path.join(tmpDir, 'misleading-workbook.docx')
+    await fs.copyFile(workbook, renamed)
+    await fs.copyFile(workbook, misleading)
+    expect(await extractOfficeText(renamed)).toContain('alpha,42')
+    expect(await extractOfficeText(misleading)).toContain('alpha,42')
   })
 
   it('reads pptx slide text with bounded ZIP extraction', async () => {
@@ -183,42 +220,83 @@ describe('ingestFile', () => {
     }
   })
 
+  it('uses the shared notebook renderer and omits binary cell output', async () => {
+    const notebook = path.join(tmpDir, 'analysis.ipynb')
+    await fs.writeFile(
+      notebook,
+      JSON.stringify({
+        nbformat: 4,
+        cells: [
+          {
+            cell_type: 'code',
+            execution_count: 1,
+            source: ['print("hello")'],
+            outputs: [{ output_type: 'display_data', data: { 'text/plain': 'figure', 'image/png': 'SECRETBASE64' } }],
+          },
+        ],
+      }),
+    )
+
+    const parts = await ingestFile({ raw: `@${notebook}`, absolutePath: notebook }, textOnlyCaps)
+    expect(JSON.stringify(parts)).toContain('Cell 1 [code] (exec 1)')
+    expect(JSON.stringify(parts)).toContain('[image/png output omitted]')
+    expect(JSON.stringify(parts)).not.toContain('SECRETBASE64')
+  })
+
   it('attaches images as base64 strings, not Buffers (session-jsonl-safe)', async () => {
     // Regression: the image part used to carry the raw Buffer, which
     // JSON.stringify persists as {"type":"Buffer","data":[...]} — a shape the
     // SDK's ModelMessage schema rejects, so resuming any session with an
     // image attachment failed every subsequent request.
-    const png = path.join(tmpDir, 'real.png')
-    await fs.writeFile(png, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-    try {
-      const parts = await ingestFile({ raw: `@${png}`, absolutePath: png }, multimodalCaps)
-      const imagePart = parts.find((p) => p.type === 'image')
-      expect(imagePart).toBeDefined()
-      if (imagePart?.type === 'image') {
-        expect(typeof imagePart.image).toBe('string')
-        expect(imagePart.image).toBe(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'))
-        // Must survive a JSON round-trip unchanged.
-        expect(JSON.parse(JSON.stringify(imagePart))).toEqual(imagePart)
-      }
-    } finally {
-      await fs.rm(png, { force: true })
+    const source = await fs.readFile(imageFile)
+    const parts = await ingestFile({ raw: `@${imageFile}`, absolutePath: imageFile }, multimodalCaps)
+    const imagePart = parts.find((part) => part.type === 'file')
+    expect(imagePart).toBeDefined()
+    if (imagePart?.type === 'file') {
+      expect(imagePart.mediaType).toBe('image/png')
+      expect(imagePart.data).toEqual({ type: 'data', data: source.toString('base64') })
+      expect(JSON.parse(JSON.stringify(imagePart))).toEqual(imagePart)
     }
   })
 
-  it('refuses provider-rejected image formats judged by magic bytes, not extension', async () => {
-    // BMP bytes in a .png file: the extension says "ok", the bytes say
-    // "provider will 400 on this". Sniffing must win — otherwise the bad
-    // part lands in the session and poisons every subsequent request.
+  it('rejects GIF before session insertion for an xAI model', async () => {
+    const gif = path.join(tmpDir, 'xai-unsupported.gif')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(gif, await new Jimp({ width: 2, height: 2, color: 0xff0000ff }).getBuffer('image/gif'))
+
+    const parts = await ingestFile(
+      { raw: `@${gif}`, absolutePath: gif },
+      multimodalCaps,
+      undefined,
+      undefined,
+      undefined,
+      'xai:grok-4.3',
+    )
+
+    expect(parts.every((part) => part.type === 'text')).toBe(true)
+    expect(JSON.stringify(parts)).toContain('accepts only PNG, JPEG')
+
+    const textOnlyParts = await ingestFile(
+      { raw: `@${gif}`, absolutePath: gif },
+      textOnlyCaps,
+      undefined,
+      undefined,
+      undefined,
+      'xai:text-only',
+    )
+    expect(JSON.stringify(textOnlyParts)).toContain('mock local OCR result')
+  })
+
+  it('normalizes a decodable BMP disguised as PNG before provider delivery', async () => {
     const bmp = path.join(tmpDir, 'disguised-bmp.png')
-    await fs.writeFile(bmp, Buffer.from([0x42, 0x4d, 0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00]))
+    const { Jimp } = await import('jimp')
+    const image = new Jimp({ width: 4, height: 3, color: 0x00ff00ff })
+    await fs.writeFile(bmp, await image.getBuffer('image/bmp'))
     try {
       const parts = await ingestFile({ raw: `@${bmp}`, absolutePath: bmp }, multimodalCaps)
-      expect(parts).toHaveLength(1)
-      expect(parts[0]?.type).toBe('text')
-      if (parts[0]?.type === 'text') {
-        expect(parts[0].text).toMatch(/unsupported image format image\/bmp/i)
-        expect(parts[0].text).toMatch(/PNG, JPEG, GIF, and WebP/)
-      }
+      const imagePart = parts.find((part) => part.type === 'file')
+      expect(imagePart).toMatchObject({ type: 'file', mediaType: 'image/png' })
+      expect(parts.some((part) => part.type === 'text' && part.text.includes('compressed'))).toBe(true)
     } finally {
       await fs.rm(bmp, { force: true })
     }
@@ -236,7 +314,7 @@ describe('ingestFile', () => {
 
   it('rejects oversized image sources before reading them into memory', async () => {
     const oversized = path.join(tmpDir, 'oversized.png')
-    await fs.writeFile(oversized, '')
+    await fs.copyFile(imageFile, oversized)
     await fs.truncate(oversized, MAX_IMAGE_SOURCE_BYTES + 1)
 
     const parts = await ingestFile({ raw: `@${oversized}`, absolutePath: oversized }, multimodalCaps)
@@ -244,6 +322,36 @@ describe('ingestFile', () => {
     expect(parts).toHaveLength(1)
     expect(parts[0]?.type).toBe('text')
     if (parts[0]?.type === 'text') expect(parts[0].text).toMatch(/too large to inline/i)
+  })
+
+  it('rechecks image size on the opened file after the initial path stat', async () => {
+    const oversized = path.join(tmpDir, 'raced-image.png')
+    await fs.copyFile(imageFile, oversized)
+    await fs.truncate(oversized, MAX_IMAGE_SOURCE_BYTES + 1)
+    const actual = await fs.stat(oversized)
+    const statSpy = vi
+      .spyOn(fs, 'stat')
+      .mockResolvedValueOnce({ ...actual, size: 1 } as Awaited<ReturnType<typeof fs.stat>>)
+
+    try {
+      const parts = await ingestFile({ raw: `@${oversized}`, absolutePath: oversized }, multimodalCaps)
+      expect(parts).toEqual([
+        expect.objectContaining({ type: 'text', text: expect.stringMatching(/too large to inline/i) }),
+      ])
+    } finally {
+      statSpy.mockRestore()
+      await fs.rm(oversized, { force: true })
+    }
+  })
+
+  it('never emits a BOM-prefixed PDF as ordinary attachment text', async () => {
+    const disguised = path.join(tmpDir, 'bom-pdf.txt')
+    await fs.writeFile(disguised, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('%PDF-1.4\n')]))
+
+    const parts = await ingestFile({ raw: `@${disguised}`, absolutePath: disguised }, multimodalCaps)
+
+    expect(JSON.stringify(parts)).not.toContain('%PDF-1.4')
+    expect(parts.every((part) => part.type === 'text')).toBe(true)
   })
 
   // Regression: a multi-MB @path attachment used to be inlined verbatim,
@@ -265,6 +373,28 @@ describe('ingestFile', () => {
     } finally {
       await fs.rm(big, { force: true })
     }
+  })
+
+  it('checks the formatted text size after adding line numbers and wrappers', async () => {
+    const newlineHeavy = path.join(tmpDir, 'newline-heavy.txt')
+    await fs.writeFile(newlineHeavy, '\n'.repeat(100_000))
+
+    const parts = await ingestFile({ raw: `@${newlineHeavy}`, absolutePath: newlineHeavy }, multimodalCaps)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/too large to inline/i) })
+  })
+
+  it('uses local OCR for a text-only model without forwarding to another provider', async () => {
+    const notices: string[] = []
+    const parts = await ingestFile({ raw: `@${imageFile}`, absolutePath: imageFile }, textOnlyCaps, (notice) =>
+      notices.push(notice),
+    )
+
+    expect(notices).toEqual([])
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ type: 'text', text: expect.stringContaining('mock local OCR result') })
+    expect(JSON.stringify(parts)).toContain('current model cannot natively see images')
   })
 })
 
@@ -294,73 +424,80 @@ describe('buildUserContent', () => {
     expect(result[0]).toEqual({ type: 'text', text: input })
     expect(result.length).toBeGreaterThan(1)
   })
-})
 
-describe('ingestFile image path with mocked vision sub-agent', () => {
-  const textOnlyCaps = {
-    image: false,
-    pdf: false,
-    audio: false,
-    filesApi: false,
-    toolImageTransport: 'unsupported' as const,
-  }
+  it('enforces a cumulative post-formatting attachment text budget', async () => {
+    const files = await Promise.all(
+      Array.from({ length: 6 }, async (_, index) => {
+        const file = path.join(tmpDir, `aggregate-${index + 1}.txt`)
+        await fs.writeFile(file, `${index + 1}:` + 'x'.repeat(180 * 1024))
+        return file
+      }),
+    )
+    const input = `review ${files.map((file) => `@${file}`).join(' ')}`
 
-  beforeEach(() => {
-    vi.mocked(pickVisionProvider).mockReset()
-    vi.mocked(captionImage).mockReset()
+    const result = await buildUserContent(input, {
+      image: true,
+      pdf: true,
+      audio: true,
+      filesApi: true,
+      toolImageTransport: 'tool-result',
+    })
+
+    expect(Array.isArray(result)).toBe(true)
+    if (!Array.isArray(result)) return
+    const attachmentText = result
+      .slice(1)
+      .filter((part): part is Extract<(typeof result)[number], { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('')
+    expect(Buffer.byteLength(attachmentText, 'utf-8')).toBeLessThanOrEqual(MAX_ATTACHMENT_TEXT_BYTES)
+    expect(attachmentText).toContain('cumulative attachment budget exceeded')
   })
 
-  it('fires onNotice with the chosen sub-agent id and inlines the caption', async () => {
-    // Simulate a user with DeepSeek (text-only) AND a Google key in the env —
-    // the picker returns Gemini, captionImage produces a description, and the
-    // resulting TextPart should both surface a notice to the UI and embed the
-    // caption text + provider attribution into the part the model will see.
-    vi.mocked(pickVisionProvider).mockReturnValue({
-      provider: 'google',
-      modelId: 'google:gemini-2.5-flash',
-      label: 'Gemini 2.5 Flash',
-    })
-    vi.mocked(captionImage).mockResolvedValue('A red Submit button on a white card')
-
-    const notices: string[] = []
-    const parts = await ingestFile({ raw: `@${imageFile}`, absolutePath: imageFile }, textOnlyCaps, (msg) =>
-      notices.push(msg),
+  it('limits the cumulative number of media parts', async () => {
+    const images = await Promise.all(
+      Array.from({ length: 11 }, async (_, index) => {
+        const file = path.join(tmpDir, `aggregate-image-${index + 1}.png`)
+        await fs.copyFile(imageFile, file)
+        return file
+      }),
     )
 
-    expect(notices).toEqual(['Captioned image via google:gemini-2.5-flash'])
-    expect(captionImage).toHaveBeenCalledTimes(1)
-    expect(parts).toHaveLength(1)
-    expect(parts[0]?.type).toBe('text')
-    if (parts[0]?.type === 'text') {
-      expect(parts[0].text).toContain('A red Submit button on a white card')
-      expect(parts[0].text).toContain('via="google:gemini-2.5-flash"')
-      expect(parts[0].text).toContain('kind="image-caption"')
-    }
+    const result = await buildUserContent(`compare ${images.map((file) => `@${file}`).join(' ')}`, {
+      image: true,
+      pdf: true,
+      audio: true,
+      filesApi: true,
+      toolImageTransport: 'tool-result',
+    })
+
+    expect(Array.isArray(result)).toBe(true)
+    if (!Array.isArray(result)) return
+    expect(result.filter((part) => part.type === 'file')).toHaveLength(10)
+    expect(JSON.stringify(result)).toContain('10-media-part limit')
   })
 
-  it('falls back when the sub-agent throws and the notice surfaces the failure', async () => {
-    // When captionImage rejects (rate limit / network / bad key),
-    // ingestFile must (a) emit a "failed, falling back to OCR" notice so
-    // the user sees what happened, and (b) NOT silently swallow the
-    // attempt by returning the multimodal-image path. We then short-circuit
-    // before OCR by asserting on the notice, since exercising real OCR on
-    // an empty file destabilises the worker thread.
-    vi.mocked(pickVisionProvider).mockReturnValue({
-      provider: 'zhipu',
-      modelId: 'zhipu:glm-4.6v',
-      label: 'GLM-4V Flash',
+  it('counts Base64 expansion in the cumulative serialized attachment budget', async () => {
+    const padded = addPngAncillaryChunk(await fs.readFile(imageFile), 3.5 * 1024 * 1024)
+    const images = await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const file = path.join(tmpDir, `wire-budget-${index + 1}.png`)
+        await fs.writeFile(file, padded)
+        return file
+      }),
+    )
+
+    const result = await buildUserContent(`compare ${images.map((file) => `@${file}`).join(' ')}`, {
+      image: true,
+      pdf: true,
+      audio: true,
+      filesApi: true,
+      toolImageTransport: 'tool-result',
     })
-    vi.mocked(captionImage).mockRejectedValue(new Error('rate limit exceeded'))
 
-    const notices: string[] = []
-    await ingestFile({ raw: `@${imageFile}`, absolutePath: imageFile }, textOnlyCaps, (msg) => notices.push(msg))
-
-    expect(captionImage).toHaveBeenCalledTimes(1)
-    // Two things must hold: the failure was reported AND it included the
-    // chosen sub-agent's label so the user knows what tried and lost.
-    expect(notices).toHaveLength(1)
-    expect(notices[0]).toContain('GLM-4V Flash')
-    expect(notices[0]).toContain('rate limit exceeded')
-    expect(notices[0]).toContain('falling back to OCR')
+    expect(Array.isArray(result)).toBe(true)
+    if (!Array.isArray(result)) return
+    expect(result.filter((part) => part.type === 'file')).toHaveLength(4)
+    expect(result.some((part) => part.type === 'text' && part.text.includes('serialized attachment limit'))).toBe(true)
   })
 })

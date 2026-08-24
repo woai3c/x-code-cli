@@ -256,7 +256,7 @@ export function buildTools(options: AgentOptions, state: LoopState) {
   // file returns a stub instead of re-sending its content. Re-assigning an
   // existing key keeps key order stable, so the cached tool-schema prefix
   // stays byte-stable (see cache-control.ts).
-  tools.readFile = createReadFileTool(state.readFileCache)
+  tools.readFile = createReadFileTool(state.readFileCache, { modelId: options.modelId })
 
   if (options.subAgentRegistry) {
     tools.task = createTaskTool(options.subAgentRegistry)
@@ -433,16 +433,19 @@ async function runTurnAttempt(
   // Chat Completions providers keep the tool role text-only and receive raw
   // tool images in one following user message. This also handles images from
   // auto-executed tools such as readFile, which bypass manual tool dispatch.
-  const requestMessages = reattachToolResultImagesForProvider(
+  const reattachedMessages = reattachToolResultImagesForProvider(
     appendStreamRecoveryContext(applyMemoryRecallAttachments(state.messages, state), recoveryText),
     options.modelId,
   )
 
-  // Text-only providers (DeepSeek, custom) would 400 on any surviving
-  // image/file parts. Rewrite those parts to OCR'd text in-place before
-  // the stream starts. Multimodal providers short-circuit inside the
-  // helper based on their capability flags.
-  await downgradeBinaryPartsForProvider(requestMessages, options.modelId)
+  // Build a request-only projection: text-only models get local OCR, while
+  // legacy PDF/audio/general file parts are omitted for every provider.
+  // Canonical session history remains unchanged.
+  const requestMessages = await downgradeBinaryPartsForProvider(
+    reattachedMessages,
+    options.modelId,
+    options.abortSignal,
+  )
 
   // Per-provider prompt caching: Anthropic gets cache_control breakpoints on
   // the system prompt + last tool + last two messages (4 total, the API

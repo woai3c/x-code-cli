@@ -17,9 +17,16 @@ vi.mock('../src/providers/registry.js', () => ({
   createModelRegistry: () => ({ languageModel: () => ({}) }),
 }))
 
-vi.mock('../src/utils/image-compress.js', () => ({
+vi.mock('../src/utils/image-compress.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/utils/image-compress.js')>()),
   ATTACH_BYTE_BUDGET: 1024,
-  compressImage: vi.fn(async (data: Buffer, mimeType: string) => ({ data, mimeType, changed: false })),
+  compressImage: vi.fn(async (data: Buffer, mimeType: string) => ({
+    data,
+    mimeType,
+    changed: false,
+    width: 1,
+    height: 1,
+  })),
 }))
 
 function clearAllKeys(): void {
@@ -121,6 +128,23 @@ describe('caption usage', () => {
 
     await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { prompt: 'Describe layout.' })
     await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { prompt: 'Report defects.' })
+
+    expect(generateText).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not share a caption for buffers with matching length, head, and tail', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'caption',
+      usage: { inputTokens: 1, outputTokens: 1 },
+      response: { modelId: 'actual-vision' },
+    } as any)
+    const first = Buffer.alloc(256, 0x61)
+    const second = Buffer.from(first)
+    first[128] = 0x31
+    second[128] = 0x32
+
+    await captionImageBuffer(first, 'image/png', 'google:requested-vision')
+    await captionImageBuffer(second, 'image/png', 'google:requested-vision')
 
     expect(generateText).toHaveBeenCalledTimes(2)
   })

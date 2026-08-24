@@ -24,15 +24,21 @@ async function makeJpeg(width: number, height: number, color = 0xff0000ff): Prom
   return img.getBuffer('image/jpeg', { quality: 95 })
 }
 
+async function makeImage(width: number, height: number, mimeType: 'image/bmp' | 'image/tiff' | 'image/gif') {
+  const { Jimp } = await import('jimp')
+  const image = new Jimp({ width, height, color: 0xff0000ff })
+  return image.getBuffer(mimeType)
+}
+
 // ── tests ────────────────────────────────────────────────────────────
 
 describe('compressImage', () => {
-  describe('fast path (no codec)', () => {
+  describe('validated pass-through', () => {
     it('passes through a small PNG unchanged', async () => {
       const buf = await makePng(100, 100)
       const result = await compressImage(buf, 'image/png')
       expect(result.changed).toBe(false)
-      expect(result.data).toBe(buf) // reference equality — zero-copy
+      expect(result.data).toEqual(buf)
     })
 
     it('passes through a small JPEG unchanged', async () => {
@@ -47,16 +53,41 @@ describe('compressImage', () => {
       expect(result.changed).toBe(false)
     })
 
-    it('passes through unsupported mime type unchanged', async () => {
-      const buf = await makePng(100, 100)
+    it('normalizes a BMP to a provider-safe format', async () => {
+      const buf = await makeImage(100, 100, 'image/bmp')
       const result = await compressImage(buf, 'image/bmp')
-      expect(result.changed).toBe(false)
+      expect(result.changed).toBe(true)
+      expect(result.mimeType).toBe('image/png')
+      expect(result.failureReason).toBeUndefined()
     })
 
-    it('passes through GIF unchanged (animation preservation)', async () => {
-      const buf = await makePng(100, 100)
+    it('passes through a valid in-budget GIF unchanged', async () => {
+      const buf = await makeImage(100, 100, 'image/gif')
       const result = await compressImage(buf, 'image/gif')
       expect(result.changed).toBe(false)
+      expect(result.data).toEqual(buf)
+    })
+
+    it('decodes and passes through a valid in-budget WebP', async () => {
+      const { createCanvas } = await import('@napi-rs/canvas')
+      const canvas = createCanvas(2, 2)
+      const context = canvas.getContext('2d')
+      context.fillStyle = 'red'
+      context.fillRect(0, 0, 2, 2)
+      const buf = await canvas.encode('webp')
+
+      const result = await compressImage(buf, 'image/webp')
+
+      expect(result).toMatchObject({ changed: false, mimeType: 'image/webp', width: 2, height: 2 })
+      expect(result.data).toEqual(buf)
+    })
+
+    it('rejects a structurally plausible PNG with no decodable image data', async () => {
+      const malformed = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAElFTkSuQmCC', 'base64')
+      const result = await compressImage(malformed, 'image/png')
+
+      expect(result.changed).toBe(false)
+      expect(['decode-failed', 'worker-failed']).toContain(result.failureReason)
     })
   })
 
@@ -116,6 +147,55 @@ describe('compressImage', () => {
       // A solid-color 2000x2000 PNG compresses very well as PNG.
       // The result should be PNG (not JPEG) when it fits the budget.
       expect(result.mimeType).toBe('image/png')
+    })
+
+    it('normalizes TIFF to PNG', async () => {
+      const buf = await makeImage(12, 8, 'image/tiff')
+      const result = await compressImage(buf, 'image/tiff')
+      expect(result).toMatchObject({ changed: true, mimeType: 'image/png' })
+      expect(result.data.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    })
+
+    it('refuses to flatten an over-budget animated GIF', async () => {
+      const singleFrame = await makeImage(10, 10, 'image/gif')
+      const frameStart = singleFrame.indexOf(0x2c)
+      const trailer = singleFrame.lastIndexOf(0x3b)
+      const animated = Buffer.concat([
+        singleFrame.subarray(0, trailer),
+        singleFrame.subarray(frameStart, trailer),
+        singleFrame.subarray(trailer),
+      ])
+      const result = await compressImage(animated, 'image/gif', { byteBudget: animated.length - 1 })
+      expect(result).toMatchObject({ changed: false, failureReason: 'animated-over-budget' })
+      expect(result.data).toBe(animated)
+    })
+
+    it('rejects a declared image above the decode pixel limit before decoding', async () => {
+      const header = Buffer.alloc(24)
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(header)
+      header.write('IHDR', 12, 'ascii')
+      header.writeUInt32BE(20_000, 16)
+      header.writeUInt32BE(20_000, 20)
+      const result = await compressImage(header, 'image/png')
+      expect(result).toMatchObject({ changed: false, failureReason: 'pixel-limit' })
+    })
+
+    it('honors an already-aborted slow-path operation', async () => {
+      const buf = await makePng(3000, 1000)
+      const controller = new AbortController()
+      controller.abort()
+      await expect(compressImage(buf, 'image/png', { abortSignal: controller.signal })).rejects.toMatchObject({
+        name: 'AbortError',
+      })
+    })
+
+    it('honors an already-aborted in-budget operation', async () => {
+      const buf = await makePng(1, 1)
+      const controller = new AbortController()
+      controller.abort()
+      await expect(compressImage(buf, 'image/png', { abortSignal: controller.signal })).rejects.toMatchObject({
+        name: 'AbortError',
+      })
     })
   })
 

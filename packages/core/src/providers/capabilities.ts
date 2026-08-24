@@ -1,9 +1,7 @@
 // @x-code-cli/core — Provider multi-modal capability table
 //
-// Declares whether each provider's API can natively accept image / pdf
-// content parts in user messages and tool results. Used by the file-ingest
-// pipeline (to decide inline-vs-OCR) and provider-compat (to strip binary
-// parts before sending to providers that would reject them).
+// Image capabilities drive model delivery. Legacy PDF/audio/file fields stay
+// in the public type for compatibility but have no ingestion consumers.
 //
 // Provider capabilities describe the wire API. modelSupportsVision applies
 // the curated per-model flag on top, so text-only Qwen/GLM variants still
@@ -15,15 +13,11 @@ import { getOpenAIChatGPTRuntimeModel, getProviderModels } from './openai-chatgp
 export interface ProviderCapabilities {
   /** Provider can receive inline image parts (base64 or URL) in user messages. */
   image: boolean
-  /** Provider can receive inline PDF file parts. */
+  /** @deprecated File ingestion always processes PDFs locally. */
   pdf: boolean
-  /** Provider can receive inline audio parts (base64 data URL). When true,
-   *  audio files are sent directly to the API — the model handles speech
-   *  recognition natively (better quality: captures pauses, tone, etc.).
-   *  When false, audio is transcribed locally via whisper.cpp and only the
-   *  timestamped text is sent. */
+  /** @deprecated File ingestion always transcribes audio locally. */
   audio: boolean
-  /** Provider has a dedicated /files upload endpoint (file_id references). */
+  /** @deprecated Generic file upload is not used by the ingestion pipeline. */
   filesApi: boolean
   /** How images returned by tools must be represented on this provider.
    *
@@ -57,7 +51,7 @@ const NO_CAPABILITIES: ProviderCapabilities = {
 
 // ── Image format policy (session-poisoning defense) ───────────────────────
 //
-// Providers accept only PNG / JPEG / GIF / WebP image parts. An unsupported
+// Most providers accept PNG / JPEG / GIF / WebP image parts. An unsupported
 // part (AVIF, HEIC, BMP, TIFF, or mislabeled bytes) is rejected with a 400 —
 // and because messages persist in the session, every subsequent request
 // fails too (Kimi CLI's image-format-policy calls this "session poisoning").
@@ -65,7 +59,15 @@ const NO_CAPABILITIES: ProviderCapabilities = {
 // ingestion and the agent loop strips on a 400 so a bad image can never
 // wedge a session. A new format is only ever sent once added here.
 
-const MODEL_ACCEPTED_IMAGE_MIMES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const DEFAULT_ACCEPTED_IMAGE_MIMES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+])
+const PROVIDER_ACCEPTED_IMAGE_MIMES: Readonly<Record<string, ReadonlySet<string>>> = {
+  xai: new Set(['image/png', 'image/jpeg']),
+}
 
 /** Lowercase, drop MIME parameters, apply the `image/jpg` alias. */
 export function normalizeImageMime(mime: string): string {
@@ -73,8 +75,14 @@ export function normalizeImageMime(mime: string): string {
   return base === 'image/jpg' ? 'image/jpeg' : base
 }
 
-export function isModelAcceptedImageMime(mime: string): boolean {
-  return MODEL_ACCEPTED_IMAGE_MIMES.has(normalizeImageMime(mime))
+function acceptedImageMimes(modelId?: string): ReadonlySet<string> {
+  if (!modelId) return DEFAULT_ACCEPTED_IMAGE_MIMES
+  const resolved = MODEL_ALIASES[modelId] ?? modelId
+  return PROVIDER_ACCEPTED_IMAGE_MIMES[providerOf(resolved)] ?? DEFAULT_ACCEPTED_IMAGE_MIMES
+}
+
+export function isModelAcceptedImageMime(mime: string, modelId?: string): boolean {
+  return acceptedImageMimes(modelId).has(normalizeImageMime(mime))
 }
 
 /** Sniff the real MIME from magic bytes; null when unrecognized. Bytes are
@@ -93,9 +101,12 @@ export async function sniffImageMime(buffer: Buffer): Promise<string | null> {
 /** Text notice standing in for a refused / stripped image so the model knows
  *  what happened and the session history stays free of parts the provider
  *  rejects. */
-export function buildUnsupportedImageNotice(mime: string, name?: string): string {
+export function buildUnsupportedImageNotice(mime: string, name?: string, modelId?: string): string {
   const what = name ? `"${name}" uses unsupported image format ${mime}` : `unsupported image format ${mime}`
-  return `[Image omitted: ${what}. Providers accept only PNG, JPEG, GIF, and WebP — convert it to PNG or JPEG and try again.]`
+  const formats = [...acceptedImageMimes(modelId)]
+    .map((value) => value.slice('image/'.length).replace('jpeg', 'JPEG').toUpperCase())
+    .join(', ')
+  return `[Image omitted: ${what}. The current model accepts only ${formats} — convert it to PNG or JPEG and try again.]`
 }
 
 /** Extract `provider` from a `provider:model` id. Returns `unknown` if the

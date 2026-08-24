@@ -88,7 +88,12 @@ const signalExitFixPlugin = {
 await rm(OUT_DIR, { recursive: true, force: true })
 
 await esbuild.build({
-  entryPoints: { cli: fileURLToPath(new URL('./src/index.ts', import.meta.url)) },
+  entryPoints: {
+    cli: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
+    'audio-transcribe-worker': fileURLToPath(new URL('../core/src/agent/audio-transcribe-worker.ts', import.meta.url)),
+    'pdf-render-worker': fileURLToPath(new URL('../core/src/agent/pdf-render-worker.ts', import.meta.url)),
+    'image-compress-worker': fileURLToPath(new URL('../core/src/utils/image-compress-worker.ts', import.meta.url)),
+  },
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -115,8 +120,13 @@ await esbuild.build({
     ...builtinModules.map((m) => `node:${m}`),
     // Runtime HTTP dispatcher used for DNS pinning and fake-IP compatibility.
     'undici',
+    // Keep PDF.js and its worker together in the runtime dependency.
+    'pdf-parse',
+    // Tesseract resolves its Node worker relative to its installed package.
+    'tesseract.js',
     // Native addons that can't be bundled
     '@vscode/ripgrep',
+    '@napi-rs/canvas',
     'fs-ext-extra-prebuilt',
     'node-pty',
     '@fugood/whisper.node',

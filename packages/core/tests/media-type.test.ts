@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { mediaTypeFor } from '../src/utils/media-type.js'
+import { knownMediaTypeFor, mediaTypeFor } from '../src/utils/media-type.js'
 
 describe('mediaTypeFor', () => {
   it('maps .jpg to image/jpeg', () => {
@@ -27,8 +27,13 @@ describe('mediaTypeFor', () => {
     expect(mediaTypeFor('bitmap.bmp')).toBe('image/bmp')
   })
 
-  it('defaults to image/png for unknown extensions', () => {
-    expect(mediaTypeFor('file.tiff')).toBe('image/png')
+  it('maps TIFF explicitly and safely rejects unknown extensions', () => {
+    expect(mediaTypeFor('file.tiff')).toBe('image/tiff')
+    expect(knownMediaTypeFor('file.svg')).toBeNull()
+    expect(knownMediaTypeFor('noext')).toBeNull()
+  })
+
+  it('keeps the legacy unknown-extension fallback for compatibility', () => {
     expect(mediaTypeFor('file.svg')).toBe('image/png')
     expect(mediaTypeFor('noext')).toBe('image/png')
   })

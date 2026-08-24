@@ -1,9 +1,23 @@
 // @x-code-cli/core — Provider-specific compatibility shims
 import type { ModelMessage } from 'ai'
 
-import { buildUnsupportedImageNotice, capabilitiesOf, modelSupportsVision } from '../providers/capabilities.js'
+import {
+  buildUnsupportedImageNotice,
+  capabilitiesOf,
+  isModelAcceptedImageMime,
+  modelSupportsVision,
+  normalizeImageMime,
+  sniffImageMime,
+} from '../providers/capabilities.js'
+import { truncateUtf8 } from '../utils.js'
+import {
+  ATTACH_BYTE_BUDGET,
+  MAX_EDGE_PX,
+  buildImageProcessingFailureNotice,
+  compressImage,
+} from '../utils/image-compress.js'
 import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
-import { ocrImage } from './file-ingest.js'
+import { ocrImage } from './image-ocr.js'
 import { toolMediaUserMessage } from './messages.js'
 import type { ToolImage } from './messages.js'
 
@@ -119,15 +133,131 @@ export function reattachToolResultImagesForProvider(messages: ModelMessage[], mo
 }
 
 const ocrCache = new LruCache<string>({ maxEntries: 50 })
+const MAX_COMPAT_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024
+const MAX_COMPAT_OCR_BYTES = 256 * 1024
 
-async function ocrBuffer(buffer: Buffer): Promise<string> {
+type CompatImageProjection =
+  | { ok: true; data: Buffer; mimeType: string; changed: boolean }
+  | { ok: false; notice: string }
+
+const compatImageCache = new LruCache<CompatImageProjection>({ maxEntries: 20 })
+
+async function normalizeCompatImage(
+  buffer: Buffer,
+  modelId: string,
+  abortSignal?: AbortSignal,
+): Promise<CompatImageProjection> {
+  abortSignal?.throwIfAborted()
+  if (buffer.length > MAX_COMPAT_IMAGE_SOURCE_BYTES) {
+    return {
+      ok: false,
+      notice: `[image omitted: legacy payload exceeds the ${MAX_COMPAT_IMAGE_SOURCE_BYTES / (1024 * 1024)} MB local image limit]`,
+    }
+  }
+
+  // Compatibility validation runs on every request projection. A full digest
+  // lets repeated session images reuse the decoded result without allowing
+  // same-size, same-header payloads to share a security decision.
+  const key = `${modelId}:${bufferFingerprint(buffer)}`
+  const cached = compatImageCache.get(key)
+  if (cached) return cached
+
+  const sniffedMime = await sniffImageMime(buffer)
+  if (!sniffedMime?.startsWith('image/')) {
+    return { ok: false, notice: '[image omitted: legacy payload is not a recognized image]' }
+  }
+  const compressed = await compressImage(buffer, sniffedMime, {
+    byteBudget: ATTACH_BYTE_BUDGET,
+    abortSignal,
+  })
+  const mimeType = normalizeImageMime(compressed.mimeType)
+  let result: CompatImageProjection
+  if (!isModelAcceptedImageMime(mimeType, modelId)) {
+    result = { ok: false, notice: buildUnsupportedImageNotice(mimeType, 'legacy session payload', modelId) }
+  } else if (
+    compressed.failureReason ||
+    compressed.data.length > ATTACH_BYTE_BUDGET ||
+    compressed.width > MAX_EDGE_PX ||
+    compressed.height > MAX_EDGE_PX
+  ) {
+    result = { ok: false, notice: buildImageProcessingFailureNotice('legacy session payload', compressed) }
+  } else {
+    result = { ok: true, data: compressed.data, mimeType, changed: compressed.changed }
+  }
+  compatImageCache.set(key, result)
+  return result
+}
+
+function normalizedImageFilename(filename: string | undefined, mimeType: string): string | undefined {
+  if (!filename) return undefined
+  const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.slice('image/'.length)
+  const stem = filename.replace(/\.[^./\\]+$/, '')
+  return `${stem}.${extension}`
+}
+
+async function ocrBuffer(buffer: Buffer, abortSignal?: AbortSignal): Promise<string> {
+  if (buffer.length > MAX_COMPAT_IMAGE_SOURCE_BYTES) {
+    return `[image omitted: legacy payload exceeds the ${MAX_COMPAT_IMAGE_SOURCE_BYTES / (1024 * 1024)} MB local OCR limit]`
+  }
   const key = bufferFingerprint(buffer)
   const cached = ocrCache.get(key)
   if (cached != null) return cached
-
-  const text = await ocrImage(buffer)
+  const sniffedMime = await sniffImageMime(buffer)
+  if (!sniffedMime?.startsWith('image/')) return '[image omitted: legacy payload is not a recognized image]'
+  const compressed = await compressImage(buffer, sniffedMime, {
+    byteBudget: ATTACH_BYTE_BUDGET,
+    abortSignal,
+  })
+  const finalMime = normalizeImageMime(compressed.mimeType)
+  if (
+    compressed.failureReason ||
+    !isModelAcceptedImageMime(finalMime) ||
+    compressed.data.length > ATTACH_BYTE_BUDGET ||
+    compressed.width > MAX_EDGE_PX ||
+    compressed.height > MAX_EDGE_PX
+  ) {
+    return buildImageProcessingFailureNotice('legacy session payload', compressed)
+  }
+  const rawText = await ocrImage(compressed.data, { abortSignal })
+  const text =
+    Buffer.byteLength(rawText, 'utf-8') <= MAX_COMPAT_OCR_BYTES
+      ? rawText
+      : truncateUtf8(rawText, MAX_COMPAT_OCR_BYTES) + '\n[Local OCR output truncated at 256 KB.]'
   ocrCache.set(key, text)
   return text
+}
+
+function filePartToBuffer(part: { data?: unknown }): Buffer | null {
+  const unwrap = (value: unknown): unknown => {
+    if (!value || typeof value !== 'object' || Buffer.isBuffer(value) || value instanceof Uint8Array) return value
+    if (value instanceof ArrayBuffer || value instanceof URL) return value
+    const tagged = value as { type?: string; data?: unknown }
+    return tagged.type === 'data' ? tagged.data : value
+  }
+  const data = unwrap(part.data)
+  if (Buffer.isBuffer(data)) return data
+  if (data instanceof Uint8Array) return Buffer.from(data)
+  if (data instanceof ArrayBuffer) return Buffer.from(data)
+  if (typeof data !== 'string') return null
+  const commaIdx = data.indexOf(',')
+  const payload = data.startsWith('data:') && commaIdx > 0 ? data.slice(commaIdx + 1) : data
+  try {
+    return Buffer.from(payload, 'base64')
+  } catch {
+    return null
+  }
+}
+
+function cloneRequestValue<T>(value: T): T {
+  if (Buffer.isBuffer(value)) return Buffer.from(value) as T
+  if (value instanceof Uint8Array) return new Uint8Array(value) as T
+  if (value instanceof ArrayBuffer) return value.slice(0) as T
+  if (value instanceof URL) return new URL(value.href) as T
+  if (Array.isArray(value)) return value.map((entry) => cloneRequestValue(entry)) as T
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, cloneRequestValue(entry)]),
+  ) as T
 }
 
 function imagePartToBuffer(part: { image: unknown; mediaType?: string }): Buffer | null {
@@ -196,41 +326,100 @@ export function stripBinaryPartsFromMessages(messages: ModelMessage[]): boolean 
   return changed
 }
 
-/**
- * Strip binary content parts from the conversation history in-place so that
- * the next `streamText` call doesn't 400 on a provider that can't accept
- * them. Replaces images with OCR'd text annotated as a fallback so the
- * model knows it's looking at text, not the image itself.
- */
-export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], modelId: string): Promise<void> {
+/** Build a request-only projection that removes legacy non-image files and
+ * OCRs images for text-only models. Canonical session messages are never
+ * mutated by this compatibility pass. */
+export async function downgradeBinaryPartsForProvider(
+  messages: ModelMessage[],
+  modelId: string,
+  abortSignal?: AbortSignal,
+): Promise<ModelMessage[]> {
   const caps = capabilitiesOf(modelId)
   const acceptsImages = caps.image && modelSupportsVision(modelId)
-  if (acceptsImages && caps.pdf) return
+  const projected = cloneRequestValue(messages)
 
-  for (const msg of messages) {
+  for (const msg of projected) {
     // User messages — content may be an array of TextPart | ImagePart | FilePart.
-    if (msg.role === 'user' && Array.isArray(msg.content)) {
-      const rewritten: typeof msg.content = []
+    if ((msg.role === 'user' || msg.role === 'assistant') && Array.isArray(msg.content)) {
+      const rewritten: unknown[] = []
       for (const part of msg.content) {
-        if (part.type === 'image' && !acceptsImages) {
+        if (part.type === 'image') {
           const buffer = imagePartToBuffer(part as { image: unknown; mediaType?: string })
-          const text = buffer ? await ocrBuffer(buffer) : '[image omitted]'
-          rewritten.push({
-            type: 'text',
-            text: `[Image replaced by local OCR — the current model cannot natively see images. Visual content is NOT visible.]\n${text}`,
-          })
+          if (!acceptsImages) {
+            const text = buffer ? await ocrBuffer(buffer, abortSignal) : '[image omitted]'
+            rewritten.push({
+              type: 'text',
+              text: `[Image replaced by local OCR — the current model cannot natively see images. Visual content is NOT visible.]\n${text}`,
+            })
+            continue
+          }
+          if (!buffer) {
+            rewritten.push({ type: 'text', text: '[image omitted: legacy payload could not be decoded]' })
+            continue
+          }
+          const normalized = await normalizeCompatImage(buffer, modelId, abortSignal)
+          if (!normalized.ok) {
+            rewritten.push({ type: 'text', text: normalized.notice })
+            continue
+          }
+          const declaredMime = normalizeImageMime((part as { mediaType?: string }).mediaType ?? '')
+          rewritten.push(
+            !normalized.changed && declaredMime === normalized.mimeType
+              ? part
+              : {
+                  ...part,
+                  image: normalized.data.toString('base64'),
+                  mediaType: normalized.mimeType,
+                },
+          )
           continue
         }
-        if (part.type === 'file' && !caps.pdf) {
+        if (part.type === 'file') {
+          const file = part as { data?: unknown; filename?: string; mediaType?: string }
+          const mediaType = file.mediaType?.toLowerCase() ?? ''
+          const isImage = mediaType === 'image' || mediaType.startsWith('image/')
+          if (isImage && acceptsImages) {
+            const buffer = filePartToBuffer(file)
+            if (!buffer) {
+              rewritten.push({ type: 'text', text: '[image omitted: legacy payload could not be decoded]' })
+              continue
+            }
+            const normalized = await normalizeCompatImage(buffer, modelId, abortSignal)
+            if (!normalized.ok) {
+              rewritten.push({ type: 'text', text: normalized.notice })
+              continue
+            }
+            const declaredMime = normalizeImageMime(mediaType)
+            rewritten.push(
+              !normalized.changed && declaredMime === normalized.mimeType
+                ? part
+                : {
+                    ...file,
+                    data: { type: 'data', data: normalized.data.toString('base64') },
+                    mediaType: normalized.mimeType,
+                    filename: normalizedImageFilename(file.filename, normalized.mimeType),
+                  },
+            )
+            continue
+          }
+          if (isImage) {
+            const buffer = filePartToBuffer(file)
+            const text = buffer ? await ocrBuffer(buffer, abortSignal) : '[image omitted]'
+            rewritten.push({
+              type: 'text',
+              text: `[Image replaced by local OCR — the current model cannot natively see images. Visual content is NOT visible.]\n${text}`,
+            })
+            continue
+          }
           rewritten.push({
             type: 'text',
-            text: `[File omitted: ${(part as { filename?: string }).filename ?? 'unknown'} — current model does not accept file attachments.]`,
+            text: `[Legacy file attachment omitted: ${file.filename ?? (mediaType || 'unknown')} — reattach or read the original path to process it locally.]`,
           })
           continue
         }
         rewritten.push(part)
       }
-      ;(msg as { content: typeof rewritten }).content = rewritten
+      ;(msg as { content: unknown }).content = rewritten
       continue
     }
 
@@ -252,13 +441,34 @@ export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], 
           // In a ModelMessage tool-result the image part is `{ type: 'image-data',
           // data, mediaType }`. OCR for text-only providers so they don't 400
           // on the binary.
-          const isImageEntry = entry.type === 'image-data'
-          if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true) && !acceptsImages) {
+          const isImageEntry =
+            entry.type === 'image-data' || (entry.type === 'media' && entry.mediaType?.startsWith('image/'))
+          if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true) && acceptsImages) {
+            const buffer = Buffer.from(entry.data ?? '', 'base64')
+            const normalized = await normalizeCompatImage(buffer, modelId, abortSignal)
+            if (!normalized.ok) {
+              rewritten.push({ type: 'text', text: normalized.notice })
+              continue
+            }
+            const declaredMime = normalizeImageMime(entry.mediaType ?? '')
+            rewritten.push(
+              !normalized.changed && declaredMime === normalized.mimeType
+                ? entry
+                : {
+                    ...entry,
+                    data: normalized.data.toString('base64'),
+                    mediaType: normalized.mimeType,
+                    filename: normalizedImageFilename(entry.filename, normalized.mimeType),
+                  },
+            )
+            continue
+          }
+          if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true)) {
             const data = entry.data ?? ''
             let text = '[image omitted]'
             try {
               const buffer = Buffer.from(data, 'base64')
-              text = await ocrBuffer(buffer)
+              text = await ocrBuffer(buffer, abortSignal)
             } catch {
               // fall through with placeholder
             }
@@ -268,10 +478,15 @@ export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], 
             })
             continue
           }
-          if ((entry.type === 'file-data' || entry.type === 'file-url' || entry.type === 'file-id') && !caps.pdf) {
+          const isLegacyFileEntry =
+            entry.type === 'file-data' ||
+            entry.type === 'file-url' ||
+            entry.type === 'file-id' ||
+            (entry.type === 'media' && !entry.mediaType?.startsWith('image/'))
+          if (isLegacyFileEntry) {
             rewritten.push({
               type: 'text',
-              text: `[File attachment omitted (${entry.filename ?? entry.mediaType ?? 'binary'}) — current model does not accept file attachments.]`,
+              text: `[Legacy file attachment omitted (${entry.filename ?? entry.mediaType ?? 'binary'}) — reattach or read the original path to process it locally.]`,
             })
             continue
           }
@@ -281,4 +496,5 @@ export async function downgradeBinaryPartsForProvider(messages: ModelMessage[], 
       }
     }
   }
+  return projected
 }

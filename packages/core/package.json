@@ -37,6 +37,7 @@
     "@ai-sdk/provider-utils": "^5.0.0",
     "@ai-sdk/xai": "^4.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@napi-rs/canvas": "0.1.80",
     "@vscode/ripgrep": "^1.17.0",
     "ai": "^7.0.0",
     "cheerio": "^1.0.0",

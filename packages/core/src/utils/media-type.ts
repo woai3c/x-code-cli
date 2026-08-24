@@ -1,15 +1,14 @@
 import path from 'node:path'
 
-/** Map a file extension to an IANA media type. Used for ImagePart mediaType
- *  hints; returning `image/png` for unknown extensions is safe — the SDK
- *  mostly treats mediaType as advisory. */
-export function mediaTypeFor(filePath: string): string {
+/** Map a known file extension to an IANA media type without guessing. */
+export function knownMediaTypeFor(filePath: string): string | null {
   const ext = path.extname(filePath).toLowerCase()
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
   if (ext === '.png') return 'image/png'
   if (ext === '.webp') return 'image/webp'
   if (ext === '.gif') return 'image/gif'
   if (ext === '.bmp') return 'image/bmp'
+  if (ext === '.tif' || ext === '.tiff') return 'image/tiff'
   // Audio
   if (ext === '.mp3') return 'audio/mpeg'
   if (ext === '.wav') return 'audio/wav'
@@ -20,5 +19,13 @@ export function mediaTypeFor(filePath: string): string {
   if (ext === '.aiff' || ext === '.aif') return 'audio/aiff'
   if (ext === '.wma') return 'audio/x-ms-wma'
   if (ext === '.webm') return 'audio/webm'
-  return 'image/png'
+  return null
+}
+
+/**
+ * @deprecated Use knownMediaTypeFor() and handle null. This compatibility
+ * fallback remains for one release cycle; ingestion code must not use it.
+ */
+export function mediaTypeFor(filePath: string): string {
+  return knownMediaTypeFor(filePath) ?? 'image/png'
 }

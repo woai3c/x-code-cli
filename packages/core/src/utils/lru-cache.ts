@@ -1,14 +1,9 @@
-/** Cheap collision-resistant fingerprint for a buffer:
- *  `${byteLength}:${head64Base64}:${tail64Base64}`.
- *  Includes both the first and last 64 bytes — headers alone are often
- *  identical across images from the same source (same camera, same template).
- *  Still O(1) in buffer size; suitable as cache keys when exact content
- *  identity matters more than cryptographic strength. Callers that need a
- *  per-model or per-provider namespace should prefix the returned string. */
+import { createHash } from 'node:crypto'
+
+/** Full content identity for binary cache entries. Callers that need a
+ *  per-model or per-provider namespace should prefix the returned digest. */
 export function bufferFingerprint(buffer: Buffer): string {
-  const head = buffer.subarray(0, 64).toString('base64')
-  const tail = buffer.length > 64 ? buffer.subarray(-64).toString('base64') : head
-  return `${buffer.length}:${head}:${tail}`
+  return createHash('sha256').update(buffer).digest('hex')
 }
 
 /** Minimal generic LRU cache backed by a Map (insertion-order iteration).

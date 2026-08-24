@@ -1,162 +1,342 @@
-// @x-code-cli/core — Image compression for model delivery
-//
-// Downsamples and re-encodes oversized images before they reach the provider,
-// using Jimp (pure JS, no native dependencies). The codec is lazy-loaded so
-// startup and the within-budget fast path stay cheap.
-//
-// Design mirrors Kimi Code's approach:
-//  - Fast path: if both byte size and pixel dimensions are within budget, the
-//    original bytes are returned untouched — zero codec allocation.
-//  - Pixel dimension ceiling: images wider/taller than MAX_EDGE_PX are scaled
-//    down proportionally (preserving aspect ratio).
-//  - Byte budget: after the edge fit, a quality/format ladder walks down
-//    (PNG → JPEG q80/60/40/20) with progressively smaller edge fallbacks
-//    until the result fits.
-//  - PNG sources try lossless compression first (preserves text and alpha);
-//    JPEG sources go straight to the quality ladder.
-//  - Best effort: any decode/encode failure returns the original bytes with
-//    `changed: false` — callers decide whether the oversized original is
-//    acceptable downstream.
-//  - Animated formats (GIF, animated WebP) are never re-encoded — doing so
-//    would flatten to a single frame.
+import { Worker } from 'node:worker_threads'
 
-/** Longest-edge pixel ceiling. Images with either dimension above this are
- *  scaled down to fit. Matches Claude Code and Kimi Code's default of 2000.
- *  Anthropic's API internally resizes to 1568px, so 2000 keeps a slight
- *  margin of quality without being wasteful. */
+/** Longest edge accepted by the model-facing image adapter. */
 export const MAX_EDGE_PX = 2000
 
-/** Raw-byte budget for user-attached images (@ mentions, paste). 3.75 MB raw
- *  stays under the 5 MB base64 ceiling every major provider enforces. */
+/** 3.75 MB raw stays below the common 5 MB Base64 request ceiling. */
 export const ATTACH_BYTE_BUDGET = 3.75 * 1024 * 1024
 
-/** Progressively lower JPEG quality for the lossy ladder. */
+/** Decode guard, checked from headers before allocating the full bitmap. */
+export const MAX_DECODE_PIXELS = 100_000_000
+
+const IMAGE_WORKER_TIMEOUT_MS = 30_000
 const JPEG_QUALITY_STEPS = [80, 60, 40, 20] as const
-
-/** Edge step-downs when the budget cannot be met at the fitted size. */
 const FALLBACK_EDGES = [2000, 1000, 768, 512, 384, 256] as const
-
-/** PNG lossless rescaling stops at this edge; below, the ladder goes lossy. */
 const PNG_RESCALE_FLOOR = 1000
+const STANDARD_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
-/** Pixel-count ceiling above which we skip compression entirely — a
- *  decompression-bomb guard. */
-const MAX_DECODE_PIXELS = 100_000_000
+// Jimp 1.6 ships PNG/JPEG/GIF/BMP/TIFF codecs, but not WebP. Keep this list
+// tied to the codecs that are actually installed instead of assuming every
+// provider-supported input can also be re-encoded locally.
+const JIMP_DECODABLE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/bmp', 'image/tiff'])
 
-/** Re-encodable MIME types. GIF is excluded (animation). */
-const RECODABLE = new Set(['image/png', 'image/jpeg', 'image/webp'])
+export type ImageCompressionFailure =
+  | 'animated-over-budget'
+  | 'budget-unmet'
+  | 'codec-unavailable'
+  | 'decode-failed'
+  | 'pixel-limit'
+  | 'worker-failed'
 
 export interface CompressResult {
-  /** Bytes to send: the re-encoded image, or the original when unchanged. */
   data: Buffer
-  /** MIME of `data`. May differ from the input (e.g. png → jpeg). */
   mimeType: string
-  /** Pixel width of the output (0 when unknown). */
   width: number
-  /** Pixel height of the output (0 when unknown). */
   height: number
-  /** Pixel width of the input image (0 when unknown). */
   originalWidth: number
-  /** Pixel height of the input image (0 when unknown). */
   originalHeight: number
-  /** True only when `data` differs from the input bytes. */
   changed: boolean
+  failureReason?: ImageCompressionFailure
 }
 
 export interface CompressOptions {
-  /** Override the longest-edge ceiling (px). */
   maxEdge?: number
-  /** Override the raw-byte budget. */
   byteBudget?: number
+  abortSignal?: AbortSignal
 }
-
-// ── header sniff ─────────────────────────────────────────────────────
-// Read pixel dimensions from the image header without decoding the full
-// bitmap — keeps the fast path allocation-free.
 
 interface SniffedDimensions {
   width: number
   height: number
 }
 
-function sniffDimensions(buf: Buffer): SniffedDimensions | null {
-  if (buf.length < 24) return null
-  // PNG: bytes 16-23 carry IHDR width (4B BE) and height (4B BE).
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
-  }
-  // JPEG: scan for SOF0/SOF2 markers. Height at offset+5, width at offset+7.
-  if (buf[0] === 0xff && buf[1] === 0xd8) {
-    let offset = 2
-    while (offset + 10 < buf.length) {
-      if (buf[offset] !== 0xff) break
-      const marker = buf[offset + 1]!
-      if (marker === 0xc0 || marker === 0xc2) {
-        return { width: buf.readUInt16BE(offset + 7), height: buf.readUInt16BE(offset + 5) }
-      }
-      const segLen = buf.readUInt16BE(offset + 2)
-      offset += 2 + segLen
-    }
-    return null
-  }
-  // WebP: bytes 24-29 for VP8 lossy; 26-29 for VP8L lossless.
-  if (
-    buf.length >= 30 &&
-    buf[0] === 0x52 && // 'R'
-    buf[1] === 0x49 && // 'I'
-    buf[2] === 0x46 && // 'F'
-    buf[3] === 0x46 && // 'F'
-    buf[8] === 0x57 && // 'W'
-    buf[9] === 0x45 && // 'E'
-    buf[10] === 0x42 && // 'B'
-    buf[11] === 0x50 // 'P'
-  ) {
-    // VP8 lossy: signature at 12..15 = "VP8 "
-    if (buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x20) {
-      // Skip 3 bytes of frame tag (bits 0..2 = frame type, etc.), then 3 bytes of start code.
-      // Width at byte 26 (16-bit LE, lower 14 bits), height at byte 28.
-      if (buf.length >= 30) {
-        return {
-          width: buf.readUInt16LE(26) & 0x3fff,
-          height: buf.readUInt16LE(28) & 0x3fff,
-        }
-      }
-    }
-    // VP8L lossless: signature at 12..15 = "VP8L"
-    if (buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x4c) {
-      if (buf.length >= 25) {
-        const bits = buf.readUInt32LE(21)
-        return {
-          width: (bits & 0x3fff) + 1,
-          height: ((bits >> 14) & 0x3fff) + 1,
-        }
-      }
-    }
-  }
-  return null
+interface EncodedImage {
+  data: Buffer
+  mimeType: string
+  width: number
+  height: number
 }
 
-/** Check if a WebP buffer is animated (contains "ANIM" chunk). */
-function isAnimatedWebp(buf: Buffer): boolean {
-  // Extended format: bytes 12..15 = "VP8X", flags byte at 20.
-  if (buf.length >= 21 && buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x58) {
-    return (buf[20]! & 0x02) !== 0 // animation flag
-  }
-  return false
+export interface ImageCompressWorkerInput {
+  data: ArrayBuffer
+  mimeType: string
+  maxEdge: number
+  byteBudget: number
 }
 
-// Normalize MIME: treat image/jpg as image/jpeg.
+export type ImageCompressWorkerOutput =
+  | {
+      ok: true
+      result: Omit<CompressResult, 'data'> & { data: ArrayBuffer }
+    }
+  | { ok: false; error: string }
+
+type JimpImage = Awaited<ReturnType<(typeof import('jimp'))['Jimp']['fromBuffer']>>
+
 function normalizeMime(mime: string): string {
   const base = (mime.split(';', 1)[0] ?? '').trim().toLowerCase()
   return base === 'image/jpg' ? 'image/jpeg' : base
 }
 
-// ── jimp helpers (lazy-loaded) ───────────────────────────────────────
+function validDimensions(width: number, height: number): SniffedDimensions | null {
+  return Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0
+    ? { width, height }
+    : null
+}
 
-type JimpImage = Awaited<ReturnType<(typeof import('jimp'))['Jimp']['fromBuffer']>>
+function sniffJpegDimensions(buf: Buffer): SniffedDimensions | null {
+  let offset = 2
+  while (offset + 8 < buf.length) {
+    if (buf[offset] !== 0xff) {
+      offset++
+      continue
+    }
+    while (buf[offset] === 0xff) offset++
+    const marker = buf[offset++]
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) break
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue
+    if (offset + 2 > buf.length) break
+    const segmentLength = buf.readUInt16BE(offset)
+    if (segmentLength < 2 || offset + segmentLength > buf.length) break
+    const isStartOfFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+    if (isStartOfFrame && segmentLength >= 7) {
+      return validDimensions(buf.readUInt16BE(offset + 5), buf.readUInt16BE(offset + 3))
+    }
+    offset += segmentLength
+  }
+  return null
+}
 
-/** Scale `image` so its longest edge is at most `edge`. Returns true when
- *  a resize actually happened; no-op when the image already fits. */
+function readTiffScalar(buf: Buffer, offset: number, littleEndian: boolean): number | null {
+  if (offset + 12 > buf.length) return null
+  const read16 = (at: number): number => (littleEndian ? buf.readUInt16LE(at) : buf.readUInt16BE(at))
+  const read32 = (at: number): number => (littleEndian ? buf.readUInt32LE(at) : buf.readUInt32BE(at))
+  const type = read16(offset + 2)
+  const count = read32(offset + 4)
+  if (count < 1) return null
+  if (type === 3) return read16(offset + 8)
+  if (type === 4) return read32(offset + 8)
+  return null
+}
+
+function sniffTiffDimensions(buf: Buffer): SniffedDimensions | null {
+  if (buf.length < 8) return null
+  const littleEndian = buf[0] === 0x49 && buf[1] === 0x49
+  const bigEndian = buf[0] === 0x4d && buf[1] === 0x4d
+  if (!littleEndian && !bigEndian) return null
+  const read16 = (at: number): number => (littleEndian ? buf.readUInt16LE(at) : buf.readUInt16BE(at))
+  const read32 = (at: number): number => (littleEndian ? buf.readUInt32LE(at) : buf.readUInt32BE(at))
+  if (read16(2) !== 42) return null
+  const ifdOffset = read32(4)
+  if (ifdOffset + 2 > buf.length) return null
+  const entries = Math.min(read16(ifdOffset), 512)
+  let width: number | null = null
+  let height: number | null = null
+  for (let index = 0; index < entries; index++) {
+    const entryOffset = ifdOffset + 2 + index * 12
+    if (entryOffset + 12 > buf.length) break
+    const tag = read16(entryOffset)
+    if (tag !== 256 && tag !== 257) continue
+    const value = readTiffScalar(buf, entryOffset, littleEndian)
+    if (tag === 256) width = value
+    else height = value
+  }
+  return width !== null && height !== null ? validDimensions(width, height) : null
+}
+
+function sniffDimensions(buf: Buffer): SniffedDimensions | null {
+  if (buf.length < 10) return null
+  if (buf.length >= 24 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return validDimensions(buf.readUInt32BE(16), buf.readUInt32BE(20))
+  }
+  if (buf[0] === 0xff && buf[1] === 0xd8) return sniffJpegDimensions(buf)
+  if (buf.subarray(0, 6).toString('ascii') === 'GIF87a' || buf.subarray(0, 6).toString('ascii') === 'GIF89a') {
+    return validDimensions(buf.readUInt16LE(6), buf.readUInt16LE(8))
+  }
+  if (buf.length >= 26 && buf[0] === 0x42 && buf[1] === 0x4d) {
+    const dibSize = buf.readUInt32LE(14)
+    if (dibSize === 12) return validDimensions(buf.readUInt16LE(18), buf.readUInt16LE(20))
+    return validDimensions(Math.abs(buf.readInt32LE(18)), Math.abs(buf.readInt32LE(22)))
+  }
+  if ((buf[0] === 0x49 && buf[1] === 0x49) || (buf[0] === 0x4d && buf[1] === 0x4d)) {
+    return sniffTiffDimensions(buf)
+  }
+  if (
+    buf.length >= 30 &&
+    buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buf.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    const chunk = buf.subarray(12, 16).toString('ascii')
+    if (chunk === 'VP8 ') return validDimensions(buf.readUInt16LE(26) & 0x3fff, buf.readUInt16LE(28) & 0x3fff)
+    if (chunk === 'VP8L' && buf.length >= 25) {
+      const bits = buf.readUInt32LE(21)
+      return validDimensions((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)
+    }
+    if (chunk === 'VP8X') {
+      const width = 1 + buf[24]! + (buf[25]! << 8) + (buf[26]! << 16)
+      const height = 1 + buf[27]! + (buf[28]! << 8) + (buf[29]! << 16)
+      return validDimensions(width, height)
+    }
+  }
+  return null
+}
+
+function hasRequiredPngStructure(buf: Buffer): boolean {
+  if (buf.length < 45 || !buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return false
+  }
+  let offset = 8
+  let chunks = 0
+  let sawHeader = false
+  let imageDataBytes = 0
+  while (offset + 12 <= buf.length && chunks++ < 10_000) {
+    const length = buf.readUInt32BE(offset)
+    if (length > buf.length - offset - 12) return false
+    const type = buf.subarray(offset + 4, offset + 8).toString('ascii')
+    if (!sawHeader) {
+      if (type !== 'IHDR' || length !== 13) return false
+      sawHeader = true
+    } else if (type === 'IHDR') {
+      return false
+    }
+    if (type === 'IDAT') imageDataBytes += length
+    const next = offset + length + 12
+    if (type === 'IEND') return length === 0 && imageDataBytes > 0 && next === buf.length
+    offset = next
+  }
+  return false
+}
+
+function structurallyComplete(buf: Buffer, mime: string): boolean {
+  if (mime === 'image/png') return hasRequiredPngStructure(buf)
+  if (mime === 'image/jpeg') return buf.lastIndexOf(Buffer.from([0xff, 0xd9])) >= 2
+  if (mime === 'image/gif') return buf.lastIndexOf(0x3b) >= 10
+  if (mime === 'image/webp') return buf.length >= 12 && buf.readUInt32LE(4) + 8 <= buf.length
+  return true
+}
+
+function skipGifSubBlocks(buf: Buffer, start: number): number {
+  let offset = start
+  while (offset < buf.length) {
+    const length = buf[offset++]!
+    if (length === 0) return offset
+    if (offset + length > buf.length) return buf.length
+    offset += length
+  }
+  return offset
+}
+
+function isAnimatedGif(buf: Buffer): boolean {
+  if (buf.length < 13) return false
+  let offset = 13
+  if ((buf[10]! & 0x80) !== 0) offset += 3 * 2 ** ((buf[10]! & 0x07) + 1)
+  let frames = 0
+  while (offset < buf.length) {
+    const marker = buf[offset++]!
+    if (marker === 0x3b) break
+    if (marker === 0x21) {
+      offset++
+      offset = skipGifSubBlocks(buf, offset)
+      continue
+    }
+    if (marker !== 0x2c || offset + 9 > buf.length) break
+    frames++
+    if (frames > 1) return true
+    const packed = buf[offset + 8]!
+    offset += 9
+    if ((packed & 0x80) !== 0) offset += 3 * 2 ** ((packed & 0x07) + 1)
+    offset++
+    offset = skipGifSubBlocks(buf, offset)
+  }
+  return false
+}
+
+function isAnimated(buf: Buffer, mime: string): boolean {
+  if (mime === 'image/gif') return isAnimatedGif(buf)
+  return (
+    mime === 'image/webp' &&
+    buf.length >= 21 &&
+    buf.subarray(12, 16).toString('ascii') === 'VP8X' &&
+    (buf[20]! & 0x02) !== 0
+  )
+}
+
+function passthroughResult(
+  bytes: Buffer,
+  mimeType: string,
+  dims: SniffedDimensions | null,
+  failureReason?: ImageCompressionFailure,
+): CompressResult {
+  return {
+    data: bytes,
+    mimeType,
+    width: dims?.width ?? 0,
+    height: dims?.height ?? 0,
+    originalWidth: dims?.width ?? 0,
+    originalHeight: dims?.height ?? 0,
+    changed: false,
+    ...(failureReason ? { failureReason } : {}),
+  }
+}
+
+function standardPassthroughCandidate(
+  bytes: Buffer,
+  mimeType: string,
+  dims: SniffedDimensions | null,
+  maxEdge: number,
+  byteBudget: number,
+): boolean {
+  return (
+    STANDARD_MIMES.has(mimeType) &&
+    !!dims &&
+    bytes.length <= byteBudget &&
+    Math.max(dims.width, dims.height) <= maxEdge &&
+    structurallyComplete(bytes, mimeType)
+  )
+}
+
+function preflightResult(
+  bytes: Buffer,
+  mimeType: string,
+  maxEdge: number,
+  byteBudget: number,
+  standardValidated = false,
+): CompressResult | null {
+  const normalizedMime = normalizeMime(mimeType)
+  const dims = sniffDimensions(bytes)
+  const passthrough = (failureReason?: ImageCompressionFailure): CompressResult =>
+    passthroughResult(bytes, normalizedMime || mimeType, dims, failureReason)
+
+  if (bytes.length === 0) return passthrough('decode-failed')
+  if (dims && dims.width * dims.height > MAX_DECODE_PIXELS) return passthrough('pixel-limit')
+  if (normalizedMime === 'image/png' && !hasRequiredPngStructure(bytes)) return passthrough('decode-failed')
+
+  if (standardPassthroughCandidate(bytes, normalizedMime, dims, maxEdge, byteBudget)) {
+    return standardValidated ? passthrough() : null
+  }
+
+  if (isAnimated(bytes, normalizedMime)) return passthrough('animated-over-budget')
+  if (normalizedMime === 'image/webp') return passthrough('codec-unavailable')
+  if (!JIMP_DECODABLE_MIMES.has(normalizedMime)) return passthrough('codec-unavailable')
+  return null
+}
+
+async function validateStandardImage(bytes: Buffer, mimeType: string): Promise<SniffedDimensions> {
+  if (mimeType === 'image/webp') {
+    const { loadImage } = await import('@napi-rs/canvas')
+    const image = await loadImage(bytes)
+    const dimensions = validDimensions(image.width, image.height)
+    if (!dimensions) throw new Error('Decoded image has invalid dimensions')
+    return dimensions
+  }
+
+  const { Jimp } = await import('jimp')
+  const image = await Jimp.fromBuffer(bytes)
+  const dimensions = validDimensions(image.width, image.height)
+  if (!dimensions) throw new Error('Decoded image has invalid dimensions')
+  return dimensions
+}
+
 function fitWithinEdge(image: JimpImage, edge: number): boolean {
   const longest = Math.max(image.width, image.height)
   if (longest <= edge) return false
@@ -168,43 +348,30 @@ function fitWithinEdge(image: JimpImage, edge: number): boolean {
   return true
 }
 
-interface EncodedImage {
-  data: Buffer
-  mimeType: string
-  width: number
-  height: number
-}
-
-/** Encode `image` under the byte budget via format/quality/size ladders. */
 async function encodeWithinBudget(
   image: JimpImage,
-  opts: { preferLossless: boolean; byteBudget: number },
+  options: { preferLossless: boolean; byteBudget: number },
 ): Promise<EncodedImage> {
-  const { preferLossless, byteBudget } = opts
+  const { preferLossless, byteBudget } = options
   let smallest: EncodedImage | null = null
-
   const consider = (data: Buffer, mimeType: string): EncodedImage => {
-    const candidate: EncodedImage = { data, mimeType, width: image.width, height: image.height }
-    if (smallest === null || candidate.data.length < smallest.data.length) smallest = candidate
+    const candidate = { data, mimeType, width: image.width, height: image.height }
+    if (smallest === null || data.length < smallest.data.length) smallest = candidate
     return candidate
   }
-
   const jpegLadder = async (): Promise<EncodedImage | null> => {
     for (const quality of JPEG_QUALITY_STEPS) {
       const jpeg = await image.getBuffer('image/jpeg', { quality })
-      if (jpeg.length <= byteBudget) return consider(jpeg, 'image/jpeg')
-      consider(jpeg, 'image/jpeg')
+      const candidate = consider(jpeg, 'image/jpeg')
+      if (jpeg.length <= byteBudget) return candidate
     }
     return null
   }
 
   if (preferLossless) {
-    // PNG first: best for screenshots (sharp text, alpha).
     const png = await image.getBuffer('image/png', { deflateLevel: 9 })
     if (png.length <= byteBudget) return consider(png, 'image/png')
     consider(png, 'image/png')
-
-    // Smaller PNGs down to the floor before going lossy.
     for (const edge of FALLBACK_EDGES) {
       if (edge < PNG_RESCALE_FLOOR) break
       if (!fitWithinEdge(image, edge)) continue
@@ -212,96 +379,73 @@ async function encodeWithinBudget(
       if (smallerPng.length <= byteBudget) return consider(smallerPng, 'image/png')
       consider(smallerPng, 'image/png')
     }
-
-    // Lossy JPEG ladder at the floored size, then at each sub-floor edge.
     const atFloor = await jpegLadder()
-    if (atFloor !== null) return atFloor
+    if (atFloor) return atFloor
     for (const edge of FALLBACK_EDGES) {
-      if (edge >= PNG_RESCALE_FLOOR) continue
-      if (!fitWithinEdge(image, edge)) continue
+      if (edge >= PNG_RESCALE_FLOOR || !fitWithinEdge(image, edge)) continue
       const atEdge = await jpegLadder()
-      if (atEdge !== null) return atEdge
+      if (atEdge) return atEdge
     }
     return smallest!
   }
 
-  // JPEG source: quality ladder at the fitted size, then the full ladder
-  // again at each fallback edge.
   const atFitted = await jpegLadder()
-  if (atFitted !== null) return atFitted
+  if (atFitted) return atFitted
   for (const edge of FALLBACK_EDGES) {
     if (!fitWithinEdge(image, edge)) continue
     const atEdge = await jpegLadder()
-    if (atEdge !== null) return atEdge
+    if (atEdge) return atEdge
   }
   return smallest!
 }
 
-// ── public API ───────────────────────────────────────────────────────
-
-/**
- * Downsample/re-encode `bytes` to fit the pixel + byte budget.
- *
- * Never throws: on any failure (unsupported format, decode error, a result
- * that would be larger than the input) the original bytes are returned with
- * `changed: false`.
- */
-export async function compressImage(
+/** Worker entrypoint. Call `compressImage()` from application code. */
+export async function compressImageInProcess(
   bytes: Buffer,
   mimeType: string,
-  options: CompressOptions = {},
+  options: Pick<CompressOptions, 'maxEdge' | 'byteBudget'> = {},
 ): Promise<CompressResult> {
   const maxEdge = options.maxEdge ?? MAX_EDGE_PX
   const byteBudget = options.byteBudget ?? ATTACH_BYTE_BUDGET
   const normalizedMime = normalizeMime(mimeType)
-  const dims = sniffDimensions(bytes)
-
-  const passthrough = (): CompressResult => ({
-    data: bytes,
-    mimeType,
-    width: dims?.width ?? 0,
-    height: dims?.height ?? 0,
-    originalWidth: dims?.width ?? 0,
-    originalHeight: dims?.height ?? 0,
-    changed: false,
-  })
-
-  // Empty or unrecognizable format → pass through.
-  if (bytes.length === 0 || !RECODABLE.has(normalizedMime)) return passthrough()
-
-  // Animated WebP → pass through (would flatten to one frame).
-  if (normalizedMime === 'image/webp' && isAnimatedWebp(bytes)) return passthrough()
-
-  // GIF is excluded from RECODABLE entirely (animation).
-
-  // Fast path: both byte size and pixel dimensions are within budget.
-  const longestEdge = dims ? Math.max(dims.width, dims.height) : 0
-  const withinBytes = bytes.length <= byteBudget
-  const withinEdge = longestEdge > 0 && longestEdge <= maxEdge
-  if (withinBytes && (withinEdge || longestEdge === 0)) return passthrough()
-
-  // Decompression-bomb guard.
-  if (dims && dims.width * dims.height > MAX_DECODE_PIXELS) return passthrough()
+  const dimensions = sniffDimensions(bytes)
+  const immediate = preflightResult(bytes, normalizedMime, maxEdge, byteBudget)
+  if (immediate) return immediate
 
   try {
+    if (standardPassthroughCandidate(bytes, normalizedMime, dimensions, maxEdge, byteBudget)) {
+      const decoded = await validateStandardImage(bytes, normalizedMime)
+      if (
+        !dimensions ||
+        decoded.width !== dimensions.width ||
+        decoded.height !== dimensions.height ||
+        decoded.width * decoded.height > MAX_DECODE_PIXELS
+      ) {
+        return passthroughResult(bytes, normalizedMime, dimensions, 'decode-failed')
+      }
+      return preflightResult(bytes, normalizedMime, maxEdge, byteBudget, true)!
+    }
+
     const { Jimp } = await import('jimp')
     const image = await Jimp.fromBuffer(bytes)
-
     const decodedWidth = image.width
     const decodedHeight = image.height
+    if (decodedWidth * decodedHeight > MAX_DECODE_PIXELS) {
+      return passthroughResult(bytes, normalizedMime, dimensions, 'pixel-limit')
+    }
 
-    const preferLossless = normalizedMime !== 'image/jpeg'
-
-    // Scale so the longest edge fits maxEdge (never enlarges).
+    const requiresNormalization = !STANDARD_MIMES.has(normalizedMime) || !structurallyComplete(bytes, normalizedMime)
     fitWithinEdge(image, maxEdge)
-
-    const encoded = await encodeWithinBudget(image, { preferLossless, byteBudget })
-
-    // Keep the result only when it actually helps (fewer bytes or fewer pixels).
+    const encoded = await encodeWithinBudget(image, {
+      preferLossless: normalizedMime !== 'image/jpeg',
+      byteBudget,
+    })
+    const budgetMet = encoded.data.length <= byteBudget && Math.max(encoded.width, encoded.height) <= maxEdge
     const originalPixels = decodedWidth * decodedHeight
     const finalPixels = encoded.width * encoded.height
-    if (encoded.data.length >= bytes.length && finalPixels >= originalPixels) return passthrough()
-
+    if (!requiresNormalization && encoded.data.length >= bytes.length && finalPixels >= originalPixels) {
+      return passthroughResult(bytes, normalizedMime, dimensions, budgetMet ? undefined : 'budget-unmet')
+    }
     return {
       data: encoded.data,
       mimeType: encoded.mimeType,
@@ -310,24 +454,134 @@ export async function compressImage(
       originalWidth: decodedWidth,
       originalHeight: decodedHeight,
       changed: true,
+      ...(budgetMet ? {} : { failureReason: 'budget-unmet' as const }),
     }
   } catch {
-    // Decode/encode failure — keep the original bytes.
-    return passthrough()
+    return passthroughResult(bytes, normalizedMime, dimensions, 'decode-failed')
   }
 }
 
-/** Format bytes as a human-readable string: `640 B`, `128 KB`, `3.8 MB`. */
+function imageWorkerUrl(): URL {
+  const current = new URL(import.meta.url)
+  if (current.pathname.endsWith('/src/utils/image-compress.ts')) {
+    return new URL('../../dist/utils/image-compress-worker.js', current)
+  }
+  if (current.pathname.includes('/chunks/')) return new URL('../image-compress-worker.js', current)
+  return new URL('./image-compress-worker.js', current)
+}
+
+function abortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error ? signal.reason : new DOMException('The operation was aborted', 'AbortError')
+}
+
+async function runCompressionWorker(
+  bytes: Buffer,
+  mimeType: string,
+  maxEdge: number,
+  byteBudget: number,
+  abortSignal?: AbortSignal,
+): Promise<CompressResult> {
+  abortSignal?.throwIfAborted()
+  const inputBytes = Uint8Array.from(bytes)
+  const worker = new Worker(imageWorkerUrl(), {
+    resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 8 },
+    workerData: {
+      data: inputBytes.buffer,
+      mimeType,
+      maxEdge,
+      byteBudget,
+    } satisfies ImageCompressWorkerInput,
+    transferList: [inputBytes.buffer],
+  })
+
+  return new Promise<CompressResult>((resolve, reject) => {
+    let settled = false
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      abortSignal?.removeEventListener('abort', onAbort)
+    }
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      void worker.terminate()
+      reject(error)
+    }
+    const onAbort = (): void => fail(abortError(abortSignal))
+    const timer = setTimeout(
+      () => fail(new Error(`Image compression timed out after ${IMAGE_WORKER_TIMEOUT_MS} ms`)),
+      IMAGE_WORKER_TIMEOUT_MS,
+    )
+    abortSignal?.addEventListener('abort', onAbort, { once: true })
+    if (abortSignal?.aborted) onAbort()
+    worker.once('message', (output: ImageCompressWorkerOutput) => {
+      if (settled) return
+      if (!output.ok) {
+        fail(new Error(output.error))
+        return
+      }
+      settled = true
+      cleanup()
+      void worker.terminate()
+      resolve({ ...output.result, data: Buffer.from(output.result.data) })
+    })
+    worker.once('error', fail)
+    worker.once('exit', (code) => {
+      if (!settled) fail(new Error(`Image compression worker exited unexpectedly with code ${code}`))
+    })
+  })
+}
+
+/**
+ * Validate, normalize and compress an image for model delivery. Header-only
+ * rejection stays on the caller thread; every accepted standard image is
+ * decoded in a task-owned worker before its original bytes may pass through.
+ */
+export async function compressImage(
+  bytes: Buffer,
+  mimeType: string,
+  options: CompressOptions = {},
+): Promise<CompressResult> {
+  options.abortSignal?.throwIfAborted()
+  const maxEdge = options.maxEdge ?? MAX_EDGE_PX
+  const byteBudget = options.byteBudget ?? ATTACH_BYTE_BUDGET
+  const immediate = preflightResult(bytes, mimeType, maxEdge, byteBudget)
+  options.abortSignal?.throwIfAborted()
+  if (immediate) return immediate
+  try {
+    return await runCompressionWorker(bytes, mimeType, maxEdge, byteBudget, options.abortSignal)
+  } catch {
+    options.abortSignal?.throwIfAborted()
+    return passthroughResult(bytes, normalizeMime(mimeType), sniffDimensions(bytes), 'worker-failed')
+  }
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** Build a caption telling the model that an image was compressed. */
 export function buildCompressionCaption(result: CompressResult): string {
-  const orig =
-    result.originalWidth > 0 ? `${result.originalWidth}x${result.originalHeight}` : `${formatBytes(result.data.length)}`
-  const now = result.width > 0 ? `${result.width}x${result.height} ${result.mimeType}` : `${result.mimeType}`
-  return `[Image compressed to fit model limits: ${orig} → ${now}. Fine detail may be lost.]`
+  const original =
+    result.originalWidth > 0 ? `${result.originalWidth}x${result.originalHeight}` : formatBytes(result.data.length)
+  const current = result.width > 0 ? `${result.width}x${result.height} ${result.mimeType}` : result.mimeType
+  return `[Image compressed to fit model limits: ${original} → ${current}. Fine detail may be lost.]`
+}
+
+export function buildImageProcessingFailureNotice(name: string, result: CompressResult): string {
+  switch (result.failureReason) {
+    case 'animated-over-budget':
+      return `[Image ${name} is animated and exceeds the image limits. Convert or resize it explicitly; animation is not silently flattened.]`
+    case 'codec-unavailable':
+      return `[Image ${name} uses ${result.mimeType}, which cannot be normalized by the installed local image codec.]`
+    case 'decode-failed':
+      return `[Image ${name} is corrupt or could not be decoded locally.]`
+    case 'pixel-limit':
+      return `[Image ${name} exceeds the ${MAX_DECODE_PIXELS.toLocaleString('en-US')}-pixel decode safety limit.]`
+    case 'worker-failed':
+      return `[Image ${name} could not be processed in the local image worker.]`
+    default:
+      return `[Image ${name} could not be reduced to provider limits (${formatBytes(result.data.length)}, ${result.width}x${result.height}).]`
+  }
 }

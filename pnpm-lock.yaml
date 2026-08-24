@@ -78,6 +78,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@napi-rs/canvas':
+        specifier: 0.1.80
+        version: 0.1.80
       '@vscode/ripgrep':
         specifier: ^1.17.0
         version: 1.17.0
@@ -87,13 +90,16 @@ importers:
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
+      pdf-parse:
+        specifier: 2.4.5
+        version: 2.4.5
+      tesseract.js:
+        specifier: 7.0.0
+        version: 7.0.0
       undici:
         specifier: ^7.28.0
         version: 7.29.0
     devDependencies:
-      '@fugood/whisper.node':
-        specifier: ^1.1.1
-        version: 1.1.1
       '@x-code-cli/core':
         specifier: workspace:*
         version: link:../core
@@ -115,6 +121,10 @@ importers:
       yargs:
         specifier: ^18.0.0
         version: 18.0.0
+    optionalDependencies:
+      '@fugood/whisper.node':
+        specifier: 1.1.1
+        version: 1.1.1
 
   packages/core:
     dependencies:
@@ -151,6 +161,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@3.25.76)
+      '@napi-rs/canvas':
+        specifier: 0.1.80
+        version: 0.1.80
       '@vscode/ripgrep':
         specifier: ^1.17.0
         version: 1.17.0

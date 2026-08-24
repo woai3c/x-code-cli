@@ -172,8 +172,9 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Model-directed Git worktrees** — when repository state and verification risk warrant it, the agent can use ordinary Git commands to create and clean up a temporary worktree instead of risking the active checkout
 - **Cross-session messaging** — named local sessions can discover one another and exchange peer-authorized work (macOS / Linux; see [docs](./docs/peer-messaging.en.md))
 - **File attachments** — `@path` or bare absolute paths auto-ingest text / code / PDF / Office docs (docx / xlsx / pptx / odt / ods / odp) / images / audio
-- **Local audio transcription** — attach MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus files; when the active model can't take audio input, X-Code CLI transcribes them locally via Whisper (whisper.cpp) and feeds the model timestamped text — the audio never leaves your machine. The Whisper model auto-downloads on first use and is cached under `~/.x-code/whisper-models/` (default `tiny`; set `X_CODE_WHISPER_MODEL` to pick another, e.g. `base`)
-- **Vision sub-agent** — text-only providers (e.g. DeepSeek) can borrow a configured vision model for image understanding
+- **Local PDF processing** — selectable text is extracted page by page; scanned or visual pages become images for the active vision model or local OCR for a text model. Large visual PDFs are loaded progressively with `readFile` page ranges. Original PDF bytes are never uploaded
+- **Local audio transcription** — MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus attachments (up to 25 MiB) are always transcribed locally via Whisper (whisper.cpp) in an isolated process; only timestamped text reaches the model. First-use model downloads are revision-pinned and SHA-256 verified before being cached under `~/.x-code/whisper-models/` (default `tiny`; set `X_CODE_WHISPER_MODEL` to pick another, e.g. `base`)
+- **Private attachment fallback** — local image attachments go only to the active vision model; text-only models receive local OCR, without automatically forwarding the attachment to another configured provider
 
 ### Context Management
 

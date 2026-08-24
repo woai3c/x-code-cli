@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
+import { makePdfBuffer } from '../../../core/tests/helpers/pdf.js'
 import { REPO_ROOT, createTestWorkspace, isolatedCliEnv, listFilesRecursively } from '../fixtures/cli-test-helpers.js'
 import { startFakeProvider } from '../fixtures/fake-provider-server.js'
 
@@ -151,6 +152,9 @@ describe('published CLI tarball', () => {
 
     expect(names).toContain('package/package.json')
     expect(names).toContain('package/dist/cli.js')
+    expect(names).toContain('package/dist/audio-transcribe-worker.js')
+    expect(names).toContain('package/dist/pdf-render-worker.js')
+    expect(names).toContain('package/dist/image-compress-worker.js')
     expect(names.some((name) => /(?:^|\/)src\//.test(name))).toBe(false)
     expect(names.some((name) => /(?:^|\/)tests?\//.test(name))).toBe(false)
     expect(names.some((name) => /(?:^|\/)(?:\.env|sessions?|logs?)(?:\/|$)/.test(name))).toBe(false)
@@ -161,9 +165,149 @@ describe('published CLI tarball', () => {
     ) as {
       files?: string[]
       dependencies?: Record<string, string>
+      optionalDependencies?: Record<string, string>
     }
     expect(manifest.files).toEqual(['dist'])
+    expect(manifest.dependencies?.['@napi-rs/canvas']).toBe('0.1.80')
     expect(manifest.dependencies?.['node-pty']).toBe('^1.1.0')
+    expect(manifest.dependencies?.['pdf-parse']).toBe('2.4.5')
+    expect(manifest.dependencies?.['tesseract.js']).toBe('7.0.0')
+    expect(manifest.optionalDependencies?.['@fugood/whisper.node']).toBe('1.1.1')
+  })
+
+  it('installs and loads the optional Whisper runtime for a normal CLI installation', async () => {
+    const packageJson = path.join(path.dirname(path.dirname(installedCliJs)), 'package.json')
+    const script = `
+      const { createRequire } = require('node:module')
+      const requireFromCli = createRequire(${JSON.stringify(packageJson)})
+      const whisper = requireFromCli('@fugood/whisper.node')
+      const timer = setTimeout(() => { console.error('Whisper runtime timeout'); process.exit(1) }, 15000)
+      whisper.loadWhisperModule().then(() => {
+        clearTimeout(timer)
+        process.stdout.write('package-whisper-runtime-loaded')
+      }).catch((error) => {
+        clearTimeout(timer)
+        console.error(error?.stack || error)
+        process.exit(1)
+      })
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 20_000 })
+    if (result.exitCode !== 0) throw new Error(`Installed Whisper runtime was not resolvable:\n${result.stderr}`)
+    expect(result.stdout).toContain('package-whisper-runtime-loaded')
+  })
+
+  it('starts the isolated Whisper process entry from the installed package', async () => {
+    const workerPath = path.join(path.dirname(installedCliJs), 'audio-transcribe-worker.js')
+    const script = `
+      const { fork } = require('node:child_process')
+      const child = fork(${JSON.stringify(workerPath)}, [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+      const timer = setTimeout(() => { child.kill('SIGKILL'); console.error('Whisper process timeout'); process.exit(1) }, 15000)
+      child.stderr.on('data', (chunk) => process.stderr.write(chunk))
+      child.once('error', (error) => { clearTimeout(timer); console.error(error); process.exit(1) })
+      child.once('spawn', () => child.send({ id: 1, type: 'shutdown' }))
+      child.once('exit', (code) => {
+        clearTimeout(timer)
+        if (code !== 0) process.exit(1)
+        process.stdout.write('package-whisper-process-started')
+      })
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 20_000 })
+    if (result.exitCode !== 0) throw new Error(`Installed Whisper process failed:\n${result.stderr}`)
+    expect(result.stdout).toContain('package-whisper-process-started')
+  })
+
+  it('starts the Tesseract Node worker from the isolated installation', async () => {
+    const packageJson = path.join(path.dirname(path.dirname(installedCliJs)), 'package.json')
+    const script = `
+      const { createRequire } = require('node:module')
+      const requireFromCli = createRequire(${JSON.stringify(packageJson)})
+      const { createWorker } = requireFromCli('tesseract.js')
+      const timer = setTimeout(() => { console.error('Tesseract worker timeout'); process.exit(1) }, 30000)
+      createWorker([], 1).then(async (worker) => {
+        clearTimeout(timer)
+        await worker.terminate()
+        process.stdout.write('package-tesseract-worker-started')
+      }).catch((error) => {
+        clearTimeout(timer)
+        console.error(error?.stack || error)
+        process.exit(1)
+      })
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 40_000 })
+    if (result.exitCode !== 0) throw new Error(`Installed Tesseract worker failed:\n${result.stdout}\n${result.stderr}`)
+    expect(result.stdout).toContain('package-tesseract-worker-started')
+  })
+
+  it('renders a PDF page through the worker from the isolated installation', async () => {
+    const pdfPath = path.join(suiteRoot, 'worker smoke.pdf')
+    const workerPath = path.join(path.dirname(installedCliJs), 'pdf-render-worker.js')
+    await fs.writeFile(pdfPath, makePdfBuffer([{ text: 'Installed package PDF worker smoke test' }]))
+    const script = `
+      const fs = require('node:fs')
+      const { Worker } = require('node:worker_threads')
+      const worker = new Worker(${JSON.stringify(workerPath)})
+      const timer = setTimeout(() => { console.error('worker timeout'); process.exit(1) }, 30000)
+      const fail = (error) => { clearTimeout(timer); console.error(error?.stack || error); process.exit(1) }
+      worker.on('error', fail)
+      worker.on('message', (response) => {
+        if (!response.ok) return fail(new Error(response.error))
+        if (response.result.type === 'init') {
+          if (response.result.totalPages !== 1) return fail(new Error('wrong page count'))
+          worker.postMessage({ id: 2, type: 'render', pageNumber: 1, desiredWidth: 320, maxPixels: 1000000 })
+          return
+        }
+        if (response.result.type === 'render') {
+          const png = Buffer.from(response.result.data)
+          if (!png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return fail(new Error('not PNG'))
+          worker.postMessage({ id: 3, type: 'destroy' })
+          return
+        }
+        clearTimeout(timer)
+        process.stdout.write('package-pdf-rendered')
+        worker.terminate().then(() => process.exit(0), fail)
+      })
+      const bytes = Uint8Array.from(fs.readFileSync(${JSON.stringify(pdfPath)}))
+      worker.postMessage({ id: 1, type: 'init', data: bytes.buffer }, [bytes.buffer])
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 40_000 })
+    if (result.exitCode !== 0) throw new Error(`Installed PDF worker failed:\n${result.stdout}\n${result.stderr}`)
+    expect(result).toMatchObject({ exitCode: 0, stdout: expect.stringContaining('package-pdf-rendered') })
+  })
+
+  it('normalizes a BMP through the image worker from the isolated installation', async () => {
+    const workerPath = path.join(path.dirname(installedCliJs), 'image-compress-worker.js')
+    const bitmap = Buffer.alloc(58)
+    bitmap.write('BM', 0, 'ascii')
+    bitmap.writeUInt32LE(bitmap.length, 2)
+    bitmap.writeUInt32LE(54, 10)
+    bitmap.writeUInt32LE(40, 14)
+    bitmap.writeInt32LE(1, 18)
+    bitmap.writeInt32LE(1, 22)
+    bitmap.writeUInt16LE(1, 26)
+    bitmap.writeUInt16LE(24, 28)
+    bitmap.writeUInt32LE(4, 34)
+    bitmap.set([0, 0, 255, 0], 54)
+    const script = `
+      const { Worker } = require('node:worker_threads')
+      const bytes = Uint8Array.from(Buffer.from(${JSON.stringify(bitmap.toString('base64'))}, 'base64'))
+      const worker = new Worker(${JSON.stringify(workerPath)}, {
+        workerData: { data: bytes.buffer, mimeType: 'image/bmp', maxEdge: 2000, byteBudget: 3932160 },
+        transferList: [bytes.buffer],
+      })
+      const timer = setTimeout(() => { console.error('worker timeout'); process.exit(1) }, 30000)
+      worker.on('error', (error) => { clearTimeout(timer); console.error(error); process.exit(1) })
+      worker.on('message', (response) => {
+        clearTimeout(timer)
+        if (!response.ok) { console.error(response.error); process.exit(1) }
+        const png = Buffer.from(response.result.data)
+        if (response.result.mimeType !== 'image/png' || !png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) process.exit(1)
+        process.stdout.write('package-image-normalized')
+        worker.terminate().then(() => process.exit(0), () => process.exit(1))
+      })
+    `
+    const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 40_000 })
+    if (result.exitCode !== 0) throw new Error(`Installed image worker failed:\n${result.stdout}\n${result.stderr}`)
+    expect(result.stdout).toContain('package-image-normalized')
   })
 
   it('contains hash-verified Windows helpers for x64 and arm64', async () => {
