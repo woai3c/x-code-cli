@@ -13,15 +13,16 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import { formatTranscription, transcribeAudio } from '../agent/audio-transcribe.js'
-import { inspectFile } from '../agent/file-classifier.js'
+import { assertSafeTextContent, inspectFile } from '../agent/file-classifier.js'
 import type { TextEncoding } from '../agent/file-classifier.js'
-import { MAX_IMAGE_SOURCE_BYTES, extractOfficeText } from '../agent/file-ingest.js'
+import { extractOfficeText } from '../agent/file-ingest.js'
 import { ocrImage } from '../agent/image-ocr.js'
 import { toToolResultContent } from '../agent/local-media.js'
 import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../agent/notebook-render.js'
 import { PDF_AUTO_MAX_RENDERED_PAGES, PDF_READ_MAX_PAGES, formatPdfReference, processPdf } from '../agent/pdf-ingest.js'
 import {
   buildUnsupportedImageNotice,
+  isModelAcceptedImage,
   isModelAcceptedImageMime,
   modelSupportsVision,
   normalizeImageMime,
@@ -32,6 +33,7 @@ import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.j
 import {
   ATTACH_BYTE_BUDGET,
   MAX_EDGE_PX,
+  MAX_IMAGE_SOURCE_BYTES,
   buildImageProcessingFailureNotice,
   compressImage,
 } from '../utils/image-compress.js'
@@ -149,8 +151,9 @@ async function readTextResult(
     lineNumber++
   }
 
-  const decoder = new TextDecoder(encoding)
+  const decoder = new TextDecoder(encoding, { fatal: true })
   const consume = (decoded: string): void => {
+    assertSafeTextContent(decoded)
     let cursor = 0
     while (cursor < decoded.length && !stopped) {
       const newline = decoded.indexOf('\n', cursor)
@@ -266,7 +269,7 @@ Usage:
 - PDFs are processed locally. Use pages such as "1-5" for a maximum of 20 pages, and pdfMode="visual" for layouts, charts, or signatures.
 - Results are returned with line numbers starting at 1.
 - This tool can read images (PNG, JPG, etc.) and PDFs — their content is presented inline.
-- This tool can read audio files (MP3, WAV, M4A, OGG, FLAC, AAC, etc.) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
+- This tool can read MP3, WAV, FLAC, and OGG Vorbis audio files (up to 20 minutes) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
 - This tool renders Jupyter notebooks (.ipynb) as readable cells (source + text outputs), skipping binary image outputs.
 - This tool can only read files, not directories. To list a directory, use listDir or shell with ls.
 - If a file path is provided by the user, assume it is valid.`,
@@ -292,7 +295,7 @@ Usage:
         reportProgress(toolCallId, `Reading ${filePath}`)
         const isRangeRead = offset != null || limit != null
 
-        const classification = await inspectFile(filePath)
+        const classification = await inspectFile(filePath, abortSignal)
         const kind = classification.kind
         abortSignal?.throwIfAborted()
 
@@ -368,8 +371,8 @@ Usage:
             }
             return rendered
           }
-          if (!isModelAcceptedImageMime(finalMime, options.modelId)) {
-            return buildUnsupportedImageNotice(finalMime, filePath, options.modelId)
+          if (!isModelAcceptedImage(finalMime, { modelId: options.modelId, animated: compressed.animated })) {
+            return buildUnsupportedImageNotice(finalMime, filePath, options.modelId, compressed.animated)
           }
           const header = compressed.changed
             ? `Loaded image: ${filePath} (compressed from ${buffer.length} to ${compressed.data.length} bytes)`

@@ -18,7 +18,7 @@ import type { FilePart, ImagePart, TextPart } from 'ai'
 import type { ProviderCapabilities } from '../providers/capabilities.js'
 import {
   buildUnsupportedImageNotice,
-  isModelAcceptedImageMime,
+  isModelAcceptedImage,
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
@@ -27,17 +27,27 @@ import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.j
 import {
   ATTACH_BYTE_BUDGET,
   MAX_EDGE_PX,
+  MAX_IMAGE_SOURCE_BYTES,
   buildCompressionCaption,
   buildImageProcessingFailureNotice,
   compressImage,
   formatBytes,
 } from '../utils/image-compress.js'
 import { formatTranscription, transcribeAudio } from './audio-transcribe.js'
-import { classifyFile, decodeTextBuffer, inspectFile } from './file-classifier.js'
+import { classifyFile, decodeTextBuffer, inspectFile, inspectFileBuffer } from './file-classifier.js'
 import type { FileKind, InspectedFileKind } from './file-classifier.js'
+import { MAX_INGEST_BYTES } from './file-ingest-limits.js'
 import { ocrImage } from './image-ocr.js'
 import { openMediaTag, toUserContentParts, wrapLocalText } from './local-media.js'
 import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from './notebook-render.js'
+import {
+  MAX_OFFICE_ARCHIVE_ENTRIES,
+  MAX_OFFICE_SOURCE_BYTES,
+  MAX_OFFICE_UNCOMPRESSED_BYTES,
+  detectOfficeKindFromArchive,
+} from './office-archive.js'
+import type { OfficeKind } from './office-archive.js'
+import { parseXlsxInWorker } from './office-xlsx.js'
 import { MAX_PDF_SOURCE_BYTES, formatPdfReference, processPdf } from './pdf-ingest.js'
 import type { VisionUsageEvent } from './vision-fallback.js'
 
@@ -70,19 +80,11 @@ export interface FileReference {
  *  fails at the API with `context_length_exceeded`. With the cap, the model
  *  sees a short hint instead and can call readFile with offset/limit or
  *  grep to narrow down. */
-export const MAX_INGEST_BYTES = 256 * 1024
 export const MAX_ATTACHMENT_TEXT_BYTES = 1024 * 1024
 export const MAX_ATTACHMENT_MEDIA_PARTS = 10
 export const MAX_ATTACHMENT_WIRE_BYTES = 21 * 1024 * 1024
-export const MAX_OFFICE_SOURCE_BYTES = 20 * 1024 * 1024
-export const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024
-const MAX_SPREADSHEET_SHEETS = 32
-const MAX_SPREADSHEET_ROWS = 10_000
-const MAX_SPREADSHEET_CELLS = 100_000
-const MAX_OFFICE_ARCHIVE_ENTRIES = 1_000
-const MAX_OFFICE_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
 
-export { MAX_PDF_SOURCE_BYTES }
+export { MAX_INGEST_BYTES, MAX_IMAGE_SOURCE_BYTES, MAX_OFFICE_SOURCE_BYTES, MAX_PDF_SOURCE_BYTES }
 
 /** The human/model-facing message we substitute when an attachment is too
  *  large to inline. Mirrors Claude Code's `MaxFileReadTokenExceededError`
@@ -194,11 +196,11 @@ export function extractFileReferences(input: string): FileReference[] {
  *  tool produces, so the model sees a consistent representation whether
  *  the file was inlined up-front or fetched on demand. */
 async function readTextFile(filePath: string, abortSignal?: AbortSignal): Promise<string> {
-  const classification = await inspectFile(filePath)
-  if (classification.kind !== 'text' && classification.kind !== 'notebook') {
+  const buffer = await readFileWithinLimit(filePath, MAX_INGEST_BYTES, abortSignal)
+  const classification = await inspectFileBuffer(filePath, buffer, abortSignal)
+  if (classification.kind !== 'text') {
     throw new Error('File content is not valid text')
   }
-  const buffer = await fs.readFile(filePath, { signal: abortSignal })
   const content = decodeTextBuffer(buffer, classification.textEncoding ?? 'utf-8')
   const lines = content.split('\n')
   return lines.map((line, i) => `${i + 1}\t${line}`).join('\n')
@@ -258,24 +260,6 @@ function officeXmlToText(xml: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   return truncateUtf8(normalized, MAX_INGEST_BYTES)
-}
-
-type OfficeKind = 'docx' | 'xlsx' | 'pptx' | 'odt' | 'ods' | 'odp'
-
-function officeKindFromMediaType(mediaType?: string | null): OfficeKind | null {
-  const normalized = mediaType?.toLowerCase() ?? ''
-  if (normalized.includes('wordprocessingml')) return 'docx'
-  if (normalized.includes('spreadsheetml')) return 'xlsx'
-  if (normalized.includes('presentationml')) return 'pptx'
-  if (normalized === 'application/vnd.oasis.opendocument.text') return 'odt'
-  if (normalized === 'application/vnd.oasis.opendocument.spreadsheet') return 'ods'
-  if (normalized === 'application/vnd.oasis.opendocument.presentation') return 'odp'
-  return null
-}
-
-function officeKindFromExtension(filePath: string): OfficeKind | null {
-  const extension = path.extname(filePath).toLowerCase().slice(1)
-  return ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp'].includes(extension) ? (extension as OfficeKind) : null
 }
 
 async function extractZippedOfficeText(archive: Buffer, kind: OfficeKind, abortSignal?: AbortSignal): Promise<string> {
@@ -343,57 +327,6 @@ async function extractZippedOfficeText(archive: Buffer, kind: OfficeKind, abortS
   return parts.join('\n\n')
 }
 
-async function validateOfficeArchive(archive: Buffer, abortSignal?: AbortSignal): Promise<OfficeKind | null> {
-  const { unzip } = await import('fflate')
-  let entryCount = 0
-  let uncompressedBytes = 0
-  const detectedKinds = new Set<OfficeKind>()
-  await new Promise<void>((resolve, reject) => {
-    let settled = false
-    let terminate = (): void => {}
-    const finish = (error?: Error | null): void => {
-      if (settled) return
-      settled = true
-      abortSignal?.removeEventListener('abort', onAbort)
-      if (error) reject(error)
-      else resolve()
-    }
-    const onAbort = (): void => {
-      terminate()
-      finish(abortSignal?.reason instanceof Error ? abortSignal.reason : new Error('Office validation aborted'))
-    }
-    terminate = unzip(
-      archive,
-      {
-        filter: (entry) => {
-          entryCount++
-          if (entryCount > MAX_OFFICE_ARCHIVE_ENTRIES) {
-            throw new Error('Office archive exceeds the safe entry-count limit')
-          }
-          uncompressedBytes += entry.originalSize
-          if (!Number.isSafeInteger(uncompressedBytes) || uncompressedBytes > MAX_OFFICE_UNCOMPRESSED_BYTES) {
-            throw new Error('Office archive exceeds the safe decompression limit')
-          }
-          const name = entry.name.replace(/^\/+/, '').toLowerCase()
-          if (name === 'word/document.xml') detectedKinds.add('docx')
-          else if (name === 'xl/workbook.xml') detectedKinds.add('xlsx')
-          else if (name === 'ppt/presentation.xml' || /^ppt\/slides\/slide\d+\.xml$/.test(name)) {
-            detectedKinds.add('pptx')
-          }
-          return false
-        },
-      },
-      (error) => finish(error),
-    )
-    if (!settled) {
-      abortSignal?.addEventListener('abort', onAbort, { once: true })
-      if (abortSignal?.aborted) onAbort()
-    }
-  })
-  if (detectedKinds.size > 1) throw new Error('Office archive contains conflicting document structures')
-  return detectedKinds.values().next().value ?? null
-}
-
 /** Extract text from an Office document with bounded, format-specific parsers. */
 export async function extractOfficeText(
   filePath: string,
@@ -403,8 +336,8 @@ export async function extractOfficeText(
   try {
     abortSignal?.throwIfAborted()
     const archive = await readFileWithinLimit(filePath, MAX_OFFICE_SOURCE_BYTES, abortSignal)
-    const structureKind = await validateOfficeArchive(archive, abortSignal)
-    const kind = structureKind ?? officeKindFromMediaType(detectedMediaType) ?? officeKindFromExtension(filePath)
+    const kind = await detectOfficeKindFromArchive(archive, abortSignal)
+    void detectedMediaType
     if (!kind) return `[Failed to extract text from ${path.basename(filePath)}: unknown Office document type]`
     if (kind === 'docx') {
       const mammoth = await import('mammoth')
@@ -412,48 +345,7 @@ export async function extractOfficeText(
       return result.value
     }
     if (kind === 'xlsx') {
-      const { default: readExcelFile } = await import('read-excel-file/node')
-      const sheets = await readExcelFile(archive)
-      const parts: string[] = []
-      let outputBytes = 0
-      let rowCount = 0
-      let cellCount = 0
-      let truncated = false
-      const csvCell = (value: unknown): string => {
-        const text = value instanceof Date ? value.toISOString() : value == null ? '' : String(value)
-        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-      }
-      for (const sheet of sheets.slice(0, MAX_SPREADSHEET_SHEETS)) {
-        const header = `--- Sheet: ${sheet.sheet} ---\n`
-        const headerBytes = Buffer.byteLength(header, 'utf-8')
-        if (outputBytes + headerBytes > MAX_INGEST_BYTES) {
-          truncated = true
-          break
-        }
-        const lines: string[] = [header.trimEnd()]
-        outputBytes += headerBytes
-        for (const row of sheet.data) {
-          rowCount++
-          cellCount += row.length
-          if (rowCount > MAX_SPREADSHEET_ROWS || cellCount > MAX_SPREADSHEET_CELLS) {
-            truncated = true
-            break
-          }
-          const line = row.map(csvCell).join(',') + '\n'
-          const lineBytes = Buffer.byteLength(line, 'utf-8')
-          if (outputBytes + lineBytes > MAX_INGEST_BYTES) {
-            truncated = true
-            break
-          }
-          lines.push(line.trimEnd())
-          outputBytes += lineBytes
-        }
-        parts.push(lines.join('\n'))
-        if (truncated) break
-      }
-      if (sheets.length > MAX_SPREADSHEET_SHEETS) truncated = true
-      if (truncated) parts.push('[Spreadsheet extraction truncated at configured sheet, row, cell, or byte limit.]')
-      return parts.join('\n\n')
+      return await parseXlsxInWorker(archive, abortSignal)
     }
     return extractZippedOfficeText(archive, kind, abortSignal)
   } catch (err) {
@@ -498,10 +390,11 @@ export async function ingestFile(
   let stats: Awaited<ReturnType<typeof fs.stat>>
   try {
     stats = await fs.stat(ref.absolutePath)
-    const classification = await inspectFile(ref.absolutePath)
+    const classification = await inspectFile(ref.absolutePath, abortSignal)
     kind = classification.kind
     mediaType = classification.mediaType
   } catch (err) {
+    if (abortSignal?.aborted) return [{ type: 'text', text: `[File ingest cancelled: ${ref.raw}]` }]
     const msg = errorMessage(err)
     return [{ type: 'text', text: `[Cannot read ${ref.raw}: ${msg}]` }]
   }
@@ -639,8 +532,13 @@ export async function ingestFile(
       abortSignal,
     })
     const finalMime = normalizeImageMime(compressed.mimeType)
-    if (caps.image && !isModelAcceptedImageMime(finalMime, modelId)) {
-      return [{ type: 'text', text: buildUnsupportedImageNotice(finalMime, ref.absolutePath, modelId) }]
+    if (caps.image && !isModelAcceptedImage(finalMime, { modelId, animated: compressed.animated })) {
+      return [
+        {
+          type: 'text',
+          text: buildUnsupportedImageNotice(finalMime, ref.absolutePath, modelId, compressed.animated),
+        },
+      ]
     }
     if (
       compressed.failureReason ||

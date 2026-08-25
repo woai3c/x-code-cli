@@ -4,6 +4,7 @@ import type { ModelMessage } from 'ai'
 import {
   buildUnsupportedImageNotice,
   capabilitiesOf,
+  isModelAcceptedImage,
   isModelAcceptedImageMime,
   modelSupportsVision,
   normalizeImageMime,
@@ -172,8 +173,11 @@ async function normalizeCompatImage(
   })
   const mimeType = normalizeImageMime(compressed.mimeType)
   let result: CompatImageProjection
-  if (!isModelAcceptedImageMime(mimeType, modelId)) {
-    result = { ok: false, notice: buildUnsupportedImageNotice(mimeType, 'legacy session payload', modelId) }
+  if (!isModelAcceptedImage(mimeType, { modelId, animated: compressed.animated })) {
+    result = {
+      ok: false,
+      notice: buildUnsupportedImageNotice(mimeType, 'legacy session payload', modelId, compressed.animated),
+    }
   } else if (
     compressed.failureReason ||
     compressed.data.length > ATTACH_BYTE_BUDGET ||

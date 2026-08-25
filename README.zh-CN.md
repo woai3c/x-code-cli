@@ -173,7 +173,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **跨会话消息** — 命名后的本机 Session 可以互相发现，并在权限边界内移交工作（macOS / Linux；详见[文档](./docs/peer-messaging.md)）
 - **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / Office 文档（docx / xlsx / pptx / odt / ods / odp）/ 图片 / 音频
 - **本地 PDF 处理** — 按页提取可选文本；扫描页或视觉页交给当前视觉模型，纯文本模型则使用本地 OCR。大型视觉 PDF 通过 `readFile` 页范围渐进读取，原始 PDF 字节不会上传
-- **本地音频转写** — MP3 / WAV / M4A / OGG / FLAC / AAC / AIFF / WMA / WebM / Opus 附件（最大 25 MiB）始终由隔离进程中的 Whisper（whisper.cpp）在本地转写，只有带时间戳的文字会交给模型。首次模型下载固定 revision 并通过 SHA-256 校验后才缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
+- **本地音频转写** — MP3 / WAV / FLAC / OGG Vorbis 附件（最大 25 MiB、20 分钟）始终由隔离进程中的 Whisper（whisper.cpp）在本地转写，只有带时间戳的文字会交给模型。模型下载前会探测 native runtime，并由隔离进程中的流式解码器按实际 PCM 帧执行硬上限；排队等待与转写共用总超时。首次模型下载固定 revision 并通过 SHA-256 校验后才缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
 - **图片附件隐私回退** — 本地图片附件只会交给当前视觉模型；纯文本模型使用本地 OCR，不会自动把附件转发给另一个已配置厂商
 
 ### 上下文管理

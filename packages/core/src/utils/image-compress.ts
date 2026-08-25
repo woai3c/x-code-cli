@@ -6,6 +6,9 @@ export const MAX_EDGE_PX = 2000
 /** 3.75 MB raw stays below the common 5 MB Base64 request ceiling. */
 export const ATTACH_BYTE_BUDGET = 3.75 * 1024 * 1024
 
+/** Maximum source bytes read before image validation moves to a worker. */
+export const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024
+
 /** Decode guard, checked from headers before allocating the full bitmap. */
 export const MAX_DECODE_PIXELS = 100_000_000
 
@@ -36,6 +39,7 @@ export interface CompressResult {
   originalWidth: number
   originalHeight: number
   changed: boolean
+  animated?: true
   failureReason?: ImageCompressionFailure
 }
 
@@ -275,6 +279,7 @@ function passthroughResult(
     originalWidth: dims?.width ?? 0,
     originalHeight: dims?.height ?? 0,
     changed: false,
+    ...(isAnimated(bytes, mimeType) ? { animated: true as const } : {}),
     ...(failureReason ? { failureReason } : {}),
   }
 }
@@ -484,6 +489,7 @@ async function runCompressionWorker(
   abortSignal?.throwIfAborted()
   const inputBytes = Uint8Array.from(bytes)
   const worker = new Worker(imageWorkerUrl(), {
+    execArgv: [],
     resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 8 },
     workerData: {
       data: inputBytes.buffer,

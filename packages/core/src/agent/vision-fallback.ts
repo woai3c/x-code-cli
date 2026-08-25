@@ -3,23 +3,23 @@
 // Used by product surfaces that explicitly request a caption, such as tool
 // image delivery. Ordinary local attachments never call this helper: they go
 // only to the active vision model or stay local for OCR.
-import fs from 'node:fs/promises'
-
 import { generateText } from 'ai'
 import type { LanguageModel, LanguageModelUsage } from 'ai'
 
 import { getAvailableProviders } from '../config/index.js'
 import {
   buildUnsupportedImageNotice,
-  isModelAcceptedImageMime,
+  isModelAcceptedImage,
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
 import { createModelRegistry } from '../providers/registry.js'
 import { debugLog } from '../utils.js'
+import { readFileWithinLimit } from '../utils/bounded-read.js'
 import {
   ATTACH_BYTE_BUDGET,
   MAX_EDGE_PX,
+  MAX_IMAGE_SOURCE_BYTES,
   buildImageProcessingFailureNotice,
   compressImage,
 } from '../utils/image-compress.js'
@@ -132,6 +132,9 @@ export async function captionImageBuffer(
     onUsage?: (event: VisionUsageEvent) => void
   } = {},
 ): Promise<string> {
+  if (buffer.length > MAX_IMAGE_SOURCE_BYTES) {
+    throw new Error(`Image exceeds the ${MAX_IMAGE_SOURCE_BYTES}-byte source limit`)
+  }
   const prompt = opts.prompt ?? DEFAULT_CAPTION_PROMPT
   const key = `${modelId}:${bufferFingerprint(buffer)}:${prompt}`
   const cached = captionCache.get(key)
@@ -149,8 +152,8 @@ export async function captionImageBuffer(
   })
   const finalBuf = compressed.data
   const finalMime = normalizeImageMime(compressed.mimeType)
-  if (!isModelAcceptedImageMime(finalMime, modelId)) {
-    throw new Error(buildUnsupportedImageNotice(finalMime, 'vision input', modelId))
+  if (!isModelAcceptedImage(finalMime, { modelId, animated: compressed.animated })) {
+    throw new Error(buildUnsupportedImageNotice(finalMime, 'vision input', modelId, compressed.animated))
   }
   if (
     compressed.failureReason ||
@@ -199,7 +202,7 @@ export async function captionImage(
   sub: VisionProvider,
   opts?: { abortSignal?: AbortSignal; onUsage?: (event: VisionUsageEvent) => void },
 ): Promise<string> {
-  const buffer = await fs.readFile(filePath, { signal: opts?.abortSignal })
+  const buffer = await readFileWithinLimit(filePath, MAX_IMAGE_SOURCE_BYTES, opts?.abortSignal)
   const mediaType = (await sniffImageMime(buffer)) ?? knownMediaTypeFor(filePath)
   if (!mediaType?.startsWith('image/')) throw new Error('Unsupported or unrecognized image format')
   return captionImageBuffer(buffer, mediaType, sub.modelId, {

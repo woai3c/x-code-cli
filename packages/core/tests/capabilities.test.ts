@@ -2,7 +2,12 @@
 // vision flag that gates the browser agent's visual mode.
 import { describe, expect, it } from 'vitest'
 
-import { capabilitiesOf, isModelAcceptedImageMime, modelSupportsVision } from '../src/providers/capabilities.js'
+import {
+  capabilitiesOf,
+  isModelAcceptedImage,
+  isModelAcceptedImageMime,
+  modelSupportsVision,
+} from '../src/providers/capabilities.js'
 
 describe('modelSupportsVision', () => {
   it('returns the catalog vision flag for listed vision models', () => {
@@ -44,13 +49,17 @@ describe('modelSupportsVision', () => {
 })
 
 describe('provider image MIME policy', () => {
-  it('limits xAI to JPEG/PNG while retaining GIF/WebP for providers that support them', () => {
+  it('applies provider MIME and animation policies', () => {
     expect(isModelAcceptedImageMime('image/png', 'xai:grok-4.3')).toBe(true)
     expect(isModelAcceptedImageMime('image/jpeg', 'xai:grok-4.3')).toBe(true)
     expect(isModelAcceptedImageMime('image/gif', 'xai:grok-4.3')).toBe(false)
     expect(isModelAcceptedImageMime('image/webp', 'xai:grok-4.3')).toBe(false)
     expect(isModelAcceptedImageMime('image/gif', 'moonshotai:kimi-k3')).toBe(true)
     expect(isModelAcceptedImageMime('image/webp', 'moonshotai:kimi-k3')).toBe(true)
+    expect(isModelAcceptedImageMime('image/gif', 'alibaba:qwen3-vl-flash')).toBe(false)
+    expect(isModelAcceptedImageMime('image/webp', 'alibaba:qwen3-vl-flash')).toBe(true)
+    expect(isModelAcceptedImage('image/gif', { modelId: 'openai:gpt-5.6-sol' })).toBe(true)
+    expect(isModelAcceptedImage('image/gif', { modelId: 'openai:gpt-5.6-sol', animated: true })).toBe(false)
   })
 })
 

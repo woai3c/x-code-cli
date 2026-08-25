@@ -151,6 +151,19 @@ describe('readFile tool', () => {
     await fs.rm(tmpDir, { recursive: true })
   })
 
+  it('fails closed when streamed text contains invalid bytes beyond the classification sample', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-binary-tail-'))
+    const filePath = path.join(tmpDir, 'binary-tail.txt')
+    await fs.writeFile(filePath, Buffer.concat([Buffer.alloc(40 * 1024, 0x61), Buffer.from([0, 0xff])]))
+
+    const result = String(await exec({ filePath }))
+
+    expect(result).toMatch(/Error|binary control|encoded data/i)
+    expect(result).not.toContain('�')
+    expect(result).not.toContain('aaaaaa')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
   it('normalizes BMP tool output to PNG image-data', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-image-'))
     const filePath = path.join(tmpDir, 'disguised.png')
@@ -178,6 +191,34 @@ describe('readFile tool', () => {
     } as never)
 
     expect(result).toContain('accepts only PNG, JPEG')
+    expect(JSON.stringify(result)).not.toContain('image-data')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('does not return animated GIF image-data to an OpenAI model', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-openai-gif-'))
+    const filePath = path.join(tmpDir, 'animated.gif')
+    const { Jimp } = await import('jimp')
+    const singleFrame = await new Jimp({ width: 2, height: 2, color: 0xffffffff }).getBuffer('image/gif')
+    const frameStart = singleFrame.indexOf(0x2c)
+    const trailer = singleFrame.lastIndexOf(0x3b)
+    await fs.writeFile(
+      filePath,
+      Buffer.concat([
+        singleFrame.subarray(0, trailer),
+        singleFrame.subarray(frameStart, trailer),
+        singleFrame.subarray(trailer),
+      ]),
+    )
+    const tool = createReadFileTool(undefined, { modelId: 'openai:gpt-5.6-sol' })
+
+    const result = await tool.execute!({ filePath }, {
+      toolCallId: 'openai-animated-gif-test',
+      messages: [],
+      abortSignal: undefined,
+    } as never)
+
+    expect(String(result)).toMatch(/animated image\/gif|non-animated/i)
     expect(JSON.stringify(result)).not.toContain('image-data')
     await fs.rm(tmpDir, { recursive: true })
   })

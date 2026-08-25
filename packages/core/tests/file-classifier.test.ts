@@ -100,6 +100,16 @@ describe('inspectFile', () => {
     expect((await inspectFile(actualAudio)).kind).toBe('audio')
   })
 
+  it('fails closed for audio extensions outside the bundled decoder contract', async () => {
+    const m4a = path.join(tempDir, 'recording.m4a')
+    const opus = path.join(tempDir, 'recording.opus')
+    await fs.writeFile(m4a, '')
+    await fs.writeFile(opus, '')
+
+    expect((await inspectFile(m4a)).kind).toBe('binary')
+    expect((await inspectFile(opus)).kind).toBe('binary')
+  })
+
   it('allows ordinary whitespace controls in text', async () => {
     const file = path.join(tempDir, 'controls.txt')
     await fs.writeFile(file, 'one\ttwo\nthree\fnext\r\n')
@@ -119,5 +129,14 @@ describe('inspectFile', () => {
     await fs.writeFile(file, Buffer.concat([Buffer.from([0xff, 0xfe]), body]))
 
     expect(await inspectFile(file)).toMatchObject({ kind: 'text', textEncoding: 'utf-16le' })
+  })
+
+  it('preserves cancellation while classifying ZIP content', async () => {
+    const file = path.join(tempDir, 'cancelled-office-probe.bin')
+    await fs.writeFile(file, Buffer.from(zipSync({ 'xl/workbook.xml': Buffer.from('<workbook/>') })))
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(inspectFile(file, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

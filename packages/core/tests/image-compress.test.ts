@@ -61,6 +61,16 @@ describe('compressImage', () => {
       expect(result.failureReason).toBeUndefined()
     })
 
+    it('does not pass parent-only Node flags to the image worker', async () => {
+      const buf = await makeImage(2, 2, 'image/bmp')
+      process.execArgv.push('--input-type=module')
+      try {
+        await expect(compressImage(buf, 'image/bmp')).resolves.toMatchObject({ changed: true, mimeType: 'image/png' })
+      } finally {
+        process.execArgv.splice(process.execArgv.lastIndexOf('--input-type=module'), 1)
+      }
+    })
+
     it('passes through a valid in-budget GIF unchanged', async () => {
       const buf = await makeImage(100, 100, 'image/gif')
       const result = await compressImage(buf, 'image/gif')
@@ -166,8 +176,24 @@ describe('compressImage', () => {
         singleFrame.subarray(trailer),
       ])
       const result = await compressImage(animated, 'image/gif', { byteBudget: animated.length - 1 })
-      expect(result).toMatchObject({ changed: false, failureReason: 'animated-over-budget' })
+      expect(result).toMatchObject({ changed: false, animated: true, failureReason: 'animated-over-budget' })
       expect(result.data).toBe(animated)
+    })
+
+    it('reports animation even when a GIF is within the passthrough budget', async () => {
+      const singleFrame = await makeImage(10, 10, 'image/gif')
+      const frameStart = singleFrame.indexOf(0x2c)
+      const trailer = singleFrame.lastIndexOf(0x3b)
+      const animated = Buffer.concat([
+        singleFrame.subarray(0, trailer),
+        singleFrame.subarray(frameStart, trailer),
+        singleFrame.subarray(trailer),
+      ])
+
+      const result = await compressImage(animated, 'image/gif')
+
+      expect(result).toMatchObject({ changed: false, animated: true })
+      expect(result.failureReason).toBeUndefined()
     })
 
     it('rejects a declared image above the decode pixel limit before decoding', async () => {

@@ -1,7 +1,7 @@
 // @x-code-cli/core — Local audio transcription via whisper.cpp
 //
-// Transcribes local audio files (MP3, WAV, M4A, OGG, FLAC, AAC, AIFF, WMA,
-// WebM) using @fugood/whisper.node — a native Node.js binding of whisper.cpp.
+// Transcribes local MP3, WAV, FLAC and OGG Vorbis files using
+// @fugood/whisper.node — a native Node.js binding of whisper.cpp.
 // Returns timestamped text segments; only the text is sent to the LLM, never
 // the raw audio. The whisper model is auto-downloaded from Hugging Face on
 // first use and cached under ~/.x-code/whisper-models/.
@@ -26,27 +26,21 @@ import { pipeline } from 'node:stream/promises'
 import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
 import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.js'
 import { acquireFileLock } from '../utils/file-lock.js'
+import { isSupportedAudioPath } from './audio-formats.js'
+import { MAX_AUDIO_DECODED_PCM_BYTES, MAX_AUDIO_DURATION_SECONDS, MAX_AUDIO_SOURCE_BYTES } from './audio-limits.js'
 import { WHISPER_MODELS, WHISPER_MODEL_REVISION } from './audio-transcribe-models.js'
 import type { WhisperModelName, WhisperModelSpec } from './audio-transcribe-models.js'
-import { WhisperProcessError, runWhisperTranscription } from './audio-transcribe-runner.js'
+import {
+  WhisperProcessError,
+  disposeWhisperProcess,
+  prepareWhisperAudio,
+  probeWhisperRuntime,
+  runWhisperTranscription,
+} from './audio-transcribe-runner.js'
 
 // ── Supported audio formats ──────────────────────────────────────────────
-const AUDIO_EXTENSIONS = new Set([
-  '.mp3',
-  '.wav',
-  '.m4a',
-  '.ogg',
-  '.flac',
-  '.aac',
-  '.aiff',
-  '.aif',
-  '.wma',
-  '.webm',
-  '.opus',
-])
-
 export function isAudioFile(filePath: string): boolean {
-  return AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+  return isSupportedAudioPath(filePath)
 }
 
 /** Whisper model variants, ordered small→large.
@@ -55,7 +49,7 @@ export function isAudioFile(filePath: string): boolean {
  *  non-English or complex audio can override via env or option. */
 const DEFAULT_MODEL: WhisperModelName = (process.env.X_CODE_WHISPER_MODEL as WhisperModelName | undefined) ?? 'tiny'
 const HUGGINGFACE_BASE = `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}`
-export const MAX_AUDIO_SOURCE_BYTES = 25 * 1024 * 1024
+export { MAX_AUDIO_DECODED_PCM_BYTES, MAX_AUDIO_DURATION_SECONDS, MAX_AUDIO_SOURCE_BYTES }
 
 function modelsDir(): string {
   return path.join(userXcodeDir(), 'whisper-models')
@@ -351,11 +345,13 @@ async function stageAudioFile(
 // ── Public API ───────────────────────────────────────────────────────────
 
 /** Check whether whisper.node native binding is available on this platform. */
-export async function isWhisperAvailable(): Promise<boolean> {
+export async function isWhisperAvailable(abortSignal?: AbortSignal): Promise<boolean> {
   try {
-    await import('@fugood/whisper.node')
+    await probeWhisperRuntime({ abortSignal })
     return true
   } catch {
+    abortSignal?.throwIfAborted()
+    disposeWhisperProcess()
     return false
   }
 }
@@ -387,29 +383,24 @@ export async function transcribeAudio(
     return `[Audio transcription failed: unknown Whisper model "${model}".]`
   }
 
-  // Pre-flight: file exists?
-  try {
-    await fs.access(filePath)
-  } catch {
-    return `[Audio transcription failed: file not found — ${filePath}]`
-  }
-
-  // Platform check
-  const available = await isWhisperAvailable()
-  if (!available) {
-    return (
-      `[Audio transcription unavailable: the whisper.node native binding ` +
-      `could not be loaded on this platform (${process.platform}/${process.arch}). ` +
-      `Supported: macOS ARM64, Windows x64, Linux x64/ARM64. ` +
-      `Install @fugood/whisper.node and its platform package to enable local audio transcription.]`
-    )
-  }
-
   try {
     debugLog('audio-transcribe', `starting transcription: ${filePath} (model: ${model})`)
 
     const staged = await stageAudioFile(filePath, options?.abortSignal)
     stagedDirectory = staged.directory
+
+    const available = await isWhisperAvailable(options?.abortSignal)
+    if (!available) {
+      return (
+        `[Audio transcription unavailable: the whisper.node native binding ` +
+        `could not be loaded on this platform (${process.platform}/${process.arch}). ` +
+        `Supported: macOS ARM64, Windows x64, Linux x64/ARM64. ` +
+        `Install @fugood/whisper.node and its platform package to enable local audio transcription.]`
+      )
+    }
+
+    const pcmPath = path.join(staged.directory, 'decoded.pcm')
+    await prepareWhisperAudio(staged.path, pcmPath, { abortSignal: options?.abortSignal })
 
     // onNotice fires for every progress tick — fine for tool-progress
     // (overwrites the same spinner line), but file-ingest appends a new
@@ -422,7 +413,7 @@ export async function transcribeAudio(
     })
     options?.abortSignal?.throwIfAborted()
     options?.onNotice?.(`Transcribing audio: ${path.basename(filePath)}…`)
-    const result = await runWhisperTranscription(targetModel, staged.path, {
+    const result = await runWhisperTranscription(targetModel, pcmPath, {
       language: options?.language,
       abortSignal: options?.abortSignal,
       onProgress: options?.onProgress,

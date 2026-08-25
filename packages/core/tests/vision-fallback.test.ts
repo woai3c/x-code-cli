@@ -3,9 +3,14 @@
 // integration testing is handled separately in scripts/.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
 import { generateText } from 'ai'
 
-import { captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
+import { captionImage, captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
+import { MAX_IMAGE_SOURCE_BYTES } from '../src/utils/image-compress.js'
 import { PROVIDER_ENV_VARS, isolateOpenAIAuth } from './provider-env.js'
 
 vi.mock('ai', async () => {
@@ -147,5 +152,21 @@ describe('caption usage', () => {
     await captionImageBuffer(second, 'image/png', 'google:requested-vision')
 
     expect(generateText).toHaveBeenCalledTimes(2)
+  })
+
+  it('bounds public captionImage file reads before image processing', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-caption-limit-'))
+    const file = path.join(directory, 'oversized.png')
+    try {
+      await fs.writeFile(file, 'not loaded')
+      await fs.truncate(file, MAX_IMAGE_SOURCE_BYTES + 1)
+
+      await expect(
+        captionImage(file, { provider: 'google', modelId: 'google:test', label: 'test' }),
+      ).rejects.toMatchObject({ name: 'FileSizeLimitError' })
+      expect(generateText).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true })
+    }
   })
 })

@@ -121,6 +121,7 @@ class PdfWorkerClient {
   constructor(abortSignal?: AbortSignal) {
     this.abortSignal = abortSignal
     this.worker = new Worker(pdfWorkerUrl(), {
+      execArgv: [],
       resourceLimits: { maxOldGenerationSizeMb: 512, stackSizeMb: 8 },
     })
     this.worker.on('message', (response: PdfRenderResponse) => this.handleResponse(response))

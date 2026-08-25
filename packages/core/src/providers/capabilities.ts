@@ -51,22 +51,27 @@ const NO_CAPABILITIES: ProviderCapabilities = {
 
 // ── Image format policy (session-poisoning defense) ───────────────────────
 //
-// Most providers accept PNG / JPEG / GIF / WebP image parts. An unsupported
-// part (AVIF, HEIC, BMP, TIFF, or mislabeled bytes) is rejected with a 400 —
+// Providers differ on both MIME and animation support. An unsupported part
+// (including a valid-but-animated GIF where only static GIF is documented)
+// is rejected with a 400 —
 // and because messages persist in the session, every subsequent request
 // fails too (Kimi CLI's image-format-policy calls this "session poisoning").
-// This closed set is the single source of truth; file-ingest gates at
+// These closed policies are the single source of truth; file-ingest gates at
 // ingestion and the agent loop strips on a 400 so a bad image can never
 // wedge a session. A new format is only ever sent once added here.
 
-const DEFAULT_ACCEPTED_IMAGE_MIMES: ReadonlySet<string> = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-])
-const PROVIDER_ACCEPTED_IMAGE_MIMES: Readonly<Record<string, ReadonlySet<string>>> = {
-  xai: new Set(['image/png', 'image/jpeg']),
+interface ImageFormatPolicy {
+  mimes: ReadonlySet<string>
+  animatedMimes: ReadonlySet<string>
+}
+
+const DEFAULT_IMAGE_POLICY: ImageFormatPolicy = {
+  mimes: new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
+  animatedMimes: new Set(),
+}
+const PROVIDER_IMAGE_POLICIES: Readonly<Record<string, ImageFormatPolicy>> = {
+  alibaba: { mimes: new Set(['image/png', 'image/jpeg', 'image/webp']), animatedMimes: new Set() },
+  xai: { mimes: new Set(['image/png', 'image/jpeg']), animatedMimes: new Set() },
 }
 
 /** Lowercase, drop MIME parameters, apply the `image/jpg` alias. */
@@ -75,14 +80,20 @@ export function normalizeImageMime(mime: string): string {
   return base === 'image/jpg' ? 'image/jpeg' : base
 }
 
-function acceptedImageMimes(modelId?: string): ReadonlySet<string> {
-  if (!modelId) return DEFAULT_ACCEPTED_IMAGE_MIMES
+function imagePolicy(modelId?: string): ImageFormatPolicy {
+  if (!modelId) return DEFAULT_IMAGE_POLICY
   const resolved = MODEL_ALIASES[modelId] ?? modelId
-  return PROVIDER_ACCEPTED_IMAGE_MIMES[providerOf(resolved)] ?? DEFAULT_ACCEPTED_IMAGE_MIMES
+  return PROVIDER_IMAGE_POLICIES[providerOf(resolved)] ?? DEFAULT_IMAGE_POLICY
 }
 
 export function isModelAcceptedImageMime(mime: string, modelId?: string): boolean {
-  return acceptedImageMimes(modelId).has(normalizeImageMime(mime))
+  return imagePolicy(modelId).mimes.has(normalizeImageMime(mime))
+}
+
+export function isModelAcceptedImage(mime: string, options: { modelId?: string; animated?: boolean } = {}): boolean {
+  const normalized = normalizeImageMime(mime)
+  const policy = imagePolicy(options.modelId)
+  return policy.mimes.has(normalized) && (!options.animated || policy.animatedMimes.has(normalized))
 }
 
 /** Sniff the real MIME from magic bytes; null when unrecognized. Bytes are
@@ -101,10 +112,15 @@ export async function sniffImageMime(buffer: Buffer): Promise<string | null> {
 /** Text notice standing in for a refused / stripped image so the model knows
  *  what happened and the session history stays free of parts the provider
  *  rejects. */
-export function buildUnsupportedImageNotice(mime: string, name?: string, modelId?: string): string {
-  const what = name ? `"${name}" uses unsupported image format ${mime}` : `unsupported image format ${mime}`
-  const formats = [...acceptedImageMimes(modelId)]
-    .map((value) => value.slice('image/'.length).replace('jpeg', 'JPEG').toUpperCase())
+export function buildUnsupportedImageNotice(mime: string, name?: string, modelId?: string, animated = false): string {
+  const kind = animated ? `animated ${mime}` : `unsupported image format ${mime}`
+  const what = name ? `"${name}" uses ${kind}` : kind
+  const policy = imagePolicy(modelId)
+  const formats = [...policy.mimes]
+    .map((value) => {
+      const label = value.slice('image/'.length).replace('jpeg', 'JPEG').toUpperCase()
+      return value === 'image/gif' && !policy.animatedMimes.has(value) ? `${label} (non-animated)` : label
+    })
     .join(', ')
   return `[Image omitted: ${what}. The current model accepts only ${formats} — convert it to PNG or JPEG and try again.]`
 }

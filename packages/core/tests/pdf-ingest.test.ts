@@ -82,6 +82,17 @@ describe('processPdf', () => {
     expect(result.parts.map((part) => (part.type === 'text' ? part.text : '')).join('\n')).toContain('mock local OCR')
   })
 
+  it('does not pass parent-only Node flags to the PDF worker', async () => {
+    process.execArgv.push('--input-type=module')
+    try {
+      const result = await processPdf(scanPdf, { vision: true })
+      expect(result.type).toBe('content')
+      if (result.type === 'content') expect(result.parts.some((part) => part.type === 'image')).toBe(true)
+    } finally {
+      process.execArgv.splice(process.execArgv.lastIndexOf('--input-type=module'), 1)
+    }
+  })
+
   it('returns a reference before rendering too many visual pages', async () => {
     const largeScan = path.join(tempDir, 'eleven-pages.pdf')
     await fs.writeFile(largeScan, makePdfBuffer(Array.from({ length: 11 }, () => ({}))))

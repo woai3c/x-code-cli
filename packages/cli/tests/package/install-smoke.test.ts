@@ -3,9 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
+import { TINY_VORBIS_EXPECTED, makeTinyVorbisBuffer } from '../../../core/tests/helpers/audio.js'
 import { makePdfBuffer } from '../../../core/tests/helpers/pdf.js'
 import { REPO_ROOT, createTestWorkspace, isolatedCliEnv, listFilesRecursively } from '../fixtures/cli-test-helpers.js'
 import { startFakeProvider } from '../fixtures/fake-provider-server.js'
@@ -155,6 +157,7 @@ describe('published CLI tarball', () => {
     expect(names).toContain('package/dist/audio-transcribe-worker.js')
     expect(names).toContain('package/dist/pdf-render-worker.js')
     expect(names).toContain('package/dist/image-compress-worker.js')
+    expect(names).toContain('package/dist/office-xlsx-worker.js')
     expect(names.some((name) => /(?:^|\/)src\//.test(name))).toBe(false)
     expect(names.some((name) => /(?:^|\/)tests?\//.test(name))).toBe(false)
     expect(names.some((name) => /(?:^|\/)(?:\.env|sessions?|logs?)(?:\/|$)/.test(name))).toBe(false)
@@ -171,6 +174,7 @@ describe('published CLI tarball', () => {
     expect(manifest.dependencies?.['@napi-rs/canvas']).toBe('0.1.80')
     expect(manifest.dependencies?.['node-pty']).toBe('^1.1.0')
     expect(manifest.dependencies?.['pdf-parse']).toBe('2.4.5')
+    expect(manifest.dependencies?.['music-metadata']).toBeUndefined()
     expect(manifest.dependencies?.['tesseract.js']).toBe('7.0.0')
     expect(manifest.optionalDependencies?.['@fugood/whisper.node']).toBe('1.1.1')
   })
@@ -196,15 +200,91 @@ describe('published CLI tarball', () => {
     expect(result.stdout).toContain('package-whisper-runtime-loaded')
   })
 
-  it('starts the isolated Whisper process entry from the installed package', async () => {
+  it('loads native Whisper and the packaged bounded audio decoders through the isolated process entry', async () => {
     const workerPath = path.join(path.dirname(installedCliJs), 'audio-transcribe-worker.js')
+    const audioPath = path.join(suiteRoot, 'metadata smoke.wav')
+    const pcmPath = path.join(suiteRoot, 'metadata smoke.pcm')
+    const flacPath = path.join(suiteRoot, 'metadata smoke.flac')
+    const flacPcmPath = path.join(suiteRoot, 'metadata smoke flac.pcm')
+    const vorbisPath = path.join(suiteRoot, 'metadata smoke.ogg')
+    const vorbisPcmPath = path.join(suiteRoot, 'metadata smoke vorbis.pcm')
+    const frames = 1_600
+    const wav = Buffer.alloc(44 + frames * 2)
+    wav.write('RIFF', 0, 'ascii')
+    wav.writeUInt32LE(wav.length - 8, 4)
+    wav.write('WAVEfmt ', 8, 'ascii')
+    wav.writeUInt32LE(16, 16)
+    wav.writeUInt16LE(1, 20)
+    wav.writeUInt16LE(1, 22)
+    wav.writeUInt32LE(16_000, 24)
+    wav.writeUInt32LE(32_000, 28)
+    wav.writeUInt16LE(2, 32)
+    wav.writeUInt16LE(16, 34)
+    wav.write('data', 36, 'ascii')
+    wav.writeUInt32LE(frames * 2, 40)
+    const flac = Buffer.from(
+      'ZkxhQwAAACISABIAAAALAAANAfQA8AAAH0Ae4Bk2cWCcfWPP6JuSCtMThAAANgUAAABBcHBsZQEAAAAlAAAAV0FWRUZPUk1BVEVYVEVOU0lCTEVfQ0hBTk5FTF9NQVNLPTB4NP/4VAgArQAAANVn//h0CAENP6oAAAAw/A==',
+      'base64',
+    )
+    await Promise.all([
+      fs.writeFile(audioPath, wav),
+      fs.writeFile(flacPath, flac),
+      fs.writeFile(vorbisPath, makeTinyVorbisBuffer()),
+    ])
     const script = `
       const { fork } = require('node:child_process')
       const child = fork(${JSON.stringify(workerPath)}, [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
       const timer = setTimeout(() => { child.kill('SIGKILL'); console.error('Whisper process timeout'); process.exit(1) }, 15000)
       child.stderr.on('data', (chunk) => process.stderr.write(chunk))
       child.once('error', (error) => { clearTimeout(timer); console.error(error); process.exit(1) })
-      child.once('spawn', () => child.send({ id: 1, type: 'shutdown' }))
+      child.on('message', (message) => {
+        if (message.type === 'error') {
+          clearTimeout(timer)
+          console.error(message.error)
+          child.kill('SIGKILL')
+          process.exit(1)
+        }
+        if (message.id === 1 && message.type === 'ready') {
+          setImmediate(() => child.send({
+            id: 2,
+            type: 'prepare-audio',
+            filePath: ${JSON.stringify(audioPath)},
+            pcmPath: ${JSON.stringify(pcmPath)},
+          }))
+          return
+        }
+        if (message.id === 2 && message.type === 'audio-prepared') {
+          if (Math.abs(message.metadata.durationSeconds - 0.1) > 0.01) process.exit(1)
+          if (require('node:fs').statSync(${JSON.stringify(pcmPath)}).size !== ${frames * 2}) process.exit(1)
+          child.send({
+            id: 4,
+            type: 'prepare-audio',
+            filePath: ${JSON.stringify(flacPath)},
+            pcmPath: ${JSON.stringify(flacPcmPath)},
+          })
+          return
+        }
+        if (message.id === 4 && message.type === 'audio-prepared') {
+          if (message.metadata.codec !== 'FLAC') process.exit(1)
+          if (require('node:fs').statSync(${JSON.stringify(flacPcmPath)}).size !== 18432) process.exit(1)
+          child.send({
+            id: 5,
+            type: 'prepare-audio',
+            filePath: ${JSON.stringify(vorbisPath)},
+            pcmPath: ${JSON.stringify(vorbisPcmPath)},
+          })
+          return
+        }
+        if (message.id === 5 && message.type === 'audio-prepared') {
+          if (message.metadata.codec !== 'Vorbis' || message.metadata.container !== 'Ogg') process.exit(1)
+          if (message.metadata.numberOfChannels !== ${TINY_VORBIS_EXPECTED.numberOfChannels}) process.exit(1)
+          if (message.metadata.sampleRate !== ${TINY_VORBIS_EXPECTED.sampleRate}) process.exit(1)
+          if (Math.abs(message.metadata.durationSeconds - ${TINY_VORBIS_EXPECTED.durationSeconds}) > 1e-9) process.exit(1)
+          if (require('node:fs').statSync(${JSON.stringify(vorbisPcmPath)}).size !== ${TINY_VORBIS_EXPECTED.pcmBytes}) process.exit(1)
+          child.send({ id: 3, type: 'shutdown' })
+        }
+      })
+      child.once('spawn', () => child.send({ id: 1, type: 'probe' }))
       child.once('exit', (code) => {
         clearTimeout(timer)
         if (code !== 0) process.exit(1)
@@ -308,6 +388,56 @@ describe('published CLI tarball', () => {
     const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 40_000 })
     if (result.exitCode !== 0) throw new Error(`Installed image worker failed:\n${result.stdout}\n${result.stderr}`)
     expect(result.stdout).toContain('package-image-normalized')
+  })
+
+  it('parses a validated XLSX through the worker from the isolated installation', async () => {
+    const requireFromCore = createRequire(path.join(REPO_ROOT, 'packages', 'core', 'package.json'))
+    const { strToU8, zipSync } = requireFromCore('fflate') as {
+      strToU8(value: string): Uint8Array
+      zipSync(files: Record<string, Uint8Array>): Uint8Array
+    }
+    const workbookPath = path.join(suiteRoot, 'worker smoke.xlsx')
+    const workerPath = path.join(path.dirname(installedCliJs), 'office-xlsx-worker.js')
+    await fs.writeFile(
+      workbookPath,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>package xlsx ok</t></is></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+    const script = `
+      import fs from 'node:fs'
+      import { Worker } from 'node:worker_threads'
+      const bytes = Uint8Array.from(fs.readFileSync(${JSON.stringify(workbookPath)}))
+      const worker = new Worker(${JSON.stringify(workerPath)}, {
+        execArgv: [],
+        workerData: { archive: bytes.buffer },
+        transferList: [bytes.buffer],
+      })
+      const timer = setTimeout(() => { console.error('worker timeout'); process.exit(1) }, 30000)
+      worker.on('error', (error) => { clearTimeout(timer); console.error(error); process.exit(1) })
+      worker.on('message', (response) => {
+        clearTimeout(timer)
+        if (!response.ok) { console.error(response.error); process.exit(1) }
+        if (!response.text?.includes('--- Sheet: Data ---\\npackage xlsx ok')) process.exit(1)
+        process.stdout.write('package-xlsx-parsed')
+      })
+    `
+    const result = await command(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: suiteRoot,
+      timeoutMs: 40_000,
+    })
+    if (result.exitCode !== 0) throw new Error(`Installed XLSX worker failed:\n${result.stdout}\n${result.stderr}`)
+    expect(result.stdout).toContain('package-xlsx-parsed')
   })
 
   it('contains hash-verified Windows helpers for x64 and arm64', async () => {

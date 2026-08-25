@@ -352,6 +352,38 @@ describe('downgradeBinaryPartsForProvider', () => {
     expect(messages).toEqual(canonical)
   })
 
+  it('omits an animated legacy GIF from an OpenAI request without mutating canonical history', async () => {
+    const { Jimp } = await import('jimp')
+    const singleFrame = await new Jimp({ width: 2, height: 2, color: 0xff0000ff }).getBuffer('image/gif')
+    const frameStart = singleFrame.indexOf(0x2c)
+    const trailer = singleFrame.lastIndexOf(0x3b)
+    const animated = Buffer.concat([
+      singleFrame.subarray(0, trailer),
+      singleFrame.subarray(frameStart, trailer),
+      singleFrame.subarray(trailer),
+    ])
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            data: { type: 'data', data: animated.toString('base64') },
+            mediaType: 'image/gif',
+            filename: 'legacy-animated.gif',
+          },
+        ],
+      },
+    ] as ModelMessage[]
+    const canonical = structuredClone(messages)
+
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+
+    expect(JSON.stringify(projected)).toMatch(/animated image\/gif|non-animated/i)
+    expect(JSON.stringify(projected)).not.toContain('"type":"file"')
+    expect(messages).toEqual(canonical)
+  })
+
   it('omits a corrupt legacy image from a vision request without mutating canonical history', async () => {
     const corruptPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ', 'base64')
     const messages = [

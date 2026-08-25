@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { crc32 } from 'node:zlib'
 
+import { inspectFile } from '../src/agent/file-classifier.js'
 import {
   MAX_ATTACHMENT_TEXT_BYTES,
   MAX_IMAGE_SOURCE_BYTES,
@@ -49,6 +50,18 @@ function addPngAncillaryChunk(png: Buffer, dataBytes: number): Buffer {
   data.copy(chunk, 8)
   chunk.writeUInt32BE(crc32(data, crc32(type)), data.length + 8)
   return Buffer.concat([png.subarray(0, iendOffset), chunk, png.subarray(iendOffset)])
+}
+
+async function makeAnimatedGif(): Promise<Buffer> {
+  const { Jimp } = await import('jimp')
+  const singleFrame = await new Jimp({ width: 2, height: 2, color: 0xff0000ff }).getBuffer('image/gif')
+  const frameStart = singleFrame.indexOf(0x2c)
+  const trailer = singleFrame.lastIndexOf(0x3b)
+  return Buffer.concat([
+    singleFrame.subarray(0, trailer),
+    singleFrame.subarray(frameStart, trailer),
+    singleFrame.subarray(trailer),
+  ])
 }
 
 beforeAll(async () => {
@@ -143,19 +156,22 @@ describe('extractOfficeText', () => {
     const workbook = path.join(tmpDir, 'sample.xlsx')
     const files = {
       '[Content_Types].xml': strToU8(
-        '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+        '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
       ),
       '_rels/.rels': strToU8(
         '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
       ),
       'xl/workbook.xml': strToU8(
-        '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="More" sheetId="2" r:id="rId2"/></sheets></workbook>',
       ),
       'xl/_rels/workbook.xml.rels': strToU8(
-        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>',
       ),
       'xl/worksheets/sheet1.xml': strToU8(
         '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Value</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>alpha</t></is></c><c r="B2"><v>42</v></c></row></sheetData></worksheet>',
+      ),
+      'xl/worksheets/sheet2.xml': strToU8(
+        '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Second</t></is></c><c r="B1" t="inlineStr"><is><t>Sheet</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>beta</t></is></c><c r="B2"><v>84</v></c></row></sheetData></worksheet>',
       ),
     }
     await fs.writeFile(workbook, Buffer.from(zipSync(files)))
@@ -165,6 +181,9 @@ describe('extractOfficeText', () => {
     expect(text).toContain('--- Sheet: Data ---')
     expect(text).toContain('Name,Value')
     expect(text).toContain('alpha,42')
+    expect(text).toContain('--- Sheet: More ---')
+    expect(text).toContain('Second,Sheet')
+    expect(text).toContain('beta,84')
 
     const renamed = path.join(tmpDir, 'renamed-workbook.bin')
     const misleading = path.join(tmpDir, 'misleading-workbook.docx')
@@ -172,6 +191,254 @@ describe('extractOfficeText', () => {
     await fs.copyFile(workbook, misleading)
     expect(await extractOfficeText(renamed)).toContain('alpha,42')
     expect(await extractOfficeText(misleading)).toContain('alpha,42')
+
+    const renamedWithLeadingEntry = path.join(tmpDir, 'renamed-workbook-with-prefix.bin')
+    await fs.writeFile(
+      renamedWithLeadingEntry,
+      Buffer.from(zipSync({ 'padding.bin': new Uint8Array(40 * 1024), ...files }, { level: 0 })),
+    )
+    expect(await inspectFile(renamedWithLeadingEntry)).toMatchObject({ kind: 'office' })
+    const ingested = await ingestFile(
+      { raw: `@${renamedWithLeadingEntry}`, absolutePath: renamedWithLeadingEntry },
+      {
+        image: false,
+        pdf: false,
+        audio: false,
+        filesApi: false,
+        toolImageTransport: 'unsupported',
+      },
+    )
+    expect(JSON.stringify(ingested)).toContain('alpha,42')
+  })
+
+  it('rejects sparse XLSX coordinates before the parser can allocate their gaps', async () => {
+    const workbook = path.join(tmpDir, 'sparse-row-bomb.xlsx')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          '[Content_Types].xml': strToU8(
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+          ),
+          '_rels/.rels': strToU8(
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+          ),
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="100001"><c r="A100001" t="inlineStr"><is><t>boom</t></is></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/row coordinate exceeds the configured safety limit/i)
+  })
+
+  it('rejects sparse XLSX coordinates whose rectangular allocation exceeds the cell budget', async () => {
+    const workbook = path.join(tmpDir, 'sparse-rectangle-bomb.xlsx')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="XFD1"><v>1</v></c></row><row r="10000"><c r="A10000"><v>2</v></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/sparse coordinates exceed the configured cell-allocation limit/i)
+  })
+
+  it('rejects lowercase XLSX coordinates that the downstream parser interprets as larger columns', async () => {
+    const workbook = path.join(tmpDir, 'lowercase-coordinate-bomb.xlsx')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData><row r="5"><c r="aaaa5"><v>1</v></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/invalid cell coordinate/i)
+  })
+
+  it('counts trailing implicit empty rows in the downstream XLSX rectangle allocation', async () => {
+    const workbook = path.join(tmpDir, 'trailing-empty-row-bomb.xlsx')
+    const trailingRows = '<row/>'.repeat(10_000 - 1)
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            `<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="XFD1"><v>1</v></c></row>${trailingRows}</sheetData></worksheet>`,
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/sparse coordinates exceed the configured cell-allocation limit/i)
+  })
+
+  it('bounds XLSX text inside the worker before returning it to the parent thread', async () => {
+    const workbook = path.join(tmpDir, 'shared-string-output-bomb.xlsx')
+    const shared = '"'.repeat(300 * 1024)
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+          ),
+          'xl/sharedStrings.xml': strToU8(
+            `<?xml version="1.0"?><sst count="2" uniqueCount="1"><si><t>${shared}</t></si></sst>`,
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(MAX_INGEST_BYTES)
+    expect(text).toContain('Spreadsheet extraction truncated')
+    expect(text).not.toContain(shared)
+  })
+
+  it('rejects XLSX rows after sheetData before the downstream parser can allocate them', async () => {
+    const workbook = path.join(tmpDir, 'row-after-sheet-data.xlsx')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData/><row r="10000"><c r="XFD10000"><v>1</v></c></row></worksheet>',
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/row element appears outside sheetData/i)
+  })
+
+  it('parses quoted greater-than signs without bypassing XLSX coordinate validation', async () => {
+    const workbook = path.join(tmpDir, 'quoted-angle-row-bomb.xlsx')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData><row harmless=">" r="10001"><c r="A10001"><v>1</v></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/row coordinate exceeds the configured safety limit/i)
+  })
+
+  it('rejects more than 32 logical workbook sheets even when physical worksheet XML is reused or absent', async () => {
+    const workbook = path.join(tmpDir, 'logical-sheet-bomb.xlsx')
+    const sheets = Array.from(
+      { length: 33 },
+      (_, index) => `<sheet name="Sheet ${index + 1}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`,
+    ).join('')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            `<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets}</sheets></workbook>`,
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships/>'),
+        }),
+      ),
+    )
+
+    const text = await extractOfficeText(workbook)
+
+    expect(text).toMatch(/logical sheet-count limit/i)
+  })
+
+  it('does not pass parent-only Node flags to the XLSX worker', async () => {
+    const workbook = path.join(tmpDir, 'worker-exec-argv.xlsx')
+    await fs.writeFile(
+      workbook,
+      Buffer.from(
+        zipSync({
+          'xl/workbook.xml': strToU8(
+            '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+          ),
+          'xl/_rels/workbook.xml.rels': strToU8(
+            '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+          ),
+          'xl/worksheets/sheet1.xml': strToU8(
+            '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>worker ok</t></is></c></row></sheetData></worksheet>',
+          ),
+        }),
+      ),
+    )
+    process.execArgv.push('--input-type=module')
+    try {
+      await expect(extractOfficeText(workbook)).resolves.toContain('worker ok')
+    } finally {
+      process.execArgv.splice(process.execArgv.lastIndexOf('--input-type=module'), 1)
+    }
   })
 
   it('reads pptx slide text with bounded ZIP extraction', async () => {
@@ -218,6 +485,18 @@ describe('ingestFile', () => {
       expect(parts[0].text).toContain('Hello')
       expect(parts[0].text).toContain(textFile)
     }
+  })
+
+  it('rejects NUL and malformed UTF-8 beyond the classifier sample before session insertion', async () => {
+    const file = path.join(tmpDir, 'binary-tail.txt')
+    await fs.writeFile(file, Buffer.concat([Buffer.alloc(40 * 1024, 0x61), Buffer.from([0, 0xff])]))
+
+    const parts = await ingestFile({ raw: `@${file}`, absolutePath: file }, textOnlyCaps)
+    const serialized = JSON.stringify(parts)
+
+    expect(serialized).toMatch(/not valid text|failed to read/i)
+    expect(serialized).not.toContain('�')
+    expect(serialized).not.toContain('aaaaaa')
   })
 
   it('uses the shared notebook renderer and omits binary cell output', async () => {
@@ -285,6 +564,36 @@ describe('ingestFile', () => {
       'xai:text-only',
     )
     expect(JSON.stringify(textOnlyParts)).toContain('mock local OCR result')
+  })
+
+  it('rejects animated GIF for OpenAI and all GIF for Alibaba before session insertion', async () => {
+    const animatedPath = path.join(tmpDir, 'animated-openai.gif')
+    const staticPath = path.join(tmpDir, 'static-alibaba.gif')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(animatedPath, await makeAnimatedGif())
+    await fs.writeFile(staticPath, await new Jimp({ width: 2, height: 2, color: 0xff0000ff }).getBuffer('image/gif'))
+
+    const openaiParts = await ingestFile(
+      { raw: `@${animatedPath}`, absolutePath: animatedPath },
+      multimodalCaps,
+      undefined,
+      undefined,
+      undefined,
+      'openai:gpt-5.6-sol',
+    )
+    const alibabaParts = await ingestFile(
+      { raw: `@${staticPath}`, absolutePath: staticPath },
+      multimodalCaps,
+      undefined,
+      undefined,
+      undefined,
+      'alibaba:qwen3-vl-flash',
+    )
+
+    expect(openaiParts.every((part) => part.type === 'text')).toBe(true)
+    expect(JSON.stringify(openaiParts)).toMatch(/animated image\/gif|non-animated/i)
+    expect(alibabaParts.every((part) => part.type === 'text')).toBe(true)
+    expect(JSON.stringify(alibabaParts)).toContain('accepts only PNG, JPEG, WEBP')
   })
 
   it('normalizes a decodable BMP disguised as PNG before provider delivery', async () => {

@@ -29,7 +29,7 @@ Notebook           → 本地渲染可读单元格文本
 文本型 PDF         → 本地逐页提取文本
 扫描 / 混合 PDF    → 文本页发送文本；视觉页发送页面图片，非视觉模型则本地 OCR
 大型 PDF           → 轻量引用 + readFile(pages) 按需读取
-图片               → 本地验证、规范化、压缩；只发送 PNG/JPEG/GIF/WebP
+图片               → 本地验证、规范化、压缩；按 Provider policy 发送标准静态格式
 未知二进制         → 明确拒绝，不发送乱码
 ```
 
@@ -274,7 +274,7 @@ type FileKind = 'text' | 'image' | 'pdf' | 'office' | 'audio' | 'notebook' | 'bi
 ### 表现
 
 - 文件可能被识别为 BMP/TIFF/ICO/AVIF/HEIC。
-- Provider 只接受 PNG/JPEG/GIF/WebP。
+- 本地交付层只生成 PNG/JPEG/GIF/WebP，具体可发送子集由 Provider policy 决定。
 - 当前入口会直接拒绝非白名单 MIME。
 
 ### 影响
@@ -291,7 +291,7 @@ type FileKind = 'text' | 'image' | 'pdf' | 'office' | 'audio' | 'notebook' | 'bi
 不可解码 / 伪装格式 → 明确拒绝
 ```
 
-动画 GIF/WebP 在无需转换时保持原格式；一旦超出尺寸或字节预算，首版明确拒绝并提示用户主动转换，不静默展平为首帧。
+动画 GIF/WebP 在本地验证阶段保留动画标记，不静默展平为首帧；进入请求前再由 Provider policy 明确拒绝或接受。当前策略均拒绝动画。
 
 ### 5.7 P1：大型 PDF 只能截断，不能渐进式读取
 
@@ -413,7 +413,14 @@ packages/core/src/agent/
   pdf-ingest.ts             # PDF 检查、逐页分析、选择、渲染、OCR
   pdf-render-protocol.ts    # PDF worker 消息协议
   pdf-render-worker.ts      # PDF.js 解析和逐页 Canvas 渲染
-  audio-transcribe.ts       # 保持现有实现
+  audio-formats.ts          # 本地解码器的保守格式契约
+  audio-decode.ts           # 流式解码、实际帧硬限制、16 kHz 单声道 PCM
+  audio-transcribe.ts       # 有界暂存、模型校验和转写调度
+  audio-transcribe-runner.ts # 隔离子进程、single-flight、取消与超时
+  audio-transcribe-worker.ts # native probe、受控 PCM 准备和 Whisper 执行
+  office-archive.ts         # 有界 ZIP 结构验证与 Office 类型识别
+  office-xlsx.ts            # XLSX 受限 worker 调度
+  office-xlsx-worker.ts     # 坐标预检和表格解析
   provider-compat.ts        # 图片传输和历史遗留媒体清理
 
 packages/core/src/utils/
@@ -427,7 +434,7 @@ packages/core/src/providers/
   capabilities.ts           # 摄取只消费图片能力；兼容保留 deprecated 字段
 ```
 
-为避免循环依赖，Tesseract worker 和 `ocrImage()` 位于 `image-ocr.ts`；分类器位于 `file-classifier.ts`。Office 提取暂由 `file-ingest.ts` 导出给 `read-file.ts` 复用，后续如继续扩展格式再独立拆分。
+为避免循环依赖，Tesseract worker 和 `ocrImage()` 位于 `image-ocr.ts`；分类器位于 `file-classifier.ts`。Office 总调度仍由 `file-ingest.ts` 导出给 `read-file.ts` 复用，ZIP 身份验证和 XLSX 高风险解析分别下沉到独立模块与受限 worker。
 
 ### 8.2 中立输出类型
 
@@ -957,18 +964,22 @@ formatTranscription(result, filePath)
 约束：
 
 - 原始音频不进入 AI SDK 消息。
-- 音频源文件最大 25 MiB；以同一份有界暂存字节作为 native 解码输入。
+- 音频源文件最大 25 MiB；以同一份有界暂存字节作为隔离进程中流式解码的输入。
+- 当前随包解码器的稳定格式契约收窄为 MP3、WAV、FLAC、OGG Vorbis；M4A/AAC/WMA/WebM/Opus/AIFF 不再仅凭扩展名进入转写，也不在 README 中承诺。
+- 隔离进程按实际解码帧计数、逐块下混并重采样为 16 kHz 单声道 signed-16 PCM；超过 20 分钟立即拒绝。交给 `transcribeData()` 的 PCM 输入最大约 36.6 MiB，因此 native float vector 被硬限制在约 73.2 MiB，而不是依赖容器元数据估算。
 - 转写结果受 256 KB 上限。
-- 超长音频返回清晰错误或未来支持分段摘要。
+- 超长音频返回清晰错误；分段转写作为后续能力，不在本版本静默截断。
 - 保留进度回调和 abortSignal。
 - README 改为“所有音频均本地转写”。
-- Whisper context 初始化、同步音频解码和异步推理全部在 CLI 的隔离子进程中执行，不能占用 TUI 主线程。
+- 流式音频解码、Whisper context 初始化和异步推理全部在 CLI 的隔离子进程中执行，不能占用 TUI 主线程。
+- `isWhisperAvailable()` 必须通过子进程 probe 实际执行 `loadWhisperModule()`；只 import JS wrapper 不能视为 native 可用。probe 和受控 PCM 准备均早于模型下载。
+- PCM 准备有独立超时；转写的 30 分钟总超时从进入 single-flight 队列时开始计算。超时与当前任务取消都会强制终止子进程，排队任务取消则必须立即 settle 且不得中断正在运行的其他任务。
 - abort 必须立即结束父进程中的请求并终止当前 Whisper 子进程，因此取消不依赖 native 解码先返回 stop handle。
 - Whisper 子进程的 60 秒计时器只表示“任务完成后的空闲时间”；转写运行期间不得启动或触发终止。
 - 发布版 CLI 将 externalized 的 `@fugood/whisper.node` 声明为精确版本的 `optionalDependencies`，普通安装应自动取得当前平台 binding；不支持的平台仍由运行时给出明确提示。
 - 首次模型下载使用可取消的跨进程文件锁，并在锁内二次检查目标文件；下载 URL 固定到已审计 revision，流式执行精确字节上限与 SHA-256 校验，只有通过校验的临时文件才能 rename 为缓存。
 - 已有模型缓存首次使用时也校验长度和完整 SHA-256；初始化失败会在模型锁内重新校验并删除已损坏缓存。
-- Whisper 子进程由进程内 single-flight 队列复用；并发任务不能同时覆盖或泄漏 context。
+- Whisper 子进程由进程内 single-flight 队列复用；并发任务不能同时覆盖或泄漏 context，队列等待本身必须可取消。
 
 ### 12.2 Provider 能力清理
 
@@ -1017,8 +1028,10 @@ const FILE_TEXT_SAMPLE_BYTES = 32 * 1024
 
 - UTF-8（含 BOM）正文出现 NUL 字节则 binary。
 - UTF-8、UTF-16LE/UTF-16BE BOM 应按对应编码验证；没有 BOM 时默认 UTF-8。
-- 非打印控制字符比例低于阈值，例如 10%。
+- 除 tab、换行、换页和回车外，不允许 NUL、DEL 或其他 C0 控制字符。
 - 不能只根据扩展名判定未知文件为文本。
+
+32 KiB 样本只用于快速分类，不能作为最终文本安全结论。`@file` 必须对同一份 `readFileWithinLimit()` Buffer 重新执行完整 fatal 解码和控制字符校验；`readFile` 的流式 decoder 同样使用 fatal 模式并校验每段实际输出，禁止产生 U+FFFD 或把 NUL 写入 Session。
 
 “出现 NUL 即 binary”只适用于已经排除 UTF-16 BOM 的样本，否则 Windows 生成的 UTF-16 文本会被误判。BOM 只是编码 hint，不能早于 PDF/图片/音频等魔数直接返回 text；魔数检测应剥离 BOM 后执行，既避免 UTF-16LE BOM 被误判为 AAC，也能识别 `UTF-8 BOM + %PDF-` 之类的伪装输入。分类失败或读取文件头失败必须 fail closed，不能像当前 `readFile` 一样回退为 text。
 
@@ -1091,9 +1104,9 @@ export type InspectedFileKind = 'text' | 'image' | 'pdf' | 'office' | 'audio' | 
 
 100 MP 限制必须在完整像素分配前执行。对于无法从文件头安全取得尺寸的格式，应使用能提供解码前元数据的 codec，或把解码放进有内存/超时边界的 worker；在 `Jimp.fromBuffer()` 完成后再检查已经太晚。
 
-动画策略必须唯一且可测试：预算内的 GIF/animated WebP 保留原动画；超出预算时首版默认拒绝并提示转换，不自动静默展平。若未来允许首帧展平，必须由显式选项启用并在输出中标注。
+动画策略必须唯一且可测试：本地解码结果显式携带 `animated`，不能让预算内 fast path 跳过动画检测。当前没有 Provider policy 允许动画；动画 GIF/WebP 均在请求前拒绝，不自动静默展平。若未来允许首帧展平，必须由显式选项启用并在输出中标注。
 
-图片 MIME policy 不是全局常量。默认策略可接受 PNG/JPEG/GIF/WebP，但 xAI 当前仅允许 PNG/JPEG；新附件、`readFile` 工具图片、显式 caption 和历史 Session 请求投影都必须携带目标 model id，在进入请求前转换或拒绝不受支持的格式。
+图片 policy 同时包含 MIME 与动画维度，不是全局常量。OpenAI 接受 PNG/JPEG/WebP/非动画 GIF；Alibaba 接受本地可交付的 PNG/JPEG/WebP、不接受 GIF；xAI 仅允许 PNG/JPEG。新附件、`readFile` 工具图片、显式 caption 和历史 Session 请求投影都必须携带目标 model id，在进入请求前转换或拒绝不受支持的格式。
 
 ## 15. Office 和 Notebook
 
@@ -1106,7 +1119,9 @@ export type InspectedFileKind = 'text' | 'image' | 'pdf' | 'office' | 'audio' | 
 - PPTX：读取 slide XML 并保留页序。
 - ODT/ODS/ODP：受 ZIP entry 和解压字节限制的 XML 文本。
 
-分类得到的真实 MIME 和 ZIP 根结构优先于扩展名。Office 源文件以 `readFileWithinLimit()` 读取一次，验证、格式分派以及 Mammoth/read-excel-file/ZIP XML 解析均消费同一份有界 Buffer，禁止验证路径后再让解析器重新打开路径。
+分类得到的真实 MIME 和 ZIP 根结构优先于扩展名。generic ZIP 即使前 32 KiB 还不能看见 Office 条目，也会在 20 MiB 有界读取后探测 OOXML/ODF 根结构；因此带有大型前置 ZIP entry 的重命名 Office 文件仍能进入解析。Office 源文件以 `readFileWithinLimit()` 读取一次，验证、格式分派以及 Mammoth/read-excel-file/ZIP XML 解析均消费同一份有界 Buffer，禁止验证路径后再让解析器重新打开路径。
+
+XLSX 的逻辑 sheet 数、workbook relationships、row/cell 坐标、安全整数范围和稀疏坐标隐含分配量必须由流式 XML parser 在 `read-excel-file` 前验证，禁止用正则截取 XML 标签。坐标语法必须与下游解释一致；预检按下游实际创建的行数组推进状态，包含无编号空行和坐标间隙，且拒绝 `sheetData` 外的 row/c，不能只用 XML 标签数或最大坐标近似矩形分配量。验证、完整解析和 CSV 格式化均位于可终止、带 256 MiB V8 heap 与 30 秒超时的 worker 中；共享字符串的每次输出引用都计入 256 KiB 文本预算，主线程只接收已截断的最终文本，不能先通过 IPC 复制未受限的 `Sheet[]`。
 
 暂不增加：
 
@@ -1420,7 +1435,12 @@ README.zh-CN.md
 - 转写文本超过 256 KB 时有明确提示。
 - 原始音频 Base64 不进入消息历史。
 - 超过 25 MiB 的源音频在 native 解码前拒绝。
-- native 解码和转写不阻塞 TUI 事件循环；解码期间取消会立即 settle 并终止隔离进程。
+- M4A/AAC/WMA/WebM/Opus/AIFF 在模型下载前返回 unsupported；MP3/WAV/FLAC/OGG Vorbis 进入转写。
+- 核心集成测试和发布包 smoke 使用小型有效 Ogg Vorbis fixture 经过真实 parser/WASM 解码，并断言 metadata 与 PCM 字节数；伪造 Ogg 或仅检查模块可解析不能作为成功门禁。
+- 流式解码按实际帧在 20 分钟处停止，写入 `transcribeData()` 的 PCM 和 native float vector 都有硬字节上限；native 请求超过总超时时强制终止。
+- JS wrapper 存在但平台 `.node` 缺失时，worker probe 在模型下载前失败；发布包 smoke 必须发送 probe，而不是只发送 shutdown。
+- 流式解码和 native 转写不阻塞 TUI 事件循环；解码期间取消会立即 settle 并终止隔离进程。
+- 排队中的转写取消或超时会立即 settle，且不会等待或终止前一个运行中的任务。
 - 转写持续超过 60 秒时子进程不被空闲计时器终止；任务完成 60 秒后才终止。
 - 首次下载遇到网络流错误、磁盘 writer 错误或取消时 Promise 会结束、`.tmp` 被清理且无未处理事件。
 - 任意 HTTP 200 的错误长度或错误 SHA-256 均不进入缓存；已有坏缓存会在锁内替换。
@@ -1435,16 +1455,19 @@ README.zh-CN.md
 - `.bin` 但实际 PNG → image。
 - `.dat` 但实际 WAV → audio。
 - `.bin` 但实际 PDF → pdf。
-- NUL 和高非打印比例文件 → binary。
+- NUL、DEL 或不允许的 C0 控制字符文件 → binary。
 - UTF-16LE/UTF-16BE BOM 文本不因 NUL 被误判为 binary。
 - UTF-8 BOM + NUL → binary；UTF-8 BOM + `%PDF-` → pdf，且摄取不产生原始 TextPart。
 - 文本中少量合法控制字符不误判。
 - UTF-8 码点和 UTF-16 代理对跨越 32 KiB 采样边界时不误判为 binary。
+- 前 32 KiB 合法、尾部包含 NUL 或非法 UTF-8 的文件不会产生 U+FFFD/TextPart；`readFile` 流式结果同样 fail closed。
+- Office 条目前有超过 32 KiB entry 的重命名 XLSX 仍按完整 ZIP 根结构识别。
 
 ### 20.5 图片测试
 
-- PNG/JPEG/GIF/WebP 保持标准格式。
+- PNG/JPEG/WebP 与 Provider 允许的静态 GIF 保持标准格式。
 - xAI 新附件、工具图片和历史 Session 中的 GIF/WebP 在请求前被拒绝或转换，canonical history 不被请求投影修改。
+- OpenAI 只接收非动画 GIF；Alibaba 不接收 GIF；预算内 animated GIF 也不能绕过新附件、工具结果或历史 Session 的 policy。
 - 仅有 PNG 容器头尾、没有可解码像素数据的损坏文件在写入 Session 前被拒绝。
 - BMP/TIFF 等可解码格式转 PNG/JPEG。
 - 伪装 MIME 被真实字节覆盖。
@@ -1452,7 +1475,7 @@ README.zh-CN.md
 - 超 25 MB 拒绝。
 - 路径 `stat` 后文件被替换或增长时，handle 级复查/有界读取仍拒绝超过 25 MB 的图片。
 - 压缩后满足 2000 px / 3.75 MB。
-- 超预算 animated GIF/WebP 明确拒绝且不静默展平。
+- 预算内和超预算 animated GIF/WebP 都会被检测；当前 Provider policy 明确拒绝且不静默展平。
 - 超预算 WebP 在没有可用 codec 时返回明确错误，不伪装成成功压缩。
 - 已取消的预算内图片也返回 AbortError，不从预检快路径成功进入结果。
 - 适配层最终生成 `input_image`，不是 `input_file`。
@@ -1476,6 +1499,8 @@ readFile(binary)
 断言工具结果只有文本和 `image-data`，没有 PDF/音频 `file-data`。
 
 用户消息附件测试还必须覆盖：100,000 字节换行文本经行号包装后超过单附件上限；UTF-16 转 UTF-8 膨胀；多个单独合规附件累计触发 1 MiB 文本、10 个媒体 part 或 21 MiB 序列化预算。断言预算按附件原子应用，Session 中不存在半个附件。
+
+XLSX 回归测试还必须覆盖：小写/非法坐标不会因校验器与下游列号解释不同而绕过预算；高列坐标后的无编号空行计入真实矩形分配；重复引用大型 shared string 时，Worker 返回给主线程的格式化文本仍不超过 256 KiB。
 
 ### 20.7 Session 恢复测试
 

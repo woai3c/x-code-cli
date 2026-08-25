@@ -11,6 +11,8 @@ const whisper = vi.hoisted(() => ({
 }))
 
 const runner = vi.hoisted(() => ({
+  prepareWhisperAudio: vi.fn(),
+  probeWhisperRuntime: vi.fn(),
   runWhisperTranscription: vi.fn(),
 }))
 
@@ -29,7 +31,12 @@ vi.mock('../src/agent/audio-transcribe-runner.js', async () => {
   const actual = await vi.importActual<typeof import('../src/agent/audio-transcribe-runner.js')>(
     '../src/agent/audio-transcribe-runner.js',
   )
-  return { ...actual, runWhisperTranscription: runner.runWhisperTranscription }
+  return {
+    ...actual,
+    prepareWhisperAudio: runner.prepareWhisperAudio,
+    probeWhisperRuntime: runner.probeWhisperRuntime,
+    runWhisperTranscription: runner.runWhisperTranscription,
+  }
 })
 
 vi.mock('@fugood/whisper.node', () => ({
@@ -64,6 +71,14 @@ beforeEach(async () => {
   vi.clearAllMocks()
   await fs.rm(modelFile(), { force: true })
   await fs.rm(`${modelFile()}.tmp`, { recursive: true, force: true })
+  runner.probeWhisperRuntime.mockResolvedValue(undefined)
+  runner.prepareWhisperAudio.mockResolvedValue({
+    durationSeconds: 1,
+    container: 'WAVE',
+    codec: 'PCM',
+    sampleRate: 16_000,
+    numberOfChannels: 1,
+  })
   runner.runWhisperTranscription.mockResolvedValue(modelResult)
 })
 

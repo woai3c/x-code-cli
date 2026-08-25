@@ -158,6 +158,12 @@ importers:
       '@ai-sdk/xai':
         specifier: ^4.0.0
         version: 4.0.23(zod@3.25.76)
+      '@audio/decode-mp3':
+        specifier: 1.3.1
+        version: 1.3.1
+      '@audio/decode-wav':
+        specifier: 1.5.0
+        version: 1.5.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@3.25.76)
@@ -167,12 +173,21 @@ importers:
       '@vscode/ripgrep':
         specifier: ^1.17.0
         version: 1.17.0
+      '@wasm-audio-decoders/flac':
+        specifier: 0.2.10
+        version: 0.2.10
+      '@wasm-audio-decoders/ogg-vorbis':
+        specifier: 0.1.20
+        version: 0.1.20
       ai:
         specifier: ^7.0.0
         version: 7.0.44(zod@3.25.76)
       cheerio:
         specifier: ^1.0.0
         version: 1.2.0
+      codec-parser:
+        specifier: 2.5.0
+        version: 2.5.0
       diff:
         specifier: ^8.0.0
         version: 8.0.3
@@ -203,6 +218,9 @@ importers:
       read-excel-file:
         specifier: ^9.3.10
         version: 9.3.10
+      saxen:
+        specifier: 11.1.1
+        version: 11.1.1
       tesseract.js:
         specifier: ^7.0.0
         version: 7.0.0
@@ -298,6 +316,14 @@ packages:
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
+
+  '@audio/decode-mp3@1.3.1':
+    resolution: {integrity: sha512-GhGm6C2hwngU+t5uEpUc94jZGCrCIXrgfneDURfK9/2tgFAWHVeckFNsSRmL4+Vd7u32uv8wQamjTnBSlrkVGA==}
+    engines: {node: '>=18'}
+
+  '@audio/decode-wav@1.5.0':
+    resolution: {integrity: sha512-gxCPRF9A/nBwdnMCJ4N5tDaLBWlfZaNKWbsqDZTMt7A5gN7w+a7HGikiN1dInAb5L0bcj6ByQuU1acfL7p5pcA==}
+    engines: {node: '>=18'}
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -611,6 +637,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@eshaz/web-worker@1.2.2':
+    resolution: {integrity: sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==}
 
   '@eslint-community/eslint-utils@4.9.1':
     resolution: {integrity: sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ==}
@@ -1321,6 +1350,15 @@ packages:
   '@vscode/ripgrep@1.17.0':
     resolution: {integrity: sha512-mBRKm+ASPkUcw4o9aAgfbusIu6H4Sdhw09bjeP1YOBFTJEZAnrnk6WZwzv8NEjgC82f7ILvhmb1WIElSugea6g==}
 
+  '@wasm-audio-decoders/common@9.0.7':
+    resolution: {integrity: sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==}
+
+  '@wasm-audio-decoders/flac@0.2.10':
+    resolution: {integrity: sha512-YfcyoD2rYRBa6ffawZKNi5qvV5HArJmNmuMVUPoutuZ2hhGi6WNSWIzgvbROGmPbFivLL764Am7xxJENWJDhjw==}
+
+  '@wasm-audio-decoders/ogg-vorbis@0.1.20':
+    resolution: {integrity: sha512-zaQPasU5usRjUDXtXOHYED5tfkR4QMXd+EH3Nrz1+4+M5pCsdD+s9YxJqb0oqnTyRu/KUujOmu5Z/m/NT47vwg==}
+
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
 
@@ -1528,6 +1566,9 @@ packages:
   code-excerpt@4.0.0:
     resolution: {integrity: sha512-xxodCmBen3iy2i0WtAK8FlFNrRzjUqjRsMfho58xT/wvZU1YTM3fCnRjcy1gJPMepaRlgm/0e6w8SpWHpn3/cA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  codec-parser@2.5.0:
+    resolution: {integrity: sha512-Ru9t80fV8B0ZiixQl8xhMTLru+dzuis/KQld32/x5T/+3LwZb0/YvQdSKytX9JqCnRdiupvAvyYJINKrXieziQ==}
 
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
@@ -2364,6 +2405,9 @@ packages:
   mnemonist@0.40.3:
     resolution: {integrity: sha512-Vjyr90sJ23CKKH/qPAgUKicw/v6pRoamxIEDFOF8uSgFME7DqPRpHgRTejWVjkdGg5dXj0/NyxZHZ9bcjH+2uQ==}
 
+  mpg123-decoder@1.0.3:
+    resolution: {integrity: sha512-+fjxnWigodWJm3+4pndi+KUg9TBojgn31DPk85zEsim7C6s0X5Ztc/hQYdytXkwuGXH+aB0/aEkG40Emukv6oQ==}
+
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
@@ -2779,6 +2823,9 @@ packages:
   simple-xml-to-json@1.2.7:
     resolution: {integrity: sha512-mz9VXphOxQWX3eQ/uXCtm6upltoN0DLx8Zb5T4TFC4FHB7S9FDPGre8CfLWqPWQQH/GrQYd2AXhhVM5LDpYx6Q==}
     engines: {node: '>=20.12.2'}
+
+  simple-yenc@1.0.4:
+    resolution: {integrity: sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw==}
 
   sisteransi@1.0.5:
     resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
@@ -3295,6 +3342,12 @@ snapshots:
       '@ai-sdk/provider-utils': 5.0.16(zod@3.25.76)
       zod: 3.25.76
 
+  '@audio/decode-mp3@1.3.1':
+    dependencies:
+      mpg123-decoder: 1.0.3
+
+  '@audio/decode-wav@1.5.0': {}
+
   '@babel/code-frame@7.29.0':
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
@@ -3607,6 +3660,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.27.3':
     optional: true
+
+  '@eshaz/web-worker@1.2.2': {}
 
   '@eslint-community/eslint-utils@4.9.1(eslint@10.0.0(jiti@2.6.1))':
     dependencies:
@@ -4394,6 +4449,21 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@wasm-audio-decoders/common@9.0.7':
+    dependencies:
+      '@eshaz/web-worker': 1.2.2
+      simple-yenc: 1.0.4
+
+  '@wasm-audio-decoders/flac@0.2.10':
+    dependencies:
+      '@wasm-audio-decoders/common': 9.0.7
+      codec-parser: 2.5.0
+
+  '@wasm-audio-decoders/ogg-vorbis@0.1.20':
+    dependencies:
+      '@wasm-audio-decoders/common': 9.0.7
+      codec-parser: 2.5.0
+
   '@workflow/serde@4.1.0': {}
 
   '@xmldom/xmldom@0.8.13': {}
@@ -4598,6 +4668,8 @@ snapshots:
   code-excerpt@4.0.0:
     dependencies:
       convert-to-spaces: 2.0.1
+
+  codec-parser@2.5.0: {}
 
   color-convert@2.0.1:
     dependencies:
@@ -5477,6 +5549,10 @@ snapshots:
     dependencies:
       obliterator: 2.0.5
 
+  mpg123-decoder@1.0.3:
+    dependencies:
+      '@wasm-audio-decoders/common': 9.0.7
+
   ms@2.1.3: {}
 
   nan@2.28.0: {}
@@ -5889,6 +5965,8 @@ snapshots:
   signal-exit@4.1.0: {}
 
   simple-xml-to-json@1.2.7: {}
+
+  simple-yenc@1.0.4: {}
 
   sisteransi@1.0.5: {}
 

@@ -2,14 +2,22 @@ import { fork } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import type { WhisperWorkerRequest, WhisperWorkerResponse, WhisperWorkerResult } from './audio-transcribe-protocol.js'
+import type {
+  WhisperAudioMetadata,
+  WhisperWorkerRequest,
+  WhisperWorkerResponse,
+  WhisperWorkerResult,
+} from './audio-transcribe-protocol.js'
 
 const IDLE_MS = 60_000
+const PROBE_TIMEOUT_MS = 15_000
+const AUDIO_PREPARATION_TIMEOUT_MS = 2 * 60_000
+export const MAX_WHISPER_TRANSCRIPTION_MS = 30 * 60_000
 
 export class WhisperProcessError extends Error {
   constructor(
     message: string,
-    readonly phase: 'initialize' | 'transcribe' | 'process',
+    readonly phase: 'runtime' | 'decode' | 'initialize' | 'transcribe' | 'process',
   ) {
     super(message)
     this.name = 'WhisperProcessError'
@@ -21,6 +29,7 @@ export interface RunWhisperOptions {
   abortSignal?: AbortSignal
   onProgress?: (progress: number) => void
   onNotice?: (message: string) => void
+  timeoutMs?: number
 }
 
 function workerPath(): string {
@@ -38,10 +47,12 @@ function abortError(signal?: AbortSignal): Error {
 
 interface PendingRequest {
   id: number
-  resolve: (result: WhisperWorkerResult) => void
+  expected: 'ready' | 'audio-prepared' | 'result'
+  resolve: (result: unknown) => void
   reject: (error: Error) => void
   options: RunWhisperOptions
   abortHandler?: () => void
+  timeout?: ReturnType<typeof setTimeout>
 }
 
 class WhisperProcessClient {
@@ -52,7 +63,7 @@ class WhisperProcessClient {
 
   constructor() {
     this.child = fork(workerPath(), [], {
-      execArgv: [],
+      execArgv: ['--max-old-space-size=256'],
       serialization: 'advanced',
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     })
@@ -92,12 +103,22 @@ class WhisperProcessClient {
     }
     this.pending = null
     this.cleanupPending(pending)
-    if (message.type === 'error') pending.reject(new WhisperProcessError(message.error, message.phase))
+    if (message.type === 'error') {
+      pending.reject(new WhisperProcessError(message.error, message.phase))
+      return
+    }
+    if (message.type !== pending.expected) {
+      pending.reject(new WhisperProcessError(`Unexpected Whisper process response: ${message.type}`, 'process'))
+      return
+    }
+    if (message.type === 'ready') pending.resolve(undefined)
+    else if (message.type === 'audio-prepared') pending.resolve(message.metadata)
     else pending.resolve(message.result)
   }
 
   private cleanupPending(pending: PendingRequest): void {
     if (pending.abortHandler) pending.options.abortSignal?.removeEventListener('abort', pending.abortHandler)
+    clearTimeout(pending.timeout)
   }
 
   private fail(error: Error): void {
@@ -118,7 +139,12 @@ class WhisperProcessClient {
     this.child.channel?.unref()
   }
 
-  transcribe(modelPath: string, filePath: string, options: RunWhisperOptions): Promise<WhisperWorkerResult> {
+  private request<T>(
+    expected: PendingRequest['expected'],
+    buildRequest: (id: number) => WhisperWorkerRequest,
+    options: RunWhisperOptions,
+    defaultTimeoutMs: number,
+  ): Promise<T> {
     options.abortSignal?.throwIfAborted()
     if (this.terminated || !this.child.connected) {
       return Promise.reject(new WhisperProcessError('Whisper process is unavailable', 'process'))
@@ -126,8 +152,14 @@ class WhisperProcessClient {
     if (this.pending) return Promise.reject(new WhisperProcessError('Whisper process is already busy', 'process'))
     this.ref()
     const id = this.nextId++
-    return new Promise<WhisperWorkerResult>((resolve, reject) => {
-      const pending: PendingRequest = { id, resolve, reject, options }
+    return new Promise<T>((resolve, reject) => {
+      const pending: PendingRequest = {
+        id,
+        expected,
+        resolve: (value) => resolve(value as T),
+        reject,
+        options,
+      }
       const abortHandler = options.abortSignal
         ? () => {
             if (this.pending !== pending) return
@@ -138,23 +170,54 @@ class WhisperProcessClient {
           }
         : undefined
       pending.abortHandler = abortHandler
+      const timeoutMs = options.timeoutMs ?? defaultTimeoutMs
+      pending.timeout = setTimeout(() => {
+        if (this.pending !== pending) return
+        this.pending = null
+        this.cleanupPending(pending)
+        reject(new WhisperProcessError(`Whisper process timed out after ${timeoutMs} ms`, 'process'))
+        this.terminate(true)
+      }, timeoutMs)
+      pending.timeout.unref()
       this.pending = pending
       if (abortHandler) options.abortSignal!.addEventListener('abort', abortHandler, { once: true })
       if (options.abortSignal?.aborted) {
         abortHandler?.()
         return
       }
-      const request: WhisperWorkerRequest = {
-        id,
-        type: 'transcribe',
-        modelPath,
-        filePath,
-        ...(options.language ? { language: options.language } : {}),
-      }
+      const request = buildRequest(id)
       this.child.send(request, (error) => {
         if (error && this.pending === pending) this.fail(new WhisperProcessError(error.message, 'process'))
       })
     })
+  }
+
+  probe(options: RunWhisperOptions): Promise<void> {
+    return this.request('ready', (id) => ({ id, type: 'probe' }), options, PROBE_TIMEOUT_MS)
+  }
+
+  prepareAudio(filePath: string, pcmPath: string, options: RunWhisperOptions): Promise<WhisperAudioMetadata> {
+    return this.request(
+      'audio-prepared',
+      (id) => ({ id, type: 'prepare-audio', filePath, pcmPath }),
+      options,
+      AUDIO_PREPARATION_TIMEOUT_MS,
+    )
+  }
+
+  transcribe(modelPath: string, pcmPath: string, options: RunWhisperOptions): Promise<WhisperWorkerResult> {
+    return this.request(
+      'result',
+      (id) => ({
+        id,
+        type: 'transcribe',
+        modelPath,
+        pcmPath,
+        ...(options.language ? { language: options.language } : {}),
+      }),
+      options,
+      MAX_WHISPER_TRANSCRIPTION_MS,
+    )
   }
 
   terminate(force = false): void {
@@ -188,32 +251,94 @@ function scheduleIdleTermination(client: WhisperProcessClient): void {
   idleTimer.unref()
 }
 
-function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
-  const result = queue.then(operation, operation)
+function totalTimeoutError(timeoutMs: number): WhisperProcessError {
+  return new WhisperProcessError(`Whisper request timed out after ${timeoutMs} ms including queue wait`, 'process')
+}
+
+function runExclusive<T>(
+  operation: (remainingMs: number) => Promise<T>,
+  options: RunWhisperOptions,
+  defaultTimeoutMs: number,
+): Promise<T> {
+  if (options.abortSignal?.aborted) return Promise.reject(abortError(options.abortSignal))
+  const timeoutMs = options.timeoutMs ?? defaultTimeoutMs
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(totalTimeoutError(timeoutMs))
+  const deadline = Date.now() + timeoutMs
+  const begin = async (): Promise<T> => {
+    options.abortSignal?.throwIfAborted()
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) throw totalTimeoutError(timeoutMs)
+    return operation(remainingMs)
+  }
+  const result = queue.then(begin, begin)
   queue = result.then(
     () => undefined,
     () => undefined,
   )
-  return result
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const cancellation = new Promise<never>((_resolve, reject) => {
+    onAbort = options.abortSignal ? () => reject(abortError(options.abortSignal)) : undefined
+    if (onAbort) options.abortSignal!.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => reject(totalTimeoutError(timeoutMs)), timeoutMs)
+    timer.unref()
+  })
+  return Promise.race([result, cancellation]).finally(() => {
+    clearTimeout(timer)
+    if (onAbort) options.abortSignal?.removeEventListener('abort', onAbort)
+  })
 }
 
 export function runWhisperTranscription(
   modelPath: string,
-  filePath: string,
+  pcmPath: string,
   options: RunWhisperOptions = {},
 ): Promise<WhisperWorkerResult> {
-  return runExclusive(async () => {
-    options.abortSignal?.throwIfAborted()
-    clearIdleTimer()
-    if (!processClient?.alive) processClient = new WhisperProcessClient()
-    const client = processClient
-    try {
-      return await client.transcribe(modelPath, filePath, options)
-    } finally {
-      if (!client.alive && processClient === client) processClient = null
-      else scheduleIdleTermination(client)
-    }
-  })
+  return withWhisperClient(
+    (client, effectiveOptions) => client.transcribe(modelPath, pcmPath, effectiveOptions),
+    options,
+    MAX_WHISPER_TRANSCRIPTION_MS,
+  )
+}
+
+function withWhisperClient<T>(
+  operation: (client: WhisperProcessClient, effectiveOptions: RunWhisperOptions) => Promise<T>,
+  options: RunWhisperOptions,
+  defaultTimeoutMs: number,
+): Promise<T> {
+  return runExclusive(
+    async (remainingMs) => {
+      options.abortSignal?.throwIfAborted()
+      clearIdleTimer()
+      if (!processClient?.alive) processClient = new WhisperProcessClient()
+      const client = processClient
+      try {
+        return await operation(client, { ...options, timeoutMs: remainingMs })
+      } finally {
+        if (!client.alive && processClient === client) processClient = null
+        else scheduleIdleTermination(client)
+      }
+    },
+    options,
+    defaultTimeoutMs,
+  )
+}
+
+export function probeWhisperRuntime(options: RunWhisperOptions = {}): Promise<void> {
+  return withWhisperClient((client, effectiveOptions) => client.probe(effectiveOptions), options, PROBE_TIMEOUT_MS)
+}
+
+export function prepareWhisperAudio(
+  filePath: string,
+  pcmPath: string,
+  options: RunWhisperOptions = {},
+): Promise<WhisperAudioMetadata> {
+  return withWhisperClient(
+    (client, effectiveOptions) => client.prepareAudio(filePath, pcmPath, effectiveOptions),
+    options,
+    AUDIO_PREPARATION_TIMEOUT_MS,
+  )
 }
 
 export function disposeWhisperProcess(): void {

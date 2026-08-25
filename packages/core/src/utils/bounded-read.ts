@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 
 const READ_CHUNK_BYTES = 64 * 1024
 
@@ -24,24 +25,35 @@ export async function readFileWithinLimit(
   abortSignal?.throwIfAborted()
   const handle = await fs.open(filePath, 'r')
   try {
-    const stats = await handle.stat()
-    if (stats.size > limitBytes) throw new FileSizeLimitError(filePath, stats.size, limitBytes)
-
-    const chunks: Buffer[] = []
-    let totalBytes = 0
-    while (totalBytes <= limitBytes) {
-      abortSignal?.throwIfAborted()
-      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, limitBytes + 1 - totalBytes))
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, totalBytes)
-      if (bytesRead === 0) break
-      chunks.push(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead))
-      totalBytes += bytesRead
-    }
-
-    if (totalBytes > limitBytes) throw new FileSizeLimitError(filePath, totalBytes, limitBytes)
-    abortSignal?.throwIfAborted()
-    return Buffer.concat(chunks, totalBytes)
+    return await readFileHandleWithinLimit(handle, filePath, limitBytes, abortSignal)
   } finally {
     await handle.close()
   }
+}
+
+/** Read a bounded snapshot from an already-open identity without closing it. */
+export async function readFileHandleWithinLimit(
+  handle: FileHandle,
+  filePath: string,
+  limitBytes: number,
+  abortSignal?: AbortSignal,
+): Promise<Buffer> {
+  abortSignal?.throwIfAborted()
+  const stats = await handle.stat()
+  if (stats.size > limitBytes) throw new FileSizeLimitError(filePath, stats.size, limitBytes)
+
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+  while (totalBytes <= limitBytes) {
+    abortSignal?.throwIfAborted()
+    const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, limitBytes + 1 - totalBytes))
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, totalBytes)
+    if (bytesRead === 0) break
+    chunks.push(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead))
+    totalBytes += bytesRead
+  }
+
+  if (totalBytes > limitBytes) throw new FileSizeLimitError(filePath, totalBytes, limitBytes)
+  abortSignal?.throwIfAborted()
+  return Buffer.concat(chunks, totalBytes)
 }

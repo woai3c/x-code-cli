@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { EventEmitter as EventEmitterType } from 'node:events'
 
-import { disposeWhisperProcess, runWhisperTranscription } from '../src/agent/audio-transcribe-runner.js'
+import {
+  disposeWhisperProcess,
+  probeWhisperRuntime,
+  runWhisperTranscription,
+} from '../src/agent/audio-transcribe-runner.js'
 
 const childState = vi.hoisted(() => ({
   options: [] as Array<{ execArgv?: string[] }>,
@@ -62,7 +66,7 @@ describe('Whisper process lifetime', () => {
     const pending = runWhisperTranscription('/model.bin', '/long.wav')
     await vi.waitFor(() => expect(childState.instances).toHaveLength(1))
     const child = childState.instances[0]!
-    expect(childState.options[0]?.execArgv).toEqual([])
+    expect(childState.options[0]?.execArgv).toEqual(['--max-old-space-size=256'])
     await vi.waitFor(() => expect(child.send).toHaveBeenCalledTimes(1))
     const request = sentRequest(child)
 
@@ -96,6 +100,82 @@ describe('Whisper process lifetime', () => {
     controller.abort()
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it('settles an aborted queued request without waiting for the active transcription', async () => {
+    const first = runWhisperTranscription('/model.bin', '/first.pcm')
+    await vi.waitFor(() => expect(childState.instances).toHaveLength(1))
+    const child = childState.instances[0]!
+    await vi.waitFor(() => expect(child.send).toHaveBeenCalledTimes(1))
+
+    const controller = new AbortController()
+    const queued = runWhisperTranscription('/model.bin', '/queued.pcm', { abortSignal: controller.signal })
+    controller.abort()
+
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' })
+    expect(child.send).toHaveBeenCalledTimes(1)
+    expect(child.kill).not.toHaveBeenCalled()
+
+    const request = sentRequest(child)
+    child.emit('message', {
+      id: request.id,
+      type: 'result',
+      result: { isAborted: false, result: 'first', segments: [] },
+    })
+    await expect(first).resolves.toMatchObject({ result: 'first' })
+    await Promise.resolve()
+    expect(child.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts queue wait against a request timeout without terminating the active transcription', async () => {
+    const first = runWhisperTranscription('/model.bin', '/first.pcm')
+    await vi.waitFor(() => expect(childState.instances).toHaveLength(1))
+    const child = childState.instances[0]!
+    await vi.waitFor(() => expect(child.send).toHaveBeenCalledTimes(1))
+
+    const queued = runWhisperTranscription('/model.bin', '/queued.pcm', { timeoutMs: 1_000 })
+    const rejection = expect(queued).rejects.toThrow(/including queue wait/i)
+    await vi.advanceTimersByTimeAsync(1_001)
+
+    await rejection
+    expect(child.send).toHaveBeenCalledTimes(1)
+    expect(child.kill).not.toHaveBeenCalled()
+
+    const request = sentRequest(child)
+    child.emit('message', {
+      id: request.id,
+      type: 'result',
+      result: { isAborted: false, result: 'first', segments: [] },
+    })
+    await expect(first).resolves.toMatchObject({ result: 'first' })
+    await Promise.resolve()
+    expect(child.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('probes the native runtime through the isolated process', async () => {
+    const pending = probeWhisperRuntime()
+    await vi.waitFor(() => expect(childState.instances).toHaveLength(1))
+    const child = childState.instances[0]!
+    await vi.waitFor(() => expect(child.send).toHaveBeenCalledTimes(1))
+    const request = child.send.mock.calls[0]?.[0] as { id: number; type: string }
+    expect(request.type).toBe('probe')
+
+    child.emit('message', { id: request.id, type: 'ready' })
+
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('force-terminates a transcription that exceeds its total timeout', async () => {
+    const pending = runWhisperTranscription('/model.bin', '/long.wav', { timeoutMs: 1_000 })
+    const rejection = expect(pending).rejects.toThrow(/timed out/i)
+    await vi.waitFor(() => expect(childState.instances).toHaveLength(1))
+    const child = childState.instances[0]!
+    await vi.waitFor(() => expect(child.send).toHaveBeenCalledTimes(1))
+
+    await vi.advanceTimersByTimeAsync(1_001)
+
+    await rejection
     expect(child.kill).toHaveBeenCalledWith('SIGKILL')
   })
 })

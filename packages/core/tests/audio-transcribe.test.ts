@@ -21,22 +21,14 @@ describe('isAudioFile', () => {
   it('recognizes common audio extensions', () => {
     expect(isAudioFile('/path/to/file.mp3')).toBe(true)
     expect(isAudioFile('/path/to/file.wav')).toBe(true)
-    expect(isAudioFile('/path/to/file.m4a')).toBe(true)
     expect(isAudioFile('/path/to/file.ogg')).toBe(true)
     expect(isAudioFile('/path/to/file.flac')).toBe(true)
-    expect(isAudioFile('/path/to/file.aac')).toBe(true)
-    expect(isAudioFile('/path/to/file.aiff')).toBe(true)
-    expect(isAudioFile('/path/to/file.aif')).toBe(true)
-    expect(isAudioFile('/path/to/file.wma')).toBe(true)
-    expect(isAudioFile('/path/to/file.webm')).toBe(true)
-    expect(isAudioFile('/path/to/file.opus')).toBe(true)
   })
 
-  it('rejects non-audio extensions', () => {
-    expect(isAudioFile('/path/to/file.txt')).toBe(false)
-    expect(isAudioFile('/path/to/file.png')).toBe(false)
-    expect(isAudioFile('/path/to/file.pdf')).toBe(false)
-    expect(isAudioFile('/path/to/file.ts')).toBe(false)
+  it('rejects formats not supported by the bundled native decoder', () => {
+    for (const extension of ['m4a', 'aac', 'aiff', 'aif', 'wma', 'webm', 'opus', 'txt', 'png', 'pdf', 'ts']) {
+      expect(isAudioFile(`/path/to/file.${extension}`), extension).toBe(false)
+    }
   })
 
   it('is case-insensitive via path.extname', () => {
@@ -55,6 +47,7 @@ describe('classifyFile', () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-audio-classify-'))
     const wavFile = path.join(tmpDir, 'test.wav')
     const emptyMp3 = path.join(tmpDir, 'empty.mp3')
+    const emptyM4a = path.join(tmpDir, 'empty.m4a')
     const wav = Buffer.alloc(44)
     wav.write('RIFF', 0, 'ascii')
     wav.writeUInt32LE(36, 4)
@@ -69,9 +62,11 @@ describe('classifyFile', () => {
     wav.write('data', 36, 'ascii')
     await fs.writeFile(wavFile, wav)
     await fs.writeFile(emptyMp3, '')
+    await fs.writeFile(emptyM4a, '')
 
     expect(await classifyFile(wavFile)).toBe('audio')
     expect(await classifyFile(emptyMp3)).toBe('audio')
+    expect(await classifyFile(emptyM4a)).toBe('unknown')
 
     await fs.rm(tmpDir, { recursive: true })
   })
