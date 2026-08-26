@@ -86,6 +86,7 @@ export function isCollapsibleReadOnlyTool(toolName: string): boolean {
 const COLLAPSIBLE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'readfile',
   'read',
+  'fileingest',
   'glob',
   'grep',
   'search',
@@ -107,7 +108,7 @@ const SHELL_LABELS: Record<string, string> = {
 export function getToolLabel(toolName: string): string {
   const n = normalizeToolName(toolName)
   if (n === 'shell' || n === 'bash') return SHELL_LABELS[getShellProvider().type] ?? 'Shell'
-  if (n === 'readfile' || n === 'read') return 'Read'
+  if (n === 'readfile' || n === 'read' || n === 'fileingest') return 'Read'
   if (n === 'writefile' || n === 'write') return 'Write'
   if (n === 'edit' || n === 'update') return 'Update'
   if (n === 'glob') return 'Glob'
@@ -130,7 +131,15 @@ export function getToolInputPreview(toolName: string, input: Record<string, unkn
     return (input.command as string) || ''
   }
 
-  if (n === 'readfile' || n === 'read' || n === 'writefile' || n === 'write' || n === 'edit' || n === 'update') {
+  if (
+    n === 'readfile' ||
+    n === 'read' ||
+    n === 'fileingest' ||
+    n === 'writefile' ||
+    n === 'write' ||
+    n === 'edit' ||
+    n === 'update'
+  ) {
     return (input.filePath as string) || (input.file_path as string) || (input.path as string) || ''
   }
 
@@ -191,7 +200,7 @@ export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadG
 
   for (const tc of tools) {
     const n = normalizeToolName(tc.toolName)
-    if (n === 'read' || n === 'readfile') {
+    if (n === 'read' || n === 'readfile' || n === 'fileingest') {
       readCount++
       const p = (tc.input.filePath as string) || (tc.input.file_path as string) || (tc.input.path as string) || ''
       if (p) readPaths.push(basename(p))
@@ -260,6 +269,8 @@ export function getToolResultSummary(toolName: string, output: string | undefine
     const lineCount = (output.match(/\n/g) || []).length + 1
     return `${lineCount} lines`
   }
+
+  if (n === 'fileingest') return output
 
   if (n === 'listdir' || n === 'ls') {
     const entries = output

@@ -146,6 +146,7 @@ export async function collectTurnResponse(
   recoveredText: string,
   suppressedReplay: boolean,
   requestTimestamp: string,
+  cacheComparisonTtlMs?: number | null,
 ): Promise<string> {
   const response = await result.response
   if (!suppressedReplay) prependRecoveredText(response.messages, recoveredText)
@@ -171,6 +172,7 @@ export async function collectTurnResponse(
       usage: raw,
       normalized,
       expectedMissReasons,
+      cacheComparisonTtlMs,
       timestamp: requestTimestamp,
     })
     debugLog(

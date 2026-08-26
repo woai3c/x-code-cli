@@ -25,6 +25,9 @@ export interface ProviderTurnUsage {
   cacheCreationTokens: number | null
   cacheReadReported: boolean
   cacheCreationReported: boolean
+  /** Provider/transport-specific window in which adjacent cache reads are
+   *  meaningfully comparable. Missing on sessions written by older builds. */
+  cacheComparisonTtlMs?: number | null
   expectedMissReasons: CacheMissReason[]
 }
 
@@ -109,6 +112,7 @@ export function createProviderTurnUsage(options: {
   usage: Record<string, unknown>
   normalized: UsageDelta
   expectedMissReasons?: Iterable<CacheMissReason>
+  cacheComparisonTtlMs?: number | null
   timestamp?: string
 }): ProviderTurnUsage {
   return {
@@ -122,13 +126,15 @@ export function createProviderTurnUsage(options: {
     cacheCreationTokens: options.normalized.cacheCreationReported ? options.normalized.cacheCreationTokens : null,
     cacheReadReported: options.normalized.cacheReadReported,
     cacheCreationReported: options.normalized.cacheCreationReported,
+    ...(options.cacheComparisonTtlMs === undefined ? {} : { cacheComparisonTtlMs: options.cacheComparisonTtlMs }),
     expectedMissReasons: [...(options.expectedMissReasons ?? [])],
   }
 }
 
-function cacheTtlMs(modelId: string): number | null {
-  if (modelId.startsWith('anthropic:') || modelId.startsWith('alibaba:')) return 5 * 60 * 1000
-  if (/^openai:gpt-5\.6(?:$|-)/.test(modelId)) return 30 * 60 * 1000
+function cacheTtlMs(turn: ProviderTurnUsage): number | null {
+  if (turn.cacheComparisonTtlMs !== undefined) return turn.cacheComparisonTtlMs
+  if (turn.modelId.startsWith('anthropic:') || turn.modelId.startsWith('alibaba:')) return 5 * 60 * 1000
+  if (/^openai:gpt-5\.6(?:$|-)/.test(turn.modelId)) return 30 * 60 * 1000
   return null
 }
 
@@ -142,7 +148,7 @@ function appendComparablePrefix(
   if (!current.cacheReadReported) return
 
   const idleMs = Math.max(0, Date.parse(current.timestamp) - Date.parse(previous.timestamp))
-  const ttl = cacheTtlMs(current.modelId)
+  const ttl = cacheTtlMs(current)
   if (ttl !== null && idleMs >= ttl) return
 
   const reusable = Math.min(previous.inputTokens, current.inputTokens)
@@ -170,7 +176,7 @@ export function estimateCacheMiss(
   const reasons = [...current.expectedMissReasons]
   if (previous.modelId !== current.modelId && !reasons.includes('model-change')) reasons.push('model-change')
   const idleMs = Math.max(0, Date.parse(current.timestamp) - Date.parse(previous.timestamp))
-  const ttl = previous.modelId === current.modelId ? cacheTtlMs(current.modelId) : null
+  const ttl = previous.modelId === current.modelId ? cacheTtlMs(current) : null
   const probableTtlExpiry = ttl !== null && idleMs >= ttl
   if (probableTtlExpiry && !reasons.includes('ttl-expiry')) reasons.push('ttl-expiry')
   return {

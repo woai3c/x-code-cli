@@ -20,6 +20,7 @@ import {
   debugLog,
   errorMessage,
   estimateContextBreakdown,
+  extractFileReferences,
   flushPendingMessages,
   formatQueuedAgentInput,
   hydrateLoopState,
@@ -164,6 +165,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const turnCoordinatorRef = useRef(createTurnCoordinator())
   const initializedRef = useRef(false)
   const pendingQuestionRef = useRef<PendingQuestion | null>(null)
+  const fileIngestSequenceRef = useRef(0)
   const planApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingAuthorityRef = useRef<PendingAuthority | null>(null)
   /** Pending tool calls keyed by toolCallId. A single slot can't survive
@@ -653,19 +655,51 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         loopStateRef.current = activeLoopState
         bindShellSessionEvents(activeLoopState)
         const prepareUserContent = async (input: string) => {
+          const refs = extractFileReferences(input)
+          if (refs.length === 0) return input
+
+          const toolCalls = refs.map((ref) => ({
+            id: `file-ingest-${fileIngestSequenceRef.current++}`,
+            filePath: ref.absolutePath,
+          }))
+          for (const toolCall of toolCalls) {
+            toolLifecycleCallbacks.onToolCall(toolCall.id, 'fileIngest', { filePath: toolCall.filePath })
+          }
+          const finishFileIngestTools = (result: string, isError?: boolean) => {
+            for (const toolCall of toolCalls) toolLifecycleCallbacks.onToolResult(toolCall.id, result, isError)
+            // fileIngest participates in the existing read-only grouping. An
+            // invisible non-collapsible sentinel flushes the completed batch
+            // immediately, before the provider starts its response, so the
+            // user sees `Read N files (...)` instead of a bare Working spinner.
+            appendMessage({
+              id: `file-ingest-flush-${fileIngestSequenceRef.current++}`,
+              role: 'assistant',
+              content: '',
+              kind: 'command-result',
+              timestamp: Date.now(),
+            })
+            setState((prev) => ({ ...prev, bufferingReads: false }))
+          }
           try {
-            return await buildUserContent(
+            const content = await buildUserContent(
               input,
               modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
               (notice) => {
                 const label = notice.split(/\r?\n/, 1)[0] ?? notice
                 setState((prev) => ({ ...prev, ingestLabel: label }))
+                for (const toolCall of toolCalls) toolLifecycleCallbacks.onToolProgress(toolCall.id, label)
               },
               controller.signal,
               undefined,
               modelId,
               activeLoopState.readFileCache,
             )
+            controller.signal.throwIfAborted()
+            finishFileIngestTools('Prepared for analysis.')
+            return content
+          } catch (error) {
+            finishFileIngestTools(`Error: ${errorMessage(error)}`, true)
+            throw error
           } finally {
             setState((prev) => ({ ...prev, ingestLabel: null }))
           }

@@ -195,6 +195,51 @@ function isTypeValidationError(err: unknown, msg: string): boolean {
   )
 }
 
+const MAX_PROVIDER_ERROR_MESSAGE_CHARS = 500
+
+function boundedProviderMessage(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized || normalized.startsWith('<!DOCTYPE') || normalized.startsWith('<html')) return undefined
+  return normalized.slice(0, MAX_PROVIDER_ERROR_MESSAGE_CHARS)
+}
+
+function messageFromProviderBody(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    try {
+      return messageFromProviderBody(JSON.parse(value) as unknown) ?? boundedProviderMessage(value)
+    } catch {
+      return boundedProviderMessage(value)
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const error = record.error
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const message = boundedProviderMessage((error as Record<string, unknown>).message)
+    if (message) return message
+  }
+  return boundedProviderMessage(record.detail) ?? boundedProviderMessage(record.message)
+}
+
+function nestedProviderErrorMessage(err: unknown, depth = 0): string | undefined {
+  if (!err || typeof err !== 'object' || depth > 3) return undefined
+  const record = err as Record<string, unknown>
+  const direct = messageFromProviderBody(record.responseBody) ?? messageFromProviderBody(record.data)
+  if (direct) return direct
+  const lastError = nestedProviderErrorMessage(record.lastError, depth + 1)
+  if (lastError) return lastError
+  const cause = nestedProviderErrorMessage(record.cause, depth + 1)
+  if (cause) return cause
+  if (Array.isArray(record.errors)) {
+    for (let index = record.errors.length - 1; index >= 0; index--) {
+      const message = nestedProviderErrorMessage(record.errors[index], depth + 1)
+      if (message) return message
+    }
+  }
+  return undefined
+}
+
 /** Provider rejection due to malformed tool_call ↔ tool_result pairing
  *  in the message history. Most often surfaces against DeepSeek with a
  *  specific wording; OpenAI and others have variants. The
@@ -225,6 +270,8 @@ function extractProviderName(msg: string): string {
  */
 function extractErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) return String(err)
+  const providerMessage = nestedProviderErrorMessage(err)
+  if (providerMessage) return providerMessage
   const msg = err.message
   // AI SDK TypeValidationError: the real provider error lives in `.value`
   const val = (err as unknown as Record<string, unknown>).value

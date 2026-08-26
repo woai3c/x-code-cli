@@ -117,6 +117,45 @@ describe('stdout writer spacing', () => {
     expect(output).toContain('\x1b[38;2;152;195;121m"done"')
   })
 
+  it('groups completed built-in file ingestion reads before model output starts', () => {
+    let output = ''
+    const write = (chunk: string) => {
+      output += chunk
+    }
+
+    for (const [id, filePath] of [
+      ['ingest-1', 'C:\\reports\\invoice.pdf'],
+      ['ingest-2', '/tmp/analysis.docx'],
+    ]) {
+      writeMessageToStdout(write, {
+        id,
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id,
+            toolName: 'fileIngest',
+            input: { filePath },
+            status: 'completed',
+            output: 'Prepared for analysis.',
+          },
+        ],
+        timestamp: 0,
+      })
+    }
+    writeMessageToStdout(write, {
+      id: 'flush',
+      role: 'assistant',
+      kind: 'command-result',
+      content: '',
+      timestamp: 0,
+    })
+
+    const plain = output.replace(/\x1b\[[0-9;]*m/g, '')
+    expect(plain).toContain('Read 2 files(invoice.pdf, analysis.docx)')
+    expect(plain.match(/Prepared for analysis\./g)).toBeNull()
+  })
+
   it('renders denied authority tool input as visible escapes in scrollback', () => {
     let output = ''
 

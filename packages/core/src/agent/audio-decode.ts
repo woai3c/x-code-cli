@@ -572,7 +572,8 @@ async function decodeM4a(source: Buffer, resampler: StreamingResampler): Promise
   // This addon's incremental API cannot resume an MP4 demux after an
   // insufficient-data boundary. prepareM4aForDecode therefore validates the
   // codec config, every sample table/range and the native allocation budget
-  // before the single append, then we require exact output dimensions.
+  // before the single append. AAC has a fixed packet size; ALAC may end with a
+  // valid remainder packet that produces fewer frames than its stts duration.
   const prepared = prepareM4aForDecode(source)
   const { Decoder } = await import('@napi-audio/decoder')
   const decoder = new Decoder({ fileExtension: 'm4a', mimeType: 'audio/mp4' })
@@ -587,8 +588,8 @@ async function decodeM4a(source: Buffer, resampler: StreamingResampler): Promise
     }
     const frames = sample.data.length / sample.channelCount
     decodedFrames += frames
-    if (decodedFrames > prepared.declaredFrames) {
-      throw new Error('M4A decoder output exceeds the validated sample-table duration')
+    if (decodedFrames > prepared.maximumDecodedFrames) {
+      throw new Error('M4A decoder output exceeds the validated codec packet budget')
     }
     await resampler.acceptInterleavedInt16(sample.data, sample.sampleRate, sample.channelCount)
   }
@@ -596,8 +597,8 @@ async function decodeM4a(source: Buffer, resampler: StreamingResampler): Promise
     await accept(decoder.append(prepared.data))
     decoder.finalize()
     await accept(decoder.flush())
-    if (decodedFrames !== prepared.declaredFrames) {
-      throw new Error('M4A decoder output does not match the validated sample-table duration')
+    if (prepared.expectedDecodedFrames !== null && decodedFrames !== prepared.expectedDecodedFrames) {
+      throw new Error('M4A decoder output does not match the validated AAC packet count')
     }
     return prepared.codec
   } finally {

@@ -17,6 +17,7 @@ function turn(options: {
   cacheRead?: number
   cacheWrite?: number
   reasons?: Parameters<typeof createProviderTurnUsage>[0]['expectedMissReasons']
+  cacheComparisonTtlMs?: number | null
 }) {
   const usage = {
     inputTokens: options.input,
@@ -35,6 +36,7 @@ function turn(options: {
     usage,
     normalized: normalizeLanguageModelUsage(usage as any),
     expectedMissReasons: options.reasons,
+    cacheComparisonTtlMs: options.cacheComparisonTtlMs,
     timestamp: options.timestamp,
   })
 }
@@ -206,6 +208,29 @@ describe('cache miss estimation', () => {
       estimatedReusableTokens: 0,
       estimatedReusedTokens: 0,
       comparableTurnCount: 0,
+    })
+  })
+
+  it('uses the ChatGPT transport comparison window instead of assuming the Platform TTL', () => {
+    const previous = turn({
+      modelId: 'openai:gpt-5.6-sol',
+      input: 8_536,
+      cacheRead: 0,
+      cacheComparisonTtlMs: 5 * 60 * 1000,
+      timestamp: '2026-08-07T00:00:00.000Z',
+    })
+    const current = turn({
+      modelId: 'openai:gpt-5.6-sol',
+      input: 13_872,
+      cacheRead: 0,
+      cacheComparisonTtlMs: 5 * 60 * 1000,
+      timestamp: '2026-08-07T00:09:23.000Z',
+    })
+
+    expect(estimateCacheMiss(previous, current)).toMatchObject({
+      expected: true,
+      probableTtlExpiry: true,
+      reasons: ['ttl-expiry'],
     })
   })
 })

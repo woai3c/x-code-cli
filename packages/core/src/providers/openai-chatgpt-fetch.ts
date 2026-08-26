@@ -50,10 +50,6 @@ function textFromDeveloperInput(item: ResponsesInputItem): string | undefined {
   return text || undefined
 }
 
-function hasPromptCacheBreakpoint(item: ResponsesInputItem): boolean {
-  return Array.isArray(item.content) && item.content.some((part) => part.prompt_cache_breakpoint?.mode === 'explicit')
-}
-
 export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; modelId?: string } {
   let body: ResponsesRequestBody
   try {
@@ -63,16 +59,24 @@ export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; 
   }
 
   delete body.max_output_tokens
+  // The Platform Responses endpoint supports GPT-5.6 explicit cache options,
+  // but the ChatGPT subscription backend currently rejects both fields with
+  // HTTP 400. Keep prompt_cache_key (which the backend accepts) and strip only
+  // the unsupported controls at this transport boundary.
+  delete body.prompt_cache_options
   body.store = false
 
   if (Array.isArray(body.input)) {
+    body.input = body.input.map((item) => {
+      if (!Array.isArray(item.content)) return item
+      return {
+        ...item,
+        content: item.content.map(({ prompt_cache_breakpoint: _breakpoint, ...part }) => part),
+      }
+    })
     const instructions: string[] = []
     let prefixLength = 0
     for (const item of body.input) {
-      // A GPT-5.6 explicit breakpoint is meaningful only on its content
-      // block. Keep that developer/system item in `input` instead of losing
-      // the marker while adapting older unmarked requests to `instructions`.
-      if (hasPromptCacheBreakpoint(item)) break
       const text = textFromDeveloperInput(item)
       if (!text) break
       instructions.push(text)

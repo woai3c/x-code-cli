@@ -7,9 +7,60 @@ import path from 'node:path'
 import { decodeAudioToPcm } from '../src/agent/audio-decode.js'
 import { MAX_AUDIO_DURATION_SECONDS, MAX_AUDIO_PCM_INPUT_BYTES } from '../src/agent/audio-limits.js'
 import { prepareM4aForDecode } from '../src/agent/audio-mp4.js'
-import { TINY_VORBIS_EXPECTED, makeTinyM4aBuffer, makeTinyVorbisBuffer } from './helpers/audio.js'
+import { TINY_VORBIS_EXPECTED, makeTinyAlacBuffer, makeTinyM4aBuffer, makeTinyVorbisBuffer } from './helpers/audio.js'
 
 let tempDir: string
+
+interface TestMp4Box {
+  end: number
+  size: number
+  start: number
+  type: string
+}
+
+function testMp4Boxes(buffer: Buffer, start: number, end: number): TestMp4Box[] {
+  const boxes: TestMp4Box[] = []
+  for (let offset = start; offset < end; ) {
+    const size = buffer.readUInt32BE(offset)
+    const type = buffer.toString('ascii', offset + 4, offset + 8)
+    if (size < 8 || offset + size > end) throw new Error(`Invalid test MP4 ${type} box`)
+    boxes.push({ end: offset + size, size, start: offset, type })
+    offset += size
+  }
+  return boxes
+}
+
+function testMp4Children(buffer: Buffer, parent: TestMp4Box | null): TestMp4Box[] {
+  if (!parent) return testMp4Boxes(buffer, 0, buffer.length)
+  const prefixBytes = parent.type === 'stsd' ? 8 : parent.type === 'mp4a' || parent.type === 'alac' ? 28 : 0
+  return testMp4Boxes(buffer, parent.start + 8 + prefixBytes, parent.end)
+}
+
+function duplicateMp4Box(buffer: Buffer, pathTypes: string[]): Buffer {
+  const ancestors: TestMp4Box[] = []
+  let parent: TestMp4Box | null = null
+  for (const type of pathTypes) {
+    const match: TestMp4Box | undefined = testMp4Children(buffer, parent).find((box) => box.type === type)
+    if (!match) throw new Error(`Missing test MP4 path: ${pathTypes.join('/')}`)
+    ancestors.push(match)
+    parent = match
+  }
+  const target = ancestors.pop()
+  if (!target) throw new Error('Test MP4 path must not be empty')
+  const duplicate = buffer.subarray(target.start, target.end)
+  const result = Buffer.concat([buffer.subarray(0, target.end), duplicate, buffer.subarray(target.end)])
+  for (const ancestor of ancestors) result.writeUInt32BE(ancestor.size + target.size, ancestor.start)
+  return result
+}
+
+function mutateAacConfig(buffer: Buffer, firstByte: number, secondByte: number): Buffer {
+  const marker = Buffer.from([0x05, 0x80, 0x80, 0x80, 0x02, 0x14, 0x08])
+  const offset = buffer.indexOf(marker)
+  if (offset < 0) throw new Error('Missing AAC AudioSpecificConfig in test fixture')
+  buffer[offset + marker.length - 2] = firstByte
+  buffer[offset + marker.length - 1] = secondByte
+  return buffer
+}
 
 function pcmWav(sampleRate: number, samples: number[]): Buffer {
   const buffer = Buffer.alloc(44 + samples.length * 2)
@@ -128,10 +179,42 @@ describe('bounded audio decoder', () => {
     expect(pcm.some((sample) => sample !== 0)).toBe(true)
   })
 
-  it('bounds M4A output using codec config and sample tables rather than the untrusted sample-entry channels', () => {
+  it('bounds AAC output using packet count and codec frames rather than untrusted duration metadata', () => {
     const prepared = prepareM4aForDecode(makeTinyM4aBuffer())
 
-    expect(prepared).toMatchObject({ declaredFrames: 4_096, numberOfChannels: 1, sampleRate: 16_000 })
+    expect(prepared).toMatchObject({
+      expectedDecodedFrames: 4_096,
+      maximumDecodedFrames: 4_096,
+      numberOfChannels: 1,
+      sampleRate: 16_000,
+    })
+  })
+
+  it('decodes a standard ALAC remainder packet without trusting stts as exact PCM output', async () => {
+    const input = path.join(tempDir, 'input-alac.m4a')
+    const output = path.join(tempDir, 'output-alac.pcm')
+    const source = makeTinyAlacBuffer()
+    const prepared = prepareM4aForDecode(source)
+    await fs.writeFile(input, source)
+
+    const metadata = await decodeAudioToPcm(input, output)
+
+    expect(prepared).toMatchObject({
+      codec: 'ALAC',
+      declaredDurationSeconds: 0.768,
+      expectedDecodedFrames: null,
+      maximumDecodedFrames: 12_288,
+      numberOfChannels: 1,
+      sampleRate: 16_000,
+    })
+    expect(metadata).toMatchObject({
+      codec: 'ALAC',
+      container: 'MPEG-4',
+      durationSeconds: 0.512,
+      numberOfChannels: 1,
+      sampleRate: 16_000,
+    })
+    expect((await fs.stat(output)).size).toBe(8_192 * Int16Array.BYTES_PER_ELEMENT)
   })
 
   it('rejects an M4A whose forged media duration disagrees with its actual sample table before native decode', async () => {
@@ -145,6 +228,81 @@ describe('bounded audio decoder', () => {
 
     await expect(decodeAudioToPcm(input, output)).rejects.toThrow(/duration does not match.*time-to-sample/i)
     await expect(fs.stat(output)).resolves.toMatchObject({ size: 0 })
+  })
+
+  it('rejects forged mdhd and stts durations that understate fixed AAC-LC packet output', () => {
+    const forged = makeTinyM4aBuffer()
+    const mdhdType = forged.indexOf(Buffer.from('mdhd'))
+    const sttsType = forged.indexOf(Buffer.from('stts'))
+    expect(mdhdType).toBeGreaterThan(0)
+    expect(sttsType).toBeGreaterThan(0)
+    forged.writeUInt32BE(2_048, mdhdType + 20)
+    forged.writeUInt32BE(512, sttsType + 16)
+
+    expect(() => prepareM4aForDecode(forged)).toThrow(/AAC-LC packets must declare exactly 1024 decoded frames/i)
+  })
+
+  it.each([
+    ['mdia', ['moov', 'trak', 'mdia']],
+    ['hdlr', ['moov', 'trak', 'mdia', 'hdlr']],
+    ['minf', ['moov', 'trak', 'mdia', 'minf']],
+    ['stbl', ['moov', 'trak', 'mdia', 'minf', 'stbl']],
+    ['stsd', ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsd']],
+    ['mdhd', ['moov', 'trak', 'mdia', 'mdhd']],
+    ['stts', ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stts']],
+    ['stsz', ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsz']],
+    ['stsc', ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsc']],
+  ])('rejects duplicate mandatory %s boxes before native decode', (type, boxPath) => {
+    const duplicated = duplicateMp4Box(makeTinyM4aBuffer(), boxPath)
+
+    expect(() => prepareM4aForDecode(duplicated)).toThrow(new RegExp(`duplicate ${type}|exactly one ${type}`, 'i'))
+  })
+
+  it('rejects duplicate AAC decoder configuration boxes before native decode', () => {
+    const duplicated = duplicateMp4Box(makeTinyM4aBuffer(), [
+      'moov',
+      'trak',
+      'mdia',
+      'minf',
+      'stbl',
+      'stsd',
+      'mp4a',
+      'esds',
+    ])
+
+    expect(() => prepareM4aForDecode(duplicated)).toThrow(/exactly one esds/i)
+  })
+
+  it('rejects multiple audio tracks so native track selection cannot bypass the validated budget', () => {
+    const duplicated = duplicateMp4Box(makeTinyM4aBuffer(), ['moov', 'trak'])
+
+    expect(() => prepareM4aForDecode(duplicated)).toThrow(/exactly one audio track/i)
+  })
+
+  it('rejects duplicate ALAC decoder configuration boxes before native decode', () => {
+    const duplicated = duplicateMp4Box(makeTinyAlacBuffer(), [
+      'moov',
+      'trak',
+      'mdia',
+      'minf',
+      'stbl',
+      'stsd',
+      'alac',
+      'alac',
+    ])
+
+    expect(() => prepareM4aForDecode(duplicated)).toThrow(/exactly one codec config/i)
+  })
+
+  it.each([
+    ['SBR', 0x2c, 0x08, /unsupported AAC object type: 5/i],
+    ['PS', 0xec, 0x08, /unsupported AAC object type: 29/i],
+    ['three channels', 0x14, 0x18, /unsupported AAC channel configuration: 3/i],
+    ['960-frame packets', 0x14, 0x0c, /unsupported 960-frame AAC packets/i],
+  ])('rejects unsupported native AAC config: %s', (_name, firstByte, secondByte, expected) => {
+    const unsupported = mutateAacConfig(makeTinyM4aBuffer(), firstByte, secondByte)
+
+    expect(() => prepareM4aForDecode(unsupported)).toThrow(expected)
   })
 
   it('enforces the PCM cap against actual decoded frames', async () => {

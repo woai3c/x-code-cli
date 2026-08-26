@@ -77,7 +77,7 @@ describe('OpenAI ChatGPT provider fetch', () => {
     expect(body.include).toContain('reasoning.encrypted_content')
   })
 
-  it('preserves a GPT-5.6 explicit cache breakpoint on developer input', () => {
+  it('strips cache controls unsupported by ChatGPT while preserving the accepted cache key', () => {
     const transformed = transformOpenAIChatGPTRequestBody(
       JSON.stringify({
         input: [
@@ -93,15 +93,18 @@ describe('OpenAI ChatGPT provider fetch', () => {
           },
           { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
         ],
+        prompt_cache_key: 'stable-cache-key',
         prompt_cache_options: { mode: 'implicit', ttl: '30m' },
       }),
     )
     const body = JSON.parse(transformed.body) as Record<string, any>
 
-    expect(body.instructions).toBeUndefined()
-    expect(body.input).toHaveLength(2)
-    expect(body.input[0].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' })
-    expect(body.prompt_cache_options).toEqual({ mode: 'implicit', ttl: '30m' })
+    expect(body.instructions).toBe('stable system prompt')
+    expect(body.input).toHaveLength(1)
+    expect(body.input[0].role).toBe('user')
+    expect(body.prompt_cache_key).toBe('stable-cache-key')
+    expect(body.prompt_cache_options).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('prompt_cache_breakpoint')
   })
 
   it('preserves none reasoning only when the authenticated model catalog supports it', async () => {

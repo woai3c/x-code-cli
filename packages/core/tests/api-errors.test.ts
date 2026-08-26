@@ -85,6 +85,27 @@ describe('classifyApiError', () => {
     expect(result.message).not.toContain('invalid test credential')
   })
 
+  it('surfaces a bounded provider detail from an SDK response body', () => {
+    const error = Object.assign(new Error('Bad Request'), {
+      statusCode: 400,
+      responseBody: JSON.stringify({ detail: 'Unsupported parameter: prompt_cache_options' }),
+    })
+
+    expect(classifyApiError(error)).toEqual({
+      message: 'Unsupported parameter: prompt_cache_options',
+      retryable: false,
+    })
+  })
+
+  it('finds a provider error body inside an SDK retry wrapper', () => {
+    const inner = Object.assign(new Error('Bad Request'), {
+      responseBody: JSON.stringify({ error: { message: 'prompt_cache_breakpoint is not supported on this model' } }),
+    })
+    const wrapper = Object.assign(new Error('Failed after 4 attempts'), { errors: [inner] })
+
+    expect(classifyApiError(wrapper).message).toBe('prompt_cache_breakpoint is not supported on this model')
+  })
+
   it('uses response metadata to classify a plain ChatGPT 401', () => {
     const error = Object.assign(new Error('Unauthorized'), {
       statusCode: 401,

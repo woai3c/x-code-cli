@@ -112,6 +112,8 @@ describe('TUI input and lifecycle', () => {
         const requests = await provider.waitForMainRequests(2)
         expect(requests[1]?.rawBody).toContain('QUEUED_ATTACHMENT_CONTENT')
         await harness.waitForText('queued-file-ingested')
+        expect(harness.raw()).toContain('Read')
+        expect(harness.raw()).toContain('queued attachment.txt')
       },
       {
         beforeStart: async (workspace) => {

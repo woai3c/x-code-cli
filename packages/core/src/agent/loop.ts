@@ -8,6 +8,7 @@ import path from 'node:path'
 import { streamText } from 'ai'
 import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
+import { getOpenAIAuthSnapshot } from '../auth/openai-chatgpt/auth-resolver.js'
 import { DEFAULT_STREAM_CONFIG, loadUserConfig } from '../config/index.js'
 import { aggregateUserPromptSubmit } from '../hooks/bus.js'
 import type { HookEvent } from '../hooks/types.js'
@@ -19,7 +20,7 @@ import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } fro
 import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { listAgentsTool, sendMessageTool } from '../peers/tools.js'
-import { applyCacheControl } from '../providers/cache-control.js'
+import { applyCacheControl, openAICacheComparisonTtlMs } from '../providers/cache-control.js'
 import { withZhipuReasoningHeader } from '../providers/registry.js'
 import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
 import { createActivateSkillTool } from '../tools/activate-skill.js'
@@ -482,12 +483,14 @@ async function runTurnAttempt(
   // system prompt + message tail; OpenAI gets a stable prefix-derived key;
   // Moonshot/xAI use session affinity. Other compatible providers rely on the
   // system-prompt cache in LoopState keeping the prefix byte-stable.
+  const openAIAuthMode = options.modelId.startsWith('openai:') ? getOpenAIAuthSnapshot().context.mode : undefined
   const cached = applyCacheControl({
     instructions: systemPrompt,
     messages: requestMessages,
     tools: effectiveTools,
     modelId: options.modelId,
     sessionId: state.sessionId,
+    openAIAuthMode,
   })
   if (options.modelId.startsWith('openai:')) {
     const openAICache = cached.providerOptions?.openai as
@@ -558,7 +561,8 @@ async function runTurnAttempt(
       // The raw dump scares users and isn't actionable. Keep a debug hatch.
       onError: ({ error }) => {
         if (process.env.DEBUG_STDOUT) {
-          debugLog('stream.onError', error instanceof Error ? error.name : typeof error)
+          const name = error instanceof Error ? error.name : typeof error
+          debugLog('stream.onError', `${name}: ${classifyApiError(error).message}`)
         }
       },
     }) as unknown as StreamResult
@@ -629,6 +633,7 @@ async function runTurnAttempt(
       recoveryText,
       tracker.suppressedReplay,
       requestTimestamp,
+      openAICacheComparisonTtlMs(options.modelId, openAIAuthMode),
     )
     debugLog(
       'turn.finish',

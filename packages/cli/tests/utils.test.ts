@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatCompactionResult, getToolResultSummary } from '../src/ui/utils.js'
+import { formatCompactionResult, getToolInputPreview, getToolLabel, getToolResultSummary } from '../src/ui/utils.js'
 
 describe('compaction usage reports', () => {
   it('reports the estimated context sizes after compression', () => {
@@ -46,5 +46,12 @@ describe('CLI tool result summaries', () => {
 
     expect(summary).toContain('... +')
     expect(summary?.endsWith('└────────┴────┘')).toBe(true)
+  })
+})
+
+describe('local file ingestion tool display', () => {
+  it('renders the built-in preflight as Read with portable file-name previews', () => {
+    expect(getToolLabel('fileIngest')).toBe('Read')
+    expect(getToolInputPreview('fileIngest', { filePath: 'C:\\reports\\invoice.pdf' })).toBe('C:\\reports\\invoice.pdf')
   })
 })

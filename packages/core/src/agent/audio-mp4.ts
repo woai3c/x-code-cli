@@ -13,16 +13,6 @@ const AAC_SAMPLE_RATES = [
   96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350,
 ] as const
 
-const AAC_CHANNELS = new Map([
-  [1, 1],
-  [2, 2],
-  [3, 3],
-  [4, 4],
-  [5, 5],
-  [6, 6],
-  [7, 8],
-])
-
 interface Mp4Box {
   end: number
   headerSize: number
@@ -38,8 +28,9 @@ interface BoxMapping extends Mp4Box {
 export interface PreparedM4a {
   codec: 'AAC' | 'ALAC'
   data: Buffer
-  declaredFrames: number
   declaredDurationSeconds: number
+  expectedDecodedFrames: number | null
+  maximumDecodedFrames: number
   numberOfChannels: number
   sampleRate: number
 }
@@ -47,6 +38,7 @@ export interface PreparedM4a {
 interface AudioTrack {
   codec: 'AAC' | 'ALAC'
   entryIndex: number
+  maximumAllocationChannels: number
   maxPacketFrames: number
   mdia: Mp4Box
   numberOfChannels: number
@@ -61,7 +53,8 @@ interface Descriptor {
 }
 
 interface SampleTiming {
-  declaredFrames: number
+  expectedDecodedFrames: number | null
+  maximumDecodedFrames: number
   sampleCount: number
 }
 
@@ -102,15 +95,21 @@ function children(buffer: Buffer, parent: Mp4Box, prefixBytes = 0): Mp4Box[] {
 }
 
 function child(buffer: Buffer, parent: Mp4Box, type: string): Mp4Box {
-  const found = children(buffer, parent).find((box) => box.type === type)
-  if (!found) throw new Error(`M4A audio track is missing its ${type} box`)
-  return found
+  const matches = children(buffer, parent).filter((box) => box.type === type)
+  if (matches.length !== 1) throw new Error(`M4A ${parent.type} box must contain exactly one ${type} box`)
+  return matches[0]!
+}
+
+function optionalChild(buffer: Buffer, parent: Mp4Box, type: string): Mp4Box | null {
+  const matches = children(buffer, parent).filter((box) => box.type === type)
+  if (matches.length > 1) throw new Error(`M4A ${parent.type} box must not contain duplicate ${type} boxes`)
+  return matches[0] ?? null
 }
 
 function audioSampleEntryChildren(buffer: Buffer, entry: Mp4Box): Mp4Box[] {
   if (entry.start + 36 > entry.end) throw new Error('M4A audio sample description is truncated')
   const version = buffer.readUInt16BE(entry.start + 16)
-  const prefixBytes = version === 0 ? 28 : version === 1 ? 44 : version === 2 ? 64 : -1
+  const prefixBytes = version === 0 ? 28 : version === 1 ? 44 : -1
   if (prefixBytes < 0) throw new Error(`M4A uses an unsupported audio sample-entry version: ${version}`)
   return children(buffer, entry, prefixBytes)
 }
@@ -134,11 +133,16 @@ function readDescriptor(buffer: Buffer, offset: number, end: number): Descriptor
   return { end: cursor + size, payloadStart: cursor, tag }
 }
 
-function findDecoderSpecificInfo(buffer: Buffer, start: number, end: number): Buffer | null {
+function decoderSpecificInfos(buffer: Buffer, start: number, end: number): Buffer[] {
+  const configs: Buffer[] = []
   let offset = start
   while (offset < end) {
     const descriptor = readDescriptor(buffer, offset, end)
-    if (descriptor.tag === 0x05) return buffer.subarray(descriptor.payloadStart, descriptor.end)
+    if (descriptor.tag === 0x05) {
+      configs.push(buffer.subarray(descriptor.payloadStart, descriptor.end))
+      offset = descriptor.end
+      continue
+    }
 
     let nestedStart: number | null = null
     if (descriptor.tag === 0x03) {
@@ -156,12 +160,11 @@ function findDecoderSpecificInfo(buffer: Buffer, start: number, end: number): Bu
     }
     if (nestedStart !== null) {
       if (nestedStart > descriptor.end) throw new Error('M4A AAC descriptor fields exceed their box')
-      const found = findDecoderSpecificInfo(buffer, nestedStart, descriptor.end)
-      if (found) return found
+      configs.push(...decoderSpecificInfos(buffer, nestedStart, descriptor.end))
     }
     offset = descriptor.end
   }
-  return null
+  return configs
 }
 
 class BitReader {
@@ -180,6 +183,13 @@ class BitReader {
     }
     return value
   }
+
+  hasOnlyZeroPadding(): boolean {
+    for (let absolute = this.bitOffset; absolute < this.data.length * 8; absolute++) {
+      if (((this.data[absolute >>> 3]! >>> (7 - (absolute & 7))) & 1) !== 0) return false
+    }
+    return true
+  }
 }
 
 function readAacObjectType(bits: BitReader): number {
@@ -189,7 +199,10 @@ function readAacObjectType(bits: BitReader): number {
 
 function readAacSampleRate(bits: BitReader): number {
   const index = bits.read(4)
-  const sampleRate = index === 15 ? bits.read(24) : AAC_SAMPLE_RATES[index]
+  if (index === 15 || index >= AAC_SAMPLE_RATES.length) {
+    throw new Error('M4A uses an unsupported AAC sample-rate configuration')
+  }
+  const sampleRate = AAC_SAMPLE_RATES[index]
   if (!sampleRate || sampleRate < MIN_AUDIO_SAMPLE_RATE || sampleRate > MAX_AUDIO_SAMPLE_RATE) {
     throw new Error('M4A AAC config has an unsafe sample rate')
   }
@@ -200,36 +213,41 @@ function aacMetadata(
   buffer: Buffer,
   entry: Mp4Box,
 ): { maxPacketFrames: number; numberOfChannels: number; sampleRate: number } {
-  const esds = audioSampleEntryChildren(buffer, entry).find((box) => box.type === 'esds')
-  if (!esds) throw new Error('M4A AAC sample description is missing its esds box')
+  const entries = audioSampleEntryChildren(buffer, entry).filter((box) => box.type === 'esds')
+  if (entries.length !== 1) throw new Error('M4A AAC sample description must contain exactly one esds box')
+  const esds = entries[0]!
   const payload = esds.start + esds.headerSize
   if (payload + 4 > esds.end) throw new Error('M4A AAC esds box is truncated')
-  const config = findDecoderSpecificInfo(buffer, payload + 4, esds.end)
-  if (!config) throw new Error('M4A AAC sample description is missing AudioSpecificConfig')
+  const configs = decoderSpecificInfos(buffer, payload + 4, esds.end)
+  if (configs.length !== 1) throw new Error('M4A AAC sample description must contain exactly one AudioSpecificConfig')
+  const config = configs[0]!
+  if (config.length !== 2) throw new Error('M4A uses an unsupported AAC AudioSpecificConfig length')
 
   const bits = new BitReader(config)
-  let objectType = readAacObjectType(bits)
-  let sampleRate = readAacSampleRate(bits)
-  let channelConfig = bits.read(4)
-  if (objectType === 5 || objectType === 29) {
-    sampleRate = readAacSampleRate(bits)
-    objectType = readAacObjectType(bits)
-    if (objectType === 22) channelConfig = bits.read(4)
-  }
+  const objectType = readAacObjectType(bits)
+  const sampleRate = readAacSampleRate(bits)
+  const channelConfig = bits.read(4)
   if (objectType !== 2) throw new Error(`M4A uses an unsupported AAC object type: ${objectType}`)
-  const numberOfChannels = AAC_CHANNELS.get(channelConfig)
-  if (!numberOfChannels) throw new Error(`M4A uses an unsupported AAC channel configuration: ${channelConfig}`)
-  return { maxPacketFrames: 2_048, numberOfChannels, sampleRate }
+  if (channelConfig !== 1 && channelConfig !== 2) {
+    throw new Error(`M4A uses an unsupported AAC channel configuration: ${channelConfig}`)
+  }
+  if (bits.read(1) !== 0) throw new Error('M4A uses unsupported 960-frame AAC packets')
+  if (bits.read(1) !== 0) throw new Error('M4A uses unsupported AAC core-coder dependencies')
+  if (bits.read(1) !== 0 || !bits.hasOnlyZeroPadding()) {
+    throw new Error('M4A uses unsupported AAC config extensions')
+  }
+  return { maxPacketFrames: 1_024, numberOfChannels: channelConfig, sampleRate }
 }
 
 function alacMetadata(
   buffer: Buffer,
   entry: Mp4Box,
 ): { maxPacketFrames: number; numberOfChannels: number; sampleRate: number } {
-  const config = audioSampleEntryChildren(buffer, entry).find((box) => box.type === 'alac')
-  if (!config || config.end - config.start - config.headerSize < 24) {
-    throw new Error('M4A ALAC sample description is missing its codec config')
-  }
+  const entries = audioSampleEntryChildren(buffer, entry).filter((box) => box.type === 'alac')
+  if (entries.length !== 1) throw new Error('M4A ALAC sample description must contain exactly one codec config')
+  const config = entries[0]!
+  if (config.end - config.start - config.headerSize !== 28)
+    throw new Error('M4A ALAC sample description has an unsupported codec config size')
   const start = config.end - 24
   const frameLength = buffer.readUInt32BE(start)
   const numberOfChannels = buffer[start + 9]!
@@ -247,6 +265,7 @@ function alacMetadata(
 }
 
 function findAudioTrack(buffer: Buffer, moov: Mp4Box): AudioTrack {
+  let audioTrack: AudioTrack | null = null
   for (const trak of children(buffer, moov).filter((box) => box.type === 'trak')) {
     const mdia = child(buffer, trak, 'mdia')
     const hdlr = child(buffer, mdia, 'hdlr')
@@ -271,9 +290,24 @@ function findAudioTrack(buffer: Buffer, moov: Mp4Box): AudioTrack {
     if (!entry) throw new Error('M4A does not contain a supported AAC or ALAC audio track')
     const codec = entry.type === 'alac' ? 'ALAC' : 'AAC'
     const metadata = codec === 'AAC' ? aacMetadata(buffer, entry) : alacMetadata(buffer, entry)
-    return { codec, entryIndex: entryIndex + 1, mdia, stbl, ...metadata }
+    if (entry.start + 26 > entry.end) throw new Error('M4A audio sample description is truncated')
+    const sampleEntryChannels = buffer.readUInt16BE(entry.start + 24)
+    const maximumSupportedChannels = codec === 'AAC' ? 2 : MAX_AUDIO_CHANNELS
+    if (sampleEntryChannels < 1 || sampleEntryChannels > maximumSupportedChannels) {
+      throw new Error(`M4A uses an unsupported ${codec} sample-entry channel count: ${sampleEntryChannels}`)
+    }
+    if (audioTrack) throw new Error('M4A must contain exactly one audio track')
+    audioTrack = {
+      codec,
+      entryIndex: entryIndex + 1,
+      maximumAllocationChannels: Math.max(sampleEntryChannels, metadata.numberOfChannels),
+      mdia,
+      stbl,
+      ...metadata,
+    }
   }
-  throw new Error('M4A does not contain an audio track')
+  if (!audioTrack) throw new Error('M4A does not contain an audio track')
+  return audioTrack
 }
 
 function mediaTiming(buffer: Buffer, track: AudioTrack): { duration: bigint; timescale: number } {
@@ -320,7 +354,14 @@ function sampleTiming(buffer: Buffer, track: AudioTrack, timescale: number, mdhd
     if (count === 0 || delta === 0 || sampleCount + count > MAX_M4A_PACKET_COUNT) {
       throw new Error('M4A time-to-sample table exceeds the supported packet range')
     }
-    const packetFrames = Number((BigInt(delta) * BigInt(track.sampleRate) + BigInt(timescale) - 1n) / BigInt(timescale))
+    const scaledFrames = BigInt(delta) * BigInt(track.sampleRate)
+    if (scaledFrames % BigInt(timescale) !== 0n) {
+      throw new Error('M4A packet duration does not map to a whole number of codec frames')
+    }
+    const packetFrames = Number(scaledFrames / BigInt(timescale))
+    if (track.codec === 'AAC' && packetFrames !== track.maxPacketFrames) {
+      throw new Error('M4A AAC-LC packets must declare exactly 1024 decoded frames')
+    }
     if (packetFrames < 1 || packetFrames > track.maxPacketFrames) {
       throw new Error('M4A packet duration exceeds the supported sample-allocation range')
     }
@@ -330,12 +371,21 @@ function sampleTiming(buffer: Buffer, track: AudioTrack, timescale: number, mdhd
   if (sampleCount === 0 || duration !== mdhdDuration) {
     throw new Error('M4A media duration does not match its time-to-sample table')
   }
-  const declaredFrames = Number((duration * BigInt(track.sampleRate) + BigInt(timescale) - 1n) / BigInt(timescale))
-  const decodedBytes = BigInt(declaredFrames) * BigInt(track.numberOfChannels) * BigInt(Int16Array.BYTES_PER_ELEMENT)
-  if (!Number.isSafeInteger(declaredFrames) || decodedBytes > BigInt(MAX_M4A_NATIVE_PCM_BYTES)) {
+  const maximumDecodedFrames = BigInt(sampleCount) * BigInt(track.maxPacketFrames)
+  if (maximumDecodedFrames > BigInt(track.sampleRate) * BigInt(MAX_AUDIO_DURATION_SECONDS)) {
+    throw new Error(`M4A exceeds the ${MAX_AUDIO_DURATION_SECONDS}s local decode limit`)
+  }
+  const decodedBytes =
+    maximumDecodedFrames * BigInt(track.maximumAllocationChannels) * BigInt(Int16Array.BYTES_PER_ELEMENT)
+  if (maximumDecodedFrames > BigInt(Number.MAX_SAFE_INTEGER) || decodedBytes > BigInt(MAX_M4A_NATIVE_PCM_BYTES)) {
     throw new Error('M4A decoded audio exceeds the local decoder memory limit')
   }
-  return { declaredFrames, sampleCount }
+  const boundedFrames = Number(maximumDecodedFrames)
+  return {
+    expectedDecodedFrames: track.codec === 'AAC' ? boundedFrames : null,
+    maximumDecodedFrames: boundedFrames,
+    sampleCount,
+  }
 }
 
 function sampleSizes(buffer: Buffer, stbl: Mp4Box, expectedCount: number): number[] {
@@ -455,7 +505,8 @@ function audioTrackMetadata(buffer: Buffer, moov: Mp4Box, topLevelBoxes: Mp4Box[
   return {
     codec: track.codec,
     declaredDurationSeconds: Number(duration) / timescale,
-    declaredFrames: timing.declaredFrames,
+    expectedDecodedFrames: timing.expectedDecodedFrames,
+    maximumDecodedFrames: timing.maximumDecodedFrames,
     numberOfChannels: track.numberOfChannels,
     sampleRate: track.sampleRate,
   }
@@ -464,9 +515,9 @@ function audioTrackMetadata(buffer: Buffer, moov: Mp4Box, topLevelBoxes: Mp4Box[
 function sampleTables(buffer: Buffer, moov: Mp4Box): Mp4Box[] {
   const tables: Mp4Box[] = []
   for (const trak of children(buffer, moov).filter((box) => box.type === 'trak')) {
-    const mdia = children(buffer, trak).find((box) => box.type === 'mdia')
-    const minf = mdia && children(buffer, mdia).find((box) => box.type === 'minf')
-    const stbl = minf && children(buffer, minf).find((box) => box.type === 'stbl')
+    const mdia = optionalChild(buffer, trak, 'mdia')
+    const minf = mdia && optionalChild(buffer, mdia, 'minf')
+    const stbl = minf && optionalChild(buffer, minf, 'stbl')
     if (stbl) tables.push(...children(buffer, stbl).filter((box) => box.type === 'stco' || box.type === 'co64'))
   }
   return tables

@@ -238,6 +238,24 @@ describe('applyCacheControl', () => {
       expect(options.store).toBe(false)
     })
 
+    it('keeps ChatGPT subscription requests on accepted automatic cache controls', () => {
+      const out = applyCacheControl({
+        instructions: 'stable system prompt',
+        messages: baseMessages,
+        modelId: 'openai:gpt-5.6-sol',
+        sessionId: 'abc',
+        openAIAuthMode: 'chatgpt',
+      })
+      const options = out.providerOptions?.openai as {
+        promptCacheOptions?: unknown
+        promptCacheKey?: string
+      }
+
+      expect(out.instructions).toBe('stable system prompt')
+      expect(options.promptCacheOptions).toBeUndefined()
+      expect(options.promptCacheKey).toMatch(/^xc-agent-v1:/)
+    })
+
     it('passes tools through untouched', () => {
       const tools = { read: { description: 'r' }, write: { description: 'w' } }
       const out = applyCacheControl({

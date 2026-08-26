@@ -253,8 +253,9 @@ describe('Kimi endpoint model ids', () => {
     const body = JSON.parse(String(init?.body)) as Record<string, any>
     expect(body.prompt_cache_key).toMatch(/^xc-agent-v1:/)
     expect(body.prompt_cache_key).not.toBe('session-1')
-    expect(body.prompt_cache_options).toEqual({ mode: 'implicit', ttl: '30m' })
-    expect(body.input[0].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' })
+    expect(body.prompt_cache_options).toBeUndefined()
+    expect(body.instructions).toBe('stable instructions')
+    expect(JSON.stringify(body)).not.toContain('prompt_cache_breakpoint')
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('platform-key-must-never-leak')
   })
 
@@ -293,8 +294,10 @@ describe('Kimi endpoint model ids', () => {
     const headers = new Headers(init?.headers)
     expect(headers.get(OPENAI_SESSION_ID_HEADER)).toBeNull()
     expect(headers.get('session-id')).toBeNull()
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const body = JSON.parse(String(init?.body)) as Record<string, any>
     expect(body.prompt_cache_key).toMatch(/^xc-agent-v1:/)
+    expect(body.prompt_cache_options).toEqual({ mode: 'implicit', ttl: '30m' })
+    expect(body.input[0].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' })
   })
 
   it('fails closed before a stale API-key provider can send after an external ChatGPT login', async () => {

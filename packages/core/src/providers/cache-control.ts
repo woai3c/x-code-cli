@@ -16,10 +16,12 @@
 //                 full tool set is registered.
 //
 //   OpenAI      — automatic prefix caching, with `promptCacheKey` routing
-//                 identical stable prefixes to the same cache shard. GPT-5.6+
-//                 additionally gets a 30-minute implicit cache and an explicit
-//                 breakpoint after the byte-stable system prompt. `store: false`
-//                 independently disables response storage.
+//                 identical stable prefixes to the same cache shard. Platform
+//                 API-key requests on GPT-5.6+ additionally get a 30-minute
+//                 implicit cache and an explicit breakpoint after the byte-
+//                 stable system prompt. ChatGPT subscription requests retain
+//                 the private transport's accepted key-only shape. `store:
+//                 false` independently disables response storage.
 //
 //   Moonshot    — automatic prefix caching + `prompt_cache_key: sessionId`
 //                 for session affinity (requests of one session hit the same
@@ -77,6 +79,9 @@ export interface CacheControlArgs {
   /** Stable per-session identifier. OpenAI's ChatGPT transport receives this
    *  separately from the cross-session prompt-cache routing key. */
   sessionId: string
+  /** ChatGPT subscription uses a private Responses transport that accepts the
+   *  stable key but not Platform-only explicit cache controls. */
+  openAIAuthMode?: 'chatgpt' | 'api-key' | 'none'
 }
 
 export interface CacheControlResult {
@@ -133,6 +138,21 @@ function supportsOpenAIExplicitPromptCaching(modelId: string): boolean {
   return /^openai:gpt-5\.6(?:$|-)/.test(modelId)
 }
 
+const CHATGPT_CACHE_COMPARISON_TTL_MS = 5 * 60 * 1000
+const OPENAI_EXPLICIT_CACHE_TTL_MS = 30 * 60 * 1000
+
+/** Diagnostic comparison window for adjacent OpenAI turns. Platform GPT-5.6
+ *  receives an explicit 30-minute TTL. ChatGPT's private transport exposes no
+ *  TTL control, so use a conservative five-minute window and avoid labeling
+ *  older provider-default evictions as byte-instability regressions. */
+export function openAICacheComparisonTtlMs(
+  modelId: string,
+  authMode: CacheControlArgs['openAIAuthMode'],
+): number | undefined {
+  if (!supportsOpenAIExplicitPromptCaching(modelId)) return undefined
+  return authMode === 'chatgpt' ? CHATGPT_CACHE_COMPARISON_TTL_MS : OPENAI_EXPLICIT_CACHE_TTL_MS
+}
+
 /** Keep cache routing stable across sessions without exposing prompt text or
  *  local paths in the provider-visible key. Model and prompt changes naturally
  *  produce a different cache group. */
@@ -176,9 +196,10 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
 
   if (provider === 'openai') {
     const promptCacheKey = openAIStablePromptCacheKey(args.modelId, args.instructions)
-    const explicitCaching = supportsOpenAIExplicitPromptCaching(args.modelId)
-    // GPT-5.6 implicit mode keeps the automatic latest-message breakpoint as
-    // a fallback while also honoring our explicit stable-system breakpoint.
+    const explicitCaching = supportsOpenAIExplicitPromptCaching(args.modelId) && args.openAIAuthMode !== 'chatgpt'
+    // Platform GPT-5.6 implicit mode keeps the automatic latest-message
+    // breakpoint alongside our explicit stable-system breakpoint. ChatGPT
+    // subscription stays on the accepted automatic key-only shape.
     return {
       instructions: explicitCaching ? openAISystemMessage(args.instructions) : args.instructions,
       messages: args.messages,
