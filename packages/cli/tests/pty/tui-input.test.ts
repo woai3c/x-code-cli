@@ -112,8 +112,13 @@ describe('TUI input and lifecycle', () => {
         const requests = await provider.waitForMainRequests(2)
         expect(requests[1]?.rawBody).toContain('QUEUED_ATTACHMENT_CONTENT')
         await harness.waitForText('queued-file-ingested')
-        expect(harness.raw()).toContain('Read')
-        expect(harness.raw()).toContain('queued attachment.txt')
+        const raw = harness.raw()
+        const oldReplyTail = raw.lastIndexOf('initial-finished')
+        const queuedUser = raw.lastIndexOf('@"queued attachment.txt" analyze this file')
+        const readSummary = raw.lastIndexOf('Read')
+        expect(oldReplyTail).toBeGreaterThanOrEqual(0)
+        expect(queuedUser).toBeGreaterThan(oldReplyTail)
+        expect(readSummary).toBeGreaterThan(queuedUser)
       },
       {
         beforeStart: async (workspace) => {

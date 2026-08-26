@@ -303,6 +303,13 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
 
   const { appendTextDelta, flushBuffer, resetBuffer } = useStreamBuffer(appendMessage)
 
+  const consumeQueuedInputsInDisplayOrder = useCallback(() => {
+    // Core drains queued input before agentLoop returns. Commit the preceding
+    // assistant tail first so React cannot append queued user rows ahead of it.
+    flushBuffer()
+    return consumeQueuedInputs()
+  }, [consumeQueuedInputs, flushBuffer])
+
   const toolLifecycleCallbacks = useMemo(
     () =>
       createToolLifecycleCallbacks({
@@ -733,7 +740,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             // Mid-turn steering: messages the user queued while this turn
             // runs are injected at tool boundaries / on stop. Stable
             // callback — reads and clears queuedMessagesRef atomically.
-            consumeQueuedInputs: ownerMayDrainQueuedInputs(lease.owner) ? consumeQueuedInputs : undefined,
+            consumeQueuedInputs: ownerMayDrainQueuedInputs(lease.owner) ? consumeQueuedInputsInDisplayOrder : undefined,
             prepareQueuedUserInput: ownerMayDrainQueuedInputs(lease.owner) ? prepareUserContent : undefined,
           },
           callbacks,
@@ -854,7 +861,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       handleTextDelta,
       handleStreamRetry,
       toolLifecycleCallbacks,
-      consumeQueuedInputs,
+      consumeQueuedInputsInDisplayOrder,
       consumedPeerInboxKeysRef,
       restoreQueueToDraft,
       currentAuthority,
