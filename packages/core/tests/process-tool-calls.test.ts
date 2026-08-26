@@ -1149,7 +1149,11 @@ describe('processToolCalls tool media ordering', () => {
         type: 'content',
         value: [
           { type: 'text', text: 'rendered' },
-          { type: 'image-data', data: `AAAA${index + 1}`, mediaType: 'image/png' },
+          {
+            type: 'file',
+            data: { type: 'data', data: `AAAA${index + 1}` },
+            mediaType: 'image/png',
+          },
         ],
       })
     }

@@ -182,7 +182,7 @@ export interface LoopState {
   /** Whether cwd is a git repo. Cached for sub-agent system prompts. */
   isGitRepo?: boolean
 
-  /** Session-scoped read de-dup cache (absolute path → last-read mtime+size).
+  /** Session-scoped read de-dup cache (absolute path → last-delivered mtime+size).
    *  readFile returns a short stub instead of re-sending full content when a
    *  file is re-read unchanged, saving context tokens. Sub-agents get their
    *  own (fresh LoopState) so caches never cross agents. In-memory only. */

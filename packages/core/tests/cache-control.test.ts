@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { XAI_PROMPT_CACHE_KEY_HEADER, applyCacheControl } from '../src/providers/cache-control.js'
+import {
+  OPENAI_SESSION_ID_HEADER,
+  XAI_PROMPT_CACHE_KEY_HEADER,
+  applyCacheControl,
+} from '../src/providers/cache-control.js'
 
 function msg(role: 'user' | 'assistant', text: string): ModelMessage {
   return { role, content: text } as ModelMessage
@@ -13,19 +17,20 @@ describe('applyCacheControl', () => {
   const baseMessages: ModelMessage[] = [msg('user', 'first'), msg('assistant', 'response'), msg('user', 'second')]
 
   describe('anthropic', () => {
-    it('folds system prompt into messages with cache_control', () => {
+    it('keeps the tagged system prompt in instructions for AI SDK v7', () => {
       const out = applyCacheControl({
         instructions: 'you are helpful',
         messages: baseMessages,
         modelId: 'anthropic:claude-opus-4-8',
         sessionId: 'abc',
       })
-      expect(out.instructions).toBeUndefined()
-      expect(out.messages[0].role).toBe('system')
-      expect(out.messages[0].content).toBe('you are helpful')
-      const sysOpts = (out.messages[0] as { providerOptions?: { anthropic?: { cacheControl?: { type: string } } } })
-        .providerOptions?.anthropic?.cacheControl
-      expect(sysOpts?.type).toBe('ephemeral')
+      expect(out.instructions).toEqual({
+        role: 'system',
+        content: 'you are helpful',
+        providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+      })
+      expect(out.messages).toHaveLength(baseMessages.length)
+      expect(out.messages[0].role).toBe('user')
     })
 
     it('tags the last two non-system messages with cache_control', () => {
@@ -35,7 +40,6 @@ describe('applyCacheControl', () => {
         modelId: 'anthropic:claude-sonnet-5',
         sessionId: 'abc',
       })
-      // Structure: [system, user1, assistant, user2]
       const lastTwo = out.messages.slice(-2)
       for (const m of lastTwo) {
         const opts = (m as { providerOptions?: { anthropic?: { cacheControl?: { type: string } } } }).providerOptions
@@ -43,7 +47,7 @@ describe('applyCacheControl', () => {
         expect(opts?.type).toBe('ephemeral')
       }
       // Earliest user should NOT have cache_control
-      const earliest = out.messages[1]
+      const earliest = out.messages[0]
       const earliestOpts = (earliest as { providerOptions?: Record<string, unknown> }).providerOptions
       expect(earliestOpts).toBeUndefined()
     })
@@ -150,28 +154,88 @@ describe('applyCacheControl', () => {
   })
 
   describe('openai', () => {
-    it('sets top-level promptCacheKey to sessionId', () => {
-      const out = applyCacheControl({
+    it('groups identical stable prefixes across sessions without exposing either prompt or session text', () => {
+      const first = applyCacheControl({
         instructions: 'sys',
         messages: baseMessages,
         modelId: 'openai:gpt-5.6-sol',
-        sessionId: 'session-xyz',
+        sessionId: 'session-one',
       })
-      expect(out.providerOptions?.openai).toBeDefined()
-      const oaiOpts = out.providerOptions?.openai as { promptCacheKey?: string; store?: boolean }
-      expect(oaiOpts.promptCacheKey).toBe('session-xyz')
-      expect(oaiOpts.store).toBe(false)
+      const second = applyCacheControl({
+        instructions: 'sys',
+        messages: baseMessages,
+        modelId: 'openai:gpt-5.6-sol',
+        sessionId: 'session-two',
+      })
+      const firstKey = (first.providerOptions?.openai as { promptCacheKey?: string }).promptCacheKey
+      const secondKey = (second.providerOptions?.openai as { promptCacheKey?: string }).promptCacheKey
+
+      expect(firstKey).toBe(secondKey)
+      expect(firstKey).toMatch(/^xc-agent-v1:[a-f0-9]{32}$/)
+      expect(firstKey).not.toContain('sys')
+      expect(firstKey).not.toContain('session-one')
+      expect(firstKey!.length).toBeLessThanOrEqual(64)
+      expect(first.headers).toEqual({ [OPENAI_SESSION_ID_HEADER]: 'session-one' })
+      expect(second.headers).toEqual({ [OPENAI_SESSION_ID_HEADER]: 'session-two' })
     })
 
-    it('keeps system prompt separate (not folded into messages)', () => {
+    it('changes the cache group when the model or stable instructions change', () => {
+      const cacheKey = (modelId: string, instructions: string) => {
+        const out = applyCacheControl({
+          instructions,
+          messages: baseMessages,
+          modelId,
+          sessionId: 'same-session',
+        })
+        return (out.providerOptions?.openai as { promptCacheKey?: string }).promptCacheKey
+      }
+
+      expect(cacheKey('openai:gpt-5.6-sol', 'sys-a')).not.toBe(cacheKey('openai:gpt-5.6-sol', 'sys-b'))
+      expect(cacheKey('openai:gpt-5.6-sol', 'sys-a')).not.toBe(cacheKey('openai:gpt-5.6-terra', 'sys-a'))
+    })
+
+    it('adds GPT-5.6 cache options and an explicit stable-system breakpoint', () => {
       const out = applyCacheControl({
-        instructions: 'sys',
+        instructions: 'stable system prompt',
         messages: baseMessages,
         modelId: 'openai:gpt-5.6-sol',
         sessionId: 'abc',
       })
+      const options = out.providerOptions?.openai as {
+        promptCacheOptions?: { mode?: string; ttl?: string }
+        store?: boolean
+      }
+
+      expect(options).toMatchObject({
+        promptCacheOptions: { mode: 'implicit', ttl: '30m' },
+        store: false,
+      })
+      expect(out.instructions).toMatchObject({
+        role: 'system',
+        content: 'stable system prompt',
+        providerOptions: { openai: { promptCacheBreakpoint: { mode: 'explicit' } } },
+      })
+      expect(out.messages).toBe(baseMessages)
+    })
+
+    it('keeps the legacy automatic-cache shape for earlier OpenAI models', () => {
+      const out = applyCacheControl({
+        instructions: 'sys',
+        messages: baseMessages,
+        modelId: 'openai:gpt-5.5',
+        sessionId: 'abc',
+      })
+      const options = out.providerOptions?.openai as {
+        promptCacheOptions?: unknown
+        promptCacheKey?: string
+        store?: boolean
+      }
+
       expect(out.instructions).toBe('sys')
-      expect(out.messages).toHaveLength(baseMessages.length)
+      expect(out.messages).toBe(baseMessages)
+      expect(options.promptCacheOptions).toBeUndefined()
+      expect(options.promptCacheKey).toMatch(/^xc-agent-v1:/)
+      expect(options.store).toBe(false)
     })
 
     it('passes tools through untouched', () => {
@@ -242,19 +306,20 @@ describe('applyCacheControl', () => {
   })
 
   describe('alibaba', () => {
-    it('folds system prompt into messages with cache_control', () => {
+    it('keeps the tagged system prompt in instructions for AI SDK v7', () => {
       const out = applyCacheControl({
         instructions: 'you are helpful',
         messages: baseMessages,
         modelId: 'alibaba:qwen3-coder-plus',
         sessionId: 'abc',
       })
-      expect(out.instructions).toBeUndefined()
-      expect(out.messages[0].role).toBe('system')
-      expect(out.messages[0].content).toBe('you are helpful')
-      const sysOpts = (out.messages[0] as { providerOptions?: { alibaba?: { cacheControl?: { type: string } } } })
-        .providerOptions?.alibaba?.cacheControl
-      expect(sysOpts?.type).toBe('ephemeral')
+      expect(out.instructions).toEqual({
+        role: 'system',
+        content: 'you are helpful',
+        providerOptions: { alibaba: { cacheControl: { type: 'ephemeral' } } },
+      })
+      expect(out.messages).toHaveLength(baseMessages.length)
+      expect(out.messages[0].role).toBe('user')
     })
 
     it('tags the last two non-system messages with cache_control', () => {
@@ -270,12 +335,12 @@ describe('applyCacheControl', () => {
           ?.alibaba?.cacheControl
         expect(opts?.type).toBe('ephemeral')
       }
-      const earliest = out.messages[1]
+      const earliest = out.messages[0]
       const earliestOpts = (earliest as { providerOptions?: Record<string, unknown> }).providerOptions
       expect(earliestOpts).toBeUndefined()
     })
 
-    it('tags only the last tool with cache_control', () => {
+    it('leaves tool definitions untouched because Alibaba ignores tool breakpoints', () => {
       const tools = {
         read: { description: 'read a file' },
         write: { description: 'write a file' },
@@ -288,12 +353,8 @@ describe('applyCacheControl', () => {
         modelId: 'alibaba:qwen3-coder-plus',
         sessionId: 'abc',
       })
-      expect(out.tools).toBeDefined()
-      expect((out.tools!.read as { providerOptions?: unknown }).providerOptions).toBeUndefined()
-      expect((out.tools!.write as { providerOptions?: unknown }).providerOptions).toBeUndefined()
-      const lastOpts = (out.tools!.edit as { providerOptions?: { alibaba?: { cacheControl?: { type: string } } } })
-        .providerOptions?.alibaba?.cacheControl
-      expect(lastOpts?.type).toBe('ephemeral')
+      expect(out.tools).toBe(tools)
+      expect((out.tools!.edit as { providerOptions?: unknown }).providerOptions).toBeUndefined()
     })
 
     it('does not set top-level providerOptions', () => {

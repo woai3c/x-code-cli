@@ -26,14 +26,21 @@ describe('local media adapters', () => {
     expect(JSON.parse(JSON.stringify(parts))).toEqual(parts)
   })
 
-  it('maps the same image to image-data for tool results without generic file-data', () => {
+  it('maps the same image to a tagged FilePart for tool results', () => {
     const result = toToolResultContent([
       { type: 'image', data: Buffer.from('image'), mediaType: 'image/jpeg', filename: 'page.jpg' },
     ])
     expect(result).toEqual({
       type: 'content',
-      value: [{ type: 'image-data', data: Buffer.from('image').toString('base64'), mediaType: 'image/jpeg' }],
+      value: [
+        {
+          type: 'file',
+          data: { type: 'data', data: Buffer.from('image').toString('base64') },
+          mediaType: 'image/jpeg',
+          filename: 'page.jpg',
+        },
+      ],
     })
-    expect(JSON.stringify(result)).not.toContain('file-data')
+    expect(JSON.stringify(result)).not.toContain('image-data')
   })
 })

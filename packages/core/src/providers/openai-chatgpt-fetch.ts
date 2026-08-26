@@ -1,5 +1,6 @@
 import { OPENAI_CHATGPT_OAUTH } from '../auth/openai-chatgpt/oauth.js'
 import type { OpenAIChatGPTRequestAuth, OpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
+import { OPENAI_SESSION_ID_HEADER } from './cache-control.js'
 import { getOpenAIChatGPTRuntimeModel, refreshOpenAIChatGPTModelsAfterNotFound } from './openai-chatgpt-models.js'
 
 type FetchInput = Parameters<typeof fetch>[0]
@@ -15,7 +16,13 @@ export interface OpenAIChatGPTFetchOptions {
 
 type ResponsesInputItem = {
   role?: string
-  content?: string | Array<{ type?: string; text?: string }>
+  content?: string | ResponsesContentPart[]
+}
+
+type ResponsesContentPart = {
+  type?: string
+  text?: string
+  prompt_cache_breakpoint?: { mode?: string }
 }
 
 type ResponsesRequestBody = {
@@ -24,10 +31,12 @@ type ResponsesRequestBody = {
   instructions?: string
   max_output_tokens?: number
   prompt_cache_key?: string
+  prompt_cache_options?: { mode?: string; ttl?: string }
   reasoning?: { effort?: string; summary?: string }
   store?: boolean
   include?: string[]
   tools?: Array<{ type?: string; strict?: boolean }>
+  text?: { format?: { type?: string; strict?: boolean } }
 }
 
 function textFromDeveloperInput(item: ResponsesInputItem): string | undefined {
@@ -41,7 +50,11 @@ function textFromDeveloperInput(item: ResponsesInputItem): string | undefined {
   return text || undefined
 }
 
-export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; modelId?: string; sessionId?: string } {
+function hasPromptCacheBreakpoint(item: ResponsesInputItem): boolean {
+  return Array.isArray(item.content) && item.content.some((part) => part.prompt_cache_breakpoint?.mode === 'explicit')
+}
+
+export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; modelId?: string } {
   let body: ResponsesRequestBody
   try {
     body = JSON.parse(raw) as ResponsesRequestBody
@@ -56,6 +69,10 @@ export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; 
     const instructions: string[] = []
     let prefixLength = 0
     for (const item of body.input) {
+      // A GPT-5.6 explicit breakpoint is meaningful only on its content
+      // block. Keep that developer/system item in `input` instead of losing
+      // the marker while adapting older unmarked requests to `instructions`.
+      if (hasPromptCacheBreakpoint(item)) break
       const text = textFromDeveloperInput(item)
       if (!text) break
       instructions.push(text)
@@ -87,8 +104,9 @@ export function transformOpenAIChatGPTRequestBody(raw: string): { body: string; 
   if (Array.isArray(body.tools)) {
     body.tools = body.tools.map((tool) => (tool.type === 'function' ? { ...tool, strict: false } : tool))
   }
+  if (body.text?.format?.type === 'json_schema') body.text.format.strict = false
 
-  return { body: JSON.stringify(body), modelId, sessionId: body.prompt_cache_key }
+  return { body: JSON.stringify(body), modelId }
 }
 
 function originalRequestUrl(input: FetchInput): URL {
@@ -96,13 +114,15 @@ function originalRequestUrl(input: FetchInput): URL {
   return new URL(typeof input === 'string' ? input : input.url)
 }
 
-function requestHeaders(input: FetchInput, init?: RequestInit): Headers {
+function requestHeaders(input: FetchInput, init?: RequestInit): { headers: Headers; sessionId?: string } {
   const headers = new Headers(input instanceof Request ? input.headers : undefined)
   new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
+  const sessionId = headers.get(OPENAI_SESSION_ID_HEADER) ?? undefined
+  headers.delete(OPENAI_SESSION_ID_HEADER)
   headers.delete('authorization')
   headers.delete('openai-organization')
   headers.delete('openai-project')
-  return headers
+  return { headers, sessionId }
 }
 
 function authenticatedHeaders(
@@ -329,10 +349,8 @@ export function createOpenAIChatGPTFetch(options: OpenAIChatGPTFetchOptions): ty
     let rawBody = init?.body
     if (rawBody === undefined && input instanceof Request) rawBody = await input.clone().text()
     const transformed =
-      typeof rawBody === 'string'
-        ? transformOpenAIChatGPTRequestBody(rawBody)
-        : { body: rawBody, modelId: undefined, sessionId: undefined }
-    const baseHeaders = requestHeaders(input, init)
+      typeof rawBody === 'string' ? transformOpenAIChatGPTRequestBody(rawBody) : { body: rawBody, modelId: undefined }
+    const requestContext = requestHeaders(input, init)
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
 
     const send = async (auth: OpenAIChatGPTRequestAuth, detectEarlyUnauthorized: boolean) =>
@@ -341,7 +359,7 @@ export function createOpenAIChatGPTFetch(options: OpenAIChatGPTFetchOptions): ty
           await fetchImpl(OPENAI_CHATGPT_OAUTH.responsesEndpoint, {
             ...init,
             body: transformed.body,
-            headers: authenticatedHeaders(baseHeaders, auth, userAgent, transformed.sessionId),
+            headers: authenticatedHeaders(requestContext.headers, auth, userAgent, requestContext.sessionId),
             signal,
           }),
         ),

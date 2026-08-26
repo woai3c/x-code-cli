@@ -12,6 +12,8 @@ import tseslint from 'typescript-eslint'
 export default defineConfig(
   {
     ignores: [
+      // Repository-local skills may carry non-project runtimes and are validated independently.
+      '.agents/skills/**',
       '**/dist/**',
       '**/node_modules/**',
       '**/coverage/**',

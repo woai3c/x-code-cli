@@ -23,10 +23,11 @@ describe('isAudioFile', () => {
     expect(isAudioFile('/path/to/file.wav')).toBe(true)
     expect(isAudioFile('/path/to/file.ogg')).toBe(true)
     expect(isAudioFile('/path/to/file.flac')).toBe(true)
+    expect(isAudioFile('/path/to/file.m4a')).toBe(true)
   })
 
   it('rejects formats not supported by the bundled native decoder', () => {
-    for (const extension of ['m4a', 'aac', 'aiff', 'aif', 'wma', 'webm', 'opus', 'txt', 'png', 'pdf', 'ts']) {
+    for (const extension of ['aac', 'aiff', 'aif', 'wma', 'webm', 'opus', 'txt', 'png', 'pdf', 'ts']) {
       expect(isAudioFile(`/path/to/file.${extension}`), extension).toBe(false)
     }
   })
@@ -35,6 +36,7 @@ describe('isAudioFile', () => {
     expect(isAudioFile('/path/to/file.MP3')).toBe(true)
     expect(isAudioFile('/path/to/file.Wav')).toBe(true)
     expect(isAudioFile('/path/to/file.FLAC')).toBe(true)
+    expect(isAudioFile('/path/to/file.M4A')).toBe(true)
   })
 })
 
@@ -66,7 +68,7 @@ describe('classifyFile', () => {
 
     expect(await classifyFile(wavFile)).toBe('audio')
     expect(await classifyFile(emptyMp3)).toBe('audio')
-    expect(await classifyFile(emptyM4a)).toBe('unknown')
+    expect(await classifyFile(emptyM4a)).toBe('audio')
 
     await fs.rm(tmpDir, { recursive: true })
   })

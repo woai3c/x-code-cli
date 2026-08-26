@@ -179,7 +179,7 @@ export async function captionImageBuffer(
         role: 'user',
         content: [
           { type: 'text', text: prompt },
-          { type: 'image', image: finalBuf, mediaType: finalMime },
+          { type: 'file', data: { type: 'data', data: finalBuf }, mediaType: finalMime },
         ],
       },
     ],

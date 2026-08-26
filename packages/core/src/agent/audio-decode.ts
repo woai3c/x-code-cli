@@ -10,6 +10,7 @@ import {
   MAX_AUDIO_SOURCE_BYTES,
   WHISPER_PCM_SAMPLE_RATE,
 } from './audio-limits.js'
+import { prepareM4aForDecode } from './audio-mp4.js'
 import type { WhisperAudioMetadata } from './audio-transcribe-protocol.js'
 
 const INPUT_CHUNK_BYTES = 16 * 1024
@@ -21,7 +22,7 @@ const MAX_WAV_HEADER_BYTES = 1024 * 1024
 const MAX_FLAC_FRAME_SAMPLES = 65_535
 const MAX_VORBIS_PACKET_SAMPLES = 8_192
 
-type AudioFormat = 'flac' | 'mp3' | 'vorbis' | 'wav'
+type AudioFormat = 'flac' | 'm4a' | 'mp3' | 'vorbis' | 'wav'
 
 interface DecoderError {
   message?: unknown
@@ -70,6 +71,7 @@ function ascii(bytes: Uint8Array, offset: number, length: number): string {
 function detectAudioFormat(sample: Buffer): AudioFormat {
   if (sample.length >= 12 && ascii(sample, 0, 4) === 'RIFF' && ascii(sample, 8, 4) === 'WAVE') return 'wav'
   if (sample.length >= 4 && ascii(sample, 0, 4) === 'fLaC') return 'flac'
+  if (sample.length >= 12 && ascii(sample, 4, 4) === 'ftyp') return 'm4a'
   if (sample.length >= 4 && ascii(sample, 0, 4) === 'OggS') {
     if (sample.includes(Buffer.from([0x01, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73]))) return 'vorbis'
     throw new Error('Ogg audio is supported only when encoded as Vorbis')
@@ -80,7 +82,7 @@ function detectAudioFormat(sample: Buffer): AudioFormat {
   ) {
     return 'mp3'
   }
-  throw new Error('Unsupported audio content; supported formats are MP3, WAV, FLAC, and OGG Vorbis')
+  throw new Error('Unsupported audio content; supported formats are MP3, WAV, FLAC, OGG Vorbis, and M4A')
 }
 
 function wavFormat(sample: Buffer): WavFormat {
@@ -363,7 +365,7 @@ async function createVorbisDecoder(): Promise<BoundedStreamingAudioDecoder> {
   }
 }
 
-async function createDecoder(format: AudioFormat): Promise<BoundedStreamingAudioDecoder> {
+async function createDecoder(format: Exclude<AudioFormat, 'm4a'>): Promise<BoundedStreamingAudioDecoder> {
   if (format === 'mp3') {
     const { decoder } = await import('@audio/decode-mp3')
     return wrapSyncDecoder((await decoder()) as SyncStreamingAudioDecoder)
@@ -382,6 +384,7 @@ function metadataFor(
 ): WhisperAudioMetadata {
   const names: Record<AudioFormat, { codec: string; container: string }> = {
     flac: { codec: 'FLAC', container: 'FLAC' },
+    m4a: { codec: 'AAC', container: 'MPEG-4' },
     mp3: { codec: 'MP3', container: 'MPEG' },
     vorbis: { codec: 'Vorbis', container: 'Ogg' },
     wav: { codec: 'PCM', container: 'WAVE' },
@@ -500,6 +503,49 @@ class StreamingResampler {
     }
   }
 
+  async acceptInterleavedInt16(data: Int16Array, sampleRate: number, channels: number): Promise<void> {
+    if (!Number.isInteger(channels) || channels < 1 || channels > MAX_AUDIO_CHANNELS) {
+      throw new Error('Audio decoder returned an unsafe channel count')
+    }
+    if (!Number.isInteger(sampleRate) || sampleRate < MIN_AUDIO_SAMPLE_RATE || sampleRate > MAX_AUDIO_SAMPLE_RATE) {
+      throw new Error('Audio decoder returned an unsafe sample rate')
+    }
+    if (data.length % channels !== 0) throw new Error('Audio decoder returned misaligned interleaved PCM')
+    if (this.inputRate !== null && this.inputRate !== sampleRate) {
+      throw new Error('Audio sample rate changed during decoding')
+    }
+    if (this.channels !== null && this.channels !== channels) {
+      throw new Error('Audio channel count changed during decoding')
+    }
+    const frames = data.length / channels
+    if (this.inputSamples + frames > MAX_AUDIO_DURATION_SECONDS * sampleRate) throw new PcmLimitError()
+    this.inputRate = sampleRate
+    this.channels = channels
+
+    for (let frame = 0; frame < frames; frame++) {
+      let current = 0
+      const frameOffset = frame * channels
+      for (let channel = 0; channel < channels; channel++) {
+        const sample = data[frameOffset + channel]!
+        current += sample < 0 ? sample / 32768 : sample / 32767
+      }
+      current /= channels
+      const sourceIndex = this.inputSamples++
+      while (this.nextOutputSample * sampleRate <= sourceIndex * WHISPER_PCM_SAMPLE_RATE) {
+        const sourcePosition = (this.nextOutputSample * sampleRate) / WHISPER_PCM_SAMPLE_RATE
+        const fraction = sourcePosition - Math.floor(sourcePosition)
+        const value =
+          sourceIndex === 0 || fraction === 0
+            ? current
+            : this.previousSample + (current - this.previousSample) * fraction
+        const full = this.sink.push(value)
+        if (full) await this.sink.write(full)
+        this.nextOutputSample++
+      }
+      this.previousSample = current
+    }
+  }
+
   async finish(): Promise<void> {
     if (!this.inputRate || this.inputSamples === 0) throw new Error('Audio decoder produced no PCM samples')
     while (this.nextOutputSample * this.inputRate < this.inputSamples * WHISPER_PCM_SAMPLE_RATE) {
@@ -508,6 +554,54 @@ class StreamingResampler {
       this.nextOutputSample++
     }
     await this.sink.finish()
+  }
+}
+
+async function readInput(handle: Awaited<ReturnType<typeof fs.open>>, size: number): Promise<Buffer> {
+  const buffer = Buffer.allocUnsafe(size)
+  let offset = 0
+  while (offset < size) {
+    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset)
+    if (bytesRead === 0) throw new Error('Audio source ended while it was being decoded')
+    offset += bytesRead
+  }
+  return buffer
+}
+
+async function decodeM4a(source: Buffer, resampler: StreamingResampler): Promise<'AAC' | 'ALAC'> {
+  // This addon's incremental API cannot resume an MP4 demux after an
+  // insufficient-data boundary. prepareM4aForDecode therefore validates the
+  // codec config, every sample table/range and the native allocation budget
+  // before the single append, then we require exact output dimensions.
+  const prepared = prepareM4aForDecode(source)
+  const { Decoder } = await import('@napi-audio/decoder')
+  const decoder = new Decoder({ fileExtension: 'm4a', mimeType: 'audio/mp4' })
+  let decodedFrames = 0
+  const accept = async (sample: ReturnType<typeof decoder.append>): Promise<void> => {
+    if (!sample) return
+    if (sample.sampleRate !== prepared.sampleRate || sample.channelCount !== prepared.numberOfChannels) {
+      throw new Error('M4A decoder output does not match the bounded codec metadata')
+    }
+    if (sample.data.length % sample.channelCount !== 0) {
+      throw new Error('M4A decoder returned misaligned interleaved PCM')
+    }
+    const frames = sample.data.length / sample.channelCount
+    decodedFrames += frames
+    if (decodedFrames > prepared.declaredFrames) {
+      throw new Error('M4A decoder output exceeds the validated sample-table duration')
+    }
+    await resampler.acceptInterleavedInt16(sample.data, sample.sampleRate, sample.channelCount)
+  }
+  try {
+    await accept(decoder.append(prepared.data))
+    decoder.finalize()
+    await accept(decoder.flush())
+    if (decodedFrames !== prepared.declaredFrames) {
+      throw new Error('M4A decoder output does not match the validated sample-table duration')
+    }
+    return prepared.codec
+  } finally {
+    decoder.close()
   }
 }
 
@@ -524,10 +618,23 @@ export async function decodeAudioToPcm(inputPath: string, pcmPath: string): Prom
     const format = detectAudioFormat(header)
     if (format === 'wav') wavFormat(header)
 
-    decoder = await createDecoder(format)
     output = await fs.open(pcmPath, 'w')
     const sink = new PcmSink(output)
     const resampler = new StreamingResampler(sink)
+    if (format === 'm4a') {
+      const codec = await decodeM4a(await readInput(input, stats.size), resampler)
+      await resampler.finish()
+      const metadata = resampler.metadata
+      return {
+        codec,
+        container: 'MPEG-4',
+        durationSeconds: metadata.outputSamples / WHISPER_PCM_SAMPLE_RATE,
+        numberOfChannels: metadata.channels,
+        sampleRate: metadata.inputRate,
+      }
+    }
+
+    decoder = await createDecoder(format)
     const stream = createReadStream(inputPath, {
       autoClose: false,
       fd: input.fd,

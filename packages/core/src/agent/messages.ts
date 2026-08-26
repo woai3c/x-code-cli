@@ -11,8 +11,8 @@ export interface ToolImage {
 /** Create a tool result message. When `images` are supplied (e.g. browser
  *  screenshots from an MCP tool) the output switches to the multimodal
  *  `content` form so a vision-capable model actually sees them; the text
- *  stays as a leading text part. AI SDK v7 uses `image-data` for inline
- *  base64 images in tool results; text-only providers get the media
+ *  stays as a leading text part. AI SDK v7 uses tagged `file` parts for
+ *  inline base64 images in tool results; text-only providers get the media
  *  stripped/OCR'd upstream by downgradeBinaryPartsForProvider. The
  *  plain-string path is unchanged for the overwhelmingly-common text-only
  *  result. */
@@ -29,7 +29,11 @@ export function toolResultMessage(
           type: 'content' as const,
           value: [
             ...(result ? [{ type: 'text' as const, text: result }] : []),
-            ...images.map((img) => ({ type: 'image-data' as const, data: img.data, mediaType: img.mediaType })),
+            ...images.map((img) => ({
+              type: 'file' as const,
+              data: { type: 'data' as const, data: img.data },
+              mediaType: img.mediaType,
+            })),
           ],
         }
       : isError
@@ -56,16 +60,16 @@ export function structuredToolResultMessage(toolCallId: string, toolName: string
 }
 
 /** Reattach tool-returned media for Chat Completions providers whose `tool`
- *  role is text-only. AI SDK's internal ImagePart expects raw base64 plus a
- *  media type; its provider converter adds the data-URL prefix on the wire. */
+ *  role is text-only. The provider converter turns an image FilePart into an
+ *  image URL on the wire. */
 export function toolMediaUserMessage(images: readonly ToolImage[]): ModelMessage {
   return {
     role: 'user',
     content: [
       { type: 'text', text: 'Attached media from tool result:' },
       ...images.map((image) => ({
-        type: 'image' as const,
-        image: image.data,
+        type: 'file' as const,
+        data: { type: 'data' as const, data: image.data },
         mediaType: image.mediaType,
       })),
     ],

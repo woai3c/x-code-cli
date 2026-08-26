@@ -92,6 +92,35 @@ describe('TUI input and lifecycle', () => {
     })
   })
 
+  it('ingests file references submitted while another response is streaming', async () => {
+    await withTui(
+      'input-queued-file-ingest',
+      [
+        {
+          type: 'completion',
+          text: '',
+          chunks: ['queue-window\n', 'initial-finished'],
+          chunkDelayMs: 800,
+        },
+        { type: 'completion', text: 'queued-file-ingested' },
+      ],
+      async ({ harness, provider }) => {
+        await submitInput(harness, 'start a response')
+        await harness.waitForText('queue-window')
+        await submitInput(harness, '@"queued attachment.txt" analyze this file')
+
+        const requests = await provider.waitForMainRequests(2)
+        expect(requests[1]?.rawBody).toContain('QUEUED_ATTACHMENT_CONTENT')
+        await harness.waitForText('queued-file-ingested')
+      },
+      {
+        beforeStart: async (workspace) => {
+          await fs.writeFile(path.join(workspace.cwd, 'queued attachment.txt'), 'QUEUED_ATTACHMENT_CONTENT\n')
+        },
+      },
+    )
+  })
+
   it('forks completed context while the current request is still streaming', async () => {
     await withTui(
       'input-fork-mid-turn',
@@ -212,11 +241,11 @@ describe('TUI input and lifecycle', () => {
 
         harness.key('enter')
         await harness.waitForScreen(
-          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} @notes/设计 方案[1].md`),
+          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} @"notes/设计 方案[1].md"`),
           'completed CJK file path',
         )
         await typeInput(harness, ' done')
-        expect(inputLine(harness)).toContain('@notes/设计 方案[1].md done')
+        expect(inputLine(harness)).toContain('@"notes/设计 方案[1].md" done')
       },
       {
         beforeStart: async (workspace) => {

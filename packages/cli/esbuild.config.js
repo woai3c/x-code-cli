@@ -140,6 +140,7 @@ await esbuild.build({
     '@fugood/node-whisper-linux-x64-vulkan',
     '@fugood/node-whisper-linux-x64-cuda',
     '@fugood/node-whisper-wasm',
+    '@napi-audio/decoder',
   ],
 })
 

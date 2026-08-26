@@ -28,7 +28,7 @@ function imageToolResult(toolCallId: string, data: string, toolName = 'readFile'
           type: 'content',
           value: [
             { type: 'text', text: `Loaded ${toolCallId}` },
-            { type: 'image-data', data, mediaType: 'image/png' },
+            { type: 'file', data: { type: 'data', data }, mediaType: 'image/png' },
           ],
         },
       },
@@ -111,8 +111,8 @@ describe('reattachToolResultImagesForProvider', () => {
       role: 'user',
       content: [
         { type: 'text', text: 'Attached media from tool result:' },
-        { type: 'image', image: 'AAAA1', mediaType: 'image/png' },
-        { type: 'image', image: 'AAAA2', mediaType: 'image/png' },
+        { type: 'file', data: { type: 'data', data: 'AAAA1' }, mediaType: 'image/png' },
+        { type: 'file', data: { type: 'data', data: 'AAAA2' }, mediaType: 'image/png' },
       ],
     })
   })
@@ -122,6 +122,22 @@ describe('reattachToolResultImagesForProvider', () => {
     const once = reattachToolResultImagesForProvider(messages, 'moonshotai:kimi-k3')
     const twice = reattachToolResultImagesForProvider(once, 'moonshotai:kimi-k3')
     expect(twice).toEqual(once)
+  })
+
+  it('still reattaches legacy image-data entries from saved sessions', () => {
+    const legacy = imageToolResult('tc-legacy-image', 'AAAA1')
+    const output = (legacy.content as Array<{ output: { value: unknown[] } }>)[0]!.output
+    output.value[1] = { type: 'image-data', data: 'LEGACY', mediaType: 'image/png' }
+
+    const requestMessages = reattachToolResultImagesForProvider([legacy], 'moonshotai:kimi-k3')
+
+    expect(requestMessages[1]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Attached media from tool result:' },
+        { type: 'file', data: { type: 'data', data: 'LEGACY' }, mediaType: 'image/png' },
+      ],
+    })
   })
 
   it('does not mutate canonical history so stale screenshots remain prunable', () => {
@@ -144,11 +160,11 @@ describe('reattachToolResultImagesForProvider', () => {
     const requestMessages = reattachToolResultImagesForProvider(messages, 'moonshotai:kimi-k3')
     const imageParts = requestMessages.flatMap((message) =>
       message.role === 'user' && Array.isArray(message.content)
-        ? message.content.filter((part) => part.type === 'image')
+        ? message.content.filter((part) => part.type === 'file')
         : [],
     )
 
-    expect(imageParts).toEqual([{ type: 'image', image: 'NEW', mediaType: 'image/png' }])
+    expect(imageParts).toEqual([{ type: 'file', data: { type: 'data', data: 'NEW' }, mediaType: 'image/png' }])
     expect(JSON.stringify(messages)).not.toContain('OLD')
   })
 

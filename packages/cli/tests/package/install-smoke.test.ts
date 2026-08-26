@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
-import { TINY_VORBIS_EXPECTED, makeTinyVorbisBuffer } from '../../../core/tests/helpers/audio.js'
+import { TINY_VORBIS_EXPECTED, makeTinyM4aBuffer, makeTinyVorbisBuffer } from '../../../core/tests/helpers/audio.js'
 import { makePdfBuffer } from '../../../core/tests/helpers/pdf.js'
 import { REPO_ROOT, createTestWorkspace, isolatedCliEnv, listFilesRecursively } from '../fixtures/cli-test-helpers.js'
 import { startFakeProvider } from '../fixtures/fake-provider-server.js'
@@ -177,6 +177,7 @@ describe('published CLI tarball', () => {
     expect(manifest.dependencies?.['music-metadata']).toBeUndefined()
     expect(manifest.dependencies?.['tesseract.js']).toBe('7.0.0')
     expect(manifest.optionalDependencies?.['@fugood/whisper.node']).toBe('1.1.1')
+    expect(manifest.optionalDependencies?.['@napi-audio/decoder']).toBe('0.1.0')
   })
 
   it('installs and loads the optional Whisper runtime for a normal CLI installation', async () => {
@@ -208,6 +209,8 @@ describe('published CLI tarball', () => {
     const flacPcmPath = path.join(suiteRoot, 'metadata smoke flac.pcm')
     const vorbisPath = path.join(suiteRoot, 'metadata smoke.ogg')
     const vorbisPcmPath = path.join(suiteRoot, 'metadata smoke vorbis.pcm')
+    const m4aPath = path.join(suiteRoot, 'metadata smoke.m4a')
+    const m4aPcmPath = path.join(suiteRoot, 'metadata smoke m4a.pcm')
     const frames = 1_600
     const wav = Buffer.alloc(44 + frames * 2)
     wav.write('RIFF', 0, 'ascii')
@@ -230,6 +233,7 @@ describe('published CLI tarball', () => {
       fs.writeFile(audioPath, wav),
       fs.writeFile(flacPath, flac),
       fs.writeFile(vorbisPath, makeTinyVorbisBuffer()),
+      fs.writeFile(m4aPath, makeTinyM4aBuffer()),
     ])
     const script = `
       const { fork } = require('node:child_process')
@@ -281,6 +285,18 @@ describe('published CLI tarball', () => {
           if (message.metadata.sampleRate !== ${TINY_VORBIS_EXPECTED.sampleRate}) process.exit(1)
           if (Math.abs(message.metadata.durationSeconds - ${TINY_VORBIS_EXPECTED.durationSeconds}) > 1e-9) process.exit(1)
           if (require('node:fs').statSync(${JSON.stringify(vorbisPcmPath)}).size !== ${TINY_VORBIS_EXPECTED.pcmBytes}) process.exit(1)
+          child.send({
+            id: 6,
+            type: 'prepare-audio',
+            filePath: ${JSON.stringify(m4aPath)},
+            pcmPath: ${JSON.stringify(m4aPcmPath)},
+          })
+          return
+        }
+        if (message.id === 6 && message.type === 'audio-prepared') {
+          if (message.metadata.codec !== 'AAC' || message.metadata.container !== 'MPEG-4') process.exit(1)
+          if (message.metadata.numberOfChannels !== 1 || message.metadata.sampleRate !== 16000) process.exit(1)
+          if (require('node:fs').statSync(${JSON.stringify(m4aPcmPath)}).size !== 8192) process.exit(1)
           child.send({ id: 3, type: 'shutdown' })
         }
       })

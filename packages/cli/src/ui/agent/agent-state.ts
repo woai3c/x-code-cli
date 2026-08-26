@@ -4,7 +4,13 @@ import type { CacheMissSummary } from '@x-code-cli/core'
 import type { AgentState } from './types.js'
 
 export function cloneCacheMissSummary(summary: CacheMissSummary): CacheMissSummary {
-  return { ...summary, estimates: summary.estimates.slice() }
+  return {
+    ...summary,
+    estimatedReusableTokens: summary.estimatedReusableTokens ?? 0,
+    estimatedReusedTokens: summary.estimatedReusedTokens ?? 0,
+    comparableTurnCount: summary.comparableTurnCount ?? 0,
+    estimates: summary.estimates.slice(),
+  }
 }
 
 export const initialAgentState: Omit<AgentState, 'modelId' | 'permissionMode'> = {
@@ -31,6 +37,7 @@ export const initialAgentState: Omit<AgentState, 'modelId' | 'permissionMode'> =
   todos: [],
   bufferingReads: false,
   compressionLabel: null,
+  ingestLabel: null,
   reconnectLabel: null,
   goalStatus: null,
   goalRunnerActive: false,

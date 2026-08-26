@@ -173,6 +173,10 @@ export async function collectTurnResponse(
       expectedMissReasons,
       timestamp: requestTimestamp,
     })
+    debugLog(
+      'cache.usage',
+      `model=${effectiveModelId} input=${turnUsage.inputTokens ?? 'unreported'} read=${turnUsage.cacheReadTokens ?? 'unreported'} write=${turnUsage.cacheCreationTokens ?? 'unreported'} readReported=${turnUsage.cacheReadReported} writeReported=${turnUsage.cacheCreationReported} expectedMiss=${expectedMissReasons.join(',') || 'none'}`,
+    )
     const cacheMiss = appendProviderTurnUsage(state, turnUsage)
     if (cacheMiss && !cacheMiss.expected) {
       debugLog(

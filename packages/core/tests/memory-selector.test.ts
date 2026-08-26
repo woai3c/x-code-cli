@@ -1,17 +1,18 @@
-import { generateText } from 'ai'
+import { streamText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { selectMemoryTopics } from '../src/knowledge/memory/selector.js'
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>()
-  return { ...actual, generateText: vi.fn() }
+  return { ...actual, streamText: vi.fn() }
 })
 
 describe('memory selector', () => {
   it('keeps tool-derived entities in a separate untrusted provenance field', async () => {
-    vi.mocked(generateText).mockResolvedValueOnce({
-      output: { topicIds: ['workflow', 'invented'] },
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({ topicIds: ['workflow', 'invented'] }),
+      usage: Promise.resolve({}),
     } as never)
 
     const selected = await selectMemoryTopics({
@@ -41,7 +42,7 @@ describe('memory selector', () => {
       untrustedSignals: 'deployWorkflow src/release.ts',
     })
 
-    const call = vi.mocked(generateText).mock.calls[0]?.[0]
+    const call = vi.mocked(streamText).mock.calls[0]?.[0]
     const payload = JSON.parse(String(call?.prompt)) as Record<string, unknown>
     expect(call?.instructions).toContain('untrustedSignals')
     expect(call?.instructions).toContain('cross-language equivalents')

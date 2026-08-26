@@ -1,10 +1,9 @@
 import path from 'node:path'
 
-export const SUPPORTED_AUDIO_EXTENSIONS: ReadonlySet<string> = new Set(['.mp3', '.wav', '.flac', '.ogg'])
+export const SUPPORTED_AUDIO_EXTENSIONS: ReadonlySet<string> = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a'])
 
 export const KNOWN_AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
   ...SUPPORTED_AUDIO_EXTENSIONS,
-  '.m4a',
   '.aac',
   '.aiff',
   '.aif',
@@ -25,7 +24,9 @@ export function isSupportedAudioBytes(mime: string, sample: Buffer): boolean {
     normalized === 'audio/wav' ||
     normalized === 'audio/x-wav' ||
     normalized === 'audio/flac' ||
-    normalized === 'audio/x-flac'
+    normalized === 'audio/x-flac' ||
+    normalized === 'audio/mp4' ||
+    normalized === 'audio/x-m4a'
   ) {
     return true
   }

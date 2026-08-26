@@ -32,6 +32,10 @@ pnpm run ci             # typecheck + lint/format checks + pnpm test
 
 After editing **core** sources you must `pnpm build` (or `tsc -b --watch` in `packages/core`). The CLI imports `packages/core/dist/`, not the TS source.
 
+## Delivery workflow
+
+Follow [`docs/development/agent-workflow.md`](docs/development/agent-workflow.md) for work definition, Human Plan Review, verification evidence, Human Local Acceptance, Draft/Ready PR handling, and continuous knowledge capture. Use [`.github/pull_request_template.md`](.github/pull_request_template.md) for the durable PR handoff. Capability status in that guide describes what can run; every task must report its own check outcomes separately.
+
 ## Architecture
 
 Two packages, unidirectional: `cli` → `core`. Core has zero UI dependencies.

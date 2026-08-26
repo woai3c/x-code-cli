@@ -105,6 +105,8 @@ export interface AgentState {
   bufferingReads: boolean
   /** Current context-compression phase, when compression is active. */
   compressionLabel: string | null
+  /** Current local attachment-processing phase, including model download progress. */
+  ingestLabel: string | null
   /** Transient provider stream recovery status. */
   reconnectLabel: string | null
   goalStatus: GoalState | null

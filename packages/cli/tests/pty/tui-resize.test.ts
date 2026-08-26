@@ -72,22 +72,22 @@ describe('TUI resize behavior', () => {
       [],
       async ({ harness }) => {
         await typeInput(harness, '/')
-        await harness.waitForScreen((screen) => screen.includes('/clear'), 'slash completion menu')
+        await harness.waitForScreen((screen) => screen.includes('/help'), 'slash completion menu')
         harness.resize(70, 24)
-        await harness.waitForScreen((screen) => screen.includes('/clear'), 'slash menu after shrinking')
+        await harness.waitForScreen((screen) => screen.includes('/help'), 'slash menu after shrinking')
 
         harness.key('backspace')
-        await harness.waitForScreen((screen) => !screen.includes('/clear'), 'slash menu closed')
+        await harness.waitForScreen((screen) => !screen.includes('/help'), 'slash menu closed')
         await typeInput(harness, '@resize')
         await harness.waitForScreen((screen) => screen.includes('@resize 菜单[1].txt'), 'file completion menu')
         harness.resize(136, 46)
         await harness.waitForScreen((screen) => screen.includes('@resize 菜单[1].txt'), 'file menu after expanding')
         harness.key('enter')
         await harness.waitForScreen(
-          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} @resize 菜单[1].txt`),
+          (screen) => screen.includes(`${GLYPH_PROMPT_ARROW} @"resize 菜单[1].txt"`),
           'file completion after resize',
         )
-        expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} @resize 菜单[1].txt`)
+        expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} @"resize 菜单[1].txt"`)
       },
       {
         columns: 120,

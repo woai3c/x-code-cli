@@ -1,7 +1,7 @@
 // @x-code-cli/core — readFile tool
 //
 // Text files are returned with line numbers. Images and locally rendered PDF
-// pages use image-data tool content only when the injected model supports
+// pages use tagged image FileParts only when the injected model supports
 // vision; otherwise the shared pipeline returns local OCR text. Original
 // PDF/audio/general binary bytes are never emitted as file-data.
 import { createReadStream } from 'node:fs'
@@ -15,9 +15,9 @@ import { z } from 'zod'
 import { formatTranscription, transcribeAudio } from '../agent/audio-transcribe.js'
 import { assertSafeTextContent, inspectFile } from '../agent/file-classifier.js'
 import type { TextEncoding } from '../agent/file-classifier.js'
-import { extractOfficeText } from '../agent/file-ingest.js'
+import { extractOfficeTextResult } from '../agent/file-ingest.js'
 import { ocrImage } from '../agent/image-ocr.js'
-import { toToolResultContent } from '../agent/local-media.js'
+import { BUILT_IN_MEDIA_ANALYSIS_NOTE, toToolResultContent } from '../agent/local-media.js'
 import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../agent/notebook-render.js'
 import { PDF_AUTO_MAX_RENDERED_PAGES, PDF_READ_MAX_PAGES, formatPdfReference, processPdf } from '../agent/pdf-ingest.js'
 import {
@@ -59,12 +59,12 @@ const LARGE_FILE_LINE_THRESHOLD = 2000
  *  `validateContentTokens`. */
 const MAX_READ_BYTES = 256 * 1024
 
-/** Per-file fingerprint used by the read de-dup cache. */
+/** Per-file fingerprint used by the delivered-content de-dup cache. */
 export interface ReadFileCacheEntry {
   mtimeMs: number
   size: number
 }
-/** Session-scoped map of absolute path → last-read fingerprint. Lives on
+/** Session-scoped map of absolute path → last-delivered fingerprint. Lives on
  *  LoopState so each agent (including sub-agents, which get a fresh
  *  LoopState) has its own isolated cache and one agent's reads never make
  *  another agent's reads return a stub for a file it never saw. */
@@ -223,14 +223,13 @@ async function readTextResult(
 }
 
 // ── Read de-dup ──
-// Re-reading a file the model already read this session — and that hasn't
-// changed since — wastes context: the content is still in the conversation
-// above. Returning a short stub instead can save thousands of tokens on the
-// common "let me re-read that file" pattern. Only whole-file reads de-dup; an
-// explicit offset/limit always re-reads (the model wants a specific range),
-// and binary (image/pdf) reads are never de-duped (re-reading an image is
-// usually a deliberate "look again"). An edit/write bumps the file's mtime,
-// so the next read naturally misses the cache and returns fresh content.
+// Re-reading a file whose complete text was already delivered this session —
+// either by attachment ingestion or readFile — wastes context. Returning a
+// short stub instead can save thousands of tokens and avoids repeated local
+// transcription. Only whole-file text-producing reads de-dup; an explicit
+// text range always re-reads, while image/PDF reads remain available for a
+// deliberate visual revisit. An edit/write bumps the file's mtime, so the next
+// read naturally misses the cache and returns fresh content.
 type ReadCacheVerdict = { hit: true; stub: string } | { hit: false; entry: ReadFileCacheEntry } | null
 
 async function checkReadCache(
@@ -246,7 +245,7 @@ async function checkReadCache(
     return {
       hit: true,
       stub:
-        `[readFile: ${filePath} is unchanged since you last read it this session ` +
+        `[readFile: ${filePath} is unchanged since its full content was added to this conversation ` +
         `(same mtime and size); its full content is already in the conversation above. ` +
         `Re-read with an explicit offset/limit to revisit a specific range, or use grep to search within it.]`,
     }
@@ -269,7 +268,8 @@ Usage:
 - PDFs are processed locally. Use pages such as "1-5" for a maximum of 20 pages, and pdfMode="visual" for layouts, charts, or signatures.
 - Results are returned with line numbers starting at 1.
 - This tool can read images (PNG, JPG, etc.) and PDFs — their content is presented inline.
-- This tool can read MP3, WAV, FLAC, and OGG Vorbis audio files (up to 20 minutes) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
+- This tool can read MP3, M4A, WAV, FLAC, and OGG Vorbis audio files (up to 20 minutes) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
+- For content analysis of supported media, use this tool before shell or OS media utilities. If it returns usable content, analyze that directly; use external utilities only after an explicit processing failure or for a user-requested conversion or codec diagnostic.
 - This tool renders Jupyter notebooks (.ipynb) as readable cells (source + text outputs), skipping binary image outputs.
 - This tool can only read files, not directories. To list a directory, use listDir or shell with ls.
 - If a file path is provided by the user, assume it is valid.`,
@@ -317,6 +317,8 @@ Usage:
         }
 
         if (kind === 'audio') {
+          const verdict = await checkReadCache(cache, filePath, false)
+          if (verdict && verdict.hit) return verdict.stub
           const result = await transcribeAudio(filePath, {
             abortSignal,
             onNotice: (msg) => reportProgress(toolCallId, msg),
@@ -330,6 +332,7 @@ Usage:
               `cap ${MAX_READ_BYTES / 1024} KB). The audio may be very long.]`
             )
           }
+          if (verdict && !verdict.hit) cache?.set(filePath, verdict.entry)
           return formatted
         }
 
@@ -382,9 +385,10 @@ Usage:
             value: [
               { type: 'text', text: header },
               {
-                type: 'image-data',
-                data: compressed.data.toString('base64'),
+                type: 'file',
+                data: { type: 'data', data: compressed.data.toString('base64') },
                 mediaType: finalMime,
+                filename: path.basename(filePath),
               },
             ],
           }
@@ -413,12 +417,17 @@ Usage:
           if (result.continuation) {
             content.value.push({ type: 'text', text: formatPdfReference(result.continuation) })
           }
+          content.value.push({ type: 'text', text: BUILT_IN_MEDIA_ANALYSIS_NOTE })
           return content
         }
 
         if (kind === 'office') {
-          const text = await extractOfficeText(filePath, abortSignal, classification.mediaType)
+          const verdict = await checkReadCache(cache, filePath, false)
+          if (verdict && verdict.hit) return verdict.stub
+          const extraction = await extractOfficeTextResult(filePath, abortSignal, classification.mediaType)
           abortSignal?.throwIfAborted()
+          if (!extraction.ok) return extraction.text
+          const { text } = extraction
           const textBytes = Buffer.byteLength(text, 'utf-8')
           if (textBytes > MAX_READ_BYTES) {
             return (
@@ -427,6 +436,7 @@ Usage:
               `Use grep to search for specific content, or delegate to a sub-agent via the task tool.]`
             )
           }
+          if (verdict && !verdict.hit) cache?.set(filePath, verdict.entry)
           return `Extracted text from ${path.basename(filePath)}:\n\n${text}`
         }
 

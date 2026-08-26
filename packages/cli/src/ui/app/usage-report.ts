@@ -66,6 +66,16 @@ export function formatUsageReport(
     `- Total:           ${fmt(usage.totalTokens)}`,
   )
 
+  const estimatedReusableTokens = cacheMissSummary?.estimatedReusableTokens ?? 0
+  if (estimatedReusableTokens > 0) {
+    const estimatedReusedTokens = cacheMissSummary?.estimatedReusedTokens ?? 0
+    const reusableRatio = `${((estimatedReusedTokens / estimatedReusableTokens) * 100).toFixed(1)}%`
+    const comparableTurnCount = cacheMissSummary?.comparableTurnCount ?? 0
+    lines.push(
+      `- Reusable prefix: ${fmt(estimatedReusedTokens)} / ${fmt(estimatedReusableTokens)}  (${reusableRatio}, estimated across ${comparableTurnCount} adjacent turn${comparableTurnCount === 1 ? '' : 's'})`,
+    )
+  }
+
   if (breakdown) {
     const sources = Object.entries(breakdown.bySource).filter(
       ([, value]) => value.inputTokens > 0 || value.outputTokens > 0,

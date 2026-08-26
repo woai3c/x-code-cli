@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 
-import { generateText } from 'ai'
+import { streamText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { createLoopState } from '../src/agent/loop-state.js'
@@ -10,7 +10,7 @@ import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memor
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>()
-  return { ...actual, generateText: vi.fn() }
+  return { ...actual, streamText: vi.fn() }
 })
 
 describe('MemoryService.search', () => {
@@ -53,7 +53,10 @@ describe('MemoryService.search', () => {
       }),
       'deployment-workflow',
     )
-    vi.mocked(generateText).mockResolvedValueOnce({ output: { topicIds: ['deployment-workflow'] } } as never)
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({ topicIds: ['deployment-workflow'] }),
+      usage: Promise.resolve({}),
+    } as never)
     const service = new MemoryService({
       memoryRoot: root,
       config: memoryConfig,
@@ -84,7 +87,13 @@ describe('MemoryService.search', () => {
       }),
       'deployment-workflow',
     )
-    vi.mocked(generateText).mockRejectedValueOnce(new Error('selector unavailable'))
+    vi.mocked(streamText).mockImplementationOnce(
+      () =>
+        ({
+          output: Promise.reject(new Error('selector unavailable')),
+          usage: Promise.resolve({}),
+        }) as never,
+    )
     const service = new MemoryService({
       memoryRoot: root,
       config: memoryConfig,

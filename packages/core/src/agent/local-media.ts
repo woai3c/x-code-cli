@@ -14,6 +14,12 @@ export type ProcessedLocalPart =
       source?: { filePath: string; page?: number }
     }
 
+export const BUILT_IN_MEDIA_ANALYSIS_NOTE =
+  '[Built-in local media processing succeeded. Analyze the supplied content directly. ' +
+  'Do not invoke shell, Node.js, Python, FFmpeg, or other external programs merely to re-read, parse, OCR, ' +
+  'transcribe, or independently validate values from this attachment. Use external programs only if the built-in ' +
+  'pipeline reports a failure, or the user explicitly asks for conversion, codec diagnostics, or independent validation.]'
+
 export function escapeMediaAttribute(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -55,14 +61,22 @@ export function toUserContentParts(parts: ProcessedLocalPart[]): Array<TextPart 
 
 export function toToolResultContent(parts: ProcessedLocalPart[]): {
   type: 'content'
-  value: Array<{ type: 'text'; text: string } | { type: 'image-data'; data: string; mediaType: string }>
+  value: Array<
+    | { type: 'text'; text: string }
+    | { type: 'file'; data: { type: 'data'; data: string }; mediaType: string; filename?: string }
+  >
 } {
   return {
     type: 'content',
     value: parts.map((part) =>
       part.type === 'text'
         ? { type: 'text', text: part.text }
-        : { type: 'image-data', data: part.data.toString('base64'), mediaType: part.mediaType },
+        : {
+            type: 'file',
+            data: { type: 'data', data: part.data.toString('base64') },
+            mediaType: part.mediaType,
+            filename: part.filename,
+          },
     ),
   }
 }

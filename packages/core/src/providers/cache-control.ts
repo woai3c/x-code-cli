@@ -16,9 +16,10 @@
 //                 full tool set is registered.
 //
 //   OpenAI      — automatic prefix caching, with `promptCacheKey` routing
-//                 identical keys to the same cache shard. We send the sessionId
-//                 as the key so every turn in a conversation maps to the same
-//                 shard. `store: false` independently disables response storage.
+//                 identical stable prefixes to the same cache shard. GPT-5.6+
+//                 additionally gets a 30-minute implicit cache and an explicit
+//                 breakpoint after the byte-stable system prompt. `store: false`
+//                 independently disables response storage.
 //
 //   Moonshot    — automatic prefix caching + `prompt_cache_key: sessionId`
 //                 for session affinity (requests of one session hit the same
@@ -30,14 +31,11 @@
 //                 carries the sessionId to the registry fetch adapter. The
 //                 adapter consumes it before sending the request.
 //
-//   Alibaba     — supports both implicit caching (automatic 80% discount,
-//                 no flags needed) and explicit caching via `cache_control:
-//                 { type: 'ephemeral' }` markers (10% of input price on
-//                 hits, 125% write cost). Explicit caching is deterministic
-//                 and uses the same breakpoint protocol as Anthropic — up
-//                 to 4 markers per request. We tag system prompt, last tool,
-//                 and last two messages (same as Anthropic) for 10× savings.
-//                 @ai-sdk/alibaba reads `providerOptions.alibaba.cacheControl`.
+//   Alibaba     — supports both implicit and explicit caching. Explicit
+//                 `cache_control` markers are valid on message content, not
+//                 tool definitions. We tag the system prompt and last two
+//                 messages; the stable tools schema still participates in
+//                 the cached prefix before those message breakpoints.
 //
 //   OpenAI-     — the DeepSeek / Zhipu / custom providers all offer automatic
 //   compatible    prefix caching with NO explicit flags required. The only
@@ -45,7 +43,9 @@
 //
 //   Google      — Gemini uses implicit caching; no per-request flags we can
 //                 usefully set from the SDK. Left as a no-op.
-import type { ModelMessage } from 'ai'
+import { createHash } from 'node:crypto'
+
+import type { ModelMessage, SystemModelMessage } from 'ai'
 
 import { providerOf } from './capabilities.js'
 
@@ -58,6 +58,7 @@ import { providerOf } from './capabilities.js'
 const MESSAGE_CACHE_BREAKPOINTS = 2
 
 export const XAI_PROMPT_CACHE_KEY_HEADER = 'x-x-code-prompt-cache-key'
+export const OPENAI_SESSION_ID_HEADER = 'x-x-code-openai-session-id'
 
 export interface CacheControlArgs {
   /** Instructions (system prompt) string. May be wrapped into a system-role
@@ -73,20 +74,18 @@ export interface CacheControlArgs {
   tools?: Record<string, any>
   /** provider:model id used to select the caching strategy. */
   modelId: string
-  /** Stable per-session key. Used by OpenAI's `promptCacheKey` to pin
-   *  identical prefixes to the same cache shard. */
+  /** Stable per-session identifier. OpenAI's ChatGPT transport receives this
+   *  separately from the cross-session prompt-cache routing key. */
   sessionId: string
 }
 
 export interface CacheControlResult {
-  /** Possibly-undefined: for Anthropic/Alibaba we fold the instructions into
-   *  the messages array to attach cache_control; in that case streamText must
-   *  be called without a separate `instructions` param. */
-  instructions?: string
+  /** Instructions may be a tagged system message when a provider needs a
+   *  cache breakpoint on the stable system prompt. */
+  instructions?: string | SystemModelMessage
   messages: ModelMessage[]
-  /** For Anthropic/Alibaba, a shallow-cloned tools record with cache_control
-   *  attached to the last entry. Other providers get the input record returned
-   *  as-is (or undefined if none was passed). */
+  /** Anthropic receives a shallow-cloned tools record with cache_control on
+   *  the last entry. Other providers get the input record as-is. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools?: Record<string, any>
   /** Top-level providerOptions to pass through to streamText. */
@@ -107,26 +106,49 @@ function tagMessage(msg: ModelMessage, provider: string, entry: Record<string, u
   } as ModelMessage
 }
 
-/** Build a system-role message with Anthropic cache_control attached. */
-function anthropicSystemMessage(system: string): ModelMessage {
+/** Build a system-role instruction with Anthropic cache_control attached. */
+function anthropicSystemMessage(system: string): SystemModelMessage {
   return {
     role: 'system',
     content: system,
     providerOptions: {
       anthropic: { cacheControl: { type: 'ephemeral' } },
     },
-  } as unknown as ModelMessage
+  }
 }
 
-/** Build a system-role message with Alibaba cache_control attached. */
-function alibabaSystemMessage(system: string): ModelMessage {
+/** Build a system-role instruction with Alibaba cache_control attached. */
+function alibabaSystemMessage(system: string): SystemModelMessage {
   return {
     role: 'system',
     content: system,
     providerOptions: {
       alibaba: { cacheControl: { type: 'ephemeral' } },
     },
-  } as unknown as ModelMessage
+  }
+}
+
+/** GPT-5.6 model variants share the new prompt_cache_options contract. */
+function supportsOpenAIExplicitPromptCaching(modelId: string): boolean {
+  return /^openai:gpt-5\.6(?:$|-)/.test(modelId)
+}
+
+/** Keep cache routing stable across sessions without exposing prompt text or
+ *  local paths in the provider-visible key. Model and prompt changes naturally
+ *  produce a different cache group. */
+export function openAIStablePromptCacheKey(modelId: string, instructions: string): string {
+  const digest = createHash('sha256').update(modelId).update('\0').update(instructions).digest('hex').slice(0, 32)
+  return `xc-agent-v1:${digest}`
+}
+
+function openAISystemMessage(system: string): SystemModelMessage {
+  return {
+    role: 'system',
+    content: system,
+    providerOptions: {
+      openai: { promptCacheBreakpoint: { mode: 'explicit' } },
+    },
+  }
 }
 
 /**
@@ -138,31 +160,37 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
   const provider = providerOf(args.modelId)
 
   if (provider === 'anthropic') {
-    // Fold instructions into messages so we can attach cache_control to it,
-    // then mark the last N non-system messages as additional breakpoints.
+    // AI SDK v7 rejects system-role entries in `messages`; keep the tagged
+    // system prompt in `instructions` and mark the message tail separately.
     const nonSystemTail = args.messages.slice(-MESSAGE_CACHE_BREAKPOINTS)
     const tailSet = new Set(nonSystemTail)
     const tagged = args.messages.map((m) =>
       tailSet.has(m) ? tagMessage(m, 'anthropic', { cacheControl: { type: 'ephemeral' } }) : m,
     )
     return {
-      instructions: undefined,
-      messages: [anthropicSystemMessage(args.instructions), ...tagged],
+      instructions: anthropicSystemMessage(args.instructions),
+      messages: tagged,
       tools: tagLastTool(args.tools),
     }
   }
 
   if (provider === 'openai') {
-    // store:false — we don't need the stored-call bookkeeping (retrieval via
-    // API), but the promptCacheKey still routes identical prefixes to the
-    // same cache shard which is the actual cost win.
+    const promptCacheKey = openAIStablePromptCacheKey(args.modelId, args.instructions)
+    const explicitCaching = supportsOpenAIExplicitPromptCaching(args.modelId)
+    // GPT-5.6 implicit mode keeps the automatic latest-message breakpoint as
+    // a fallback while also honoring our explicit stable-system breakpoint.
     return {
-      instructions: args.instructions,
+      instructions: explicitCaching ? openAISystemMessage(args.instructions) : args.instructions,
       messages: args.messages,
       tools: args.tools,
       providerOptions: {
-        openai: { promptCacheKey: args.sessionId, store: false },
+        openai: {
+          promptCacheKey,
+          ...(explicitCaching ? { promptCacheOptions: { mode: 'implicit', ttl: '30m' } } : {}),
+          store: false,
+        },
       },
+      headers: { [OPENAI_SESSION_ID_HEADER]: args.sessionId },
     }
   }
 
@@ -195,20 +223,18 @@ export function applyCacheControl(args: CacheControlArgs): CacheControlResult {
   }
 
   if (provider === 'alibaba') {
-    // Alibaba supports explicit caching via `cache_control: { type: 'ephemeral' }`
-    // markers, same protocol as Anthropic — up to 4 breakpoints per request.
-    // Explicit cache hits cost 10% of input price (vs 80% implicit discount),
-    // with a 125% write cost. We tag instructions + last tool + last 2
-    // messages — identical layout to Anthropic.
+    // Alibaba's explicit markers belong on message content. Tool definitions
+    // still form part of the stable prefix, but markers attached to tools are
+    // ignored by both the API contract and the current provider adapter.
     const nonSystemTail = args.messages.slice(-MESSAGE_CACHE_BREAKPOINTS)
     const tailSet = new Set(nonSystemTail)
     const tagged = args.messages.map((m) =>
       tailSet.has(m) ? tagMessage(m, 'alibaba', { cacheControl: { type: 'ephemeral' } }) : m,
     )
     return {
-      instructions: undefined,
-      messages: [alibabaSystemMessage(args.instructions), ...tagged],
-      tools: tagLastToolAlibaba(args.tools),
+      instructions: alibabaSystemMessage(args.instructions),
+      messages: tagged,
+      tools: args.tools,
     }
   }
 
@@ -247,10 +273,4 @@ function tagLastToolForProvider(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function tagLastTool(tools: Record<string, any> | undefined): Record<string, any> | undefined {
   return tagLastToolForProvider(tools, 'anthropic')
-}
-
-/** Alibaba cache_control on last tool. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function tagLastToolAlibaba(tools: Record<string, any> | undefined): Record<string, any> | undefined {
-  return tagLastToolForProvider(tools, 'alibaba')
 }

@@ -153,3 +153,8 @@ tmp
 
 # X-Code CLI project-local state (sessions, history, plans, memory, and local settings)
 .x-code
+
+.agents
+
+# Local recordings used for manual CLI checks; fixtures belong under tests.
+/*.m4a

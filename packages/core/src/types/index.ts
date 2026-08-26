@@ -1,5 +1,5 @@
 // @x-code-cli/core — Public type definitions
-import type { LanguageModel, ModelMessage } from 'ai'
+import type { LanguageModel, ModelMessage, UserContent } from 'ai'
 
 import type { EditDiffPayload } from '../agent/diff.js'
 import type { SubAgentRegistry } from '../agent/sub-agents/registry.js'
@@ -466,7 +466,7 @@ export interface AgentOptions {
   /** Drain callback for user messages queued while the loop is running.
    *  The agent loop calls this at safe boundaries — after a tool batch
    *  finishes (before the next API request) and on a `stop` finish — and
-   *  injects any returned texts as ONE merged user message (wrapped with
+   *  injects any returned inputs as ONE merged user message (wrapped with
    *  a "sent while you were working" marker) into `state.messages`.
    *  MUST have drain semantics: return the current queue contents and
    *  clear it atomically, so a message is never injected twice. Return
@@ -474,6 +474,11 @@ export interface AgentOptions {
    *  disabled (sub-agents, --print). Mirrors Codex's steer_input and
    *  Claude Code's priority-'next' queue consumption. */
   consumeQueuedInputs?: () => QueuedAgentInput[] | undefined
+
+  /** Resolve locally queued user input through the same attachment pipeline
+   *  as a normal submit. Called only for user-sourced entries after the queue
+   *  has been drained atomically; peer input must remain escaped plain text. */
+  prepareQueuedUserInput?: (input: string) => Promise<UserContent>
 
   /** Process-owned peer service. Present only on the root agent when
    *  cross-session messaging was explicitly enabled at startup. */

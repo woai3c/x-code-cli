@@ -37,7 +37,7 @@ describe('toolResultMessage', () => {
       type: 'content',
       value: [
         { type: 'text', text: '[image returned, image/png]' },
-        { type: 'image-data', data: 'AAAA', mediaType: 'image/png' },
+        { type: 'file', data: { type: 'data', data: 'AAAA' }, mediaType: 'image/png' },
       ],
     })
   })
@@ -56,14 +56,14 @@ describe('toolResultMessage', () => {
 })
 
 describe('toolMediaUserMessage', () => {
-  it('wraps base64 bytes in typed image parts instead of prompt text', () => {
+  it('wraps base64 bytes in tagged image FileParts instead of prompt text', () => {
     expect(toolMediaUserMessage([{ data: 'AAAA', mediaType: 'image/png' }])).toEqual({
       role: 'user',
       content: [
         { type: 'text', text: 'Attached media from tool result:' },
         {
-          type: 'image',
-          image: 'AAAA',
+          type: 'file',
+          data: { type: 'data', data: 'AAAA' },
           mediaType: 'image/png',
         },
       ],

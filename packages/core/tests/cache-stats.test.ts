@@ -58,15 +58,18 @@ describe('cache miss estimation', () => {
     })
   })
 
-  it.each(['compaction', 'tool-activation', 'permission-mode-change', 'transcript-rewrite'] as const)(
-    'marks %s misses as expected',
-    (reason) => {
-      const previous = turn({ input: 8_000, cacheRead: 6_000 })
-      const current = turn({ input: 9_000, cacheRead: 0, reasons: [reason] })
+  it.each([
+    'compaction',
+    'tool-activation',
+    'permission-mode-change',
+    'reasoning-change',
+    'transcript-rewrite',
+  ] as const)('marks %s misses as expected', (reason) => {
+    const previous = turn({ input: 8_000, cacheRead: 6_000 })
+    const current = turn({ input: 9_000, cacheRead: 0, reasons: [reason] })
 
-      expect(estimateCacheMiss(previous, current)).toMatchObject({ expected: true, reasons: [reason] })
-    },
-  )
+    expect(estimateCacheMiss(previous, current)).toMatchObject({ expected: true, reasons: [reason] })
+  })
 
   it('adds model-change even when the caller did not pre-mark it', () => {
     const previous = turn({ modelId: 'openai:old', input: 8_000, cacheRead: 6_000 })
@@ -164,5 +167,45 @@ describe('cache miss estimation', () => {
     }
 
     expect(incremental).toEqual(scanCacheMisses(turns))
+  })
+
+  it('reports reuse against only the comparable adjacent prefix', () => {
+    const summary = scanCacheMisses([
+      turn({ modelId: 'openai:gpt-5.6-sol', input: 8_536, cacheRead: 5_632 }),
+      turn({ modelId: 'openai:gpt-5.6-sol', input: 18_202, cacheRead: 7_680 }),
+      turn({ modelId: 'openai:gpt-5.6-sol', input: 20_000, cacheRead: 0, reasons: ['compaction'] }),
+    ])
+
+    expect(summary).toMatchObject({
+      estimatedReusableTokens: 8_536,
+      estimatedReusedTokens: 7_680,
+      comparableTurnCount: 1,
+    })
+  })
+
+  it('treats GPT-5.6 turns after the configured 30-minute TTL as expected misses', () => {
+    const previous = turn({
+      modelId: 'openai:gpt-5.6-sol',
+      input: 8_000,
+      cacheRead: 6_000,
+      timestamp: '2026-08-07T00:00:00.000Z',
+    })
+    const current = turn({
+      modelId: 'openai:gpt-5.6-sol',
+      input: 9_000,
+      cacheRead: 0,
+      timestamp: '2026-08-07T00:31:00.000Z',
+    })
+
+    expect(estimateCacheMiss(previous, current)).toMatchObject({
+      expected: true,
+      probableTtlExpiry: true,
+      reasons: ['ttl-expiry'],
+    })
+    expect(scanCacheMisses([previous, current])).toMatchObject({
+      estimatedReusableTokens: 0,
+      estimatedReusedTokens: 0,
+      comparableTurnCount: 0,
+    })
   })
 })

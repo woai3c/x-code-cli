@@ -644,32 +644,33 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         // PDF/Office/non-vision providers). Falls through to the plain-string
         // fast path when nothing attachable is detected.
         //
-        // Ingest notices surface local media milestones as `⎿`-prefixed lines.
+        // Ingest notices update the live spinner so long local processing and
+        // first-time model downloads remain visible without flooding history.
         const modelId = modelIdRef.current
         const providerCaps = capabilitiesOf(modelId)
-        const content = submitOptions?.rawContent
-          ? text
-          : await buildUserContent(
-              text,
-              modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
-              (notice) => {
-                appendMessage({
-                  id: `ingest-notice-${Date.now()}`,
-                  role: 'assistant',
-                  content: notice,
-                  timestamp: Date.now(),
-                  kind: 'command-result',
-                })
-              },
-              abortControllerRef.current.signal,
-              undefined,
-              modelId,
-            )
-
         const activeLoopState =
           loopStateRef.current ?? createLoopState(permissionModeRef.current, { projectCwd: process.cwd() })
         loopStateRef.current = activeLoopState
         bindShellSessionEvents(activeLoopState)
+        const prepareUserContent = async (input: string) => {
+          try {
+            return await buildUserContent(
+              input,
+              modelSupportsVision(modelId) ? providerCaps : { ...providerCaps, image: false },
+              (notice) => {
+                const label = notice.split(/\r?\n/, 1)[0] ?? notice
+                setState((prev) => ({ ...prev, ingestLabel: label }))
+              },
+              controller.signal,
+              undefined,
+              modelId,
+              activeLoopState.readFileCache,
+            )
+          } finally {
+            setState((prev) => ({ ...prev, ingestLabel: null }))
+          }
+        }
+        const content = submitOptions?.rawContent ? text : await prepareUserContent(text)
         // agentLoop returns { state, turnCount } — we only keep the state
         // (long-lived session). turnCount is per-invocation and the main
         // interactive loop has no use for it (the cap mechanism is what
@@ -699,6 +700,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
             // runs are injected at tool boundaries / on stop. Stable
             // callback — reads and clears queuedMessagesRef atomically.
             consumeQueuedInputs: ownerMayDrainQueuedInputs(lease.owner) ? consumeQueuedInputs : undefined,
+            prepareQueuedUserInput: ownerMayDrainQueuedInputs(lease.owner) ? prepareUserContent : undefined,
           },
           callbacks,
           activeLoopState,
@@ -1363,7 +1365,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  hook free of disk side-effects matches the existing model-switch
    *  separation. */
   const setThinking = useCallback((enabled: boolean) => {
+    if (thinkingRef.current === enabled) return
     thinkingRef.current = enabled
+    if (loopStateRef.current) markExpectedCacheMiss(loopStateRef.current, 'reasoning-change')
   }, [])
 
   /** Read the current /thinking toggle (for status display). */

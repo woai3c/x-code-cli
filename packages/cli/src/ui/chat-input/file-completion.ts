@@ -30,7 +30,7 @@ export interface AtTrigger {
   active: boolean
   /** Position of the '@' itself (only meaningful when active). */
   atIdx: number
-  /** Substring between '@' and the cursor — fed to scoreAndRank. */
+  /** Path substring between '@' and the cursor, without optional quotes. */
   query: string
   /** Right boundary of the token (first whitespace at-or-after cursor,
    *  or text.length). applyCompletion replaces text.slice(atIdx, tokenEnd). */
@@ -45,28 +45,44 @@ function isWhitespace(ch: string): boolean {
 
 export function detectAtToken(text: string, cursor: number): AtTrigger {
   if (cursor < 0 || cursor > text.length) return INACTIVE
-  // Walk left from cursor; whitespace before '@' = not in a token.
-  let i = cursor - 1
-  while (i >= 0) {
-    const ch = text[i] ?? ''
-    if (ch === '@') break
-    if (isWhitespace(ch)) return INACTIVE
-    i--
+  let atIdx = text.lastIndexOf('@', Math.max(0, cursor - 1))
+  while (atIdx >= 0) {
+    if (atIdx > 0 && !isWhitespace(text[atIdx - 1] ?? '')) {
+      atIdx = text.lastIndexOf('@', atIdx - 1)
+      continue
+    }
+
+    const quote = text[atIdx + 1]
+    if (quote === '"' || quote === "'") {
+      let closingQuote = -1
+      for (let index = atIdx + 2; index < text.length; index++) {
+        if (text[index] === quote && text[index - 1] !== '\\') {
+          closingQuote = index
+          break
+        }
+      }
+      const contentStart = atIdx + 2
+      const contentEnd = closingQuote >= 0 ? closingQuote : text.length
+      const tokenEnd = closingQuote >= 0 ? closingQuote + 1 : text.length
+      if (cursor >= contentStart && cursor <= tokenEnd) {
+        const query = text.slice(contentStart, Math.min(cursor, contentEnd)).split(`\\${quote}`).join(quote)
+        return { active: true, atIdx, query, tokenEnd }
+      }
+    } else {
+      let tokenEnd = atIdx + 1
+      while (tokenEnd < text.length && !isWhitespace(text[tokenEnd] ?? '')) tokenEnd++
+      if (cursor >= atIdx + 1 && cursor <= tokenEnd) {
+        return {
+          active: true,
+          atIdx,
+          query: text.slice(atIdx + 1, cursor),
+          tokenEnd,
+        }
+      }
+    }
+    atIdx = atIdx === 0 ? -1 : text.lastIndexOf('@', atIdx - 1)
   }
-  if (i < 0 || text[i] !== '@') return INACTIVE
-  const atIdx = i
-  // Same prefix rule as file-ingest.ts:114 — keeps `user@host` and
-  // `npm install foo@1.2` from popping the menu.
-  if (atIdx > 0 && !isWhitespace(text[atIdx - 1] ?? '')) return INACTIVE
-  // Right boundary: scan forward to first whitespace.
-  let j = cursor
-  while (j < text.length && !isWhitespace(text[j] ?? '')) j++
-  return {
-    active: true,
-    atIdx,
-    query: text.slice(atIdx + 1, cursor),
-    tokenEnd: j,
-  }
+  return INACTIVE
 }
 
 export interface FileEntry {
@@ -154,12 +170,14 @@ export function applyCompletion(
   tokenEnd: number,
   picked: { relPath: string; isDirectory: boolean },
 ): { text: string; cursor: number } {
-  const insert = '@' + picked.relPath + (picked.isDirectory ? '/' : '')
+  const completedPath = picked.relPath + (picked.isDirectory ? '/' : '')
+  const quoted = /\s|["\\]/.test(completedPath)
+  const insert = quoted ? `@"${completedPath.replace(/"/g, '\\"')}"` : `@${completedPath}`
   const before = text.slice(0, atIdx)
   const after = text.slice(tokenEnd)
   return {
     text: before + insert + after,
-    cursor: atIdx + insert.length,
+    cursor: atIdx + insert.length - (quoted && picked.isDirectory ? 1 : 0),
   }
 }
 

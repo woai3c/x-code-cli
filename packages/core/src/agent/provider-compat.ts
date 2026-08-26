@@ -31,8 +31,8 @@ import type { ToolImage } from './messages.js'
 //
 // Two flavors:
 //   - User messages: ImagePart / FilePart → TextPart with OCR'd text.
-//   - Tool result messages: `content` value array with `image-data`
-//     entries → same content array but with image entries replaced by
+//   - Tool result messages: `content` value array with tagged image `file`
+//     entries (plus legacy `image-data`) → same content array but with image entries replaced by
 //     `text` entries (OCR'd).
 //
 // OCR runs locally via tesseract.js. Results are memoized by a content
@@ -40,6 +40,42 @@ import type { ToolImage } from './messages.js'
 // OCR on every turn.
 
 type MaybeOutput = { type?: string; value?: unknown; filename?: string }
+
+interface ToolContentEntry {
+  type?: string
+  data?: string | { type?: string; data?: unknown }
+  mediaType?: string
+  text?: string
+  filename?: string
+  [key: string]: unknown
+}
+
+function isToolImageEntry(entry: ToolContentEntry): boolean {
+  if (entry.type === 'file') {
+    const mediaType = entry.mediaType?.toLowerCase() ?? ''
+    return mediaType === 'image' || mediaType.startsWith('image/')
+  }
+  return entry.type === 'image-data' || (entry.type === 'media' && (entry.mediaType?.startsWith('image/') ?? false))
+}
+
+function toolImageBase64(entry: ToolContentEntry): string | undefined {
+  if (entry.type === 'file') {
+    if (typeof entry.data === 'string') return entry.data
+    return entry.data?.type === 'data' && typeof entry.data.data === 'string' ? entry.data.data : undefined
+  }
+  return typeof entry.data === 'string' ? entry.data : undefined
+}
+
+function withToolImageData(
+  entry: ToolContentEntry,
+  data: string,
+  mediaType: string,
+  filename?: string,
+): ToolContentEntry {
+  return entry.type === 'file'
+    ? { ...entry, data: { type: 'data', data }, mediaType, filename }
+    : { ...entry, data, mediaType, filename }
+}
 
 /**
  * Move image parts out of tool results for multimodal Chat Completions
@@ -82,15 +118,10 @@ export function reattachToolResultImagesForProvider(messages: ModelMessage[], mo
       if (!output || output.type !== 'content' || !Array.isArray(output.value)) return part
 
       const retained: unknown[] = []
-      for (const entry of output.value as Array<{
-        type?: string
-        data?: string
-        mediaType?: string
-        text?: string
-      }>) {
-        const isImage = entry.type === 'image-data' || (entry.type === 'media' && entry.mediaType?.startsWith('image/'))
-        if (isImage && typeof entry.data === 'string' && typeof entry.mediaType === 'string') {
-          pendingImages.push({ data: entry.data, mediaType: entry.mediaType })
+      for (const entry of output.value as ToolContentEntry[]) {
+        const data = toolImageBase64(entry)
+        if (isToolImageEntry(entry) && data && typeof entry.mediaType === 'string') {
+          pendingImages.push({ data, mediaType: entry.mediaType })
           movedAny = true
         } else {
           retained.push(entry)
@@ -435,20 +466,14 @@ export async function downgradeBinaryPartsForProvider(
         if (!output || output.type !== 'content' || !Array.isArray(output.value)) continue
 
         const rewritten: unknown[] = []
-        for (const entry of output.value as Array<{
-          type: string
-          data?: string
-          mediaType?: string
-          text?: string
-          filename?: string
-        }>) {
-          // In a ModelMessage tool-result the image part is `{ type: 'image-data',
-          // data, mediaType }`. OCR for text-only providers so they don't 400
-          // on the binary.
-          const isImageEntry =
-            entry.type === 'image-data' || (entry.type === 'media' && entry.mediaType?.startsWith('image/'))
+        for (const entry of output.value as ToolContentEntry[]) {
+          // New sessions use tagged image FileParts; legacy sessions may still
+          // contain image-data/media. OCR for text-only providers so they do
+          // not reject the binary tool output.
+          const isImageEntry = isToolImageEntry(entry)
+          const imageData = toolImageBase64(entry)
           if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true) && acceptsImages) {
-            const buffer = Buffer.from(entry.data ?? '', 'base64')
+            const buffer = Buffer.from(imageData ?? '', 'base64')
             const normalized = await normalizeCompatImage(buffer, modelId, abortSignal)
             if (!normalized.ok) {
               rewritten.push({ type: 'text', text: normalized.notice })
@@ -458,17 +483,17 @@ export async function downgradeBinaryPartsForProvider(
             rewritten.push(
               !normalized.changed && declaredMime === normalized.mimeType
                 ? entry
-                : {
-                    ...entry,
-                    data: normalized.data.toString('base64'),
-                    mediaType: normalized.mimeType,
-                    filename: normalizedImageFilename(entry.filename, normalized.mimeType),
-                  },
+                : withToolImageData(
+                    entry,
+                    normalized.data.toString('base64'),
+                    normalized.mimeType,
+                    normalizedImageFilename(entry.filename, normalized.mimeType),
+                  ),
             )
             continue
           }
           if (isImageEntry && (entry.mediaType?.startsWith('image/') ?? true)) {
-            const data = entry.data ?? ''
+            const data = imageData ?? ''
             let text = '[image omitted]'
             try {
               const buffer = Buffer.from(data, 'base64')
@@ -483,6 +508,7 @@ export async function downgradeBinaryPartsForProvider(
             continue
           }
           const isLegacyFileEntry =
+            entry.type === 'file' ||
             entry.type === 'file-data' ||
             entry.type === 'file-url' ||
             entry.type === 'file-id' ||

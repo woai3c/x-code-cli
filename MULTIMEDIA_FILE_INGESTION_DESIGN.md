@@ -965,7 +965,7 @@ formatTranscription(result, filePath)
 
 - 原始音频不进入 AI SDK 消息。
 - 音频源文件最大 25 MiB；以同一份有界暂存字节作为隔离进程中流式解码的输入。
-- 当前随包解码器的稳定格式契约收窄为 MP3、WAV、FLAC、OGG Vorbis；M4A/AAC/WMA/WebM/Opus/AIFF 不再仅凭扩展名进入转写，也不在 README 中承诺。
+- 当前随包解码器的稳定格式契约为 MP3、WAV、FLAC、OGG Vorbis 和 M4A；AAC/WMA/WebM/Opus/AIFF 不仅凭扩展名进入转写，也不在 README 中承诺。
 - 隔离进程按实际解码帧计数、逐块下混并重采样为 16 kHz 单声道 signed-16 PCM；超过 20 分钟立即拒绝。交给 `transcribeData()` 的 PCM 输入最大约 36.6 MiB，因此 native float vector 被硬限制在约 73.2 MiB，而不是依赖容器元数据估算。
 - 转写结果受 256 KB 上限。
 - 超长音频返回清晰错误；分段转写作为后续能力，不在本版本静默截断。
@@ -1435,7 +1435,7 @@ README.zh-CN.md
 - 转写文本超过 256 KB 时有明确提示。
 - 原始音频 Base64 不进入消息历史。
 - 超过 25 MiB 的源音频在 native 解码前拒绝。
-- M4A/AAC/WMA/WebM/Opus/AIFF 在模型下载前返回 unsupported；MP3/WAV/FLAC/OGG Vorbis 进入转写。
+- AAC/WMA/WebM/Opus/AIFF 在模型下载前返回 unsupported；MP3/WAV/FLAC/OGG Vorbis/M4A 进入转写。
 - 核心集成测试和发布包 smoke 使用小型有效 Ogg Vorbis fixture 经过真实 parser/WASM 解码，并断言 metadata 与 PCM 字节数；伪造 Ogg 或仅检查模块可解析不能作为成功门禁。
 - 流式解码按实际帧在 20 分钟处停止，写入 `transcribeData()` 的 PCM 和 native float vector 都有硬字节上限；native 请求超过总超时时强制终止。
 - JS wrapper 存在但平台 `.node` 缺失时，worker probe 在模型下载前失败；发布包 smoke 必须发送 probe，而不是只发送 shutdown。

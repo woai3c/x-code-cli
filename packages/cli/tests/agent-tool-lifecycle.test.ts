@@ -30,6 +30,7 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
     todos: [],
     bufferingReads: false,
     compressionLabel: null,
+    ingestLabel: null,
     reconnectLabel: null,
     goalStatus: null,
     goalRunnerActive: false,

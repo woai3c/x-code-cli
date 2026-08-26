@@ -1465,6 +1465,7 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     transcriptIntegrity === 'failed'
       ? { ...derivedSecurity, peerInfluenceActive: true, integrityFailure: true }
       : derivedSecurity
+  const scannedCacheMissSummary = scanCacheMisses(providerTurns)
 
   return {
     sessionId: header.sessionId,
@@ -1484,7 +1485,15 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
     usageBreakdown: lastUsage?.breakdown ?? createUsageBreakdown(),
     providerTurns,
-    cacheMissSummary: lastUsage?.cacheMissSummary ?? scanCacheMisses(providerTurns),
+    cacheMissSummary: lastUsage?.cacheMissSummary
+      ? {
+          ...lastUsage.cacheMissSummary,
+          estimatedReusableTokens: scannedCacheMissSummary.estimatedReusableTokens,
+          estimatedReusedTokens: scannedCacheMissSummary.estimatedReusedTokens,
+          comparableTurnCount: scannedCacheMissSummary.comparableTurnCount,
+          estimates: scannedCacheMissSummary.estimates,
+        }
+      : scannedCacheMissSummary,
     goal,
     goalInputs,
     checkpoints,
@@ -1766,9 +1775,16 @@ export function hydrateLoopState(
   state.tokenUsage = { ...loaded.tokenUsage }
   state.usageBreakdown = loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown()
   state.providerTurns = loaded.providerTurns?.slice() ?? []
+  const scannedCacheMissSummary = scanCacheMisses(state.providerTurns)
   state.cacheMissSummary = loaded.cacheMissSummary
-    ? { ...loaded.cacheMissSummary, estimates: scanCacheMisses(state.providerTurns).estimates }
-    : scanCacheMisses(state.providerTurns)
+    ? {
+        ...loaded.cacheMissSummary,
+        estimatedReusableTokens: scannedCacheMissSummary.estimatedReusableTokens,
+        estimatedReusedTokens: scannedCacheMissSummary.estimatedReusedTokens,
+        comparableTurnCount: scannedCacheMissSummary.comparableTurnCount,
+        estimates: scannedCacheMissSummary.estimates,
+      }
+    : scannedCacheMissSummary
   state.lastInputTokens = loaded.tokenUsage.inputTokens
   state.persistedMessageCount = loaded.trackedMessages.length
   state.checkpoints = loaded.checkpoints.slice()

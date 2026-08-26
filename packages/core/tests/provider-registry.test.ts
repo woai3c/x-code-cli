@@ -17,7 +17,11 @@ import {
 } from '../src/auth/openai-chatgpt/auth-resolver.js'
 import { writeOpenAIChatGPTCredentials } from '../src/auth/openai-chatgpt/credential-store.js'
 import { getProviderOptions, saveUserConfig } from '../src/config/index.js'
-import { XAI_PROMPT_CACHE_KEY_HEADER, applyCacheControl } from '../src/providers/cache-control.js'
+import {
+  OPENAI_SESSION_ID_HEADER,
+  XAI_PROMPT_CACHE_KEY_HEADER,
+  applyCacheControl,
+} from '../src/providers/cache-control.js'
 import { createModelRegistry, kimiCodingModelId } from '../src/providers/registry.js'
 
 function sseResponse(events: unknown[]): Response {
@@ -38,8 +42,11 @@ describe('Kimi endpoint model ids', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     resetOpenAIAuthContextForTesting()
     delete process.env.X_CODE_HOME
+    delete process.env.ALIBABA_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
     delete process.env.MOONSHOT_API_KEY
     delete process.env.OPENAI_API_KEY
     delete process.env.XAI_API_KEY
@@ -105,6 +112,98 @@ describe('Kimi endpoint model ids', () => {
     expect(init?.signal).toBe(controller.signal)
   })
 
+  it('serializes Anthropic cache breakpoints without putting a system role in messages', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://api.anthropic.com')
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ error: { message: 'test stop' } }, { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const tools = {
+      lookup: tool({
+        description: 'look something up',
+        inputSchema: z.object({ query: z.string() }),
+      }),
+    }
+    const cache = applyCacheControl({
+      instructions: 'stable instructions',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools,
+      modelId: 'anthropic:claude-opus-4-8',
+      sessionId: 'session-1',
+    })
+    const errors: unknown[] = []
+    const result = streamText({
+      model: createModelRegistry().languageModel('anthropic:claude-opus-4-8'),
+      instructions: cache.instructions,
+      messages: cache.messages,
+      tools: cache.tools,
+      onError: ({ error }) => {
+        errors.push(error)
+      },
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(errors).toHaveLength(1)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://api.anthropic.com/v1/messages')
+    const body = JSON.parse(String(init?.body)) as Record<string, any>
+    expect(body.system).toEqual([{ type: 'text', text: 'stable instructions', cache_control: { type: 'ephemeral' } }])
+    expect(body.messages[0]).toMatchObject({ role: 'user' })
+    expect(body.messages.some((message: { role?: string }) => message.role === 'system')).toBe(false)
+    expect(body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' })
+    expect(body.tools[0].cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  it('serializes Alibaba message cache breakpoints and leaves tools unmarked', async () => {
+    process.env.ALIBABA_API_KEY = 'test-key'
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ error: { message: 'test stop' } }, { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const tools = {
+      lookup: tool({
+        description: 'look something up',
+        inputSchema: z.object({ query: z.string() }),
+      }),
+    }
+    const cache = applyCacheControl({
+      instructions: 'stable instructions',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools,
+      modelId: 'alibaba:qwen3-coder-plus',
+      sessionId: 'session-1',
+    })
+    const errors: unknown[] = []
+    const result = streamText({
+      model: createModelRegistry().languageModel('alibaba:qwen3-coder-plus'),
+      instructions: cache.instructions,
+      messages: cache.messages,
+      tools: cache.tools,
+      onError: ({ error }) => {
+        errors.push(error)
+      },
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(errors).toHaveLength(1)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
+    const body = JSON.parse(String(init?.body)) as Record<string, any>
+    expect(body.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'stable instructions', cache_control: { type: 'ephemeral' } }],
+    })
+    expect(body.messages[1].content[0].cache_control).toEqual({ type: 'ephemeral' })
+    expect(JSON.stringify(body.tools)).not.toContain('cache_control')
+  })
+
   it('registers one OpenAI provider with ChatGPT auth and keeps OPENAI_API_KEY out of the request', async () => {
     process.env.OPENAI_API_KEY = 'platform-key-must-never-leak'
     await writeOpenAIChatGPTCredentials({
@@ -126,11 +225,18 @@ describe('Kimi endpoint model ids', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
     const model = createModelRegistry().languageModel('openai:gpt-5.6-sol')
-    const result = streamText({
-      model,
+    const cache = applyCacheControl({
       instructions: 'stable instructions',
       messages: [{ role: 'user', content: 'hello' }],
-      providerOptions: { openai: { store: false, promptCacheKey: 'session-1' } },
+      modelId: 'openai:gpt-5.6-sol',
+      sessionId: 'session-1',
+    })
+    const result = streamText({
+      model,
+      instructions: cache.instructions,
+      messages: cache.messages,
+      providerOptions: cache.providerOptions as Parameters<typeof streamText>[0]['providerOptions'],
+      headers: cache.headers,
       onError: () => undefined,
     })
     for await (const _chunk of result.textStream) {
@@ -140,8 +246,55 @@ describe('Kimi endpoint model ids', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('https://chatgpt.com/backend-api/codex/responses')
-    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer oauth-access')
+    const headers = new Headers(init?.headers)
+    expect(headers.get('authorization')).toBe('Bearer oauth-access')
+    expect(headers.get('session-id')).toBe('session-1')
+    expect(headers.get(OPENAI_SESSION_ID_HEADER)).toBeNull()
+    const body = JSON.parse(String(init?.body)) as Record<string, any>
+    expect(body.prompt_cache_key).toMatch(/^xc-agent-v1:/)
+    expect(body.prompt_cache_key).not.toBe('session-1')
+    expect(body.prompt_cache_options).toEqual({ mode: 'implicit', ttl: '30m' })
+    expect(body.input[0].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' })
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('platform-key-must-never-leak')
+  })
+
+  it('pins Platform API auth to OpenAI despite OPENAI_BASE_URL and strips the internal session header', async () => {
+    vi.stubEnv('OPENAI_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+    process.env.OPENAI_API_KEY = 'platform-key'
+    initializeOpenAIAuthContext()
+    expect(getOpenAIAuthSnapshot().context.mode).toBe('api-key')
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ error: { message: 'test stop' } }, { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const cache = applyCacheControl({
+      instructions: 'stable instructions',
+      messages: [{ role: 'user', content: 'hello' }],
+      modelId: 'openai:gpt-5.6-sol',
+      sessionId: 'session-1',
+    })
+    const model = createModelRegistry().languageModel('openai:gpt-5.6-sol')
+    expect(model.provider).toContain('openai')
+    const result = streamText({
+      model,
+      instructions: cache.instructions,
+      messages: cache.messages,
+      providerOptions: cache.providerOptions as Parameters<typeof streamText>[0]['providerOptions'],
+      headers: cache.headers,
+      onError: () => undefined,
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://api.openai.com/v1/responses')
+    const headers = new Headers(init?.headers)
+    expect(headers.get(OPENAI_SESSION_ID_HEADER)).toBeNull()
+    expect(headers.get('session-id')).toBeNull()
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    expect(body.prompt_cache_key).toMatch(/^xc-agent-v1:/)
   })
 
   it('fails closed before a stale API-key provider can send after an external ChatGPT login', async () => {

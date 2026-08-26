@@ -1,10 +1,11 @@
 import type { LanguageModel, LanguageModelUsage } from 'ai'
-import { NoObjectGeneratedError, NoOutputGeneratedError, Output, generateText } from 'ai'
+import { NoObjectGeneratedError, NoOutputGeneratedError, Output, streamText } from 'ai'
 
 import { z } from 'zod'
 
 import type { MemoryReasoningMode } from '../../config/index.js'
 import { providerOf } from '../../providers/capabilities.js'
+import { getOpenAIChatGPTReasoningTiers } from '../../providers/openai-chatgpt-models.js'
 import { getReasoningLevel, getThinkingProviderOptions } from '../../providers/thinking.js'
 import { debugLog } from '../../utils.js'
 
@@ -121,9 +122,11 @@ export function resetMemoryInferenceState(): void {
   rejectedTemperature.clear()
 }
 
-/** Shared structured-output generateText wrapper used by the extractor and
- *  the selector. Inference settings from runMemoryInference are spread last
- *  so budget/reasoning fallbacks always win over call-site defaults. */
+/** Shared structured-output stream wrapper used by the extractor and the
+ *  selector. ChatGPT's Codex transport requires streaming even for background
+ *  inference; awaiting output + usage still exposes a single completed result
+ *  to callers. Inference settings are spread last so budget/reasoning
+ *  fallbacks always win over call-site defaults. */
 export function generateStructuredObject(input: {
   model: LanguageModel
   instructions: string
@@ -135,7 +138,8 @@ export function generateStructuredObject(input: {
   abortSignal?: AbortSignal
 }): (settings: MemoryInferenceSettings) => Promise<{ output: unknown; usage: LanguageModelUsage }> {
   return async ({ providerOptions, ...settings }) => {
-    const result = await generateText({
+    let streamError: unknown
+    const result = streamText({
       model: input.model,
       instructions: input.instructions,
       prompt: JSON.stringify(input.payload),
@@ -148,10 +152,18 @@ export function generateStructuredObject(input: {
       ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
       ...settings,
       ...(providerOptions
-        ? { providerOptions: providerOptions as Parameters<typeof generateText>[0]['providerOptions'] }
+        ? { providerOptions: providerOptions as Parameters<typeof streamText>[0]['providerOptions'] }
         : {}),
+      onError: ({ error }) => {
+        streamError = error
+      },
     })
-    return result as { output: unknown; usage: LanguageModelUsage }
+    try {
+      const [output, usage] = await Promise.all([result.output, result.usage])
+      return { output, usage }
+    } catch (error) {
+      throw streamError ?? error
+    }
   }
 }
 
@@ -169,7 +181,7 @@ function inferenceSettings(
       maxOutputTokens,
       ...(reasoning && reasoning !== 'provider-default' ? { reasoning } : {}),
       ...(Object.keys(providerOptions).length ? { providerOptions } : {}),
-      ...(!omitTemperature ? { temperature: 0 } : {}),
+      ...(!omitTemperature && (!reasoning || reasoning === 'none') ? { temperature: 0 } : {}),
     }
   }
   const provider = providerOf(modelId)
@@ -186,7 +198,11 @@ function requiresThinking(modelId: string): boolean {
   const provider = providerOf(normalized)
   if (provider === 'google') return /gemini-(?:2\.5-pro|3(?:[.\-]|$))/.test(normalized)
   if (provider === 'deepseek') return /(?:^|:)deepseek-reasoner(?:$|[-.])/.test(normalized)
-  if (provider === 'openai') return /(?:^|:)(?:gpt-5-pro|o[134])(?:$|[-.])/.test(normalized)
+  if (provider === 'openai') {
+    const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
+    if (chatGPTTiers?.length && !chatGPTTiers.some((tier) => tier.value === 'none')) return true
+    return /(?:^|:)(?:gpt-5(?:$|[-.])|o[134](?:$|[-.]))/.test(normalized)
+  }
   return provider === 'anthropic' && /claude-opus-4-5/.test(normalized)
 }
 

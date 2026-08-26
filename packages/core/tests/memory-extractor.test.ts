@@ -1,4 +1,4 @@
-import { generateText } from 'ai'
+import { streamText } from 'ai'
 import type { LanguageModel } from 'ai'
 
 import { extractMemoryOperations } from '../src/knowledge/memory/extractor.js'
@@ -6,7 +6,7 @@ import type { MemoryJob } from '../src/knowledge/memory/types.js'
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>()
-  return { ...actual, generateText: vi.fn() }
+  return { ...actual, streamText: vi.fn() }
 })
 
 function job(): MemoryJob {
@@ -36,8 +36,8 @@ function job(): MemoryJob {
 
 describe('memory extractor', () => {
   it('uses one structured model call, redacts input, and returns bounded operations', async () => {
-    vi.mocked(generateText).mockResolvedValueOnce({
-      output: {
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({
         operations: [
           {
             action: 'upsert',
@@ -53,8 +53,8 @@ describe('memory extractor', () => {
             },
           },
         ],
-      },
-      usage: { inputTokens: 100, outputTokens: 20 },
+      }),
+      usage: Promise.resolve({ inputTokens: 100, outputTokens: 20 }),
     } as never)
 
     const result = await extractMemoryOperations({
@@ -67,17 +67,17 @@ describe('memory extractor', () => {
     })
     expect(result.operations).toHaveLength(1)
     expect(result.tokens).toBe(120)
-    expect(generateText).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(vi.mocked(generateText).mock.calls[0]?.[0])).not.toContain('sk-proj-abcdefghijklmnop')
-    expect(vi.mocked(generateText).mock.calls[0]?.[0]).toMatchObject({ reasoning: 'none', temperature: 0 })
-    const payload = JSON.parse(String(vi.mocked(generateText).mock.calls[0]?.[0].prompt))
+    expect(streamText).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(vi.mocked(streamText).mock.calls[0]?.[0])).not.toContain('sk-proj-abcdefghijklmnop')
+    expect(vi.mocked(streamText).mock.calls[0]?.[0]).toMatchObject({ reasoning: 'none', temperature: 0 })
+    const payload = JSON.parse(String(vi.mocked(streamText).mock.calls[0]?.[0].prompt))
     expect(payload.explicitMemoryIntent).toBe(true)
     expect(payload.existingTopicIds).toEqual([])
   })
 
   it('rejects invalid memory identifiers before commit', async () => {
-    vi.mocked(generateText).mockResolvedValueOnce({
-      output: {
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({
         operations: [
           {
             action: 'upsert',
@@ -93,8 +93,8 @@ describe('memory extractor', () => {
             },
           },
         ],
-      },
-      usage: { inputTokens: 100, outputTokens: 20 },
+      }),
+      usage: Promise.resolve({ inputTokens: 100, outputTokens: 20 }),
     } as never)
 
     await expect(
@@ -109,8 +109,8 @@ describe('memory extractor', () => {
   })
 
   it('rejects incomplete metadata for a new topic instead of losing the operation at commit', async () => {
-    vi.mocked(generateText).mockResolvedValueOnce({
-      output: {
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({
         operations: [
           {
             action: 'upsert',
@@ -120,8 +120,8 @@ describe('memory extractor', () => {
             evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-02T00:01:00.000Z' }],
           },
         ],
-      },
-      usage: { inputTokens: 100, outputTokens: 20 },
+      }),
+      usage: Promise.resolve({ inputTokens: 100, outputTokens: 20 }),
     } as never)
 
     await expect(
@@ -137,8 +137,8 @@ describe('memory extractor', () => {
   })
 
   it('allows an existing topic update without a metadata patch', async () => {
-    vi.mocked(generateText).mockResolvedValueOnce({
-      output: {
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({
         operations: [
           {
             action: 'upsert',
@@ -148,8 +148,8 @@ describe('memory extractor', () => {
             evidence: [{ kind: 'explicit', sourceId: 'session', occurredAt: '2026-08-02T00:01:00.000Z' }],
           },
         ],
-      },
-      usage: { inputTokens: 100, outputTokens: 20 },
+      }),
+      usage: Promise.resolve({ inputTokens: 100, outputTokens: 20 }),
     } as never)
 
     const result = await extractMemoryOperations({
@@ -162,5 +162,26 @@ describe('memory extractor', () => {
     })
 
     expect(result.operations).toHaveLength(1)
+  })
+
+  it('surfaces the provider stream error instead of a generic missing-output wrapper', async () => {
+    const providerError = new Error('invalid response schema')
+    vi.mocked(streamText).mockImplementationOnce((options) => {
+      options.onError?.({ error: providerError })
+      return {
+        output: Promise.reject(new Error('No output generated')),
+        usage: Promise.resolve({}),
+      } as never
+    })
+
+    await expect(
+      extractMemoryOperations({
+        job: job(),
+        model: {} as LanguageModel,
+        coreProfile: '',
+        factRegistry: '',
+        relatedTopics: [],
+      }),
+    ).rejects.toBe(providerError)
   })
 })

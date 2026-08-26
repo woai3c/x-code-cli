@@ -1,6 +1,6 @@
 // @x-code-cli/core — Local audio transcription via whisper.cpp
 //
-// Transcribes local MP3, WAV, FLAC and OGG Vorbis files using
+// Transcribes local MP3, WAV, FLAC, OGG Vorbis and M4A files using
 // @fugood/whisper.node — a native Node.js binding of whisper.cpp.
 // Returns timestamped text segments; only the text is sent to the LLM, never
 // the raw audio. The whisper model is auto-downloaded from Hugging Face on
@@ -141,7 +141,11 @@ async function validateModelFile(
 async function ensureModel(model: WhisperModelName, options?: EnsureModelOptions): Promise<string> {
   const dest = modelPath(model)
   const spec = WHISPER_MODELS[model]
-  if (await validateModelFile(dest, spec, options?.abortSignal)) return dest
+  if (await validateModelFile(dest, spec, options?.abortSignal)) {
+    debugLog('audio-transcribe', `model cache hit: ${dest}`)
+    options?.onProgress?.(`Using cached Whisper model "${model}"`)
+    return dest
+  }
 
   await fs.mkdir(modelsDir(), { recursive: true })
   const lease = await acquireFileLock(`${dest}.lock`, {
@@ -151,7 +155,11 @@ async function ensureModel(model: WhisperModelName, options?: EnsureModelOptions
   })
   if (!lease) throw new Error(`Could not acquire the whisper model download lock for ${model}`)
   try {
-    if (await validateModelFile(dest, spec, options?.abortSignal)) return dest
+    if (await validateModelFile(dest, spec, options?.abortSignal)) {
+      debugLog('audio-transcribe', `model cache filled by another process: ${dest}`)
+      options?.onProgress?.(`Using cached Whisper model "${model}"`)
+      return dest
+    }
     verifiedModels.delete(dest)
     await fs.rm(dest, { force: true })
 
@@ -413,10 +421,17 @@ export async function transcribeAudio(
     })
     options?.abortSignal?.throwIfAborted()
     options?.onNotice?.(`Transcribing audio: ${path.basename(filePath)}…`)
+    let lastNoticeProgress = -5
     const result = await runWhisperTranscription(targetModel, pcmPath, {
       language: options?.language,
       abortSignal: options?.abortSignal,
-      onProgress: options?.onProgress,
+      onProgress: (progress) => {
+        options?.onProgress?.(progress)
+        const percentage = Math.max(0, Math.min(100, Math.floor(progress / 5) * 5))
+        if (percentage <= lastNoticeProgress) return
+        lastNoticeProgress = percentage
+        options?.onNotice?.(`Transcribing audio: ${path.basename(filePath)} (${percentage}%)`)
+      },
       onNotice: options?.onNotice,
     })
 

@@ -164,7 +164,7 @@ describe('readFile tool', () => {
     await fs.rm(tmpDir, { recursive: true })
   })
 
-  it('normalizes BMP tool output to PNG image-data', async () => {
+  it('normalizes BMP tool output to a tagged PNG FilePart', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-image-'))
     const filePath = path.join(tmpDir, 'disguised.png')
     const { Jimp } = await import('jimp')
@@ -172,7 +172,7 @@ describe('readFile tool', () => {
     const result = await exec({ filePath })
     expect(result).toMatchObject({
       type: 'content',
-      value: expect.arrayContaining([expect.objectContaining({ type: 'image-data', mediaType: 'image/png' })]),
+      value: expect.arrayContaining([expect.objectContaining({ type: 'file', mediaType: 'image/png' })]),
     })
     await fs.rm(tmpDir, { recursive: true })
   })
@@ -331,7 +331,7 @@ describe('readFile — read de-dup cache', () => {
     expect(first).toContain('line one')
 
     const second = (await execWith(tool, { filePath })) as string
-    expect(second).toContain('unchanged since you last read it')
+    expect(second).toContain('unchanged since its full content was added')
     expect(second).not.toContain('line two')
 
     await fs.rm(tmpDir, { recursive: true })
@@ -352,6 +352,24 @@ describe('readFile — read de-dup cache', () => {
     const second = (await execWith(tool, { filePath })) as string
     expect(second).toContain('showing first 2000')
     expect(second).not.toContain('unchanged since')
+
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('does not cache a failed Office extraction as complete', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-dd-office-'))
+    const filePath = path.join(tmpDir, 'broken.docx')
+    await fs.writeFile(filePath, Buffer.from('PK\u0003\u0004broken archive'))
+    const cache: ReadFileCache = new Map()
+    const tool = createReadFileTool(cache)
+
+    const first = (await execWith(tool, { filePath })) as string
+    const second = (await execWith(tool, { filePath })) as string
+
+    expect(first).toContain('Failed to extract text')
+    expect(second).toContain('Failed to extract text')
+    expect(second).not.toContain('unchanged since')
+    expect(cache.has(filePath)).toBe(false)
 
     await fs.rm(tmpDir, { recursive: true })
   })

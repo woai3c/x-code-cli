@@ -119,6 +119,10 @@ describe('caption usage', () => {
     await captionImageBuffer(buffer, 'image/png', 'google:requested-vision', { onUsage })
 
     expect(generateText).toHaveBeenCalledOnce()
+    expect(vi.mocked(generateText).mock.calls[0]?.[0].messages?.[0]).toMatchObject({
+      role: 'user',
+      content: expect.arrayContaining([expect.objectContaining({ type: 'file', mediaType: 'image/png' })]),
+    })
     expect(onUsage).toHaveBeenCalledOnce()
     expect(onUsage).toHaveBeenCalledWith({ modelId: 'google:actual-vision', usage })
   })

@@ -103,6 +103,54 @@ describe('extractFileReferences', () => {
     expect(refs).toHaveLength(1)
   })
 
+  it('captures a shell-quoted absolute path containing spaces and CJK characters', () => {
+    const source = '/Users/example/Media/语音记录 9.m4a'
+    const refs = extractFileReferences(`'${source}' 分析一下内容`)
+
+    expect(refs).toEqual([{ raw: `'${source}'`, absolutePath: path.normalize(source) }])
+  })
+
+  it('captures quoted Windows paths without treating backslashes as escapes', () => {
+    const source = 'D:\\res\\voice files\\meeting 9.m4a'
+    const refs = extractFileReferences(`analyze "${source}" please`)
+
+    expect(refs).toEqual([{ raw: `"${source}"`, absolutePath: path.win32.normalize(source) }])
+  })
+
+  it('captures quoted relative @-mentions emitted by file completion', () => {
+    const refs = extractFileReferences('read @"notes/设计 方案[1].md" please')
+
+    expect(refs).toEqual([
+      {
+        raw: '@"notes/设计 方案[1].md"',
+        absolutePath: path.resolve('notes/设计 方案[1].md'),
+      },
+    ])
+  })
+
+  it('requires quoting when an absolute path contains spaces', () => {
+    expect(extractFileReferences('summarize /tmp/quarterly report.pdf please')).toEqual([])
+  })
+
+  it('does not merge prose between route-like tokens and source paths', () => {
+    expect(extractFileReferences('compare /api/v1 route against packages/core/src/foo.ts')).toEqual([])
+  })
+
+  it.each(['/tmp/file.txt.', '/tmp/file.txt:'])('strips sentence punctuation from %s', (input) => {
+    expect(extractFileReferences(input)).toEqual([
+      { raw: '/tmp/file.txt', absolutePath: path.normalize('/tmp/file.txt') },
+    ])
+  })
+
+  it('scans route-heavy prompts without combining tokens into a path', () => {
+    const input = Array.from({ length: 64_000 }, (_, index) => `/route/${index}`).join(' ')
+    expect(extractFileReferences(input)).toEqual([])
+  })
+
+  it('does not treat quoted relative prose as a file reference', () => {
+    expect(extractFileReferences("say 'hello world.txt' please")).toEqual([])
+  })
+
   it('de-duplicates repeated references', () => {
     const refs = extractFileReferences('@/a/b.md vs @/a/b.md')
     expect(refs).toHaveLength(1)
@@ -732,6 +780,80 @@ describe('buildUserContent', () => {
     if (!Array.isArray(result)) return
     expect(result[0]).toEqual({ type: 'text', text: input })
     expect(result.length).toBeGreaterThan(1)
+  })
+
+  it('marks a fully inlined attachment as already available to readFile', async () => {
+    const cache = new Map<string, { mtimeMs: number; size: number }>()
+
+    await buildUserContent(
+      `please read @${textFile}`,
+      {
+        image: true,
+        pdf: true,
+        audio: true,
+        filesApi: true,
+        toolImageTransport: 'tool-result',
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      cache,
+    )
+
+    expect(cache.get(textFile)).toMatchObject({ size: Buffer.byteLength('# Hello\nLine 2') })
+  })
+
+  it('does not mark an omitted attachment as already read', async () => {
+    const oversized = path.join(tmpDir, 'build-cache-oversized.txt')
+    const cache = new Map<string, { mtimeMs: number; size: number }>()
+    await fs.writeFile(oversized, 'x'.repeat(MAX_INGEST_BYTES + 1))
+
+    try {
+      await buildUserContent(
+        `please read @${oversized}`,
+        {
+          image: true,
+          pdf: true,
+          audio: true,
+          filesApi: true,
+          toolImageTransport: 'tool-result',
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        cache,
+      )
+      expect(cache.has(oversized)).toBe(false)
+    } finally {
+      await fs.rm(oversized, { force: true })
+    }
+  })
+
+  it('does not mark a failed Office extraction as fully delivered', async () => {
+    const broken = path.join(tmpDir, 'broken-cache.docx')
+    const cache = new Map<string, { mtimeMs: number; size: number }>()
+    await fs.writeFile(broken, Buffer.from('PK\u0003\u0004broken archive'))
+
+    const result = await buildUserContent(
+      `please read @${broken}`,
+      {
+        image: true,
+        pdf: true,
+        audio: true,
+        filesApi: true,
+        toolImageTransport: 'tool-result',
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      cache,
+    )
+
+    expect(JSON.stringify(result)).toContain('Failed to extract text')
+    expect(cache.has(broken)).toBe(false)
   })
 
   it('enforces a cumulative post-formatting attachment text budget', async () => {

@@ -66,6 +66,19 @@ describe('detectAtToken', () => {
     expect(t.query).toBe('')
     expect(t.tokenEnd).toBe(7)
   })
+
+  it('keeps a quoted path active across whitespace', () => {
+    const text = 'read @"notes/设计 方案/" now'
+    const cursor = text.indexOf('" now')
+    const t = detectAtToken(text, cursor)
+
+    expect(t).toEqual({
+      active: true,
+      atIdx: 5,
+      query: 'notes/设计 方案/',
+      tokenEnd: cursor + 1,
+    })
+  })
 })
 
 describe('scoreAndRank', () => {
@@ -141,5 +154,23 @@ describe('applyCompletion', () => {
     })
     expect(out.text).toBe('look @a.ts then read it')
     expect(out.cursor).toBe(10)
+  })
+
+  it('quotes completed file paths containing whitespace', () => {
+    const out = applyCompletion('@设计', 0, 3, {
+      relPath: 'notes/设计 方案[1].md',
+      isDirectory: false,
+    })
+
+    expect(out.text).toBe('@"notes/设计 方案[1].md"')
+    expect(out.cursor).toBe(out.text.length)
+  })
+
+  it('leaves the cursor inside a quoted directory so completion can continue', () => {
+    const out = applyCompletion('@voice', 0, 6, { relPath: 'voice notes', isDirectory: true })
+
+    expect(out.text).toBe('@"voice notes/"')
+    expect(out.cursor).toBe(out.text.length - 1)
+    expect(detectAtToken(out.text, out.cursor)).toMatchObject({ active: true, query: 'voice notes/' })
   })
 })

@@ -35,7 +35,7 @@ async function loadRuntime(): Promise<WhisperModule> {
 async function contextFor(modelPath: string, id: number): Promise<WhisperContext> {
   if (context && loadedModelPath === modelPath) return context
   await releaseContext()
-  send({ id, type: 'notice', message: 'Loading whisper model…' })
+  send({ id, type: 'notice', message: 'Loading cached Whisper model into memory…' })
   const loaded = await loadRuntime()
   context = await loaded.initWhisper({ filePath: modelPath, useGpu: true })
   loadedModelPath = modelPath

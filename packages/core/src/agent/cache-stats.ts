@@ -5,6 +5,7 @@ export type CacheMissReason =
   | 'compaction'
   | 'tool-activation'
   | 'permission-mode-change'
+  | 'reasoning-change'
   | 'model-change'
   | 'tool-surface-change'
   | 'memory-context-change'
@@ -44,6 +45,11 @@ export interface CacheMissSummary {
   unexpectedCount: number
   probableTtlTokens: number
   probableTtlCount: number
+  /** Upper bound of reusable input across comparable adjacent turns. */
+  estimatedReusableTokens: number
+  /** Provider-reported cache reads, clamped to the comparable prefix. */
+  estimatedReusedTokens: number
+  comparableTurnCount: number
   estimates: CacheMissEstimate[]
 }
 
@@ -57,6 +63,9 @@ export function createCacheMissSummary(): CacheMissSummary {
     unexpectedCount: 0,
     probableTtlTokens: 0,
     probableTtlCount: 0,
+    estimatedReusableTokens: 0,
+    estimatedReusedTokens: 0,
+    comparableTurnCount: 0,
     estimates: [],
   }
 }
@@ -118,7 +127,33 @@ export function createProviderTurnUsage(options: {
 }
 
 function cacheTtlMs(modelId: string): number | null {
-  return modelId.startsWith('anthropic:') || modelId.startsWith('alibaba:') ? 5 * 60 * 1000 : null
+  if (modelId.startsWith('anthropic:') || modelId.startsWith('alibaba:')) return 5 * 60 * 1000
+  if (/^openai:gpt-5\.6(?:$|-)/.test(modelId)) return 30 * 60 * 1000
+  return null
+}
+
+function appendComparablePrefix(
+  summary: CacheMissSummary,
+  previous: ProviderTurnUsage,
+  current: ProviderTurnUsage,
+): void {
+  if (previous.modelId !== current.modelId || current.expectedMissReasons.length > 0) return
+  if (previous.inputTokens == null || current.inputTokens == null || current.cacheReadTokens == null) return
+  if (!current.cacheReadReported) return
+
+  const idleMs = Math.max(0, Date.parse(current.timestamp) - Date.parse(previous.timestamp))
+  const ttl = cacheTtlMs(current.modelId)
+  if (ttl !== null && idleMs >= ttl) return
+
+  const reusable = Math.min(previous.inputTokens, current.inputTokens)
+  if (reusable <= 0) return
+  // `??=` keeps resumed sessions written by older builds from accumulating NaN.
+  summary.estimatedReusableTokens ??= 0
+  summary.estimatedReusedTokens ??= 0
+  summary.comparableTurnCount ??= 0
+  summary.estimatedReusableTokens += reusable
+  summary.estimatedReusedTokens += Math.min(current.cacheReadTokens, reusable)
+  summary.comparableTurnCount++
 }
 
 export function estimateCacheMiss(
@@ -157,6 +192,7 @@ export function appendCacheMissEstimate(
   current: ProviderTurnUsage,
 ): CacheMissEstimate | undefined {
   if (!previous) return undefined
+  appendComparablePrefix(summary, previous, current)
   const estimate = estimateCacheMiss(previous, current)
   if (!estimate) return undefined
   if (estimate.expected) {

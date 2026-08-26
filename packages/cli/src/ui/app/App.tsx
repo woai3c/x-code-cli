@@ -2012,11 +2012,13 @@ export function App({
                     ? 'Signing out'
                     : state.reconnectLabel
                       ? state.reconnectLabel
-                      : state.compressionLabel
-                        ? `Compressing — ${state.compressionLabel}`
-                        : state.bufferingReads
-                          ? 'Reading'
-                          : 'Working',
+                      : state.ingestLabel
+                        ? state.ingestLabel
+                        : state.compressionLabel
+                          ? `Compressing — ${state.compressionLabel}`
+                          : state.bufferingReads
+                            ? 'Reading'
+                            : 'Working',
               mode: authOperation === null && state.activeToolCalls.length > 0 ? 'tool-use' : 'requesting',
             }
           : null

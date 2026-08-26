@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { transcribeAudio } from '../src/agent/audio-transcribe.js'
-import { ingestFile } from '../src/agent/file-ingest.js'
+import { buildUserContent, ingestFile } from '../src/agent/file-ingest.js'
 import { createReadFileTool } from '../src/tools/read-file.js'
 
 vi.mock('../src/agent/audio-transcribe.js', async (importOriginal) => {
@@ -67,6 +67,22 @@ describe('local audio ingestion', () => {
     expect(JSON.stringify(parts)).toContain('hello locally')
     expect(JSON.stringify(parts)).not.toContain('audio/wav')
     expect(JSON.stringify(parts)).not.toContain('type":"file')
+    expect(JSON.stringify(parts)).toContain('Built-in local media processing succeeded')
+  })
+
+  it('forwards changing model download progress to the attachment status callback', async () => {
+    const notices: string[] = []
+    vi.mocked(transcribeAudio).mockImplementationOnce(async (_filePath, options) => {
+      options?.onNotice?.('First-time setup: downloading whisper model "tiny"')
+      options?.onNotice?.('Downloading whisper model: 18.5/74.1 MB (25%)')
+      options?.onNotice?.('Downloading whisper model: 37.1/74.1 MB (50%)')
+      return { text: 'hello locally', segments: [] }
+    })
+
+    await ingestFile({ raw: `@${audioPath}`, absolutePath: audioPath }, caps, (notice) => notices.push(notice))
+
+    expect(notices).toContain('Downloading whisper model: 18.5/74.1 MB (25%)')
+    expect(notices).toContain('Downloading whisper model: 37.1/74.1 MB (50%)')
   })
 
   it('uses the same local transcription path from readFile', async () => {
@@ -80,6 +96,22 @@ describe('local audio ingestion', () => {
     expect(transcribeAudio).toHaveBeenCalled()
     expect(result).toContain('hello locally')
     expect(JSON.stringify(result)).not.toContain('audio/wav')
+  })
+
+  it('does not transcribe again when the current attachment already contains the result', async () => {
+    vi.mocked(transcribeAudio).mockClear()
+    const cache = new Map<string, { mtimeMs: number; size: number }>()
+    await buildUserContent(`analyze @${audioPath}`, caps, undefined, undefined, undefined, undefined, cache)
+
+    const tool = createReadFileTool(cache)
+    const result = await tool.execute!({ filePath: audioPath }, {
+      toolCallId: 'audio-cached',
+      messages: [],
+      abortSignal: undefined,
+    } as never)
+
+    expect(result).toContain('full content is already in the conversation above')
+    expect(transcribeAudio).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an oversized transcription instead of filling the request history', async () => {

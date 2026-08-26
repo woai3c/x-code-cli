@@ -22,7 +22,8 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { debugLog, errorMessage, truncateUtf8 } from '../utils.js'
+import type { ReadFileCache } from '../tools/read-file.js'
+import { errorMessage, truncateUtf8 } from '../utils.js'
 import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.js'
 import {
   ATTACH_BYTE_BUDGET,
@@ -38,7 +39,13 @@ import { classifyFile, decodeTextBuffer, inspectFile, inspectFileBuffer } from '
 import type { FileKind, InspectedFileKind } from './file-classifier.js'
 import { MAX_INGEST_BYTES } from './file-ingest-limits.js'
 import { ocrImage } from './image-ocr.js'
-import { openMediaTag, toUserContentParts, wrapLocalText } from './local-media.js'
+import {
+  BUILT_IN_MEDIA_ANALYSIS_NOTE,
+  escapeMediaAttribute,
+  openMediaTag,
+  toUserContentParts,
+  wrapLocalText,
+} from './local-media.js'
 import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from './notebook-render.js'
 import {
   MAX_OFFICE_ARCHIVE_ENTRIES,
@@ -154,39 +161,109 @@ function addUsage(current: AttachmentUsage, added: AttachmentUsage): void {
  * Extract plain-text references from a user prompt. Two syntaxes are
  * recognized:
  *
- *   1. `@path` — the `@` prefix marks an explicit attachment. Stops at
- *      whitespace. Honors Windows (`D:\foo\bar`) and POSIX (`/etc/foo`)
- *      absolute paths.
+ *   1. `@path` — the `@` prefix marks an explicit attachment. Paths with
+ *      whitespace may be wrapped in single or double quotes. Honors Windows
+ *      (`D:\foo\bar`) and POSIX (`/etc/foo`) absolute paths.
  *
- *   2. Bare absolute paths — any token that looks like `C:\…`, `D:\…`, or
- *      starts with `/` and contains at least one path separator, with an
- *      extension. Less aggressive than @-mention: only fires on tokens that
- *      clearly look like paths, to avoid hijacking regex/SQL/etc.
+ *   2. Bare absolute paths — a single non-whitespace token that looks like
+ *      `C:\…`, `D:\…`, or starts with `/`, with an extension. Paths containing
+ *      whitespace must be quoted. This keeps prose, routes, regex and SQL from
+ *      being merged into false file references.
  *
  * Duplicates are de-duplicated by absolute path so a file referenced twice
  * only gets ingested once.
  */
+function isWhitespace(value: string): boolean {
+  return value === ' ' || value === '\t' || value === '\n' || value === '\r'
+}
+
+function isReferenceBoundary(input: string, index: number): boolean {
+  return index === 0 || isWhitespace(input[index - 1] ?? '')
+}
+
+function isWindowsAbsolute(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
+}
+
+function resolveReferencePath(value: string): string {
+  if (isWindowsAbsolute(value)) return path.win32.normalize(value)
+  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(value)
+}
+
+function isBareAbsoluteFilePath(value: string): boolean {
+  const absolute = isWindowsAbsolute(value) || value.startsWith('/')
+  if (!absolute) return false
+  const extension = (isWindowsAbsolute(value) ? path.win32 : path.posix).extname(value)
+  return /^\.[A-Za-z0-9]{1,16}$/.test(extension)
+}
+
+function readQuotedPath(input: string, quoteIndex: number): { end: number; value: string } | null {
+  const quote = input[quoteIndex]
+  if (quote !== "'" && quote !== '"') return null
+  let value = ''
+  for (let index = quoteIndex + 1; index < input.length; index++) {
+    const current = input[index] ?? ''
+    if (current === quote) return { end: index + 1, value }
+    if (current === '\\' && input[index + 1] === quote) {
+      value += quote
+      index++
+    } else {
+      value += current
+    }
+  }
+  return null
+}
+
 export function extractFileReferences(input: string): FileReference[] {
   const refs = new Map<string, FileReference>()
 
-  // @path — one token, stops at whitespace. `@` must be at line start or
-  // preceded by whitespace so we don't eat `@user@host` email-ish tokens.
-  const atRegex = /(?:^|\s)@((?:[A-Za-z]:[\\/]|[\\/])[^\s]+|[^\s@][^\s]*)/g
-  for (const m of input.matchAll(atRegex)) {
-    const raw = m[1] ?? ''
-    if (!raw) continue
-    const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(raw)
-    refs.set(abs, { raw: `@${raw}`, absolutePath: abs })
+  const addReference = (value: string, raw: string): void => {
+    if (!value || value.startsWith('@')) return
+    const absolutePath = resolveReferencePath(value)
+    refs.set(absolutePath, { raw, absolutePath })
   }
 
-  // Bare absolute paths. Require a separator + extension so code snippets
-  // like `fs.readFile` don't match. Windows drive letters + POSIX roots only.
-  const bareRegex = /(?:^|\s)((?:[A-Za-z]:[\\/]|\/)[^\s]*\.[A-Za-z0-9]{1,8})/g
-  for (const m of input.matchAll(bareRegex)) {
-    const raw = m[1] ?? ''
-    if (!raw) continue
-    const abs = path.normalize(raw)
-    if (!refs.has(abs)) refs.set(abs, { raw, absolutePath: abs })
+  // Explicit mentions may quote a path containing whitespace. The boundary
+  // rule keeps email addresses and package version specifiers out.
+  for (let index = 0; index < input.length; index++) {
+    if (input[index] !== '@' || !isReferenceBoundary(input, index)) continue
+    const valueStart = index + 1
+    const quoted = readQuotedPath(input, valueStart)
+    if (quoted) {
+      addReference(quoted.value, input.slice(index, quoted.end))
+      index = quoted.end - 1
+      continue
+    }
+    if (input[valueStart] === "'" || input[valueStart] === '"') continue
+    let end = valueStart
+    while (end < input.length && !isWhitespace(input[end] ?? '')) end++
+    addReference(input.slice(valueStart, end), input.slice(index, end))
+    index = Math.max(index, end - 1)
+  }
+
+  // Quoted bare paths are common when a shell copies a path containing
+  // whitespace into the prompt.
+  for (let index = 0; index < input.length; index++) {
+    if (!isReferenceBoundary(input, index)) continue
+    const quoted = readQuotedPath(input, index)
+    if (!quoted) continue
+    if (isBareAbsoluteFilePath(quoted.value)) addReference(quoted.value, input.slice(index, quoted.end))
+    index = quoted.end - 1
+  }
+
+  // Scan each token once. Besides avoiding regex backtracking on route-heavy
+  // prompts, this deliberately requires quotes for paths containing spaces.
+  const trailingPunctuation = new Set(['.', ',', ':', ';', '!', '?', ')', ']', '}'])
+  for (let start = 0; start < input.length; ) {
+    while (start < input.length && isWhitespace(input[start] ?? '')) start++
+    if (start >= input.length) break
+    let end = start
+    while (end < input.length && !isWhitespace(input[end] ?? '')) end++
+    let candidateEnd = end
+    while (candidateEnd > start && trailingPunctuation.has(input[candidateEnd - 1] ?? '')) candidateEnd--
+    const raw = input.slice(start, candidateEnd)
+    if (isBareAbsoluteFilePath(raw)) addReference(raw, raw)
+    start = end
   }
 
   return [...refs.values()]
@@ -327,35 +404,53 @@ async function extractZippedOfficeText(archive: Buffer, kind: OfficeKind, abortS
   return parts.join('\n\n')
 }
 
+export type OfficeExtractionResult = { ok: true; text: string } | { ok: false; text: string }
+
 /** Extract text from an Office document with bounded, format-specific parsers. */
-export async function extractOfficeText(
+export async function extractOfficeTextResult(
   filePath: string,
   abortSignal?: AbortSignal,
   detectedMediaType?: string | null,
-): Promise<string> {
+): Promise<OfficeExtractionResult> {
   try {
     abortSignal?.throwIfAborted()
     const archive = await readFileWithinLimit(filePath, MAX_OFFICE_SOURCE_BYTES, abortSignal)
     const kind = await detectOfficeKindFromArchive(archive, abortSignal)
     void detectedMediaType
-    if (!kind) return `[Failed to extract text from ${path.basename(filePath)}: unknown Office document type]`
+    if (!kind) {
+      return {
+        ok: false,
+        text: `[Failed to extract text from ${path.basename(filePath)}: unknown Office document type]`,
+      }
+    }
     if (kind === 'docx') {
       const mammoth = await import('mammoth')
       const result = await mammoth.extractRawText({ buffer: archive })
-      return result.value
+      return { ok: true, text: result.value }
     }
     if (kind === 'xlsx') {
-      return await parseXlsxInWorker(archive, abortSignal)
+      return { ok: true, text: await parseXlsxInWorker(archive, abortSignal) }
     }
-    return extractZippedOfficeText(archive, kind, abortSignal)
+    return { ok: true, text: await extractZippedOfficeText(archive, kind, abortSignal) }
   } catch (err) {
     if (err instanceof FileSizeLimitError) {
-      return `[Office file is too large to parse safely: ${formatBytes(err.observedBytes)} (cap ${formatBytes(err.limitBytes)}).]`
+      return {
+        ok: false,
+        text: `[Office file is too large to parse safely: ${formatBytes(err.observedBytes)} (cap ${formatBytes(err.limitBytes)}).]`,
+      }
     }
     abortSignal?.throwIfAborted()
     const msg = errorMessage(err)
-    return `[Failed to extract text from ${path.basename(filePath)}: ${msg}]`
+    return { ok: false, text: `[Failed to extract text from ${path.basename(filePath)}: ${msg}]` }
   }
+}
+
+export async function extractOfficeText(
+  filePath: string,
+  abortSignal?: AbortSignal,
+  detectedMediaType?: string | null,
+): Promise<string> {
+  return (await extractOfficeTextResult(filePath, abortSignal, detectedMediaType)).text
 }
 
 /**
@@ -449,7 +544,9 @@ export async function ingestFile(
   }
 
   if (kind === 'office') {
-    const text = await extractOfficeText(ref.absolutePath, abortSignal, mediaType)
+    const extraction = await extractOfficeTextResult(ref.absolutePath, abortSignal, mediaType)
+    if (!extraction.ok) return [{ type: 'text', text: extraction.text }]
+    const { text } = extraction
     // Office binaries are usually much larger than their extracted text
     // (compression + media), so check post-extraction. A book-length .docx
     // can still exceed the cap.
@@ -475,6 +572,7 @@ export async function ingestFile(
     if (result.type === 'reference') return [{ type: 'text', text: formatPdfReference(result) }]
     const parts = toUserContentParts(result.parts)
     if (result.continuation) parts.push({ type: 'text', text: formatPdfReference(result.continuation) })
+    parts.push({ type: 'text', text: BUILT_IN_MEDIA_ANALYSIS_NOTE })
     const totalTextBytes = parts.reduce(
       (total, part) => total + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf-8') : 0),
       0,
@@ -488,23 +586,18 @@ export async function ingestFile(
   // Audio always stays local: only timestamped transcription text enters the
   // model message, regardless of provider wire capabilities.
   if (kind === 'audio') {
-    // onNotice appends a new UI line each call, so only forward key milestones
-    // (first-time download notice, "transcribing…", "done"). Download
-    // percentage ticks go to debugLog only.
+    // Keep repeated native notices out of the UI without discarding changing
+    // download/transcription percentages. The CLI renders these notices in a
+    // single live status line, so forwarding progress does not flood history.
     let lastNotice = ''
-    const throttledNotice = onNotice
+    const deduplicatedNotice = onNotice
       ? (msg: string) => {
           if (msg === lastNotice) return
-          const isPercentageTick = /^Downloading whisper model: \d/.test(msg)
-          if (isPercentageTick) {
-            debugLog('audio-transcribe', msg)
-            return
-          }
           lastNotice = msg
           onNotice(msg)
         }
       : undefined
-    const result = await transcribeAudio(ref.absolutePath, { abortSignal, onNotice: throttledNotice })
+    const result = await transcribeAudio(ref.absolutePath, { abortSignal, onNotice: deduplicatedNotice })
     if (typeof result === 'string') {
       return [{ type: 'text', text: result }]
     }
@@ -517,7 +610,8 @@ export async function ingestFile(
       ref.absolutePath,
       `${wrapLocalText('file', formatted, { kind: 'audio-transcription', path: ref.absolutePath })}\n` +
         `[Note: this audio was transcribed locally via whisper.cpp. ` +
-        `Only the timestamped text is visible; pauses, tone, and speaker identity are not captured.]`,
+        `Only the timestamped text is visible; pauses, tone, and speaker identity are not captured.]\n` +
+        BUILT_IN_MEDIA_ANALYSIS_NOTE,
     )
   }
 
@@ -602,6 +696,7 @@ export async function buildUserContent(
   abortSignal?: AbortSignal,
   onVisionUsage?: (event: VisionUsageEvent) => void,
   modelId?: string,
+  readFileCache?: ReadFileCache,
 ): Promise<string | IngestedPart[]> {
   const refs = extractFileReferences(text)
   if (refs.length === 0) return text
@@ -626,6 +721,27 @@ export async function buildUserContent(
     }
     parts.push(...ingested)
     addUsage(usage, added)
+    await rememberCompleteAttachment(readFileCache, ref.absolutePath, ingested)
   }
   return parts
+}
+
+function hasCompleteLocalFile(parts: IngestedPart[], filePath: string): boolean {
+  const pathAttribute = `path="${escapeMediaAttribute(filePath)}"`
+  return parts.some((part) => {
+    if (part.type !== 'text' || !part.text.startsWith('<<file ')) return false
+    const openingEnd = part.text.indexOf('>>')
+    if (openingEnd === -1 || !part.text.slice(0, openingEnd).includes(pathAttribute)) return false
+    return part.text.indexOf('<</file>>', openingEnd + 2) !== -1
+  })
+}
+
+async function rememberCompleteAttachment(
+  cache: ReadFileCache | undefined,
+  filePath: string,
+  parts: IngestedPart[],
+): Promise<void> {
+  if (!cache || !hasCompleteLocalFile(parts, filePath)) return
+  const stats = await fs.stat(filePath).catch(() => null)
+  if (stats) cache.set(filePath, { mtimeMs: stats.mtimeMs, size: stats.size })
 }

@@ -43,6 +43,19 @@ describe('memory inference policy', () => {
     expect(generate).toHaveBeenCalledWith({ maxOutputTokens: 1500, reasoning: 'low' })
   })
 
+  it('starts OpenAI models without an off tier at low effort without temperature', async () => {
+    const generate = vi.fn().mockResolvedValue({ output: {} })
+
+    await runMemoryInference({
+      modelId: 'openai:gpt-5.6-sol',
+      maxOutputTokens: 1500,
+      maxTotalOutputTokens: 8192,
+      generate,
+    })
+
+    expect(generate).toHaveBeenCalledWith({ maxOutputTokens: 1500, reasoning: 'low' })
+  })
+
   it('falls back from unsupported reasoning controls and remembers the result', async () => {
     const wrapped = Object.assign(new Error('Failed after 1 attempt'), {
       lastError: new Error('reasoning_effort none is not supported by this model'),
@@ -50,7 +63,7 @@ describe('memory inference policy', () => {
     const first = vi.fn().mockRejectedValueOnce(wrapped).mockResolvedValueOnce({ output: {} })
 
     await runMemoryInference({
-      modelId: 'openai:gpt-5.6-sol',
+      modelId: 'openai:gpt-4.1',
       maxOutputTokens: 1500,
       maxTotalOutputTokens: 8192,
       generate: first,
@@ -58,7 +71,7 @@ describe('memory inference policy', () => {
 
     expect(first).toHaveBeenNthCalledWith(1, { maxOutputTokens: 1500, reasoning: 'none', temperature: 0 })
     expect(first).toHaveBeenNthCalledWith(2, { maxOutputTokens: 1500, reasoning: 'low' })
-    expect(reasoningControls('openai:gpt-5.6-sol', 'auto')).toEqual(['low', 'provider-default'])
+    expect(reasoningControls('openai:gpt-4.1', 'auto')).toEqual(['low', 'provider-default'])
   })
 
   it('learns when a provider silently keeps reasoning enabled', async () => {

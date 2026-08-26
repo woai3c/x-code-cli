@@ -32,7 +32,8 @@
     "undici": "^7.28.0"
   },
   "optionalDependencies": {
-    "@fugood/whisper.node": "1.1.1"
+    "@fugood/whisper.node": "1.1.1",
+    "@napi-audio/decoder": "0.1.0"
   },
   "devDependencies": {
     "@x-code-cli/core": "workspace:*",

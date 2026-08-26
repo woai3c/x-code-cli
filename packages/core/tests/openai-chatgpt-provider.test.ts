@@ -5,6 +5,7 @@ import path from 'node:path'
 import { resetOpenAIAuthContextForTesting } from '../src/auth/openai-chatgpt/auth-resolver.js'
 import { writeOpenAIChatGPTCredentials } from '../src/auth/openai-chatgpt/credential-store.js'
 import { OpenAIChatGPTTokenManager } from '../src/auth/openai-chatgpt/token-manager.js'
+import { OPENAI_SESSION_ID_HEADER } from '../src/providers/cache-control.js'
 import {
   OPENAI_CHATGPT_AUTH_RESPONSE_HEADER,
   OPENAI_CHATGPT_USAGE_LIMIT_HEADER,
@@ -50,7 +51,7 @@ describe('OpenAI ChatGPT provider fetch', () => {
     fs.rmSync(testHome, { recursive: true, force: true })
   })
 
-  it('moves instructions, removes max output tokens, and loosens tool strictness', () => {
+  it('moves instructions, removes max output tokens, and loosens strict schemas', () => {
     const transformed = transformOpenAIChatGPTRequestBody(
       JSON.stringify({
         input: [
@@ -62,6 +63,7 @@ describe('OpenAI ChatGPT provider fetch', () => {
         store: true,
         reasoning: { effort: 'medium', summary: 'detailed' },
         tools: [{ type: 'function', name: 'read', strict: true }],
+        text: { format: { type: 'json_schema', strict: true, schema: { type: 'object' } } },
       }),
     )
     const body = JSON.parse(transformed.body) as Record<string, any>
@@ -71,7 +73,35 @@ describe('OpenAI ChatGPT provider fetch', () => {
     expect(body.store).toBe(false)
     expect(body.reasoning.summary).toBe('auto')
     expect(body.tools[0].strict).toBe(false)
+    expect(body.text.format.strict).toBe(false)
     expect(body.include).toContain('reasoning.encrypted_content')
+  })
+
+  it('preserves a GPT-5.6 explicit cache breakpoint on developer input', () => {
+    const transformed = transformOpenAIChatGPTRequestBody(
+      JSON.stringify({
+        input: [
+          {
+            role: 'developer',
+            content: [
+              {
+                type: 'input_text',
+                text: 'stable system prompt',
+                prompt_cache_breakpoint: { mode: 'explicit' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+        ],
+        prompt_cache_options: { mode: 'implicit', ttl: '30m' },
+      }),
+    )
+    const body = JSON.parse(transformed.body) as Record<string, any>
+
+    expect(body.instructions).toBeUndefined()
+    expect(body.input).toHaveLength(2)
+    expect(body.input[0].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' })
+    expect(body.prompt_cache_options).toEqual({ mode: 'implicit', ttl: '30m' })
   })
 
   it('preserves none reasoning only when the authenticated model catalog supports it', async () => {
@@ -143,8 +173,12 @@ describe('OpenAI ChatGPT provider fetch', () => {
 
     await chatGPTFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: [], prompt_cache_key: 'session-1' }),
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+        [OPENAI_SESSION_ID_HEADER]: 'session-1',
+      },
+      body: JSON.stringify({ input: [], prompt_cache_key: 'stable-cache-key' }),
     })
 
     expect(transport).toHaveBeenCalledOnce()
@@ -155,7 +189,24 @@ describe('OpenAI ChatGPT provider fetch', () => {
     expect(headers.get('chatgpt-account-id')).toBe('account-1')
     expect(headers.get('originator')).toBe('x-code-cli')
     expect(headers.get('session-id')).toBe('session-1')
+    expect(headers.get(OPENAI_SESSION_ID_HEADER)).toBeNull()
+    expect(JSON.parse(String(init?.body)).prompt_cache_key).toBe('stable-cache-key')
     expect(JSON.stringify(init)).not.toContain('platform-key-must-never-leak')
+  })
+
+  it('never derives the ChatGPT session header from the prompt cache key', async () => {
+    const transport = vi.fn<typeof fetch>(async () => new Response('ok'))
+    const chatGPTFetch = createOpenAIChatGPTFetch({
+      tokenManager: new OpenAIChatGPTTokenManager(),
+      fetch: transport,
+    })
+
+    await chatGPTFetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      body: JSON.stringify({ input: [], prompt_cache_key: 'stable-cache-key' }),
+    })
+
+    expect(new Headers(transport.mock.calls[0]?.[1]?.headers).get('session-id')).toBeNull()
   })
 
   it('rejects unexpected endpoints instead of falling through to Platform API', async () => {

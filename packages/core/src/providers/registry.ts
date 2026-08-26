@@ -13,7 +13,7 @@ import { getOpenAIAuthSnapshot, refreshOpenAIAuthSnapshot } from '../auth/openai
 import type { OpenAIAuthSnapshot } from '../auth/openai-chatgpt/auth-resolver.js'
 import { getOpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
 import { getProviderOptions, loadUserConfig } from '../config/index.js'
-import { XAI_PROMPT_CACHE_KEY_HEADER } from './cache-control.js'
+import { OPENAI_SESSION_ID_HEADER, XAI_PROMPT_CACHE_KEY_HEADER } from './cache-control.js'
 import { createOpenAIChatGPTFetch } from './openai-chatgpt-fetch.js'
 
 const KIMI_CODING_MODEL_IDS = {
@@ -47,7 +47,12 @@ function createOpenAIAuthFetch(providerSnapshot: OpenAIAuthSnapshot): typeof fet
       )
     }
     if (providerSnapshot.context.mode === 'chatgpt') return chatGPTFetch(input, init)
-    if (providerSnapshot.context.mode === 'api-key') return permanentErrorFetch(input, init)
+    if (providerSnapshot.context.mode === 'api-key') {
+      const headers = new Headers(input instanceof Request ? input.headers : undefined)
+      new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
+      headers.delete(OPENAI_SESSION_ID_HEADER)
+      return permanentErrorFetch(input, { ...init, headers })
+    }
     return unavailableOpenAIResponse('No active OpenAI credentials remain. Run /login.')
   }
 }
@@ -63,6 +68,9 @@ export function createModelRegistry() {
   if (openAIAuth.context.mode !== 'none') {
     providers.openai = createOpenAI({
       apiKey: openAIAuth.context.mode === 'api-key' ? openAIAuth.context.apiKey : 'x-code-dynamic-openai-auth',
+      // Keep official OpenAI auth isolated from SDK-level OPENAI_BASE_URL.
+      // Third-party gateways are configured explicitly through custom:*.
+      baseURL: 'https://api.openai.com/v1',
       fetch: createOpenAIAuthFetch(openAIAuth),
     })
   }

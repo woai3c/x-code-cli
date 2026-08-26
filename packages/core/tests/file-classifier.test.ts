@@ -5,7 +5,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { inspectFile } from '../src/agent/file-classifier.js'
+import { classifyFile, inspectFile } from '../src/agent/file-classifier.js'
+import { makeTinyM4aBuffer } from './helpers/audio.js'
 
 function wavHeader(): Buffer {
   const buffer = Buffer.alloc(44)
@@ -100,13 +101,17 @@ describe('inspectFile', () => {
     expect((await inspectFile(actualAudio)).kind).toBe('audio')
   })
 
-  it('fails closed for audio extensions outside the bundled decoder contract', async () => {
+  it('recognizes M4A while failing closed for formats outside the bundled decoder contract', async () => {
     const m4a = path.join(tempDir, 'recording.m4a')
+    const actualM4a = path.join(tempDir, 'actual-recording.m4a')
     const opus = path.join(tempDir, 'recording.opus')
     await fs.writeFile(m4a, '')
+    await fs.writeFile(actualM4a, makeTinyM4aBuffer())
     await fs.writeFile(opus, '')
 
     expect((await inspectFile(m4a)).kind).toBe('binary')
+    expect(await classifyFile(m4a)).toBe('audio')
+    expect((await inspectFile(actualM4a)).kind).toBe('audio')
     expect((await inspectFile(opus)).kind).toBe('binary')
   })
 

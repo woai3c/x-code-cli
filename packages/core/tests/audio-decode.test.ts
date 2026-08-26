@@ -6,7 +6,8 @@ import path from 'node:path'
 
 import { decodeAudioToPcm } from '../src/agent/audio-decode.js'
 import { MAX_AUDIO_DURATION_SECONDS, MAX_AUDIO_PCM_INPUT_BYTES } from '../src/agent/audio-limits.js'
-import { TINY_VORBIS_EXPECTED, makeTinyVorbisBuffer } from './helpers/audio.js'
+import { prepareM4aForDecode } from '../src/agent/audio-mp4.js'
+import { TINY_VORBIS_EXPECTED, makeTinyM4aBuffer, makeTinyVorbisBuffer } from './helpers/audio.js'
 
 let tempDir: string
 
@@ -111,6 +112,39 @@ describe('bounded audio decoder', () => {
       sampleRate: TINY_VORBIS_EXPECTED.sampleRate,
     })
     expect((await fs.stat(output)).size).toBe(TINY_VORBIS_EXPECTED.pcmBytes)
+  })
+
+  it('decodes an AAC/M4A with trailing movie metadata through the bundled native decoder', async () => {
+    const input = path.join(tempDir, 'voice recording.m4a')
+    const output = path.join(tempDir, 'output-m4a.pcm')
+    await fs.writeFile(input, makeTinyM4aBuffer())
+
+    const metadata = await decodeAudioToPcm(input, output)
+    const pcm = await fs.readFile(output)
+
+    expect(metadata).toMatchObject({ codec: 'AAC', container: 'MPEG-4', numberOfChannels: 1, sampleRate: 16_000 })
+    expect(metadata.durationSeconds).toBeCloseTo(0.256)
+    expect(pcm.length).toBe(4_096 * Int16Array.BYTES_PER_ELEMENT)
+    expect(pcm.some((sample) => sample !== 0)).toBe(true)
+  })
+
+  it('bounds M4A output using codec config and sample tables rather than the untrusted sample-entry channels', () => {
+    const prepared = prepareM4aForDecode(makeTinyM4aBuffer())
+
+    expect(prepared).toMatchObject({ declaredFrames: 4_096, numberOfChannels: 1, sampleRate: 16_000 })
+  })
+
+  it('rejects an M4A whose forged media duration disagrees with its actual sample table before native decode', async () => {
+    const input = path.join(tempDir, 'forged-duration.m4a')
+    const output = path.join(tempDir, 'forged-duration.pcm')
+    const forged = makeTinyM4aBuffer()
+    const mdhdType = forged.indexOf(Buffer.from('mdhd'))
+    expect(mdhdType).toBeGreaterThan(0)
+    forged.writeUInt32BE(1, mdhdType + 20)
+    await fs.writeFile(input, forged)
+
+    await expect(decodeAudioToPcm(input, output)).rejects.toThrow(/duration does not match.*time-to-sample/i)
+    await expect(fs.stat(output)).resolves.toMatchObject({ size: 0 })
   })
 
   it('enforces the PCM cap against actual decoded frames', async () => {
