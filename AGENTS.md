@@ -1,6 +1,8 @@
 # AGENTS.md
 
-This file is loaded into the agent's context at the start of every session. Keep it concise — the agent reads it every turn.
+This is the repository instruction entrypoint. X-Code loads the applicable `AGENTS.md` chain into project context;
+other agent hosts must use a verified discovery path or open this file explicitly. Keep it concise because it is prompt
+context.
 
 ## Rules
 

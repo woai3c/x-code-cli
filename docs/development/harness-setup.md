@@ -4,7 +4,11 @@ This guide owns external or sensitive setup that repository files cannot complet
 
 ## GitHub PR governance
 
-Status: `SETUP REQUIRED` for enforced Ready/merge governance. The repository already contains `.github/workflows/pr-check.yml` and `.github/pull_request_template.md`; public GitHub history shows that PR Check workflows have run. Branch rules, required reviews, current check requirements, and fork behavior were not verified.
+Status: `SETUP REQUIRED` for enforced Ready/merge governance. The repository already contains
+`.github/workflows/pr-check.yml` and `.github/pull_request_template.md`, and GitHub Actions history proves that PR Check
+workflows run. Read-only GitHub API inspection reports `main` as unprotected, returns no branch-protection configuration,
+and lists no repository rulesets. The defined jobs therefore are not currently enforced as merge requirements. Fork
+behavior remains unverified.
 
 A repository administrator should:
 
@@ -12,7 +16,11 @@ A repository administrator should:
 2. Configure a branch rule or ruleset that requires a PR and the intended current check contexts. The workflow currently defines `Lint & Format`, `Type Check`, `Test` on Ubuntu/macOS/Windows, `Windows Native Source`, `Package Check`, and `Commit Message Check`.
 3. Open a harmless Draft PR from a repository branch. Confirm the template appears, each expected job starts, a failed/cancelled/timed-out job blocks the selected boundary, and Draft is not treated as Ready.
 4. If outside contributions are supported, repeat from a fork and verify token permissions, dependency installation, and secret isolation. The PR workflow has read-only contents permission and uses only the automatic `GITHUB_TOKEN`; confirm organization/repository policy agrees.
-5. Record the exact required check contexts and review rule in the repository's maintained governance owner, then update the MR/PR CI and Draft/Ready rows in [`agent-workflow.md`](agent-workflow.md).
+5. Recheck the effective external state with `gh api repos/woai3c/x-code-cli/branches/main`,
+   `gh api repos/woai3c/x-code-cli/branches/main/protection`, and `gh api repos/woai3c/x-code-cli/rulesets`. An
+   unprotected branch returns HTTP 404 from the protection endpoint; do not treat that expected response as configured
+   protection.
+6. Record the exact required check contexts and review rule in the repository's maintained governance owner, then update the MR/PR CI and Draft/Ready rows in [`agent-workflow.md`](agent-workflow.md).
 
 Fallback: keep the PR Draft and have the maintainer manually account for every job and acceptance decision. Consequence: GitHub may still allow a merge that bypasses the documented workflow. Disable or rollback by reverting only the external rule change after recording why; repository workflow files are unaffected unless they were separately changed.
 
@@ -33,6 +41,17 @@ Fallback: use fake-provider, Package, and PTY tests plus Human Local Acceptance.
 
 Remove E2E credentials from the local environment or secret store to disable the path. Delete retained temporary directories and ignored `.state` artifacts only after preserving any evidence required for an active failure investigation.
 
-## Deliberately unselected automation
+## Deliberately unselected review and learning automation
 
-Independent AI review and automatic post-merge knowledge audit are `NOT CONFIGURED`. Before adding either, maintainers must choose the runner and model provider, define untrusted-input handling and data disclosure, scope credentials and write permissions, set cost/concurrency/failure behavior, and verify that proposed knowledge changes use a separate human-reviewed PR. Until then, use human technical review or a clearly separate manual reviewer, and capture confirmed knowledge in the active change.
+Independent pre-acceptance Agent review is `NOT CONFIGURED`. X-Code's built-in `code-reviewer` supplies a real
+separate-context candidate, but its restricted shell is not a verified strict no-edit boundary and this repository has not
+selected the review packet, model and data scope, cost, timeout, or failure route. Before enabling it as a required stage,
+maintainers must define those boundaries, bind evidence to the exact candidate, run a representative review, and verify
+that findings return through implementation, verification, and a new review. Until then, use labeled implementer
+self-review plus Human Technical Review or a clearly separate manual reviewer.
+
+Platform AI review and automatic post-merge knowledge audit are also `NOT CONFIGURED`. Before adding either, maintainers
+must choose the runner and model provider, define untrusted-input handling and data disclosure, scope credentials and write
+permissions, set cost/concurrency/failure behavior, and verify that proposed knowledge changes use a separate human-reviewed
+PR. Until then, PR CI and Human Technical Review are the platform fallbacks, and confirmed knowledge is captured in the
+active change.

@@ -24,8 +24,10 @@
 - Targeted Runtime Verification:
 - Full E2E:
 - Cross-platform evidence or exclusions:
+- Independent pre-acceptance Agent review: <!-- reviewed revision and reviewer provenance, or NOT CONFIGURED plus fallback -->
 - Human Local Acceptance: <!-- decision owner and link; the implementing agent cannot supply this -->
-- Independent review: <!-- human, separately initiated Agent, NOT CONFIGURED, or pending -->
+- PR Human Technical Review: <!-- pending after Ready or result bound to the revision -->
+- Platform AI review: <!-- NOT CONFIGURED, pending, or result bound to the revision -->
 - Material evidence artifacts:
 
 ## Deviations and knowledge
@@ -35,9 +37,10 @@
 
 ## Readiness
 
-<!-- A Draft may be opened earlier. Mark Ready only after applicable local verification, runtime evidence, and Human Local Acceptance are accounted for. GitHub CI and review still run after Ready. -->
+<!-- A Draft may be opened earlier. Mark Ready only after applicable local verification, runtime evidence, independent pre-acceptance review or fallback, and Human Local Acceptance are accounted for. GitHub CI and review still run after Ready. -->
 
 - [ ] Non-trivial plan review is recorded, or the bounded fast path is justified.
 - [ ] Applicable local and runtime outcomes are passed or explicitly accounted for.
+- [ ] Applicable independent pre-acceptance Agent review is complete, or its unavailable capability and fallback are recorded.
 - [ ] Human Local Acceptance is recorded or an established policy is cited.
 - [ ] Risks, unknowns, E2E status, and evidence exclusions are visible above.
