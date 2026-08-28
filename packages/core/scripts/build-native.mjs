@@ -47,7 +47,8 @@ async function main() {
 
   const destinationRoot = path.join(coreDir, 'dist', 'native', 'windows')
   await ensureCompleteDistNativeRoot(destinationRoot)
-  for (const artifactName of requestedArtifacts()) {
+  const artifactNames = requestedArtifacts()
+  for (const artifactName of artifactNames) {
     const definition = WINDOWS_NATIVE_ARTIFACTS[artifactName]
     const nativeDir = path.join(coreDir, 'native', definition.sourceDirectory)
     await run('cargo', ['build', '--release', '--locked', '--manifest-path', path.join(nativeDir, 'Cargo.toml')])
