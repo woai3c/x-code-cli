@@ -39,6 +39,18 @@ interface UnixSocketFileSystem {
   unlink(filePath: string): Promise<void>
 }
 
+export interface UnixSocketTransportOptions {
+  fileSystem?: UnixSocketFileSystem
+  getSocketDir?: () => string
+}
+
+function validUnixAddress(address: string, socketDir?: string): boolean {
+  if (!path.isAbsolute(address)) return false
+  if (socketDir && path.dirname(path.resolve(address)) !== path.resolve(socketDir)) return false
+  const basename = path.basename(address)
+  return /^p-[A-Za-z0-9_-]{16}\.sock$/.test(basename) || /^[0-9a-f]{8}\.sock$/i.test(basename)
+}
+
 async function lstatIfPresent(
   fileSystem: UnixSocketFileSystem,
   filePath: string,
@@ -131,10 +143,19 @@ async function probeListener(options: {
   })
 }
 
-export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocketFileSystem } = {}): PeerTransport {
+export function createUnixSocketTransport(dependencies: UnixSocketTransportOptions = {}): PeerTransport {
   const fileSystem = dependencies.fileSystem ?? fs
+  const createAddressHint = (instanceId: string): string => {
+    const socketDir = dependencies.getSocketDir?.()
+    if (!socketDir) throw new Error('PEER_RUNTIME_NOT_INITIALIZED')
+    return path.join(socketDir, `${instanceId.slice(0, 8)}.sock`)
+  }
+  const validateAddress = (address: string): boolean => validUnixAddress(address, dependencies.getSocketDir?.())
   if (process.platform === 'win32') {
     return {
+      kind: 'unix',
+      createAddressHint,
+      validateAddress,
       async listen() {
         throw new Error('PEER_UNSUPPORTED_PLATFORM')
       },
@@ -145,6 +166,10 @@ export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocke
   }
 
   return {
+    kind: 'unix',
+    createAddressHint,
+    validateAddress,
+
     async listen(options): Promise<PeerTransportServer> {
       const address = path.join(path.dirname(options.address), `p-${randomBytes(12).toString('base64url')}.sock`)
       if (Buffer.byteLength(address, 'utf8') > 103) throw new Error('PEER_SOCKET_PATH_TOO_LONG')
@@ -152,6 +177,17 @@ export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocke
       const sockets = new Set<net.Socket>()
       let ownedSocket: Awaited<ReturnType<typeof fs.lstat>> | null = null
       let closePromise: Promise<void> | null = null
+      let closeExpected = false
+      let closedSettled = false
+      let resolveClosed!: (result: { expected: boolean; reason?: string }) => void
+      const closed = new Promise<{ expected: boolean; reason?: string }>((resolve) => {
+        resolveClosed = resolve
+      })
+      const settleClosed = (result: { expected: boolean; reason?: string }): void => {
+        if (closedSettled) return
+        closedSettled = true
+        resolveClosed(result)
+      }
       const server = net.createServer((socket) => {
         sockets.add(socket)
         const decoder = new NdjsonFrameDecoder()
@@ -208,8 +244,12 @@ export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocke
         socket.once('error', () => {})
       })
 
+      server.on('error', (error) => settleClosed({ expected: closeExpected, reason: errorMessage(error) }))
+      server.once('close', () => settleClosed({ expected: closeExpected }))
+
       const closeBoundServer = (deadlineMs = 500): Promise<void> => {
         if (closePromise) return closePromise
+        closeExpected = true
         closePromise = (async () => {
           const expectedOwnedSocket = ownedSocket
           const displaced: Array<{
@@ -363,6 +403,7 @@ export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocke
 
       return {
         address,
+        closed,
         async close(closeOptions = {}) {
           await closeBoundServer(closeOptions.deadlineMs ?? 500)
         },
@@ -422,6 +463,16 @@ export function createUnixSocketTransport(dependencies: { fileSystem?: UnixSocke
           if (!settled) settle(new Error('PEER_CONNECTION_CLOSED'))
         })
       })
+    },
+
+    async cleanupConfirmedDeadEndpoint(address) {
+      if (!validateAddress(address)) return
+      const before = await lstatIfPresent(fileSystem, address)
+      if (!before?.isSocket() || before.isSymbolicLink()) return
+      const after = await lstatIfPresent(fileSystem, address)
+      if (after?.isSocket() && !after.isSymbolicLink() && sameFileIdentity(before, after)) {
+        await fileSystem.unlink(address).catch(() => {})
+      }
     },
   }
 }

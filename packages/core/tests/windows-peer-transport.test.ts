@@ -1,0 +1,317 @@
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import net from 'node:net'
+import { setTimeout as delay } from 'node:timers/promises'
+
+import { createPeerIdentity } from '../src/peers/identity.js'
+import { createPeerRegistry } from '../src/peers/registry.js'
+import { createPeerService } from '../src/peers/service.js'
+import { createWindowsNamedPipeTransport } from '../src/peers/windows-named-pipe-transport.js'
+import { resolveWindowsPeerBrokerArtifact } from '../src/peers/windows-peer-broker-artifact.js'
+import {
+  WindowsPeerBrokerFrameDecoder,
+  WindowsPeerBrokerFrameKind,
+  decodeOneStringPayload,
+  encodeStartServerPayload,
+  encodeWindowsPeerBrokerFrame,
+} from '../src/peers/windows-peer-broker-protocol.js'
+
+const describeWindows = process.platform === 'win32' ? describe : describe.skip
+
+describeWindows('Windows named pipe peer transport', () => {
+  it('discovers and sends between two real broker-backed services', async () => {
+    const suffix = Date.now().toString(36)
+    const sender = createPeerService({ enabled: true, name: `windows-sender-${suffix}` })
+    const receiver = createPeerService({ enabled: true, name: `windows-receiver-${suffix}` })
+    try {
+      await sender.start()
+      await receiver.start()
+      expect(sender.isAvailable()).toBe(true)
+      expect(receiver.isAvailable()).toBe(true)
+      const peers = await sender.listAgents()
+      expect(peers.some((peer) => peer.address === receiver.identity!.address)).toBe(true)
+      await expect(
+        sender.sendMessage(receiver.identity!.address, 'Windows transport integration'),
+      ).resolves.toMatchObject({
+        success: true,
+        status: 'delivered',
+      })
+    } finally {
+      await Promise.all([sender.shutdown(), receiver.shutdown()])
+    }
+  })
+
+  it('rejects a wrong token before dispatching to Node', async () => {
+    const senderRegistry = createPeerRegistry()
+    const receiverRegistry = createPeerRegistry()
+    await Promise.all([senderRegistry.initialize(), receiverRegistry.initialize()])
+    const sender = createPeerIdentity({ name: 'transport-sender' })
+    const receiver = createPeerIdentity({ name: 'transport-receiver' })
+    const senderTransport = createWindowsNamedPipeTransport({ getRuntimePaths: () => senderRegistry.paths() })
+    const receiverTransport = createWindowsNamedPipeTransport({ getRuntimePaths: () => receiverRegistry.paths() })
+    let dispatches = 0
+    const senderServer = await senderTransport.listen({
+      address: senderTransport.createAddressHint(sender.instanceId),
+      instanceId: sender.instanceId,
+      inboxToken: sender.inboxToken,
+      onRequest: async () => ({ v: 1, type: 'error', code: 'PEER_TEST', message: 'unexpected' }),
+    })
+    const receiverServer = await receiverTransport.listen({
+      address: receiverTransport.createAddressHint(receiver.instanceId),
+      instanceId: receiver.instanceId,
+      inboxToken: receiver.inboxToken,
+      onRequest: async (frame) => {
+        dispatches++
+        return frame
+      },
+    })
+    try {
+      await expect(
+        senderTransport.request({
+          address: receiverServer.address,
+          targetToken: 'x'.repeat(43),
+          senderInstanceId: sender.instanceId,
+          frame: { v: 1, type: 'ping', requestId: randomUUID() },
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toMatchObject({ name: 'PEER_WINDOWS_PIPE_IO_FAILED' })
+      expect(dispatches).toBe(0)
+    } finally {
+      await Promise.all([senderServer.close(), receiverServer.close()])
+    }
+  })
+
+  it('propagates abort and bounds shutdown while an inbound callback remains active', async () => {
+    const senderRegistry = createPeerRegistry()
+    const receiverRegistry = createPeerRegistry()
+    await Promise.all([senderRegistry.initialize(), receiverRegistry.initialize()])
+    const sender = createPeerIdentity({ name: 'abort-sender' })
+    const receiver = createPeerIdentity({ name: 'abort-receiver' })
+    const senderTransport = createWindowsNamedPipeTransport({ getRuntimePaths: () => senderRegistry.paths() })
+    const receiverTransport = createWindowsNamedPipeTransport({ getRuntimePaths: () => receiverRegistry.paths() })
+    let dispatched = false
+    const senderServer = await senderTransport.listen({
+      address: senderTransport.createAddressHint(sender.instanceId),
+      instanceId: sender.instanceId,
+      inboxToken: sender.inboxToken,
+      onRequest: async () => ({ v: 1, type: 'error', code: 'PEER_TEST', message: 'unexpected' }),
+    })
+    const receiverServer = await receiverTransport.listen({
+      address: receiverTransport.createAddressHint(receiver.instanceId),
+      instanceId: receiver.instanceId,
+      inboxToken: receiver.inboxToken,
+      onRequest: async () => {
+        dispatched = true
+        return new Promise(() => {})
+      },
+    })
+    const controller = new AbortController()
+    const request = senderTransport.request({
+      address: receiverServer.address,
+      targetToken: receiver.inboxToken,
+      senderInstanceId: sender.instanceId,
+      frame: { v: 1, type: 'ping', requestId: randomUUID() },
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    })
+    while (!dispatched) await delay(5)
+    controller.abort()
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' })
+    const startedAt = Date.now()
+    await Promise.all([senderServer.close({ deadlineMs: 300 }), receiverServer.close({ deadlineMs: 300 })])
+    expect(Date.now() - startedAt).toBeLessThan(1_500)
+  })
+
+  it('exits and releases its pipe when the parent stdin channel reaches EOF', async () => {
+    const registry = createPeerRegistry()
+    await registry.initialize()
+    const identity = createPeerIdentity({ name: 'parent-eof' })
+    const artifact = await resolveWindowsPeerBrokerArtifact()
+    const child = spawn(artifact.executablePath, ['broker', '--protocol', '1'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    const decoder = new WindowsPeerBrokerFrameDecoder()
+    const address = await new Promise<string>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', () => reject(new Error('broker exited before SERVER_READY')))
+      child.stdout.on('data', (chunk: Buffer) => {
+        try {
+          for (const frame of decoder.push(chunk)) {
+            if (frame.kind === WindowsPeerBrokerFrameKind.ServerReady) resolve(decodeOneStringPayload(frame.payload))
+          }
+        } catch (error) {
+          reject(error)
+        }
+      })
+      child.stdin.write(
+        encodeWindowsPeerBrokerFrame({
+          kind: WindowsPeerBrokerFrameKind.StartServer,
+          operationId: 1,
+          payload: encodeStartServerPayload({
+            namespaceId: registry.paths().namespaceId!,
+            instanceId: identity.instanceId,
+            inboxToken: identity.inboxToken,
+          }),
+        }),
+      )
+    })
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+    child.stdin.end()
+    await Promise.race([
+      exited,
+      delay(2_000).then(() => {
+        child.kill()
+        throw new Error('broker did not exit after parent EOF')
+      }),
+    ])
+    await expect(
+      new Promise<void>((resolve, reject) => {
+        const socket = net.connect(address)
+        socket.once('connect', () => {
+          socket.destroy()
+          reject(new Error('released peer pipe remained connectable'))
+        })
+        socket.once('error', () => resolve())
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('reports an unexpected broker exit through server.closed', async () => {
+    const registry = createPeerRegistry()
+    await registry.initialize()
+    const children: ChildProcessWithoutNullStreams[] = []
+    const spawnBroker: typeof spawn = ((command, args, options) => {
+      const child = spawn(command, args ?? [], options as never) as ChildProcessWithoutNullStreams
+      children.push(child)
+      return child
+    }) as typeof spawn
+    const identity = createPeerIdentity({ name: 'crash-receiver' })
+    const transport = createWindowsNamedPipeTransport({ getRuntimePaths: () => registry.paths(), spawnBroker })
+    const server = await transport.listen({
+      address: transport.createAddressHint(identity.instanceId),
+      instanceId: identity.instanceId,
+      inboxToken: identity.inboxToken,
+      onRequest: async (frame) => frame,
+    })
+    expect(children).toHaveLength(1)
+    children[0]!.kill()
+    await expect(server.closed).resolves.toMatchObject({ expected: false })
+  })
+
+  it('fails the service closed and removes its registration after a broker crash', async () => {
+    const registry = createPeerRegistry()
+    const children: ChildProcessWithoutNullStreams[] = []
+    const spawnBroker: typeof spawn = ((command, args, options) => {
+      const child = spawn(command, args ?? [], options as never) as ChildProcessWithoutNullStreams
+      children.push(child)
+      return child
+    }) as typeof spawn
+    const transport = createWindowsNamedPipeTransport({ getRuntimePaths: () => registry.paths(), spawnBroker })
+    const service = createPeerService({
+      enabled: true,
+      name: `crash-cleanup-${Date.now().toString(36)}`,
+      registry,
+      transport,
+    })
+    try {
+      await service.start()
+      expect(service.isAvailable()).toBe(true)
+      await expect(registry.read(service.identity!.instanceId)).resolves.not.toBeNull()
+      expect(children).toHaveLength(1)
+
+      children[0]!.kill()
+      await vi.waitFor(() => expect(service.isAvailable()).toBe(false))
+      await vi.waitFor(async () => expect(await registry.read(service.identity!.instanceId)).toBeNull())
+      expect(service.getUnavailableReason()).toBeTruthy()
+    } finally {
+      await service.shutdown()
+    }
+  })
+
+  it('does not leak operation capacity after local encoding failures or missing cancel acknowledgements', async () => {
+    const namespaceId = '0123456789ab'
+    const fakeBroker = String.raw`
+      let buffered = Buffer.alloc(0)
+      process.stdin.on('data', (chunk) => {
+        buffered = Buffer.concat([buffered, chunk])
+        while (buffered.length >= 16) {
+          const payloadLength = buffered.readUInt32LE(12)
+          const frameLength = 16 + payloadLength
+          if (buffered.length < frameLength) return
+          const kind = buffered[5]
+          const payload = buffered.subarray(16, frameLength)
+          buffered = buffered.subarray(frameLength)
+          if (kind !== 2) continue
+          const namespaceLength = payload.readUInt16LE(0)
+          const namespace = payload.subarray(2, 2 + namespaceLength).toString('utf8')
+          const address = '\\\\.\\pipe\\x-code-peer-v1-' + namespace + '-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          const addressBytes = Buffer.from(address)
+          const responsePayload = Buffer.allocUnsafe(2 + addressBytes.length)
+          responsePayload.writeUInt16LE(addressBytes.length)
+          addressBytes.copy(responsePayload, 2)
+          const response = Buffer.allocUnsafe(16 + responsePayload.length)
+          response.write('XCPB')
+          response[4] = 1
+          response[5] = 0x82
+          response.writeUInt16LE(0, 6)
+          response.writeUInt32LE(0, 8)
+          response.writeUInt32LE(responsePayload.length, 12)
+          responsePayload.copy(response, 16)
+          process.stdout.write(response)
+        }
+      })
+    `
+    const spawnBroker = (() =>
+      spawn(process.execPath, ['-e', fakeBroker], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      }) as ChildProcessWithoutNullStreams) as unknown as typeof spawn
+    const transport = createWindowsNamedPipeTransport({
+      getRuntimePaths: () => ({ namespaceId }),
+      artifact: { executablePath: process.execPath, protocolVersion: 1, sha256: '0'.repeat(64) },
+      spawnBroker,
+    })
+    const identity = createPeerIdentity({ name: 'bounded-operation-client' })
+    const server = await transport.listen({
+      address: namespaceId,
+      instanceId: identity.instanceId,
+      inboxToken: identity.inboxToken,
+      onRequest: async (frame) => frame,
+    })
+    const request = (signal?: AbortSignal, targetToken = identity.inboxToken) =>
+      transport.request({
+        address: server.address,
+        targetToken,
+        senderInstanceId: identity.instanceId,
+        frame: { v: 1, type: 'ping', requestId: randomUUID() },
+        timeoutMs: 60_000,
+        signal,
+      })
+
+    try {
+      for (let index = 0; index < 300; index++) {
+        await expect(request(undefined, 'x'.repeat(65_536))).rejects.toMatchObject({
+          name: 'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
+        })
+      }
+
+      vi.useFakeTimers()
+      for (let index = 0; index < 256; index++) {
+        const controller = new AbortController()
+        const pending = request(controller.signal)
+        controller.abort()
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      }
+      await expect(request()).rejects.toMatchObject({ name: 'PEER_WINDOWS_OPERATION_CAPACITY' })
+      await vi.advanceTimersByTimeAsync(5_001)
+      const recoveredController = new AbortController()
+      const recovered = request(recoveredController.signal)
+      recoveredController.abort()
+      await expect(recovered).rejects.toMatchObject({ name: 'AbortError' })
+    } finally {
+      vi.useRealTimers()
+      await server.close({ deadlineMs: 0 })
+    }
+  })
+})

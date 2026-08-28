@@ -15,6 +15,10 @@ import {
   type PeerRegistrationV1,
   type RegistrationCandidate,
 } from './types.js'
+import {
+  type WindowsPeerRuntimeSecurityProvider,
+  createWindowsPeerRuntimeSecurity,
+} from './windows-peer-runtime-security.js'
 
 function exactKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
   const allowedSet = new Set(allowed)
@@ -25,7 +29,15 @@ function validIsoDate(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 64 && Number.isFinite(Date.parse(value))
 }
 
-function parseRegistration(value: unknown, socketDir: string): PeerRegistrationV1 | null {
+export function isValidWindowsPeerPipeAddress(address: string, namespaceId?: string): boolean {
+  const match = /^\\\\\.\\pipe\\x-code-peer-v1-([a-f0-9]{12})-([A-Za-z0-9_-]{32})$/.exec(address)
+  return Boolean(match && (!namespaceId || match[1] === namespaceId))
+}
+
+export function parseRegistration(
+  value: unknown,
+  runtime: { socketDir: string; namespaceId?: string },
+): PeerRegistrationV1 | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const source = value as Record<string, unknown>
   if (
@@ -82,14 +94,18 @@ function parseRegistration(value: unknown, socketDir: string): PeerRegistrationV
   }
   if (!record.transport || typeof record.transport !== 'object' || Array.isArray(record.transport)) return null
   const transport = record.transport as Record<string, unknown>
-  if (
-    !exactKeys(transport, ['kind', 'address']) ||
-    transport.kind !== 'unix' ||
-    typeof transport.address !== 'string' ||
-    !isSocketPathInNamespace(transport.address, socketDir) ||
-    (path.basename(transport.address) !== `${record.instanceId.slice(0, 8)}.sock` &&
-      !/^p-[A-Za-z0-9_-]{16}\.sock$/.test(path.basename(transport.address)))
-  ) {
+  if (!exactKeys(transport, ['kind', 'address']) || typeof transport.address !== 'string') return null
+  if (transport.kind === 'unix') {
+    if (
+      !isSocketPathInNamespace(transport.address, runtime.socketDir) ||
+      (path.basename(transport.address) !== `${record.instanceId.slice(0, 8)}.sock` &&
+        !/^p-[A-Za-z0-9_-]{16}\.sock$/.test(path.basename(transport.address)))
+    ) {
+      return null
+    }
+  } else if (transport.kind === 'windows-pipe') {
+    if (!isValidWindowsPeerPipeAddress(transport.address, runtime.namespaceId)) return null
+  } else {
     return null
   }
   return structuredClone(record) as unknown as PeerRegistrationV1
@@ -108,7 +124,7 @@ async function validateOpenRegistration(handle: fs.FileHandle): Promise<{ size: 
 async function readCandidateFile(
   registrationPath: string,
   expectedInstanceId: string,
-  socketDir: string,
+  runtime: { socketDir: string; namespaceId?: string },
 ): Promise<RegistrationCandidate | null> {
   let handle: fs.FileHandle | undefined
   try {
@@ -118,7 +134,7 @@ async function readCandidateFile(
     if (!safe) return null
     const raw = await handle.readFile({ encoding: 'utf8' })
     if (Buffer.byteLength(raw, 'utf8') > MAX_REGISTRATION_BYTES) return null
-    const registration = parseRegistration(JSON.parse(raw), socketDir)
+    const registration = parseRegistration(JSON.parse(raw), runtime)
     if (!registration || registration.instanceId !== expectedInstanceId) return null
     return { registration, registrationPath, mtimeMs: safe.mtimeMs }
   } catch {
@@ -139,15 +155,8 @@ async function pidExists(pid: number): Promise<boolean | 'unknown'> {
   }
 }
 
-function sameFileIdentity(
-  left: { dev: number | bigint; ino: number | bigint },
-  right: { dev: number | bigint; ino: number | bigint },
-): boolean {
-  return left.dev === right.dev && left.ino === right.ino
-}
-
 export interface PeerRegistry {
-  initialize(): Promise<void>
+  initialize(signal?: AbortSignal): Promise<void>
   write(registration: PeerRegistrationV1): Promise<void>
   read(instanceId: string): Promise<RegistrationCandidate | null>
   listCandidates(): Promise<CandidateScanResult>
@@ -159,18 +168,43 @@ export interface PeerRegistry {
     deadlineMs?: number
   }): Promise<{ peers: PublicPeer[]; registrations: RegistrationCandidate[]; partial: boolean }>
   removeOwn(instanceId: string): Promise<boolean>
-  cleanupConfirmedDead(candidate: RegistrationCandidate, graceMs?: number): Promise<boolean>
-  paths(): { registryDir: string; socketDir: string }
+  cleanupConfirmedDead(candidate: RegistrationCandidate, graceMs?: number, transport?: PeerTransport): Promise<boolean>
+  paths(): { registryDir: string; socketDir: string; namespaceId?: string }
 }
 
-export function createPeerRegistry(): PeerRegistry {
+export interface PeerRegistryOptions {
+  platform?: NodeJS.Platform
+  transportKind?: PeerTransport['kind']
+  windowsRuntimeSecurity?: WindowsPeerRuntimeSecurityProvider
+}
+
+export function createPeerRegistry(options: PeerRegistryOptions = {}): PeerRegistry {
+  const platform = options.platform ?? process.platform
+  const windowsRuntimeSecurity =
+    options.windowsRuntimeSecurity ?? (platform === 'win32' ? createWindowsPeerRuntimeSecurity() : undefined)
+  const transportKind = options.transportKind ?? (platform === 'win32' ? 'windows-pipe' : 'unix')
   let registryDir = ''
   let socketDir = ''
+  let namespaceId: string | undefined
+  let initializePromise: Promise<void> | undefined
 
-  const initialize = async (): Promise<void> => {
-    const paths = await ensurePeerRuntimeDirectories()
-    registryDir = paths.registryDir
-    socketDir = paths.socketDir
+  const initialize = async (signal?: AbortSignal): Promise<void> => {
+    if (registryDir && socketDir) return
+    if (initializePromise) return initializePromise
+    const operation = (async () => {
+      const paths = windowsRuntimeSecurity
+        ? await windowsRuntimeSecurity.initialize(signal)
+        : await ensurePeerRuntimeDirectories()
+      registryDir = paths.registryDir
+      socketDir = paths.socketDir
+      namespaceId = (paths as { namespaceId?: string }).namespaceId
+    })()
+    initializePromise = operation
+    try {
+      await operation
+    } finally {
+      if (initializePromise === operation) initializePromise = undefined
+    }
   }
 
   const ensureInitialized = async (): Promise<void> => {
@@ -180,7 +214,11 @@ export function createPeerRegistry(): PeerRegistry {
   const read = async (instanceId: string): Promise<RegistrationCandidate | null> => {
     if (!isUuid(instanceId)) return null
     await ensureInitialized()
-    return readCandidateFile(path.join(registryDir, `${instanceId}.json`), instanceId, socketDir)
+    const candidate = await readCandidateFile(path.join(registryDir, `${instanceId}.json`), instanceId, {
+      socketDir,
+      namespaceId,
+    })
+    return candidate?.registration.transport.kind === transportKind ? candidate : null
   }
 
   return {
@@ -188,8 +226,8 @@ export function createPeerRegistry(): PeerRegistry {
 
     async write(registration) {
       await ensureInitialized()
-      const validated = parseRegistration(registration, socketDir)
-      if (!validated) throw new Error('Invalid peer registration')
+      const validated = parseRegistration(registration, { socketDir, namespaceId })
+      if (!validated || validated.transport.kind !== transportKind) throw new Error('Invalid peer registration')
       const finalPath = path.join(registryDir, `${validated.instanceId}.json`)
       const tempPath = path.join(registryDir, `.${validated.instanceId}.${randomUUID()}.tmp`)
       const bytes = JSON.stringify(validated) + '\n'
@@ -235,8 +273,8 @@ export function createPeerRegistry(): PeerRegistry {
           rejected++
           continue
         }
-        const candidate = await readCandidateFile(path.join(registryDir, name), instanceId, socketDir)
-        if (candidate) candidates.push(candidate)
+        const candidate = await readCandidateFile(path.join(registryDir, name), instanceId, { socketDir, namespaceId })
+        if (candidate?.registration.transport.kind === transportKind) candidates.push(candidate)
         else rejected++
       }
       return { candidates, scanned: selected.length, rejected, truncated: names.length > selected.length }
@@ -245,7 +283,10 @@ export function createPeerRegistry(): PeerRegistry {
     async listLive(options) {
       const scan = await this.listCandidates()
       const candidates = scan.candidates.filter(
-        (candidate) => candidate.registration.instanceId !== options.senderInstanceId,
+        (candidate) =>
+          candidate.registration.instanceId !== options.senderInstanceId &&
+          candidate.registration.transport.kind === options.transport.kind &&
+          options.transport.validateAddress(candidate.registration.transport.address),
       )
       const registrations: RegistrationCandidate[] = []
       const concurrency = Math.min(16, Math.max(8, options.concurrency ?? 12))
@@ -271,7 +312,7 @@ export function createPeerRegistry(): PeerRegistry {
           if (!candidate) return
           const livePid = await pidExists(candidate.registration.pid)
           if (livePid === false) {
-            await this.cleanupConfirmedDead(candidate).catch(() => false)
+            await this.cleanupConfirmedDead(candidate, undefined, options.transport).catch(() => false)
             continue
           }
           const requestId = randomUUID()
@@ -326,7 +367,7 @@ export function createPeerRegistry(): PeerRegistry {
       return true
     },
 
-    async cleanupConfirmedDead(candidate, graceMs = 30_000) {
+    async cleanupConfirmedDead(candidate, graceMs = 30_000, transport) {
       await ensureInitialized()
       const registration = candidate.registration
       if ((await pidExists(registration.pid)) !== false) return false
@@ -341,29 +382,30 @@ export function createPeerRegistry(): PeerRegistry {
       ) {
         return false
       }
-      const socketPath = registration.transport.address
-      const socketBefore = isSocketPathInNamespace(socketPath, socketDir)
-        ? await fs.lstat(socketPath).catch(() => null)
-        : null
+      const address = registration.transport.address
+      const remainingBeforeRemoval = await this.listCandidates()
+      const shared = remainingBeforeRemoval.candidates.some(
+        (other) =>
+          other.registration.instanceId !== registration.instanceId && other.registration.transport.address === address,
+      )
       await fs.unlink(current.registrationPath).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT') throw error
       })
-      if (socketBefore?.isSocket() && !socketBefore.isSymbolicLink()) {
-        const remaining = await this.listCandidates()
-        const shared = remaining.candidates.some((other) => other.registration.transport.address === socketPath)
-        if (!remaining.truncated && remaining.rejected === 0 && !shared) {
-          const socketAfter = await fs.lstat(socketPath).catch(() => null)
-          if (socketAfter?.isSocket() && !socketAfter.isSymbolicLink() && sameFileIdentity(socketBefore, socketAfter)) {
-            await fs.unlink(socketPath).catch(() => {})
-          }
-        }
+      if (
+        transport?.kind === registration.transport.kind &&
+        transport.cleanupConfirmedDeadEndpoint &&
+        !remainingBeforeRemoval.truncated &&
+        remainingBeforeRemoval.rejected === 0 &&
+        !shared
+      ) {
+        await transport.cleanupConfirmedDeadEndpoint(address)
       }
       return true
     },
 
     paths() {
       if (!registryDir || !socketDir) throw new Error('Peer registry has not been initialized')
-      return { registryDir, socketDir }
+      return { registryDir, socketDir, ...(namespaceId ? { namespaceId } : {}) }
     },
   }
 }

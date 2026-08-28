@@ -37,16 +37,18 @@ jobs:
         with:
           tool: cargo-xwin
 
-      - name: Build strict Windows Job Object supervisor
-        run: >-
-          cargo xwin build --release --locked
-          --target ${{ matrix.target }}
-          --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml
+      - name: Build Windows native helpers
+        run: |
+          cargo xwin build --release --locked --target ${{ matrix.target }} --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml
+          cargo xwin build --release --locked --target ${{ matrix.target }} --manifest-path packages/core/native/windows-peer-broker/Cargo.toml
+          mkdir -p native-output/${{ matrix.arch }}
+          cp packages/core/native/windows-job-supervisor/target/${{ matrix.target }}/release/xc-shell-supervisor.exe native-output/${{ matrix.arch }}/
+          cp packages/core/native/windows-peer-broker/target/${{ matrix.target }}/release/xc-peer-broker.exe native-output/${{ matrix.arch }}/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-shell-supervisor-${{ matrix.arch }}
-          path: packages/core/native/windows-job-supervisor/target/${{ matrix.target }}/release/xc-shell-supervisor.exe
+          name: windows-native-${{ matrix.arch }}
+          path: native-output/${{ matrix.arch }}/*.exe
           if-no-files-found: error
 
   verify-windows-runtime:
@@ -67,12 +69,12 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-shell-supervisor-x64
+          name: windows-native-x64
           path: packages/core/native/prebuilt/windows/x64
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-shell-supervisor-arm64
+          name: windows-native-arm64
           path: packages/core/native/prebuilt/windows/arm64
 
       - name: Generate native artifact hash manifest
@@ -80,10 +82,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Exercise release x64 Job and ConPTY helpers
+      - name: Exercise release x64 native helpers
         run: |
+          & packages/core/native/prebuilt/windows/x64/xc-peer-broker.exe self-test --protocol 1
           pnpm build
-          pnpm exec vitest run packages/core/tests/windows-job-provider.test.ts packages/core/tests/windows-supervisor-protocol.test.ts packages/core/tests/pty-provider.test.ts
+          pnpm exec vitest run packages/core/tests/windows-job-provider.test.ts packages/core/tests/windows-supervisor-protocol.test.ts packages/core/tests/pty-provider.test.ts packages/core/tests/windows-peer-broker-protocol.test.ts packages/core/tests/windows-peer-transport.test.ts packages/core/tests/windows-native-artifacts.test.ts
 
       - name: Check packaged Windows runtime
         run: pnpm check:package
@@ -109,12 +112,12 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-shell-supervisor-x64
+          name: windows-native-x64
           path: packages/core/native/prebuilt/windows/x64
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-shell-supervisor-arm64
+          name: windows-native-arm64
           path: packages/core/native/prebuilt/windows/arm64
 
       - name: Generate native artifact hash manifest
@@ -153,6 +156,8 @@ jobs:
             grep -q 'package/dist/native/windows/manifest.json' <<< "$listing"
             grep -q 'package/dist/native/windows/x64/xc-shell-supervisor.exe' <<< "$listing"
             grep -q 'package/dist/native/windows/arm64/xc-shell-supervisor.exe' <<< "$listing"
+            grep -q 'package/dist/native/windows/x64/xc-peer-broker.exe' <<< "$listing"
+            grep -q 'package/dist/native/windows/arm64/xc-peer-broker.exe' <<< "$listing"
           done
           smoke_dir="$(mktemp -d)"
           trap 'rm -rf "$smoke_dir"' EXIT

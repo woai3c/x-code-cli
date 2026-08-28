@@ -57,9 +57,16 @@ describe('peer service terminal sanitization', () => {
       paths: () => ({ registryDir: '/runtime/peers', socketDir: '/runtime/sockets' }),
     }
     const transport: PeerTransport = {
+      kind: 'unix',
+      createAddressHint: () => '/runtime/receiver.sock',
+      validateAddress: () => true,
       listen: vi.fn(async (options) => {
         onRequest = options.onRequest
-        return { address: options.address, close: vi.fn(async () => {}) }
+        return {
+          address: options.address,
+          closed: new Promise<{ expected: boolean }>(() => {}),
+          close: vi.fn(async () => {}),
+        }
       }),
       request: vi.fn(async () => {
         throw new Error('not used')

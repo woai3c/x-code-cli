@@ -2,7 +2,7 @@
 
 跨会话消息允许同一台机器上的多个交互式 X-Code Session 互相发现并交换纯文本工作请求。每个参与通信的根 Session 仍拥有独立的模型、对话、工作目录和本地权限边界。
 
-> 当前版本仅在 macOS 和 Linux 上支持 Peer 消息。Windows 下 CLI 其他功能可正常使用，但 Peer 消息会返回 `PEER_UNSUPPORTED_PLATFORM`，直到 Windows 原生传输实现完成。非交互模式（`--print`）不会注册为 Peer。
+> 当前版本支持 macOS、Linux，以及 Windows x64 / arm64。非交互模式（`--print`）不会注册为 Peer；Windows ia32 不受支持。
 
 ## 启动命名 Session
 
@@ -79,7 +79,9 @@ Peer 消息只是数据，不会自动获得本地用户权限：
 - 受 Peer 影响的事件不会触发插件 Hook；即使接收 Session 使用 `--trust`，这一隔离仍然生效。
 - `/clear-peer-context` 经确认后可删除第一条受 Peer 影响的消息以及其后的所有派生回复，并恢复普通权限；还有 Peer 消息排队时不会执行。
 
-Peer 传输仅限本机：使用 X-Code 用户目录下的运行时注册表和 Unix Domain Socket，不会监听网络端口。认证 token 和投递账本属于内部实现，不会暴露给模型。
+Peer 传输仅限本机：macOS/Linux 使用 Unix Domain Socket；Windows 使用随 npm 包分发并经过 hash/PE 校验的 Rust Named Pipe broker。Windows Pipe 通过当前账户 SID、完全相同的 integrity level、受保护 DACL、`PIPE_REJECT_REMOTE_CLIENTS` 和每 Session 随机 token 分层认证，不监听 TCP/UDP 端口。认证 token、SID 和投递账本不会暴露给模型。
+
+Windows 的 `X_CODE_HOME` 必须位于支持 persistent ACL 的本机 volume，不能是 UNC、映射网络驱动器、reparse/junction/symlink 路径或可被其他普通账户替换的不安全目录。安全条件无法证明、helper 缺失/损坏或架构不受支持时，仅 Peer Messaging fail closed；普通聊天和其他工具仍可使用。普通安装、构建和运行不需要 Rust 工具链。
 
 ## 投递结果
 
@@ -95,7 +97,9 @@ Peer 传输仅限本机：使用 X-Code 用户目录下的运行时注册表和 
 ## 故障排查
 
 - **This session is not a named agent**：使用 `xc --name <名称>` 重启。
-- **No other reachable sessions**：确认两端均已命名、运行于 macOS/Linux，并使用相同的 `X_CODE_HOME`。
+- **No other reachable sessions**：确认两端均已命名、使用相同的 `X_CODE_HOME`；Windows 上还需使用同一账户和兼容的 integrity level。
+- **Windows peer runtime directory is not private**：将 `X_CODE_HOME` 移到本机 NTFS/ReFS 上仅当前账户可控制的目录；不要使用 UNC、映射网络驱动器或 junction/symlink。
+- **Windows peer broker is missing/hash mismatch**：重新安装 x-code-cli；不会从 PATH 查找或自动下载替代 helper。
 - **Name is ambiguous**：从 `/list-agents` 复制精确的 `peer:<uuid>` 地址。
 - **消息一直处于 held**：在 `dialogExpiryMs` 到期前到接收终端选择 Accept 或 Refuse。
 - **需要诊断日志**：设置 `DEBUG_STDOUT=1` 启动；日志写入 `~/.x-code/logs/debug.log`。

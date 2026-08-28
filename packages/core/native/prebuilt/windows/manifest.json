@@ -1,14 +1,33 @@
 {
-  "protocolVersion": 2,
-  "sourceSha256": "5fa5990bade94702bf0d828a27e081d83657dcf770fc37af6674d78c20971c41",
+  "manifestVersion": 2,
   "artifacts": {
     "x64": {
-      "file": "x64/xc-shell-supervisor.exe",
-      "sha256": "e4a99d21759551712f4ea7e60bd11b5595a9b2442569f074ebcb671f05fa2cb2"
+      "shellSupervisor": {
+        "file": "x64/xc-shell-supervisor.exe",
+        "protocolVersion": 2,
+        "sha256": "e4a99d21759551712f4ea7e60bd11b5595a9b2442569f074ebcb671f05fa2cb2",
+        "sourceSha256": "5fa5990bade94702bf0d828a27e081d83657dcf770fc37af6674d78c20971c41"
+      },
+      "peerBroker": {
+        "file": "x64/xc-peer-broker.exe",
+        "protocolVersion": 1,
+        "sha256": "33177bdde78c76162433dd21fb2a40800f817fa58f41791360558865b333dffd",
+        "sourceSha256": "4258b29c7b414c43373e802f779ea9d78c86da1086139b1dec95773e0946e78d"
+      }
     },
     "arm64": {
-      "file": "arm64/xc-shell-supervisor.exe",
-      "sha256": "463eb57ccd64ffb438dff3f0a93548e403b6122e05431939f72f91f6427c2e3f"
+      "shellSupervisor": {
+        "file": "arm64/xc-shell-supervisor.exe",
+        "protocolVersion": 2,
+        "sha256": "463eb57ccd64ffb438dff3f0a93548e403b6122e05431939f72f91f6427c2e3f",
+        "sourceSha256": "5fa5990bade94702bf0d828a27e081d83657dcf770fc37af6674d78c20971c41"
+      },
+      "peerBroker": {
+        "file": "arm64/xc-peer-broker.exe",
+        "protocolVersion": 1,
+        "sha256": "e1608fa1537845064078568b7bb8840e8c7198ba83380d704416781ec7450c26",
+        "sourceSha256": "4258b29c7b414c43373e802f779ea9d78c86da1086139b1dec95773e0946e78d"
+      }
     }
   }
 }

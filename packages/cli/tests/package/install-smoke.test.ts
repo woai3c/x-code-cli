@@ -462,16 +462,26 @@ describe('published CLI tarball', () => {
     const manifestBytes = byName.get('package/dist/native/windows/manifest.json')
     expect(manifestBytes).toBeDefined()
     const manifest = JSON.parse(manifestBytes!.toString('utf-8')) as {
-      protocolVersion: number
-      artifacts: Record<string, { file: string; sha256: string }>
+      manifestVersion: number
+      artifacts: Record<
+        string,
+        Record<string, { file: string; protocolVersion: number; sha256: string; sourceSha256: string }>
+      >
     }
 
-    expect(manifest.protocolVersion).toBe(2)
+    expect(manifest.manifestVersion).toBe(2)
     for (const arch of ['x64', 'arm64']) {
-      const artifact = manifest.artifacts[arch]!
-      const bytes = byName.get(`package/dist/native/windows/${artifact.file}`)
-      expect(bytes, `missing ${arch} Windows helper`).toBeDefined()
-      expect(createHash('sha256').update(bytes!).digest('hex')).toBe(artifact.sha256)
+      for (const [artifactName, protocolVersion] of [
+        ['shellSupervisor', 2],
+        ['peerBroker', 1],
+      ] as const) {
+        const artifact = manifest.artifacts[arch]![artifactName]!
+        const bytes = byName.get(`package/dist/native/windows/${artifact.file}`)
+        expect(bytes, `missing ${arch} Windows ${artifactName}`).toBeDefined()
+        expect(artifact.protocolVersion).toBe(protocolVersion)
+        expect(artifact.sourceSha256).toMatch(/^[a-f0-9]{64}$/)
+        expect(createHash('sha256').update(bytes!).digest('hex')).toBe(artifact.sha256)
+      }
     }
   })
 

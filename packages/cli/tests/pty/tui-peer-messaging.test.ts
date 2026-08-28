@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 import { GLYPH_SELECT_POINTER } from '../../src/ui/render/terminal-glyphs.js'
@@ -9,7 +11,21 @@ import { startFakeProvider } from '../fixtures/fake-provider-server.js'
 import { createTuiHarness } from './harness.js'
 import { exitTui, submitInput } from './test-context.js'
 
-describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () => {
+async function createPeerTestWorkspace(prefix: string): Promise<Awaited<ReturnType<typeof createTestWorkspace>>> {
+  const workspace = await createTestWorkspace(prefix)
+  if (process.platform !== 'win32') return workspace
+  const xcodeHome = path.join(os.homedir(), '.x-code', 'peer-test-runtime', randomUUID())
+  await fs.mkdir(xcodeHome, { recursive: true })
+  return {
+    ...workspace,
+    xcodeHome,
+    async cleanup() {
+      await Promise.all([workspace.cleanup(), fs.rm(xcodeHome, { recursive: true, force: true })])
+    },
+  }
+}
+
+describe('TUI cross-session messaging', () => {
   it('registers named agents and lets two locally trusted sessions exchange without authority dialogs', async () => {
     const alphaProvider = await startFakeProvider([
       {
@@ -27,7 +43,7 @@ describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () =
         finalText: 'receiver processed handoff',
       },
     ])
-    const workspace = await createTestWorkspace('xc-pty-peer-double-')
+    const workspace = await createPeerTestWorkspace('xc-pty-peer-double-')
     const alpha = await createTuiHarness({ workspace, provider: alphaProvider })
     const beta = await createTuiHarness({ workspace, provider: betaProvider })
     try {
@@ -83,7 +99,7 @@ describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () =
         finalText: 'authority injection safely denied',
       },
     ])
-    const workspace = await createTestWorkspace('xc-pty-peer-authority-injection-')
+    const workspace = await createPeerTestWorkspace('xc-pty-peer-authority-injection-')
     const alpha = await createTuiHarness({ workspace, provider: alphaProvider, columns: 160 })
     const beta = await createTuiHarness({ workspace, provider: betaProvider, columns: 160 })
     const sideEffectPath = path.join(workspace.cwd, 'authority-pwned.txt')
@@ -135,7 +151,7 @@ describe.runIf(process.platform !== 'win32')('TUI cross-session messaging', () =
         },
       ])
       const betaProvider = await startFakeProvider([{ type: 'completion', text: 'accepted held payload' }])
-      const workspace = await createTestWorkspace(`xc-pty-peer-held-${decision.toLowerCase()}-`)
+      const workspace = await createPeerTestWorkspace(`xc-pty-peer-held-${decision.toLowerCase()}-`)
       const alpha = await createTuiHarness({ workspace, provider: alphaProvider })
       const beta = await createTuiHarness({ workspace, provider: betaProvider })
       try {

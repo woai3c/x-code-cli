@@ -31,9 +31,33 @@ export interface WindowsSupervisorArtifact {
   sha256: string
 }
 
-interface WindowsSupervisorManifest {
+interface WindowsNativeArtifactManifestEntry {
+  file: string
   protocolVersion: number
-  artifacts: Record<string, { file: string; sha256: string }>
+  sha256: string
+  sourceSha256: string
+}
+
+interface WindowsSupervisorManifest {
+  manifestVersion: number
+  artifacts: Record<string, { shellSupervisor?: WindowsNativeArtifactManifestEntry }>
+}
+
+const WINDOWS_NATIVE_MANIFEST_VERSION = 2
+const WINDOWS_PE_MACHINES: Record<'x64' | 'arm64', number> = { x64: 0x8664, arm64: 0xaa64 }
+
+function verifyWindowsSupervisorPe(bytes: Buffer, arch: 'x64' | 'arm64'): void {
+  if (bytes.length < 0x40 || bytes.readUInt16LE(0) !== 0x5a4d) {
+    throw new Error(`Windows shell supervisor is not a PE executable for ${arch}`)
+  }
+  const peOffset = bytes.readUInt32LE(0x3c)
+  if (
+    peOffset + 6 > bytes.length ||
+    bytes.readUInt32LE(peOffset) !== 0x00004550 ||
+    bytes.readUInt16LE(peOffset + 4) !== WINDOWS_PE_MACHINES[arch]
+  ) {
+    throw new Error(`Windows shell supervisor PE architecture mismatch for ${arch}`)
+  }
 }
 
 export interface WindowsJobObjectProviderOptions {
@@ -85,20 +109,31 @@ export async function resolveWindowsSupervisorArtifact(
   } catch (error) {
     throw new Error(`Windows shell supervisor artifact is missing for ${arch}; reinstall x-code-cli`, { cause: error })
   }
-  if (manifest.protocolVersion !== WINDOWS_SUPERVISOR_PROTOCOL_VERSION) {
+  if (manifest.manifestVersion !== WINDOWS_NATIVE_MANIFEST_VERSION) {
     throw new Error(
-      `Windows shell supervisor manifest protocol mismatch: expected ${WINDOWS_SUPERVISOR_PROTOCOL_VERSION}, received ${manifest.protocolVersion}`,
+      `Windows native manifest mismatch: expected ${WINDOWS_NATIVE_MANIFEST_VERSION}, received ${manifest.manifestVersion}`,
     )
   }
-  const artifact = manifest.artifacts[arch]
+  const artifact = manifest.artifacts?.[arch]?.shellSupervisor
   if (!artifact) throw new Error(`Windows shell supervisor manifest has no ${arch} artifact`)
-  if (!/^[a-f0-9]{64}$/i.test(artifact.sha256)) throw new Error('Windows shell supervisor manifest hash is invalid')
+  if (artifact.protocolVersion !== WINDOWS_SUPERVISOR_PROTOCOL_VERSION) {
+    throw new Error(
+      `Windows shell supervisor manifest protocol mismatch: expected ${WINDOWS_SUPERVISOR_PROTOCOL_VERSION}, received ${artifact.protocolVersion}`,
+    )
+  }
+  if (!/^[a-f0-9]{64}$/.test(artifact.sha256) || !/^[a-f0-9]{64}$/.test(artifact.sourceSha256)) {
+    throw new Error('Windows shell supervisor manifest hash is invalid')
+  }
+  if (artifact.file !== `${arch}/xc-shell-supervisor.exe`) {
+    throw new Error(`Windows shell supervisor manifest has an invalid ${arch} path`)
+  }
   const executablePath = path.resolve(root, artifact.file)
   const relative = path.relative(root, executablePath)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('Windows shell supervisor manifest points outside its native directory')
   }
   const bytes = await fs.readFile(executablePath)
+  verifyWindowsSupervisorPe(bytes, arch)
   const actualHash = createHash('sha256').update(bytes).digest('hex')
   if (actualHash !== artifact.sha256.toLowerCase()) {
     throw new Error(`Windows shell supervisor hash mismatch for ${arch}`)

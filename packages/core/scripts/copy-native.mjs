@@ -21,8 +21,25 @@ try {
   // A missing, stale, or partial destination is replaced below.
 }
 
+async function copyIfChanged(relativeFile) {
+  const sourcePath = path.join(sourceDir, relativeFile)
+  const destinationPath = path.join(destinationDir, relativeFile)
+  const sourceBytes = await fs.readFile(sourcePath)
+  const destinationBytes = await fs.readFile(destinationPath).catch(() => null)
+  if (destinationBytes?.equals(sourceBytes)) return
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true })
+  const temporaryPath = `${destinationPath}.${process.pid}.tmp`
+  await fs.writeFile(temporaryPath, sourceBytes)
+  await fs.rename(temporaryPath, destinationPath)
+}
+
 if (!destinationIsCurrent) {
-  await fs.rm(destinationDir, { recursive: true, force: true })
-  await fs.mkdir(path.dirname(destinationDir), { recursive: true })
-  await fs.cp(sourceDir, destinationDir, { recursive: true })
+  await fs.mkdir(destinationDir, { recursive: true })
+  for (const architecture of Object.values(sourceManifest.artifacts)) {
+    for (const artifact of Object.values(architecture)) await copyIfChanged(artifact.file)
+  }
+  const manifestPath = path.join(destinationDir, 'manifest.json')
+  const temporaryManifestPath = `${manifestPath}.${process.pid}.tmp`
+  await fs.writeFile(temporaryManifestPath, `${JSON.stringify(sourceManifest, null, 2)}\n`, 'utf8')
+  await fs.rename(temporaryManifestPath, manifestPath)
 }

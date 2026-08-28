@@ -9,7 +9,7 @@ import path from 'node:path'
 
 import { createPeerIdentity } from '../src/peers/identity.js'
 import { peerSocketPath } from '../src/peers/paths.js'
-import { createPeerRegistry } from '../src/peers/registry.js'
+import { createPeerRegistry, parseRegistration } from '../src/peers/registry.js'
 import type { PeerTransport } from '../src/peers/transport.js'
 import type { PeerRegistrationV1 } from '../src/peers/types.js'
 
@@ -25,6 +25,21 @@ afterEach(async () => {
   delete process.env.X_CODE_HOME
   await rm(testDir, { recursive: true, force: true })
 })
+
+function createTestRegistry() {
+  if (process.platform !== 'win32') return createPeerRegistry({})
+  return createPeerRegistry({
+    transportKind: 'unix',
+    windowsRuntimeSecurity: {
+      async initialize() {
+        const registryDir = path.join(process.env.X_CODE_HOME!, 'runtime', 'peers')
+        const socketDir = path.join(process.env.X_CODE_HOME!, 'runtime', 'peer-sockets')
+        await Promise.all([mkdir(registryDir, { recursive: true }), mkdir(socketDir, { recursive: true })])
+        return { registryDir, socketDir, namespaceId: '0123456789ab' }
+      },
+    },
+  })
+}
 
 function registration(socketDir: string, overrides: Partial<PeerRegistrationV1> = {}): PeerRegistrationV1 {
   const identity = createPeerIdentity({ name: 'backend' })
@@ -68,12 +83,12 @@ describe('owner-only peer registry', () => {
     const linked = path.join(testDir, 'linked-home')
     await symlink(target, linked)
     process.env.X_CODE_HOME = linked
-    await expect(createPeerRegistry().initialize()).rejects.toThrow('Unsafe peer runtime directory')
+    await expect(createTestRegistry().initialize()).rejects.toThrow('Unsafe peer runtime directory')
     if (process.platform !== 'win32') expect((await lstat(target)).mode & 0o777).toBe(0o755)
   })
 
   it('routes through X_CODE_HOME and atomically writes owner-only registrations', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const paths = registry.paths()
     expect(paths.registryDir).toBe(path.join(process.env.X_CODE_HOME!, 'runtime', 'peers'))
@@ -91,7 +106,7 @@ describe('owner-only peer registry', () => {
   })
 
   it('enumerates duplicate names and short-display collisions with full UUID identities', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const socketDir = registry.paths().socketDir
     const oneInstanceId = '12345678-1111-4111-8111-111111111111'
@@ -118,7 +133,7 @@ describe('owner-only peer registry', () => {
   })
 
   it('sanitizes untrusted registry name and cwd fields before exposing candidates', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const value = registration(registry.paths().socketDir, {
       name: 'back\x1b]52;c;Y2xpcGJvYXJk\x07end\u202e',
@@ -136,7 +151,7 @@ describe('owner-only peer registry', () => {
   })
 
   it('rejects symlinks, broad modes, oversized files, bad schema, and socket namespace escape', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const { registryDir, socketDir } = registry.paths()
 
@@ -170,7 +185,7 @@ describe('owner-only peer registry', () => {
   })
 
   it('does not remove a registration for a live pid during residual cleanup', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const value = registration(registry.paths().socketDir, {
       updatedAt: new Date(Date.now() - 60_000).toISOString(),
@@ -182,7 +197,7 @@ describe('owner-only peer registry', () => {
   })
 
   it('removes only a twice-confirmed dead registration after the grace period', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const value = registration(registry.paths().socketDir, {
       pid: 2_147_483_647,
@@ -195,7 +210,7 @@ describe('owner-only peer registry', () => {
   })
 
   itPosix('removes a dead colliding registration without unlinking a live registration shared socket', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const deadId = 'bbbbbbbb-1111-4111-8111-111111111111'
     const liveId = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -237,10 +252,18 @@ describe('owner-only peer registry', () => {
     const identityModule = path.join(process.cwd(), 'packages/core/dist/peers/identity.js')
     const pathsModule = path.join(process.cwd(), 'packages/core/dist/peers/paths.js')
     const childScript = `
+      import { mkdir } from 'node:fs/promises'
+      import path from 'node:path'
       import { createPeerRegistry } from ${JSON.stringify(`file://${registryModule}`)}
       import { createPeerIdentity } from ${JSON.stringify(`file://${identityModule}`)}
       import { peerSocketPath } from ${JSON.stringify(`file://${pathsModule}`)}
-      const registry = createPeerRegistry()
+      const windowsRuntimeSecurity = { initialize: async () => {
+        const registryDir = path.join(process.env.X_CODE_HOME, 'runtime', 'peers')
+        const socketDir = path.join(process.env.X_CODE_HOME, 'runtime', 'peer-sockets')
+        await Promise.all([mkdir(registryDir, { recursive: true }), mkdir(socketDir, { recursive: true })])
+        return { registryDir, socketDir, namespaceId: '0123456789ab' }
+      } }
+      const registry = createPeerRegistry(process.platform === 'win32' ? { transportKind: 'unix', windowsRuntimeSecurity } : {})
       await registry.initialize()
       const identity = createPeerIdentity({ name: 'child' })
       const now = new Date().toISOString()
@@ -251,22 +274,39 @@ describe('owner-only peer registry', () => {
     `
     await Promise.all([runChild(childScript), runChild(childScript)])
 
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const scan = await registry.listCandidates()
     expect(scan.candidates).toHaveLength(2)
     expect(scan.candidates.every((candidate) => candidate.registration.name === 'child')).toBe(true)
   })
 
+  it('strictly validates Windows pipe descriptors and namespace isolation', () => {
+    const value = registration('C:\\runtime', {
+      transport: {
+        kind: 'windows-pipe',
+        address: '\\\\.\\pipe\\x-code-peer-v1-0123456789ab-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      },
+    })
+    expect(parseRegistration(value, { socketDir: 'C:\\runtime', namespaceId: '0123456789ab' })).not.toBeNull()
+    expect(parseRegistration(value, { socketDir: 'C:\\runtime', namespaceId: 'ffffffffffff' })).toBeNull()
+    expect(
+      parseRegistration(
+        { ...value, transport: { kind: 'windows-pipe', address: '\\\\.\\pipe\\x-code-peer-v1-0123456789ab-..' } },
+        { socketDir: 'C:\\runtime', namespaceId: '0123456789ab' },
+      ),
+    ).toBeNull()
+  })
+
   it('rejects registration tokens that are not full random 32-byte base64url values', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const value = registration(registry.paths().socketDir, { inboxToken: randomBytes(8).toString('base64url') })
     await expect(registry.write(value)).rejects.toThrow('Invalid peer registration')
   })
 
   it('bounds listLive ping concurrency and returns only authenticated pong identities', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const values = Array.from({ length: 20 }, () => registration(registry.paths().socketDir))
     for (const value of values) await registry.write(value)
@@ -274,6 +314,9 @@ describe('owner-only peer registry', () => {
     let active = 0
     let maximum = 0
     const transport: PeerTransport = {
+      kind: 'unix',
+      createAddressHint: vi.fn(),
+      validateAddress: () => true,
       listen: vi.fn() as never,
       request: async ({ address, frame }) => {
         active++
@@ -292,13 +335,16 @@ describe('owner-only peer registry', () => {
   })
 
   it('never deletes a live-pid registration merely because ping times out', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     const value = registration(registry.paths().socketDir, {
       updatedAt: new Date(Date.now() - 60_000).toISOString(),
     })
     await registry.write(value)
     const transport: PeerTransport = {
+      kind: 'unix',
+      createAddressHint: vi.fn(),
+      validateAddress: () => true,
       listen: vi.fn() as never,
       request: vi.fn(async () => {
         throw new Error('PEER_TIMEOUT')
@@ -310,10 +356,13 @@ describe('owner-only peer registry', () => {
   })
 
   it('honors the overall listLive deadline and caller abort', async () => {
-    const registry = createPeerRegistry()
+    const registry = createTestRegistry()
     await registry.initialize()
     for (let index = 0; index < 20; index++) await registry.write(registration(registry.paths().socketDir))
     const transport: PeerTransport = {
+      kind: 'unix',
+      createAddressHint: vi.fn(),
+      validateAddress: () => true,
       listen: vi.fn() as never,
       request: ({ signal }) =>
         new Promise<never>((_, reject) =>
