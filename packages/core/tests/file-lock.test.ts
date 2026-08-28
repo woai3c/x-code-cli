@@ -9,23 +9,24 @@ import { acquireFileLock } from '../src/utils/file-lock.js'
 const execFileAsync = promisify(execFile)
 const LOCK_MODULE_URL = new URL('../dist/utils/file-lock.js', import.meta.url).href
 
-async function runLockContender(lockPath: string, holdMs: number): Promise<{ start: number; end: number }> {
+async function runLockContender(lockPath: string, holdMs: number): Promise<{ start: bigint; end: bigint }> {
   const script = `
     import { acquireFileLock } from ${JSON.stringify(LOCK_MODULE_URL)}
     const lease = await acquireFileLock(process.argv[1], { waitMs: 10000, retryMs: 5 })
     if (!lease) throw new Error('timed out acquiring test lock')
-    const start = Date.now()
+    const start = process.hrtime.bigint()
     await new Promise(resolve => setTimeout(resolve, Number(process.argv[2])))
-    const end = Date.now()
+    const end = process.hrtime.bigint()
     await lease.release()
-    process.stdout.write(JSON.stringify({ start, end }))
+    process.stdout.write(JSON.stringify({ start: start.toString(), end: end.toString() }))
   `
   const result = await execFileAsync(
     process.execPath,
     ['--input-type=module', '--eval', script, lockPath, String(holdMs)],
     { windowsHide: true },
   )
-  return JSON.parse(result.stdout) as { start: number; end: number }
+  const interval = JSON.parse(result.stdout) as { start: string; end: string }
+  return { start: BigInt(interval.start), end: BigInt(interval.end) }
 }
 
 describe('file lock ownership', () => {
@@ -44,7 +45,7 @@ describe('file lock ownership', () => {
           { at: start, delta: 1 },
           { at: end, delta: -1 },
         ])
-        .sort((a, b) => a.at - b.at || a.delta - b.delta)
+        .sort((a, b) => (a.at === b.at ? a.delta - b.delta : a.at < b.at ? -1 : 1))
       let active = 0
       let maxActive = 0
       for (const event of events) {

@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
@@ -79,6 +80,15 @@ async function secureWindowsPeerRuntime(
   }
   if (signal?.aborted) throw abortError()
   const root = path.resolve(options.root ?? userXcodeDir())
+  try {
+    await fs.mkdir(root, { recursive: true })
+  } catch (error) {
+    throw runtimeError(
+      'PEER_WINDOWS_RUNTIME_UNSAFE',
+      `Windows peer runtime root creation failed: ${errorMessage(error)}`,
+      error,
+    )
+  }
   const artifact = await (options.artifact ?? resolveWindowsPeerBrokerArtifact())
   if (signal?.aborted) throw abortError()
   const spawnBroker = options.spawnBroker ?? spawn

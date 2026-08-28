@@ -1,6 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs/promises'
 import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { createPeerIdentity } from '../src/peers/identity.js'
@@ -15,10 +18,25 @@ import {
   encodeStartServerPayload,
   encodeWindowsPeerBrokerFrame,
 } from '../src/peers/windows-peer-broker-protocol.js'
+import { createWindowsPeerRuntimeSecurity } from '../src/peers/windows-peer-runtime-security.js'
 
 const describeWindows = process.platform === 'win32' ? describe : describe.skip
 
 describeWindows('Windows named pipe peer transport', () => {
+  it('creates and secures an absent user runtime root', async () => {
+    const root = path.join(os.homedir(), `.x-code-peer-clean-root-${randomUUID()}`)
+    const registry = createPeerRegistry({
+      windowsRuntimeSecurity: createWindowsPeerRuntimeSecurity({ root }),
+    })
+    try {
+      await registry.initialize()
+      expect((await fs.stat(registry.paths().registryDir)).isDirectory()).toBe(true)
+      expect(registry.paths().namespaceId).toMatch(/^[a-f0-9]{12}$/)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('discovers and sends between two real broker-backed services', async () => {
     const suffix = Date.now().toString(36)
     const sender = createPeerService({ enabled: true, name: `windows-sender-${suffix}` })
@@ -198,6 +216,74 @@ describeWindows('Windows named pipe peer transport', () => {
     children[0]!.kill()
     await expect(server.closed).resolves.toMatchObject({ expected: false })
   })
+
+  it('survives clients that disconnect before authentication', async () => {
+    const registry = createPeerRegistry()
+    await registry.initialize()
+    const identity = createPeerIdentity({ name: 'disconnect-stress' })
+    const transport = createWindowsNamedPipeTransport({ getRuntimePaths: () => registry.paths() })
+    const server = await transport.listen({
+      address: transport.createAddressHint(identity.instanceId),
+      instanceId: identity.instanceId,
+      inboxToken: identity.inboxToken,
+      onRequest: async (frame) => frame,
+    })
+    try {
+      for (let index = 0; index < 4_000; index++) {
+        await new Promise<void>((resolve) => {
+          const socket = net.connect(server.address)
+          socket.once('connect', () => {
+            socket.destroy()
+            resolve()
+          })
+          socket.once('error', () => resolve())
+        })
+      }
+
+      const requestId = randomUUID()
+      await expect(
+        transport.request({
+          address: server.address,
+          targetToken: identity.inboxToken,
+          senderInstanceId: identity.instanceId,
+          frame: { v: 1, type: 'ping', requestId },
+          timeoutMs: 2_000,
+        }),
+      ).resolves.toMatchObject({ type: 'ping', requestId })
+      await expect(Promise.race([server.closed.then(() => true), delay(50).then(() => false)])).resolves.toBe(false)
+    } finally {
+      await server.close()
+    }
+  }, 30_000)
+
+  it('keeps accepting active operations after 256 rapid successes', async () => {
+    const registry = createPeerRegistry()
+    await registry.initialize()
+    const identity = createPeerIdentity({ name: 'success-capacity' })
+    const transport = createWindowsNamedPipeTransport({ getRuntimePaths: () => registry.paths() })
+    const server = await transport.listen({
+      address: transport.createAddressHint(identity.instanceId),
+      instanceId: identity.instanceId,
+      inboxToken: identity.inboxToken,
+      onRequest: async (frame) => frame,
+    })
+    try {
+      for (let index = 0; index < 300; index++) {
+        const requestId = randomUUID()
+        await expect(
+          transport.request({
+            address: server.address,
+            targetToken: identity.inboxToken,
+            senderInstanceId: identity.instanceId,
+            frame: { v: 1, type: 'ping', requestId },
+            timeoutMs: 2_000,
+          }),
+        ).resolves.toMatchObject({ type: 'ping', requestId })
+      }
+    } finally {
+      await server.close()
+    }
+  }, 15_000)
 
   it('fails the service closed and removes its registration after a broker crash', async () => {
     const registry = createPeerRegistry()

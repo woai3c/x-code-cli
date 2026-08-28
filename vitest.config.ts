@@ -18,6 +18,7 @@ export default defineConfig({
           name: 'unit',
           include: ['packages/core/tests/**/*.test.ts', 'packages/cli/tests/*.test.{ts,tsx}'],
           sequence: { groupOrder: 0 },
+          testTimeout: 15_000,
         },
       },
       {

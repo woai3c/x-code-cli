@@ -182,7 +182,7 @@ class BrokerClient {
       return Promise.reject(error)
     }
     this.purgeTombstones()
-    if (this.pending.size + this.tombstones.size >= WINDOWS_PEER_BROKER_MAX_OPERATIONS) {
+    if (this.pending.size >= WINDOWS_PEER_BROKER_MAX_OPERATIONS) {
       return Promise.reject(
         transportError('PEER_WINDOWS_OPERATION_CAPACITY', 'Windows peer broker operation capacity is exhausted'),
       )
@@ -400,7 +400,6 @@ class BrokerClient {
     }
     this.pending.delete(frame.operationId)
     this.disposePending(pending)
-    this.tombstones.set(frame.operationId, Date.now() + TOMBSTONE_TTL_MS)
     if (failure) pending.reject(failure)
     else pending.resolve(response!)
   }
@@ -415,7 +414,7 @@ class BrokerClient {
     if (status === 'canceled' || pending.terminalSeen) {
       this.pending.delete(frame.operationId)
       this.disposePending(pending)
-      this.tombstones.set(frame.operationId, Date.now() + TOMBSTONE_TTL_MS)
+      this.rememberTombstone(frame.operationId)
     }
   }
 
@@ -444,7 +443,7 @@ class BrokerClient {
     if (!pending) return
     this.pending.delete(operationId)
     this.disposePending(pending)
-    this.tombstones.set(operationId, Date.now() + TOMBSTONE_TTL_MS)
+    this.rememberTombstone(operationId)
     pending.reject(error)
   }
 
@@ -457,6 +456,14 @@ class BrokerClient {
     const now = Date.now()
     for (const [operationId, expiresAt] of this.tombstones) {
       if (expiresAt <= now) this.tombstones.delete(operationId)
+    }
+  }
+
+  private rememberTombstone(operationId: number): void {
+    this.purgeTombstones()
+    this.tombstones.set(operationId, Date.now() + TOMBSTONE_TTL_MS)
+    while (this.tombstones.size > WINDOWS_PEER_BROKER_MAX_OPERATIONS) {
+      this.tombstones.delete(this.tombstones.keys().next().value!)
     }
   }
 

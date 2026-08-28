@@ -82,8 +82,33 @@ async function artifactSourceHashes(coreDir) {
   )
 }
 
-export async function writeWindowsNativeManifest(coreDir, windowsDir) {
+function builtEntrySet(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error('Windows native manifest requires at least one explicitly built artifact')
+  }
+  const built = new Set()
+  for (const entry of entries) {
+    if (!WINDOWS_NATIVE_ARCHES.includes(entry?.arch) || !WINDOWS_NATIVE_ARTIFACTS[entry?.artifactName]) {
+      throw new Error(`Invalid Windows native build provenance: ${String(entry?.arch)}:${String(entry?.artifactName)}`)
+    }
+    built.add(`${entry.arch}:${entry.artifactName}`)
+  }
+  return built
+}
+
+async function previousWindowsNativeManifest(windowsDir) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(windowsDir, 'manifest.json'), 'utf8'))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+export async function updateWindowsNativeManifest(coreDir, windowsDir, builtEntries) {
+  const built = builtEntrySet(builtEntries)
   const sourceHashes = await artifactSourceHashes(coreDir)
+  const previous = await previousWindowsNativeManifest(windowsDir)
   const artifacts = {}
   for (const arch of WINDOWS_NATIVE_ARCHES) {
     artifacts[arch] = {}
@@ -91,11 +116,27 @@ export async function writeWindowsNativeManifest(coreDir, windowsDir) {
       const file = `${arch}/${definition.file}`
       const bytes = await fs.readFile(path.join(windowsDir, file))
       verifyPeArchitecture(bytes, arch, artifactName)
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      let sourceSha256
+      if (built.has(`${arch}:${artifactName}`)) {
+        sourceSha256 = sourceHashes[artifactName]
+      } else {
+        const previousEntry = previous?.artifacts?.[arch]?.[artifactName]
+        if (
+          previousEntry?.file !== file ||
+          previousEntry.protocolVersion !== definition.protocolVersion ||
+          previousEntry.sha256 !== sha256 ||
+          !/^[a-f0-9]{64}$/.test(previousEntry.sourceSha256 ?? '')
+        ) {
+          throw new Error(`Cannot preserve provenance for unbuilt Windows ${arch} ${artifactName}`)
+        }
+        sourceSha256 = previousEntry.sourceSha256
+      }
       artifacts[arch][artifactName] = {
         file,
         protocolVersion: definition.protocolVersion,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        sourceSha256: sourceHashes[artifactName],
+        sha256,
+        sourceSha256,
       }
     }
   }

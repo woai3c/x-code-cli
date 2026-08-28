@@ -352,6 +352,7 @@ describe('owner-only peer registry', () => {
     }
     const live = await registry.listLive({ transport, senderInstanceId: randomUUID() })
     expect(live.peers).toEqual([])
+    expect(live.partial).toBe(true)
     expect(await registry.read(value.instanceId)).not.toBeNull()
   })
 

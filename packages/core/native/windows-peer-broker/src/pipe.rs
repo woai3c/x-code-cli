@@ -8,9 +8,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_NOT_FOUND,
-    ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_NOT_FOUND,
+    ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
+    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
@@ -235,6 +236,7 @@ fn run_listener(
             {
                 return;
             }
+            Err(error) if abandoned_accept(&error) => continue,
             Err(error) => {
                 handler.server_fatal(error);
                 return;
@@ -277,6 +279,13 @@ fn run_listener(
             return;
         }
     }
+}
+
+fn abandoned_accept(error: &PipeError) -> bool {
+    matches!(
+        error.os_code,
+        Some(code) if code == ERROR_NO_DATA as i32 || code == ERROR_PIPE_NOT_CONNECTED as i32
+    )
 }
 
 struct ActiveConnectionGuard(Arc<AtomicUsize>);
@@ -1161,6 +1170,24 @@ mod tests {
 
         let identity = crate::process_peer::current_process_identity().unwrap();
         self_test(&identity).unwrap();
+    }
+
+    #[test]
+    fn disconnected_accept_instances_are_recoverable() {
+        for code in [ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED] {
+            let error = PipeError::os(
+                PipeErrorCode::Io,
+                "named pipe accept failed",
+                io::Error::from_raw_os_error(code as i32),
+            );
+            assert!(abandoned_accept(&error));
+        }
+        let fatal = PipeError::os(
+            PipeErrorCode::Io,
+            "named pipe accept failed",
+            io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND as i32),
+        );
+        assert!(!abandoned_accept(&fatal));
     }
 
     #[test]

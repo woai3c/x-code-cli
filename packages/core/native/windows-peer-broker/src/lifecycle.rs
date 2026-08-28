@@ -65,7 +65,7 @@ impl OperationBook {
         {
             return Err(RegisterError::Duplicate);
         }
-        if operation_id == 0 || self.active.len() + self.tombstones.len() >= self.capacity {
+        if operation_id == 0 || self.active.len() >= self.capacity {
             return Err(RegisterError::Capacity);
         }
         self.active.insert(
@@ -99,6 +99,9 @@ impl OperationBook {
             return false;
         }
         self.tombstones.push_back((operation_id, now));
+        while self.tombstones.len() > self.capacity {
+            self.tombstones.pop_front();
+        }
         true
     }
 
@@ -119,6 +122,11 @@ impl OperationBook {
     #[cfg(test)]
     pub fn active_len(&self) -> usize {
         self.active.len()
+    }
+
+    #[cfg(test)]
+    pub fn tombstone_len(&self) -> usize {
+        self.tombstones.len()
     }
 
     fn purge(&mut self, now: Instant) {
@@ -705,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_capacity_unknown_and_ttl_are_bounded() {
+    fn active_capacity_and_tombstones_are_bounded_independently() {
         let now = Instant::now();
         let mut book = OperationBook::new(2, Duration::from_secs(1));
         book.register(1, now).unwrap();
@@ -713,11 +721,29 @@ mod tests {
         book.register(2, now).unwrap();
         assert_eq!(book.register(3, now), Err(RegisterError::Capacity));
         assert!(book.complete(1, now));
-        assert_eq!(book.register(3, now), Err(RegisterError::Capacity));
+        book.register(3, now).unwrap();
+        assert!(book.complete(2, now));
+        assert!(book.complete(3, now));
+        assert_eq!(book.tombstone_len(), 2);
+        book.register(4, now).unwrap();
         assert_eq!(book.cancel(99, now), CancelDecision::Unknown);
 
         let later = now + Duration::from_secs(2);
-        book.register(3, later).unwrap();
+        book.register(5, later).unwrap();
         assert_eq!(book.cancel(1, later), CancelDecision::Unknown);
+    }
+
+    #[test]
+    fn rapid_successes_do_not_exhaust_active_capacity() {
+        let now = Instant::now();
+        let mut book = OperationBook::new(256, Duration::from_secs(5));
+        for operation_id in 1..=257 {
+            book.register(operation_id, now).unwrap();
+            assert!(book.complete(operation_id, now));
+        }
+        assert_eq!(book.active_len(), 0);
+        assert_eq!(book.tombstone_len(), 256);
+        assert_eq!(book.cancel(1, now), CancelDecision::Unknown);
+        assert_eq!(book.cancel(257, now), CancelDecision::TooLate);
     }
 }

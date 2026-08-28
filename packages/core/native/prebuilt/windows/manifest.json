@@ -11,8 +11,8 @@
       "peerBroker": {
         "file": "x64/xc-peer-broker.exe",
         "protocolVersion": 1,
-        "sha256": "4a4974d64501b7bcf843c41a378c28eef4fbf983fb67c601cfc8b6a5b50b30ec",
-        "sourceSha256": "3db7bed59484aa6aa06fa48e8de779393d27d40c372c35fe0f3d85f780f12f84"
+        "sha256": "770b043c09a5658dfb56d1d1c6584d47d51bf34f31036c66acc51c453992a707",
+        "sourceSha256": "1a184729bf008ff374e869e41f354f59f83433986f2296daf32479c0c5f4253d"
       }
     },
     "arm64": {
@@ -25,8 +25,8 @@
       "peerBroker": {
         "file": "arm64/xc-peer-broker.exe",
         "protocolVersion": 1,
-        "sha256": "6ab738f7e6e5e6b948dac91db32edb6e452bf68243f77720f251d470d9bade82",
-        "sourceSha256": "3db7bed59484aa6aa06fa48e8de779393d27d40c372c35fe0f3d85f780f12f84"
+        "sha256": "9031f7b8e130229a044d347a8cf74153be9a9f2e80c93c415d31f4f5366b7492",
+        "sourceSha256": "1a184729bf008ff374e869e41f354f59f83433986f2296daf32479c0c5f4253d"
       }
     }
   }

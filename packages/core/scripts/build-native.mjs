@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { WINDOWS_NATIVE_ARTIFACTS, writeWindowsNativeManifest } from './native-artifacts.mjs'
+import { WINDOWS_NATIVE_ARTIFACTS, updateWindowsNativeManifest } from './native-artifacts.mjs'
 
 const coreDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -56,7 +56,11 @@ async function main() {
     await fs.mkdir(destinationDir, { recursive: true })
     await fs.copyFile(source, path.join(destinationDir, definition.file))
   }
-  await writeWindowsNativeManifest(coreDir, destinationRoot)
+  await updateWindowsNativeManifest(
+    coreDir,
+    destinationRoot,
+    artifactNames.map((artifactName) => ({ arch: process.arch, artifactName })),
+  )
 }
 
 await main()

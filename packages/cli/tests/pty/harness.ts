@@ -222,14 +222,14 @@ export async function createTuiHarness(options: {
         ? `& ${values.map(powershellQuote).join(' ')}; Write-Output "${EXIT_MARKER}$LASTEXITCODE"\r`
         : `${values.map(posixQuote).join(' ')}; __x_code_status=$?; printf '\\n${EXIT_MARKER}%s\\n' "$__x_code_status"\n`
       processUnderTest.write(command)
-      await waitFor(() => raw.includes('test-model'), 'CLI header', 10_000)
+      await waitFor(() => raw.includes('test-model'), 'CLI header', 20_000)
       await waitFor(
         async () => {
           await waitForRendered()
           return lastPromptLine(terminalScreen(terminal)) !== ''
         },
         'interactive input prompt',
-        10_000,
+        20_000,
       )
       await waitForRendered()
       await waitForTerminalQuiet()

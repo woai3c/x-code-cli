@@ -335,6 +335,7 @@ export function createPeerRegistry(options: PeerRegistryOptions = {}): PeerRegis
           } catch {
             // A live PID may have a blocked event loop. Ping failure hides it
             // from this live view but never authorizes registration/socket deletion.
+            partial = true
           }
         }
       }

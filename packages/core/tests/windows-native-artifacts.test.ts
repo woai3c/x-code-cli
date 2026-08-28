@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 
 import { resolveWindowsPeerBrokerArtifact } from '../src/peers/windows-peer-broker-artifact.js'
 
@@ -20,6 +22,9 @@ interface NativeManifest {
 }
 
 const nativeRoot = path.resolve('packages/core/dist/native/windows')
+const coreDir = path.resolve('packages/core')
+const writeManifestScript = path.join(coreDir, 'scripts', 'write-native-manifest.mjs')
+const execFileAsync = promisify(execFile)
 let testRoot = ''
 
 beforeEach(async () => {
@@ -89,5 +94,32 @@ describe('Windows native artifacts', () => {
     await expect(resolveWindowsPeerBrokerArtifact('ia32', testRoot)).rejects.toMatchObject({
       name: 'PEER_WINDOWS_UNSUPPORTED_ARCH',
     })
+  })
+
+  it('preserves source provenance for binaries that were not rebuilt', async () => {
+    const scriptRoot = await fs.mkdtemp(path.join(coreDir, '.native-manifest-test-'))
+    try {
+      await fs.cp(nativeRoot, scriptRoot, { recursive: true })
+      const manifest = await readManifest(scriptRoot)
+      const currentX64Source = manifest.artifacts.x64.peerBroker.sourceSha256
+      manifest.artifacts.arm64.peerBroker.sourceSha256 = '1'.repeat(64)
+      await fs.writeFile(path.join(scriptRoot, 'manifest.json'), JSON.stringify(manifest), 'utf8')
+
+      await execFileAsync(process.execPath, [writeManifestScript, scriptRoot, '--built', 'x64:peerBroker'])
+      const updated = await readManifest(scriptRoot)
+      expect(updated.artifacts.x64.peerBroker.sourceSha256).toBe(currentX64Source)
+      expect(updated.artifacts.arm64.peerBroker.sourceSha256).toBe('1'.repeat(64))
+
+      await expect(execFileAsync(process.execPath, [writeManifestScript, scriptRoot])).rejects.toThrow(
+        /explicitly built artifact/i,
+      )
+
+      await fs.appendFile(path.join(scriptRoot, updated.artifacts.arm64.peerBroker.file), Buffer.from([0]))
+      await expect(
+        execFileAsync(process.execPath, [writeManifestScript, scriptRoot, '--built', 'x64:peerBroker']),
+      ).rejects.toThrow(/cannot preserve provenance/i)
+    } finally {
+      await fs.rm(scriptRoot, { recursive: true, force: true })
+    }
   })
 })

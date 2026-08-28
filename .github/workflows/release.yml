@@ -78,7 +78,7 @@ jobs:
           path: packages/core/native/prebuilt/windows/arm64
 
       - name: Generate native artifact hash manifest
-        run: node packages/core/scripts/write-native-manifest.mjs native/prebuilt/windows
+        run: node packages/core/scripts/write-native-manifest.mjs native/prebuilt/windows --all-current
 
       - run: pnpm install --frozen-lockfile
 
@@ -121,7 +121,7 @@ jobs:
           path: packages/core/native/prebuilt/windows/arm64
 
       - name: Generate native artifact hash manifest
-        run: node packages/core/scripts/write-native-manifest.mjs native/prebuilt/windows
+        run: node packages/core/scripts/write-native-manifest.mjs native/prebuilt/windows --all-current
 
       - run: pnpm install --frozen-lockfile
 
