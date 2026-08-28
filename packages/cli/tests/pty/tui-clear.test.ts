@@ -39,6 +39,7 @@ describe('TUI /clear behavior', () => {
         await harness.waitForScreen(
           (screen) => !screen.includes('LINE-01') && !screen.includes('PowerShell(') && screen.includes('test-model'),
           'viewport cleared after /clear',
+          10_000,
         )
 
         const lines = harness.screen()

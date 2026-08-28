@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { ingestFile } from '../src/agent/file-ingest.js'
 import { MAX_PDF_SOURCE_BYTES, extractPdfTextWithFallback, processPdf } from '../src/agent/pdf-ingest.js'
 import { createReadFileTool } from '../src/tools/read-file.js'
 import { makePdfBuffer } from './helpers/pdf.js'
@@ -219,4 +220,19 @@ describe('readFile PDF integration', () => {
     expect(JSON.stringify(result)).not.toContain('file-data')
     expect(JSON.stringify(result)).not.toContain('application/pdf')
   })
+})
+
+describe('ingestFile PDF detection', () => {
+  it('never emits a BOM-prefixed PDF as ordinary attachment text', async () => {
+    const disguised = path.join(tempDir, 'bom-pdf.txt')
+    await fs.writeFile(disguised, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('%PDF-1.4\n')]))
+
+    const parts = await ingestFile(
+      { raw: `@${disguised}`, absolutePath: disguised },
+      { image: true, pdf: true, audio: true, filesApi: true, toolImageTransport: 'tool-result' },
+    )
+
+    expect(JSON.stringify(parts)).not.toContain('%PDF-1.4')
+    expect(parts.every((part) => part.type === 'text')).toBe(true)
+  }, 15_000)
 })

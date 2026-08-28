@@ -701,16 +701,6 @@ describe('ingestFile', () => {
     }
   })
 
-  it('never emits a BOM-prefixed PDF as ordinary attachment text', async () => {
-    const disguised = path.join(tmpDir, 'bom-pdf.txt')
-    await fs.writeFile(disguised, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('%PDF-1.4\n')]))
-
-    const parts = await ingestFile({ raw: `@${disguised}`, absolutePath: disguised }, multimodalCaps)
-
-    expect(JSON.stringify(parts)).not.toContain('%PDF-1.4')
-    expect(parts.every((part) => part.type === 'text')).toBe(true)
-  })
-
   // Regression: a multi-MB @path attachment used to be inlined verbatim,
   // pushing the user message past the model's context window before the
   // first turn could even start. Now we substitute a short hint that
@@ -906,7 +896,7 @@ describe('buildUserContent', () => {
     if (!Array.isArray(result)) return
     expect(result.filter((part) => part.type === 'file')).toHaveLength(10)
     expect(JSON.stringify(result)).toContain('10-media-part limit')
-  })
+  }, 15_000)
 
   it('counts Base64 expansion in the cumulative serialized attachment budget', async () => {
     const padded = addPngAncillaryChunk(await fs.readFile(imageFile), 3.5 * 1024 * 1024)

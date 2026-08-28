@@ -16,8 +16,8 @@ use windows_sys::Win32::Security::{
     INHERIT_ONLY_ACE, InitializeAcl, InitializeSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SetKernelObjectSecurity, SetSecurityDescriptorControl,
-    SetSecurityDescriptorDacl, TOKEN_MANDATORY_LABEL, TOKEN_USER, TokenIntegrityLevel,
-    TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE,
+    SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_MANDATORY_LABEL, TOKEN_USER,
+    TokenIntegrityLevel, TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject};
 
@@ -277,6 +277,7 @@ pub fn constant_time_eq_43(left: &[u8], right: &[u8]) -> bool {
 pub struct PrivateSecurityDescriptor {
     descriptor: Vec<usize>,
     _acl: Vec<usize>,
+    _owner: Sid,
 }
 
 impl PrivateSecurityDescriptor {
@@ -317,6 +318,10 @@ impl PrivateSecurityDescriptor {
         if unsafe { SetSecurityDescriptorDacl(descriptor_pointer, 1, acl_pointer, 0) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        let owner = account_sid.clone();
+        if unsafe { SetSecurityDescriptorOwner(descriptor_pointer, owner.raw(), 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
         if unsafe {
             SetSecurityDescriptorControl(descriptor_pointer, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         } == 0
@@ -326,6 +331,7 @@ impl PrivateSecurityDescriptor {
         Ok(Self {
             descriptor,
             _acl: acl,
+            _owner: owner,
         })
     }
 
@@ -341,7 +347,9 @@ impl PrivateSecurityDescriptor {
         if unsafe {
             SetKernelObjectSecurity(
                 handle,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                DACL_SECURITY_INFORMATION
+                    | OWNER_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
                 self.descriptor.as_ptr() as PSECURITY_DESCRIPTOR,
             )
         } == 0
@@ -682,5 +690,22 @@ mod tests {
         let mut bytes = [0u8; 32];
         random_bytes(&mut bytes).unwrap();
         assert_ne!(bytes, [0u8; 32]);
+    }
+
+    #[test]
+    fn private_descriptor_pins_the_account_as_owner() {
+        let identity = crate::process_peer::current_process_identity().unwrap();
+        let descriptor = PrivateSecurityDescriptor::new(&identity.account_sid, true).unwrap();
+        let descriptor_pointer = descriptor.descriptor.as_ptr() as PSECURITY_DESCRIPTOR;
+        let mut owner = null_mut();
+        let mut owner_defaulted = 0;
+        assert_ne!(
+            unsafe {
+                GetSecurityDescriptorOwner(descriptor_pointer, &mut owner, &mut owner_defaulted)
+            },
+            0
+        );
+        assert!(identity.account_sid.equals_raw(owner));
+        assert_eq!(owner_defaulted, 0);
     }
 }

@@ -1127,7 +1127,7 @@ pub fn generate_pipe_name(namespace_id: &str) -> Result<String, PipeError> {
 fn base64url_192(bytes: &[u8; 24]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut output = [0u8; 32];
-    for (chunk_index, chunk) in bytes.chunks_exact(3).enumerate() {
+    for (chunk_index, chunk) in bytes.as_chunks::<3>().0.iter().enumerate() {
         let value = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | chunk[2] as u32;
         let offset = chunk_index * 4;
         output[offset] = ALPHABET[((value >> 18) & 0x3f) as usize];

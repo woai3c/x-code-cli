@@ -11,7 +11,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, GetDriveTypeW, GetFileInformationByHandle, GetFinalPathNameByHandleW,
     GetVolumeInformationW, GetVolumePathNameW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_GUID,
-    WRITE_DAC,
+    WRITE_DAC, WRITE_OWNER,
 };
 
 use crate::security::{
@@ -144,7 +144,10 @@ fn ensure_private_directory(
             return Err(io::Error::from_raw_os_error(error as i32));
         }
     }
-    let handle = open_directory_with_access(path, READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES)?;
+    let handle = open_directory_with_access(
+        path,
+        READ_CONTROL | WRITE_DAC | WRITE_OWNER | FILE_READ_ATTRIBUTES,
+    )?;
     descriptor.apply_to_handle(handle.raw())?;
     verify_private_handle(handle.raw(), &identity.account_sid)?;
     Ok(handle)
