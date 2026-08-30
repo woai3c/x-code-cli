@@ -133,7 +133,8 @@ export type AuthorityDecision =
 
 export interface AuthorityApproval {
   decision: 'allow-once' | 'deny'
-  viewedComplete: boolean
+  /** @deprecated Payload pagination no longer gates a local approval. */
+  viewedComplete?: boolean
   canonicalPayloadSha256?: string
   canonicalCallSha256: string
   authorityHash: string
@@ -286,8 +287,8 @@ export interface AgentCallbacks {
     input: Record<string, unknown>
   }) => Promise<PermissionDecision>
   /** Peer-influenced calls use a separate allow-once-only surface. The
-   *  callback must prove that the complete canonical payload was rendered;
-   *  absence of this callback is a fail-closed denial. */
+   *  callback binds its local decision to the complete canonical preview and
+   *  hashes; absence of this callback is a fail-closed denial. */
   onAskAuthority?: (request: {
     toolCallId: string
     toolName: string

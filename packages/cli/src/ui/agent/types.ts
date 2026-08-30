@@ -43,6 +43,7 @@ export interface PendingPermission {
 }
 
 export interface PendingAuthority {
+  requestId: number
   toolCallId: string
   toolName: string
   input: Record<string, unknown>

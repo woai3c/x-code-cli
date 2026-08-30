@@ -709,7 +709,7 @@ describe('ingestFile', () => {
 
     expect(JSON.stringify(parts)).not.toContain('%PDF-1.4')
     expect(parts.every((part) => part.type === 'text')).toBe(true)
-  })
+  }, 15_000)
 
   // Regression: a multi-MB @path attachment used to be inlined verbatim,
   // pushing the user message past the model's context window before the

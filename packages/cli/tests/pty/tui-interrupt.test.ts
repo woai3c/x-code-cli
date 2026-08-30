@@ -210,6 +210,17 @@ describe('TUI interruption', () => {
 
         await submitInput(harness, 'hi')
         await harness.waitForText('session-recovery-ok')
+        await waitFor(
+          async () => {
+            try {
+              return JSON.stringify(await readSessionJsonl(workspace.cwd)).includes('session-recovery-ok')
+            } catch {
+              return false
+            }
+          },
+          'recovery persisted to session JSONL',
+          10_000,
+        )
         const recovered = await readSessionJsonl(workspace.cwd)
         expect(JSON.stringify(recovered)).toContain('session-recovery-ok')
         await typeInput(harness, 'session-still-editable')

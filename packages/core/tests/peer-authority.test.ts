@@ -36,7 +36,6 @@ function classify(
 function approvalFor(preview: AuthorityApprovalPreview): AuthorityApproval {
   return {
     decision: 'allow-once',
-    viewedComplete: true,
     authorityHash: preview.authorityHash,
     canonicalCallSha256: preview.canonicalCallSha256,
     ...(preview.outboundPayload ? { canonicalPayloadSha256: preview.outboundPayload.sha256 } : {}),
@@ -367,7 +366,7 @@ describe('canonical outbound approval payloads', () => {
 })
 
 describe('allow-once approval binding', () => {
-  it('accepts only a complete, explicitly viewed matching approval', () => {
+  it('accepts only a complete matching approval without a pagination gate', () => {
     const preview = classify('webFetch', {
       url: 'https://example.test/data',
       prompt: 'extract one field',
@@ -375,7 +374,7 @@ describe('allow-once approval binding', () => {
     const approval = approvalFor(preview)
 
     expect(verifyAuthorityApproval(approval, preview, PEER_AUTHORITY)).toBe(true)
-    expect(verifyAuthorityApproval({ ...approval, viewedComplete: false }, preview, PEER_AUTHORITY)).toBe(false)
+    expect(verifyAuthorityApproval({ ...approval, viewedComplete: false }, preview, PEER_AUTHORITY)).toBe(true)
     expect(verifyAuthorityApproval({ ...approval, decision: 'deny' }, preview, PEER_AUTHORITY)).toBe(false)
     expect(
       verifyAuthorityApproval({ ...approval, canonicalPayloadSha256: '0'.repeat(64) }, preview, PEER_AUTHORITY),

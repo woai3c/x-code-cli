@@ -229,7 +229,6 @@ describe('PTY shell tool transport', () => {
     const options: AgentOptions = { modelId: 'test-model', trustMode: true, printMode: false }
     const onAskAuthority = vi.fn(async (request: Parameters<NonNullable<AgentCallbacks['onAskAuthority']>>[0]) => ({
       decision: request.toolCallId === 'call-peer-write' ? ('deny' as const) : ('allow-once' as const),
-      viewedComplete: true,
       canonicalPayloadSha256: request.preview.outboundPayload?.sha256,
       canonicalCallSha256: request.preview.canonicalCallSha256,
       authorityHash: request.preview.authorityHash,

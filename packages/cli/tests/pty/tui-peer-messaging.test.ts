@@ -168,6 +168,12 @@ describe('TUI cross-session messaging', () => {
       { type: 'tool-call', name: 'readFile', id: 'call_metadata_injection', input: { filePath: metadataInjection } },
       {
         type: 'tool-call',
+        name: 'readFile',
+        id: 'call_metadata_injection_repeat',
+        input: { filePath: metadataInjection },
+      },
+      {
+        type: 'tool-call',
         name: 'shell',
         id: 'call_payload_injection',
         input: { command: payloadInjection },
@@ -188,6 +194,20 @@ describe('TUI cross-session messaging', () => {
       expect(beta.raw()).not.toContain('\x1b]52;c;bWV0YWRhdGE=\x07')
       expect(beta.raw()).not.toContain('\x07')
       expect(beta.raw()).not.toContain('\u202e')
+      beta.key('up')
+      await beta.waitForScreen(
+        (screen) => screen.includes(`${GLYPH_SELECT_POINTER} Allow once`),
+        'peer authority allow option selected immediately',
+      )
+      beta.key('escape')
+
+      await betaProvider.waitForMainRequests(2, 10_000)
+      await beta.waitForScreen(
+        (screen) =>
+          screen.includes('unsafe\\u001B]52;c;bWV0YWRhdGE=\\u0007\\u202E.txt') &&
+          screen.includes(`${GLYPH_SELECT_POINTER} Deny`),
+        'repeated peer authority request reset to deny',
+      )
       beta.key('escape')
 
       await beta.waitForText(/Payload: canonical-json · \d+ original UTF-8 bytes/)
