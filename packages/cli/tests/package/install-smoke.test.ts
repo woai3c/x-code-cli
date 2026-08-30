@@ -340,30 +340,46 @@ describe('published CLI tarball', () => {
     await fs.writeFile(pdfPath, makePdfBuffer([{ text: 'Installed package PDF worker smoke test' }]))
     const script = `
       const fs = require('node:fs')
+      const { fork } = require('node:child_process')
       const { Worker } = require('node:worker_threads')
-      const worker = new Worker(${JSON.stringify(workerPath)})
+      const childMode = process.platform === 'win32'
+      const worker = childMode
+        ? fork(${JSON.stringify(workerPath)}, [], {
+            execArgv: ['--max-old-space-size=512'],
+            serialization: 'advanced',
+            stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+          })
+        : new Worker(${JSON.stringify(workerPath)})
+      const postMessage = (message, transferList = []) => {
+        if (childMode) worker.send(message)
+        else worker.postMessage(message, transferList)
+      }
       const timer = setTimeout(() => { console.error('worker timeout'); process.exit(1) }, 30000)
       const fail = (error) => { clearTimeout(timer); console.error(error?.stack || error); process.exit(1) }
+      let destroyAcknowledged = false
       worker.on('error', fail)
+      worker.on('exit', (code) => {
+        clearTimeout(timer)
+        if (!destroyAcknowledged || code !== 0) return fail(new Error('PDF worker did not exit cleanly after destroy'))
+        process.stdout.write('package-pdf-rendered', () => process.exit(0))
+      })
       worker.on('message', (response) => {
         if (!response.ok) return fail(new Error(response.error))
         if (response.result.type === 'init') {
           if (response.result.totalPages !== 1) return fail(new Error('wrong page count'))
-          worker.postMessage({ id: 2, type: 'render', pageNumber: 1, desiredWidth: 320, maxPixels: 1000000 })
+          postMessage({ id: 2, type: 'render', pageNumber: 1, desiredWidth: 320, maxPixels: 1000000 })
           return
         }
         if (response.result.type === 'render') {
           const png = Buffer.from(response.result.data)
           if (!png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return fail(new Error('not PNG'))
-          worker.postMessage({ id: 3, type: 'destroy' })
+          postMessage({ id: 3, type: 'destroy' })
           return
         }
-        clearTimeout(timer)
-        process.stdout.write('package-pdf-rendered')
-        worker.terminate().then(() => process.exit(0), fail)
+        destroyAcknowledged = true
       })
       const bytes = Uint8Array.from(fs.readFileSync(${JSON.stringify(pdfPath)}))
-      worker.postMessage({ id: 1, type: 'init', data: bytes.buffer }, [bytes.buffer])
+      postMessage({ id: 1, type: 'init', data: bytes.buffer }, [bytes.buffer])
     `
     const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 40_000 })
     if (result.exitCode !== 0) throw new Error(`Installed PDF worker failed:\n${result.stdout}\n${result.stderr}`)
@@ -392,13 +408,17 @@ describe('published CLI tarball', () => {
       })
       const timer = setTimeout(() => { console.error('worker timeout'); process.exit(1) }, 30000)
       worker.on('error', (error) => { clearTimeout(timer); console.error(error); process.exit(1) })
-      worker.on('message', (response) => {
+      let resultReceived = false
+      worker.on('exit', (code) => {
         clearTimeout(timer)
+        if (!resultReceived || code !== 0) process.exit(1)
+        process.stdout.write('package-image-normalized', () => process.exit(0))
+      })
+      worker.on('message', (response) => {
         if (!response.ok) { console.error(response.error); process.exit(1) }
         const png = Buffer.from(response.result.data)
         if (response.result.mimeType !== 'image/png' || !png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) process.exit(1)
-        process.stdout.write('package-image-normalized')
-        worker.terminate().then(() => process.exit(0), () => process.exit(1))
+        resultReceived = true
       })
     `
     const result = await command(process.execPath, ['-e', script], { cwd: suiteRoot, timeoutMs: 40_000 })
@@ -462,16 +482,26 @@ describe('published CLI tarball', () => {
     const manifestBytes = byName.get('package/dist/native/windows/manifest.json')
     expect(manifestBytes).toBeDefined()
     const manifest = JSON.parse(manifestBytes!.toString('utf-8')) as {
-      protocolVersion: number
-      artifacts: Record<string, { file: string; sha256: string }>
+      manifestVersion: number
+      artifacts: Record<
+        string,
+        Record<string, { file: string; protocolVersion: number; sha256: string; sourceSha256: string }>
+      >
     }
 
-    expect(manifest.protocolVersion).toBe(2)
+    expect(manifest.manifestVersion).toBe(2)
     for (const arch of ['x64', 'arm64']) {
-      const artifact = manifest.artifacts[arch]!
-      const bytes = byName.get(`package/dist/native/windows/${artifact.file}`)
-      expect(bytes, `missing ${arch} Windows helper`).toBeDefined()
-      expect(createHash('sha256').update(bytes!).digest('hex')).toBe(artifact.sha256)
+      for (const [artifactName, protocolVersion] of [
+        ['shellSupervisor', 2],
+        ['peerBroker', 2],
+      ] as const) {
+        const artifact = manifest.artifacts[arch]![artifactName]!
+        const bytes = byName.get(`package/dist/native/windows/${artifact.file}`)
+        expect(bytes, `missing ${arch} Windows ${artifactName}`).toBeDefined()
+        expect(artifact.protocolVersion).toBe(protocolVersion)
+        expect(artifact.sourceSha256).toMatch(/^[a-f0-9]{64}$/)
+        expect(createHash('sha256').update(bytes!).digest('hex')).toBe(artifact.sha256)
+      }
     }
   })
 

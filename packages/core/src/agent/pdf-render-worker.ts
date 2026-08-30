@@ -4,8 +4,7 @@ import { parentPort } from 'node:worker_threads'
 
 import type { PdfRenderRequest, PdfRenderResponse } from './pdf-render-protocol.js'
 
-if (!parentPort) throw new Error('PDF render worker requires a parent port')
-const port = parentPort
+if (!parentPort && !process.send) throw new Error('PDF render worker requires a parent channel')
 
 let parser: PDFParse | null = null
 let queue: Promise<void> = Promise.resolve()
@@ -68,13 +67,38 @@ async function handleRequest(request: PdfRenderRequest): Promise<PdfRenderRespon
   }
 }
 
-port.on('message', (request: PdfRenderRequest) => {
-  queue = queue.then(async () => {
-    const response = await handleRequest(request)
-    if (response.ok && response.result.type === 'render') {
-      port.postMessage(response, [response.result.data])
-    } else {
-      port.postMessage(response)
+function send(response: PdfRenderResponse): Promise<boolean> {
+  if (parentPort) {
+    if (response.ok && response.result.type === 'render') parentPort.postMessage(response, [response.result.data])
+    else parentPort.postMessage(response)
+    return Promise.resolve(true)
+  }
+  if (!process.send || !process.connected) return Promise.resolve(false)
+  return new Promise<boolean>((resolve) => {
+    try {
+      process.send!(response, (error) => resolve(!error))
+    } catch {
+      resolve(false)
     }
   })
-})
+}
+
+function closeChannel(): void {
+  if (parentPort) parentPort.close()
+  else if (process.connected) process.disconnect()
+}
+
+function onRequest(request: PdfRenderRequest): void {
+  queue = queue.then(async () => {
+    const response = await handleRequest(request)
+    const shouldClose = response.ok && response.result.type === 'destroy'
+    const sent = await send(response)
+    if (shouldClose || !sent) closeChannel()
+  })
+}
+
+if (parentPort) parentPort.on('message', onRequest)
+else {
+  process.once('disconnect', () => process.exit(0))
+  process.on('message', (request) => onRequest(request as PdfRenderRequest))
+}

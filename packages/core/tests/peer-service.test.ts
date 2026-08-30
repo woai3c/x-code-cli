@@ -273,7 +273,7 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const realTransport = createUnixSocketTransport()
     let stalledAttempts = 0
     const receiverTransport: PeerTransport = {
-      listen: (options) => realTransport.listen(options),
+      ...realTransport,
       request: async (options) => {
         if (
           options.frame.type !== 'delivery-update' ||
@@ -282,7 +282,7 @@ describeUnix('PeerService over real Unix domain sockets', () => {
           return realTransport.request(options)
         }
         stalledAttempts++
-        return new Promise(() => {})
+        return new Promise<never>(() => {})
       },
     }
     const receiver = await startPeer('receiver', 'hold', { transport: receiverTransport })
@@ -363,7 +363,13 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     }
     const close = vi.fn(async () => {})
     const transport: PeerTransport = {
-      listen: vi.fn(async (options) => ({ address: options.address, close })),
+      kind: 'unix',
+      validateAddress: () => true,
+      listen: vi.fn(async (options) => ({
+        address: options.address,
+        closed: new Promise<{ expected: boolean }>(() => {}),
+        close,
+      })),
       request: vi.fn(),
     }
     const service = createPeerService({ enabled: true, name: 'late-start', registry, transport })
@@ -380,6 +386,39 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     expect(transport.listen).not.toHaveBeenCalled()
     expect(registry.write).not.toHaveBeenCalled()
     expect(close).not.toHaveBeenCalled()
+  })
+
+  it('fails closed and removes registration after an unexpected transport exit', async () => {
+    const removeOwn = vi.fn(async () => true)
+    const registry: PeerRegistry = {
+      initialize: vi.fn(async () => {}),
+      write: vi.fn(),
+      read: vi.fn(async () => null),
+      listCandidates: vi.fn(async () => ({ candidates: [], scanned: 0, rejected: 0, truncated: false })),
+      listLive: vi.fn(async () => ({ peers: [], registrations: [], partial: false })),
+      removeOwn,
+      cleanupConfirmedDead: vi.fn(async () => false),
+      paths: () => ({ registryDir: testHome, socketDir: testHome }),
+    }
+    let closeUnexpectedly!: (result: { expected: boolean; reason?: string }) => void
+    const closed = new Promise<{ expected: boolean; reason?: string }>((resolve) => {
+      closeUnexpectedly = resolve
+    })
+    const transport: PeerTransport = {
+      kind: 'unix',
+      validateAddress: () => true,
+      listen: vi.fn(async (options) => ({ address: options.address, closed, close: vi.fn(async () => {}) })),
+      request: vi.fn(),
+    }
+    const service = createPeerService({ enabled: true, name: 'crashed-transport', registry, transport })
+    services.push(service)
+    await service.start()
+    expect(service.isAvailable()).toBe(true)
+
+    closeUnexpectedly({ expected: false, reason: 'listener crashed' })
+    await vi.waitFor(() => expect(service.isAvailable()).toBe(false))
+    await vi.waitFor(() => expect(removeOwn).toHaveBeenCalledWith(service.identity!.instanceId))
+    expect(service.getUnavailableReason()).toBe('listener crashed')
   })
 
   it('closes a listener that resolves after shutdown invalidates startup', async () => {
@@ -399,10 +438,12 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const listenGate = new Promise<void>((resolve) => (releaseListen = resolve))
     const close = vi.fn(async () => {})
     const transport: PeerTransport = {
+      kind: 'unix',
+      validateAddress: () => true,
       listen: vi.fn(async (options) => {
         signalListen()
         await listenGate
-        return { address: options.address, close }
+        return { address: options.address, closed: new Promise<{ expected: boolean }>(() => {}), close }
       }),
       request: vi.fn(),
     }
@@ -438,11 +479,13 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const close = vi.fn(async () => {})
     let receivedSignal: AbortSignal | undefined
     const transport: PeerTransport = {
+      kind: 'unix',
+      validateAddress: () => true,
       listen: vi.fn(async (options) => {
         receivedSignal = options.signal
         signalListen()
         await listenGate
-        return { address: options.address, close }
+        return { address: options.address, closed: new Promise<{ expected: boolean }>(() => {}), close }
       }),
       request: vi.fn(),
     }
@@ -488,7 +531,13 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     }
     const close = vi.fn(async () => {})
     const transport: PeerTransport = {
-      listen: vi.fn(async (options) => ({ address: options.address, close })),
+      kind: 'unix',
+      validateAddress: () => true,
+      listen: vi.fn(async (options) => ({
+        address: options.address,
+        closed: new Promise<{ expected: boolean }>(() => {}),
+        close,
+      })),
       request: vi.fn(),
     }
     const service = createPeerService({ enabled: true, name: 'aborted-registration', registry, transport })
@@ -524,7 +573,7 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const realTransport = createUnixSocketTransport()
     let dropFirstMessageAck = true
     const ackDroppingTransport: PeerTransport = {
-      listen: (options) => realTransport.listen(options),
+      ...realTransport,
       request: async (options) => {
         const response = await realTransport.request(options)
         if (dropFirstMessageAck && options.frame.type === 'message') {

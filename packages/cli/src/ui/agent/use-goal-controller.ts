@@ -60,6 +60,7 @@ interface UseGoalControllerOptions {
   abortControllerRef: MutableRef<AbortController | null>
   pendingQuestionRef: MutableRef<PendingQuestion | null>
   pendingAuthorityRef: MutableRef<PendingAuthority | null>
+  authorityRequestSequenceRef: MutableRef<number>
   permissionResolversRef: MutableRef<Array<(decision: PermissionDecision) => void>>
   turnCoordinatorRef: MutableRef<TurnCoordinator>
   appendMessage: (message: DisplayMessage) => void
@@ -82,6 +83,7 @@ export function useGoalController({
   abortControllerRef,
   pendingQuestionRef,
   pendingAuthorityRef,
+  authorityRequestSequenceRef,
   permissionResolversRef,
   turnCoordinatorRef,
   appendMessage,
@@ -118,7 +120,7 @@ export function useGoalController({
       },
       onAskAuthority: (request) => {
         return new Promise<AuthorityApproval>((resolve) => {
-          const pending: PendingAuthority = { ...request, resolve }
+          const pending: PendingAuthority = { ...request, requestId: authorityRequestSequenceRef.current++, resolve }
           pendingAuthorityRef.current = pending
           void agentOptions.peerService?.updateLocalState({ status: 'waiting' }).catch(() => {})
           setState((previous) => ({ ...previous, authorityRequest: pending }))
@@ -165,6 +167,7 @@ export function useGoalController({
     goalToolLifecycleCallbacks,
     handleStreamRetry,
     pendingAuthorityRef,
+    authorityRequestSequenceRef,
     pendingQuestionRef,
     permissionModeRef,
     permissionResolversRef,
@@ -281,7 +284,7 @@ export function useGoalController({
 
     const pendingAuthority = pendingAuthorityRef.current
     pendingAuthorityRef.current = null
-    if (pendingAuthority) pendingAuthority.resolve(authorityApproval(pendingAuthority.preview, 'deny', false))
+    if (pendingAuthority) pendingAuthority.resolve(authorityApproval(pendingAuthority.preview, 'deny'))
 
     const pendingQuestion = pendingQuestionRef.current
     pendingQuestionRef.current = null

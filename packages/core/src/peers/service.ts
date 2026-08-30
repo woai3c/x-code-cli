@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import fs from 'node:fs/promises'
 
 import { type PeerMessagingConfig, resolvePeerMessagingConfig } from '../config/index.js'
 import { sha256Text } from '../permissions/authority.js'
@@ -20,6 +19,7 @@ import type {
 } from './inbox-types.js'
 import { createPeerInbox } from './inbox.js'
 import { peerSocketPath } from './paths.js'
+import { createPlatformPeerTransport } from './platform-transport.js'
 import { MAX_MESSAGE_BYTES, encodePeerFrame } from './protocol.js'
 import type { PeerFrameV1 } from './protocol.js'
 import { type PeerRateLimiter, createPeerRateLimiter } from './rate-limit.js'
@@ -27,7 +27,6 @@ import { type PeerRegistry, createPeerRegistry } from './registry.js'
 import { stripTerminalControls } from './terminal-sanitize.js'
 import type { PeerTransport, PeerTransportServer } from './transport.js'
 import type { PeerIdentity, PeerRegistrationV1, RegistrationCandidate } from './types.js'
-import { createUnixSocketTransport } from './unix-socket-transport.js'
 
 export interface PreparedPeerSend {
   requestedTarget: string
@@ -178,20 +177,24 @@ function sendPayloadHash(message: string, summary?: string): string {
   return sha256Text(JSON.stringify({ message, ...(summary ? { summary } : {}) }))
 }
 
-async function lstatIfPresent(filePath: string): Promise<Awaited<ReturnType<typeof fs.lstat>> | null> {
-  try {
-    return await fs.lstat(filePath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
+function peerErrorCode(error: unknown, fallback = 'PEER_IO_ERROR'): string {
+  if (error instanceof Error && error.name.startsWith('PEER_')) return error.name
+  const message = errorMessage(error)
+  return message.startsWith('PEER_') && /^[A-Z0-9_]+$/.test(message) ? message : fallback
 }
 
 export function createPeerService(options: PeerServiceOptions = {}): PeerService {
   const config: PeerMessagingConfig = resolvePeerMessagingConfig(options.config)
   const enabled = options.enabled ?? false
-  const registry = options.registry ?? createPeerRegistry()
-  const transport = options.transport ?? createUnixSocketTransport()
+  const registry =
+    options.registry ?? createPeerRegistry(options.transport ? { transportKind: options.transport.kind ?? 'unix' } : {})
+  const transport =
+    options.transport ??
+    createPlatformPeerTransport({
+      getRuntimePaths: () => registry.paths(),
+    })
+  const transportKind = transport.kind ?? 'unix'
+  const isTransportAddressValid = (address: string): boolean => transport.validateAddress?.(address) ?? true
   const identity = enabled
     ? (options.identity ?? createPeerIdentity({ name: options.name, cwd: options.cwd, now: options.now }))
     : null
@@ -236,7 +239,13 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
     if (!identity || senderInstanceId === identity.instanceId)
       throw serviceError('PEER_SELF', 'Self-send is not allowed')
     const sender = await registry.read(senderInstanceId)
-    if (!sender) throw serviceError('PEER_AUTH_FAILED', 'Sender registration is missing or unsafe')
+    if (
+      !sender ||
+      sender.registration.transport.kind !== transportKind ||
+      !isTransportAddressValid(sender.registration.transport.address)
+    ) {
+      throw serviceError('PEER_AUTH_FAILED', 'Sender registration is missing or unsafe')
+    }
     return sender
   }
 
@@ -419,7 +428,13 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
     try {
       const targetInstanceId = update.target.address.slice('peer:'.length)
       const candidate = await registry.read(targetInstanceId)
-      if (!candidate) return false
+      if (
+        !candidate ||
+        candidate.registration.transport.kind !== transportKind ||
+        !isTransportAddressValid(candidate.registration.transport.address)
+      ) {
+        return false
+      }
       const requestId = randomUUID()
       const request = transport
         .request({
@@ -496,11 +511,6 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
         await startPromise
         return
       }
-      if (process.platform === 'win32') {
-        unavailableReason = 'Peer messaging is not supported on Windows in this release.'
-        unavailableCode = 'PEER_UNSUPPORTED_PLATFORM'
-        return
-      }
       const generation = ++lifecycleGeneration
       const startIsCurrent = (): boolean => !shuttingDown && !signal?.aborted && lifecycleGeneration === generation
       const operation = (async (): Promise<void> => {
@@ -509,43 +519,19 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
           if (signal?.aborted) throw signal.reason ?? serviceError('AbortError', 'Peer startup aborted')
           registrationWriteGeneration++
           registrationWritesEnabled = true
-          await registry.initialize()
+          await registry.initialize(signal)
           if (!startIsCurrent()) return
-          const socketPath = peerSocketPath(registry.paths().socketDir, identity.instanceId)
-          const stale = await lstatIfPresent(socketPath)
-          if (!startIsCurrent()) return
-          if (stale) {
-            if (!stale.isSocket() || stale.isSymbolicLink()) {
-              throw serviceError('PEER_SOCKET_UNSAFE', 'Peer socket path is occupied by an unsafe file')
-            }
-            const scan = await registry.listCandidates()
-            if (!startIsCurrent()) return
-            if (scan.truncated) {
-              throw serviceError('PEER_SOCKET_IN_USE', 'Peer socket ownership scan was truncated')
-            }
-            const owners = scan.candidates.filter(
-              (candidate) => candidate.registration.transport.address === socketPath,
-            )
-            if (owners.length === 0) {
-              throw serviceError('PEER_SOCKET_IN_USE', 'Peer socket owner cannot be proven dead')
-            }
-            for (const owner of owners) {
-              await registry.cleanupConfirmedDead(owner).catch(() => false)
-              if (!startIsCurrent()) return
-            }
-            if (await lstatIfPresent(socketPath)) {
-              throw serviceError('PEER_SOCKET_IN_USE', 'Peer socket is owned by another active or unverified session')
-            }
-            if (!startIsCurrent()) return
-          }
           localServer = await transport.listen({
-            address: socketPath,
+            address: peerSocketPath(registry.paths().socketDir, identity.instanceId),
             instanceId: identity.instanceId,
             inboxToken: identity.inboxToken,
             onRequest,
             signal,
           })
           if (!startIsCurrent()) return
+          if (!isTransportAddressValid(localServer.address)) {
+            throw serviceError('PEER_TRANSPORT_ADDRESS_INVALID', 'Peer transport returned an invalid address')
+          }
           server = localServer
           const timestamp = now().toISOString()
           registration = {
@@ -555,7 +541,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
             ...(options.sessionId ? { sessionId: options.sessionId } : {}),
             name: identity.name,
             cwd: options.cwd ?? process.cwd(),
-            transport: { kind: 'unix', address: localServer.address },
+            transport: { kind: transportKind, address: localServer.address },
             inboxToken: identity.inboxToken,
             permissionClass: options.getPermissionClass?.() ?? options.permissionClass ?? 'prompted',
             status: 'idle',
@@ -573,6 +559,32 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
           }, 15_000)
           heartbeat.unref()
           started = true
+          void localServer.closed?.then((result) => {
+            if (result.expected || shuttingDown || server !== localServer || !started) return
+            lifecycleGeneration++
+            started = false
+            server = undefined
+            void localServer?.close({ deadlineMs: 250 }).catch(() => {})
+            registrationWritesEnabled = false
+            registrationWriteGeneration++
+            if (heartbeat) clearInterval(heartbeat)
+            heartbeat = undefined
+            unavailableCode =
+              transportKind === 'windows-pipe'
+                ? 'PEER_WINDOWS_BROKER_EXITED'
+                : peerErrorCode(result.reason, 'PEER_IO_ERROR')
+            unavailableReason = result.reason ?? 'Peer transport exited unexpectedly.'
+            void (async () => {
+              await registrationWriteTail.catch(() => {})
+              if (identity) {
+                for (let attempt = 0; attempt < 4; attempt++) {
+                  if (await registry.removeOwn(identity.instanceId).catch(() => false)) break
+                  await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)))
+                }
+              }
+              registration = undefined
+            })()
+          })
         } catch (error) {
           if (startIsCurrent()) {
             registrationWritesEnabled = false
@@ -580,7 +592,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
             await registrationWriteTail.catch(() => {})
             if (identity) await registry.removeOwn(identity.instanceId).catch(() => false)
             unavailableReason = errorMessage(error)
-            unavailableCode = 'PEER_IO_ERROR'
+            unavailableCode = peerErrorCode(error)
             debugLog('peer.start-failed', unavailableReason)
           }
         } finally {
@@ -663,7 +675,12 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
           throw serviceError(code, `Message ${messageId} is not eligible for retry`)
         }
         candidate = await registry.read(retry.record.receiverInstanceId)
-        if (!candidate || `peer:${candidate.registration.instanceId}` !== retry.record.receiverAddress) {
+        if (
+          !candidate ||
+          candidate.registration.transport.kind !== transportKind ||
+          !isTransportAddressValid(candidate.registration.transport.address) ||
+          `peer:${candidate.registration.instanceId}` !== retry.record.receiverAddress
+        ) {
           throw serviceError('PEER_STALE', 'The originally resolved receiver is no longer registered')
         }
       } else {
@@ -720,6 +737,8 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
       if (
         !current ||
         current.registration.instanceId !== prepared.candidate.registration.instanceId ||
+        current.registration.transport.kind !== transportKind ||
+        !isTransportAddressValid(current.registration.transport.address) ||
         current.registration.transport.address !== prepared.candidate.registration.transport.address ||
         current.registration.inboxToken !== prepared.candidate.registration.inboxToken
       ) {

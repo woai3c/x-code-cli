@@ -361,7 +361,6 @@ export function ChatInput({
    *  lands here instead of resolving the dialog. */
   const [permissionFeedback, setPermissionFeedback] = useState<{ text: string; cursor: number } | null>(null)
   const [authoritySelected, setAuthoritySelected] = useState(1)
-  const [authorityViewedComplete, setAuthorityViewedComplete] = useState(false)
   const [authorityPage, setAuthorityPage] = useState(0)
   const [lastPermissionKey, setLastPermissionKey] = useState<string | null>(null)
   const permissionKey = permission ? `${permission.toolName}:${JSON.stringify(permission.input)}` : null
@@ -371,11 +370,12 @@ export function ChatInput({
     setPermissionFeedback(null)
   }
   const [lastAuthorityKey, setLastAuthorityKey] = useState<string | null>(null)
-  const authorityKey = authorityRequest?.preview.canonicalCallSha256 ?? null
+  const authorityKey = authorityRequest
+    ? `${authorityRequest.requestId}:${authorityRequest.preview.canonicalCallSha256}`
+    : null
   if (authorityKey !== lastAuthorityKey) {
     setLastAuthorityKey(authorityKey)
     setAuthoritySelected(1)
-    setAuthorityViewedComplete(false)
     setAuthorityPage(0)
   }
 
@@ -844,18 +844,14 @@ export function ChatInput({
       const dialogSlashMode = textRef.current.trimStart().startsWith('/')
       if (authorityRequest) {
         if (key === 'escape') {
-          authorityRequest.onResolve(false, authorityViewedComplete)
+          authorityRequest.onResolve(false)
           return
         }
-        if (!authorityViewedComplete && (key === 'down' || key === 'right' || key === 'pagedown' || key === 'return')) {
-          setAuthorityPage((page) => {
-            const next = Math.min(authorityPageCount - 1, page + 1)
-            if (next === authorityPageCount - 1) setAuthorityViewedComplete(true)
-            return next
-          })
+        if (key === 'right' || key === 'pagedown') {
+          setAuthorityPage((page) => Math.min(authorityPageCount - 1, page + 1))
           return
         }
-        if (!authorityViewedComplete && (key === 'up' || key === 'left' || key === 'pageup')) {
+        if (key === 'left' || key === 'pageup') {
           setAuthorityPage((page) => Math.max(0, page - 1))
           return
         }
@@ -864,7 +860,7 @@ export function ChatInput({
           return
         }
         if (key === 'return') {
-          authorityRequest.onResolve(authoritySelected === 0, true)
+          authorityRequest.onResolve(authoritySelected === 0)
           return
         }
         return
@@ -1828,10 +1824,8 @@ export function ChatInput({
       }
       frame.push(
         textToCells(
-          authorityViewedComplete
-            ? `  Complete payload viewed · SHA-256 ${preview.outboundPayload?.sha256 ?? preview.canonicalCallSha256}`
-            : `  Payload page ${authorityPage + 1}/${authorityPageCount} · Enter/→ for next page; approval locked.`,
-          authorityViewedComplete ? S_SUCCESS : S_WARNING,
+          `  Payload page ${authorityPage + 1}/${authorityPageCount} · ←/→ view pages · SHA-256 ${preview.outboundPayload?.sha256 ?? preview.canonicalCallSha256}`,
+          S_WARNING,
         ),
       )
 

@@ -418,7 +418,7 @@ export function verifyAuthorityApproval(
   preview: AuthorityApprovalPreview,
   currentAuthority: ExecutionAuthority,
 ): boolean {
-  if (approval.decision !== 'allow-once' || !approval.viewedComplete || !preview.complete || !preview.approvable) {
+  if (approval.decision !== 'allow-once' || !preview.complete || !preview.approvable) {
     return false
   }
   if (!equalHex(approval.authorityHash, authoritySnapshotHash(currentAuthority))) return false

@@ -2,7 +2,7 @@
 
 Cross-session messaging lets interactive X-Code sessions on the same machine discover one another and exchange plain-text work requests. Each participating root session keeps its own model, conversation, working directory, and local permission boundary.
 
-> This release supports peer messaging on macOS and Linux. Windows sessions remain usable, but peer messaging reports `PEER_UNSUPPORTED_PLATFORM` until a Windows transport is available. Print mode (`--print`) does not register a peer.
+> This release supports macOS, Linux, and Windows x64. A Windows arm64 broker artifact is packaged as a preview but has not completed native-device acceptance. Print mode (`--print`) does not register a peer; Windows ia32 is unsupported.
 
 ## Start named sessions
 
@@ -79,7 +79,9 @@ A peer message is data, not user authority:
 - Peer-influenced events do not invoke plugin hooks. This isolation remains in effect even when the receiving session uses `--trust`.
 - `/clear-peer-context` can delete the first peer-influenced message and every derived response after it, then restore normal authority. It refuses to run while peer messages are still queued.
 
-Peer transport is local-only: it uses a runtime registry and Unix-domain sockets under the X-Code user directory, not a network listener. Authentication tokens and delivery ledgers are implementation details and are never model-visible.
+Peer transport is local-only: macOS/Linux use Unix-domain sockets, while Windows uses a hash- and PE-verified Rust Named Pipe broker bundled with the npm package. Windows authenticates in layers with the current account SID, an exact integrity-level match, a protected DACL, `PIPE_REJECT_REMOTE_CLIENTS`, and a random per-session token. It does not listen on TCP or UDP. Authentication tokens, SIDs, and delivery ledgers are never model-visible.
+
+On Windows, `X_CODE_HOME` must be on a local volume with persistent ACLs. UNC paths, mapped network drives, reparse/junction/symlink paths, and directories replaceable by another ordinary account are rejected. If security cannot be proven, the helper is missing or damaged, or the architecture is unsupported, only peer messaging fails closed; normal chat and other tools remain available. Normal installation, builds, and use do not require a Rust toolchain.
 
 ## Delivery results
 
@@ -95,7 +97,9 @@ Messages arriving while the receiver is busy are queued and processed without in
 ## Troubleshooting
 
 - **This session is not a named agent** — restart it with `xc --name <name>`.
-- **No other reachable sessions** — verify that both sessions are named, run on macOS/Linux, and share the same `X_CODE_HOME`.
+- **No other reachable sessions** — verify that both sessions are named and share the same `X_CODE_HOME`; on Windows they must also use the same account and a compatible integrity level.
+- **Windows peer runtime directory is not private** — move `X_CODE_HOME` to a current-account-controlled directory on local NTFS/ReFS; do not use UNC paths, mapped network drives, or junctions/symlinks.
+- **Windows peer broker is missing/hash mismatch** — reinstall x-code-cli. X-Code will not search `PATH` or download a fallback helper.
 - **Name is ambiguous** — copy the exact `peer:<uuid>` address from `/list-agents`.
 - **A message stays held** — accept or refuse it in the receiving terminal before `dialogExpiryMs` elapses.
 - **Need diagnostics** — launch with `DEBUG_STDOUT=1`; details go to `~/.x-code/logs/debug.log`.

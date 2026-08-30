@@ -88,9 +88,10 @@ interface PermissionRequest {
 }
 
 interface AuthorityRequest {
+  requestId: number
   toolName: string
   preview: AuthorityApprovalPreview
-  onResolve: (allow: boolean, viewedComplete: boolean) => void
+  onResolve: (allow: boolean) => void
 }
 
 interface SelectRequest {

@@ -5,11 +5,18 @@ import { resolve } from 'node:path'
 const MIB = 1024 * 1024
 const limits = {
   packed: 3.5 * MIB,
-  unpacked: 12 * MIB,
-  files: 40,
+  unpacked: 12.75 * MIB,
+  files: 42,
 }
 const cliPackage = JSON.parse(readFileSync(resolve('packages/cli/package.json'), 'utf8'))
 const requiredRuntimeDependencies = ['@vscode/ripgrep', 'fs-ext-extra-prebuilt', 'undici']
+const requiredNativeArtifacts = [
+  'dist/native/windows/x64/xc-shell-supervisor.exe',
+  'dist/native/windows/x64/xc-peer-broker.exe',
+  'dist/native/windows/arm64/xc-shell-supervisor.exe',
+  'dist/native/windows/arm64/xc-peer-broker.exe',
+]
+const nativeArtifactLimit = 0.4 * MIB
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const result = spawnSync(npm, ['pack', './packages/cli', '--dry-run', '--ignore-scripts', '--json'], {
@@ -46,6 +53,15 @@ const violations = []
 for (const dependency of requiredRuntimeDependencies) {
   if (typeof cliPackage.dependencies?.[dependency] !== 'string') {
     violations.push(`required runtime dependency is not declared: ${dependency}`)
+  }
+}
+for (const artifactPath of requiredNativeArtifacts) {
+  const artifact = files.find((file) => file.path === artifactPath)
+  if (!artifact) violations.push(`required native artifact is missing: ${artifactPath}`)
+  else if (Number(artifact.size) > nativeArtifactLimit) {
+    violations.push(
+      `native artifact ${artifactPath} size ${formatBytes(Number(artifact.size))} exceeds ${formatBytes(nativeArtifactLimit)}`,
+    )
   }
 }
 

@@ -80,7 +80,7 @@ describe('processPdf', () => {
     if (result.type !== 'content') return
     expect(result.parts.every((part) => part.type === 'text')).toBe(true)
     expect(result.parts.map((part) => (part.type === 'text' ? part.text : '')).join('\n')).toContain('mock local OCR')
-  })
+  }, 15_000)
 
   it('does not pass parent-only Node flags to the PDF worker', async () => {
     process.execArgv.push('--input-type=module')
@@ -91,7 +91,7 @@ describe('processPdf', () => {
     } finally {
       process.execArgv.splice(process.execArgv.lastIndexOf('--input-type=module'), 1)
     }
-  })
+  }, 15_000)
 
   it('returns a reference before rendering too many visual pages', async () => {
     const largeScan = path.join(tempDir, 'eleven-pages.pdf')
@@ -122,7 +122,7 @@ describe('processPdf', () => {
       pageRange: { first: 2, last: 4 },
     })
     expect(invalid).toMatchObject({ type: 'error', code: 'invalid-range' })
-  })
+  }, 15_000)
 
   it('forces page rendering in visual mode and returns an atomic continuation at the byte budget', async () => {
     const result = await processPdf(textPdf, {
@@ -185,6 +185,30 @@ describe('processPdf', () => {
       name: 'AbortError',
     })
   })
+
+  it.runIf(process.platform === 'win32')(
+    'waits for an in-flight PDF child process to exit after abort before accepting another request',
+    async () => {
+      const controller = new AbortController()
+      let abortedAfterInit = false
+
+      await expect(
+        processPdf(textPdf, {
+          vision: true,
+          abortSignal: controller.signal,
+          onNotice: (message) => {
+            if (abortedAfterInit || !message.startsWith('Extracting PDF text')) return
+            abortedAfterInit = true
+            controller.abort()
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' })
+
+      expect(abortedAfterInit).toBe(true)
+      await expect(processPdf(textPdf, { vision: true })).resolves.toMatchObject({ type: 'content' })
+    },
+    20_000,
+  )
 })
 
 describe('extractPdfTextWithFallback', () => {

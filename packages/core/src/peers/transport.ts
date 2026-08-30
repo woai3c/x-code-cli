@@ -1,11 +1,15 @@
 import type { PeerFrameV1 } from './protocol.js'
+import type { PeerTransportDescriptor } from './types.js'
 
 export interface PeerTransportServer {
   address: string
+  closed?: Promise<{ expected: boolean; reason?: string }>
   close(options?: { deadlineMs?: number }): Promise<void>
 }
 
 export interface PeerTransport {
+  readonly kind?: PeerTransportDescriptor['kind']
+  validateAddress?(address: string): boolean
   listen(options: {
     address: string
     instanceId: string
@@ -21,4 +25,5 @@ export interface PeerTransport {
     timeoutMs?: number
     signal?: AbortSignal
   }): Promise<PeerFrameV1>
+  cleanupConfirmedDeadEndpoint?(address: string): Promise<void>
 }

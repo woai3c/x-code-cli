@@ -168,6 +168,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const fileIngestSequenceRef = useRef(0)
   const planApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingAuthorityRef = useRef<PendingAuthority | null>(null)
+  const authorityRequestSequenceRef = useRef(0)
   /** Pending tool calls keyed by toolCallId. A single slot can't survive
    *  parallel tool calls in one turn — the SDK emits tool-call A, tool-call
    *  B, tool-result A, tool-result B, so a shared slot gets overwritten and
@@ -514,7 +515,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         },
         onAskAuthority: (request) => {
           return new Promise<AuthorityApproval>((resolve) => {
-            const pending: PendingAuthority = { ...request, resolve }
+            const pending: PendingAuthority = { ...request, requestId: authorityRequestSequenceRef.current++, resolve }
             pendingAuthorityRef.current = pending
             void options.peerService?.updateLocalState({ status: 'waiting' }).catch(() => {})
             setState((prev) => ({ ...prev, authorityRequest: pending }))
@@ -971,7 +972,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   }, [])
 
   const resolveAuthority = useCallback(
-    (allow: boolean, viewedComplete: boolean) => {
+    (allow: boolean) => {
       const pending = pendingAuthorityRef.current
       pendingAuthorityRef.current = null
       setState((prev) => ({ ...prev, authorityRequest: null }))
@@ -981,9 +982,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         void options.peerService.updateLocalState({ status: 'busy', busyKind }).catch(() => {})
       }
       if (pending) {
-        queueMicrotask(() =>
-          pending.resolve(authorityApproval(pending.preview, allow ? 'allow-once' : 'deny', viewedComplete)),
-        )
+        queueMicrotask(() => pending.resolve(authorityApproval(pending.preview, allow ? 'allow-once' : 'deny')))
       }
     },
     [options.peerService],
@@ -1090,6 +1089,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     abortControllerRef,
     pendingQuestionRef,
     pendingAuthorityRef,
+    authorityRequestSequenceRef,
     permissionResolversRef,
     turnCoordinatorRef,
     appendMessage,

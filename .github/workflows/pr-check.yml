@@ -95,7 +95,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - run: pnpm install --frozen-lockfile
 
@@ -103,12 +103,16 @@ jobs:
         run: |
           cargo fmt --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml --check
           cargo test --locked --manifest-path packages/core/native/windows-job-supervisor/Cargo.toml
+          cargo fmt --manifest-path packages/core/native/windows-peer-broker/Cargo.toml --check
+          cargo test --locked --manifest-path packages/core/native/windows-peer-broker/Cargo.toml
+          cargo clippy --locked --all-targets --manifest-path packages/core/native/windows-peer-broker/Cargo.toml -- -D warnings
 
-      - name: Exercise a freshly built x64 helper
+      - name: Exercise freshly built x64 helpers
         run: |
           pnpm build
           pnpm build:native
-          pnpm exec vitest run packages/core/tests/windows-job-provider.test.ts packages/core/tests/windows-supervisor-protocol.test.ts packages/core/tests/pty-provider.test.ts
+          & packages/core/dist/native/windows/x64/xc-peer-broker.exe self-test --protocol 2
+          pnpm exec vitest run packages/core/tests/windows-job-provider.test.ts packages/core/tests/windows-supervisor-protocol.test.ts packages/core/tests/pty-provider.test.ts packages/core/tests/windows-peer-broker-protocol.test.ts packages/core/tests/windows-peer-transport.test.ts packages/core/tests/windows-native-artifacts.test.ts
 
   package:
     name: Package Check

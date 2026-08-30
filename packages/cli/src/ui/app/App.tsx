@@ -2069,6 +2069,7 @@ export function App({
       authorityRequest={
         authorityRequest
           ? {
+              requestId: authorityRequest.requestId,
               toolName: authorityRequest.toolName,
               preview: authorityRequest.preview,
               onResolve: resolveAuthority,

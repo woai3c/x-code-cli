@@ -1,4 +1,7 @@
+import { fork } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 
 import { isModelAcceptedImageMime, normalizeImageMime } from '../providers/capabilities.js'
@@ -23,6 +26,7 @@ export const PDF_ANALYSIS_PAGE_LIMIT = 200
 export const PDF_MAX_DECLARED_PAGES = 2_000
 const PDF_PROCESS_TIMEOUT_MS = 120_000
 const PDF_WORKER_OPERATION_TIMEOUT_MS = 30_000
+const PDF_WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
 
 export type PdfMode = 'auto' | 'text-only' | 'visual'
 export type PdfPageKind = 'text' | 'visual' | 'both'
@@ -111,26 +115,114 @@ function pdfWorkerUrl(): URL {
   return new URL('./pdf-render-worker.js', current)
 }
 
-class PdfWorkerClient {
-  private readonly worker: Worker
-  private readonly pending = new Map<number, PendingRequest>()
-  private readonly abortSignal?: AbortSignal
-  private nextId = 1
-  private terminated = false
+type PdfWorkerMessageListener = (response: PdfRenderResponse) => void
+type PdfWorkerErrorListener = (error: Error) => void
+type PdfWorkerExitListener = (code: number) => void
 
-  constructor(abortSignal?: AbortSignal) {
-    this.abortSignal = abortSignal
-    this.worker = new Worker(pdfWorkerUrl(), {
+class PdfWorkerEndpoint {
+  private readonly child?: ChildProcess
+  private readonly thread?: Worker
+
+  constructor() {
+    if (process.platform === 'win32') {
+      // @napi-rs/canvas can fault the host when loaded in a Windows Worker thread; a process contains native faults.
+      this.child = fork(fileURLToPath(pdfWorkerUrl()), [], {
+        execArgv: ['--max-old-space-size=512'],
+        serialization: 'advanced',
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      })
+      return
+    }
+    this.thread = new Worker(pdfWorkerUrl(), {
       execArgv: [],
       resourceLimits: { maxOldGenerationSizeMb: 512, stackSizeMb: 8 },
     })
-    this.worker.on('message', (response: PdfRenderResponse) => this.handleResponse(response))
-    this.worker.on('error', (error) => {
+  }
+
+  onMessage(listener: PdfWorkerMessageListener): void {
+    if (this.thread) this.thread.on('message', listener)
+    else this.child!.on('message', (message) => listener(message as PdfRenderResponse))
+  }
+
+  onError(listener: PdfWorkerErrorListener): void {
+    if (this.thread) this.thread.on('error', listener)
+    else this.child!.on('error', listener)
+  }
+
+  onExit(listener: PdfWorkerExitListener): void {
+    if (this.thread) this.thread.on('exit', listener)
+    else this.child!.on('exit', (code) => listener(code ?? 1))
+  }
+
+  onceExit(listener: PdfWorkerExitListener): () => void {
+    if (this.thread) {
+      this.thread.once('exit', listener)
+      return () => this.thread!.off('exit', listener)
+    }
+    const childListener = (code: number | null): void => listener(code ?? 1)
+    this.child!.once('exit', childListener)
+    return () => this.child!.off('exit', childListener)
+  }
+
+  postMessage(request: PdfRenderRequest, transfer: ArrayBuffer[]): void {
+    if (this.thread) {
+      this.thread.postMessage(request, transfer)
+      return
+    }
+    if (!this.child!.connected) throw new Error('PDF render process IPC channel is closed')
+    this.child!.send(request)
+  }
+
+  async terminate(): Promise<void> {
+    if (this.thread) {
+      await this.thread.terminate().catch(() => {})
+      return
+    }
+    const child = this.child!
+    if (child.exitCode !== null || child.signalCode !== null) return
+    const exited = this.waitForChildExit(1_000)
+    child.kill()
+    if (await exited) return
+    const killed = this.waitForChildExit(1_000)
+    child.kill('SIGKILL')
+    await killed
+  }
+
+  private waitForChildExit(timeoutMs: number): Promise<boolean> {
+    const child = this.child!
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      const onExit = (): void => finish(true)
+      const finish = (exited: boolean): void => {
+        clearTimeout(timer)
+        child.off('exit', onExit)
+        resolve(exited)
+      }
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      child.once('exit', onExit)
+    })
+  }
+}
+
+class PdfWorkerClient {
+  private readonly worker: PdfWorkerEndpoint
+  private readonly pending = new Map<number, PendingRequest>()
+  private readonly abortSignal?: AbortSignal
+  private nextId = 1
+  private closing = false
+  private terminated = false
+  private terminationPromise?: Promise<void>
+
+  constructor(abortSignal?: AbortSignal) {
+    this.abortSignal = abortSignal
+    this.worker = new PdfWorkerEndpoint()
+    this.worker.onMessage((response) => this.handleResponse(response))
+    this.worker.onError((error) => {
       this.failAll(new PdfWorkerFailure(`PDF render worker failed: ${error.message}`))
       void this.terminate()
     })
-    this.worker.on('exit', (code) => {
-      const expected = this.terminated
+    this.worker.onExit((code) => {
+      const expected = (this.closing || this.terminated) && this.pending.size === 0
       this.terminated = true
       if (!expected) this.failAll(new PdfWorkerFailure(`PDF render worker exited unexpectedly with code ${code}`))
     })
@@ -161,17 +253,21 @@ class PdfWorkerClient {
     this.pending.clear()
   }
 
-  private request(request: PdfRenderRequest, transfer: ArrayBuffer[] = []): Promise<PdfRenderResult> {
+  private request(
+    request: PdfRenderRequest,
+    transfer: ArrayBuffer[] = [],
+    timeoutMs = PDF_WORKER_OPERATION_TIMEOUT_MS,
+  ): Promise<PdfRenderResult> {
     this.abortSignal?.throwIfAborted()
     if (this.terminated) return Promise.reject(new PdfWorkerFailure('PDF render worker is terminated'))
     return new Promise<PdfRenderResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.id)
-        const error = new PdfWorkerFailure(`PDF worker operation timed out after ${PDF_WORKER_OPERATION_TIMEOUT_MS} ms`)
+        const error = new PdfWorkerFailure(`PDF worker operation timed out after ${timeoutMs} ms`)
         reject(error)
         this.failAll(error)
         void this.terminate()
-      }, PDF_WORKER_OPERATION_TIMEOUT_MS)
+      }, timeoutMs)
       this.pending.set(request.id, { resolve, reject, timer })
       try {
         this.worker.postMessage(request, transfer)
@@ -209,20 +305,56 @@ class PdfWorkerClient {
   }
 
   async dispose(): Promise<void> {
-    this.abortSignal?.removeEventListener('abort', this.handleAbort)
-    if (this.terminated) return
     try {
-      await this.request({ id: this.nextId++, type: 'destroy' })
-    } catch {
-      // worker termination below is the final cleanup path
+      if (this.terminationPromise) {
+        await this.terminationPromise
+        return
+      }
+      if (this.terminated) return
+      try {
+        await this.request({ id: this.nextId++, type: 'destroy' }, [], PDF_WORKER_SHUTDOWN_TIMEOUT_MS)
+      } catch {
+        await this.terminate()
+        return
+      }
+      this.closing = true
+      // Immediate worker.terminate() can race @napi-rs/canvas finalizers and crash the host process on Windows.
+      if (await this.waitForExit(PDF_WORKER_SHUTDOWN_TIMEOUT_MS)) {
+        if (this.terminationPromise) await this.terminationPromise
+        return
+      }
+      await this.terminate()
+    } finally {
+      this.abortSignal?.removeEventListener('abort', this.handleAbort)
     }
-    await this.terminate()
   }
 
-  private async terminate(): Promise<void> {
-    if (this.terminated) return
+  private waitForExit(timeoutMs: number): Promise<boolean> {
+    if (this.terminated) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      let removeExitListener = (): void => {}
+      const finish = (exited: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        removeExitListener()
+        resolve(exited)
+      }
+      const onExit = (): void => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      removeExitListener = this.worker.onceExit(onExit)
+      if (this.terminated) finish(true)
+    })
+  }
+
+  private terminate(): Promise<void> {
+    if (this.terminationPromise) return this.terminationPromise
+    if (this.terminated) return Promise.resolve()
+    this.closing = true
     this.terminated = true
-    await this.worker.terminate().catch(() => {})
+    this.terminationPromise = this.worker.terminate().catch(() => {})
+    return this.terminationPromise
   }
 }
 

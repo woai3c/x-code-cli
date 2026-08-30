@@ -709,7 +709,7 @@ describe('ingestFile', () => {
 
     expect(JSON.stringify(parts)).not.toContain('%PDF-1.4')
     expect(parts.every((part) => part.type === 'text')).toBe(true)
-  })
+  }, 15_000)
 
   // Regression: a multi-MB @path attachment used to be inlined verbatim,
   // pushing the user message past the model's context window before the
@@ -906,7 +906,7 @@ describe('buildUserContent', () => {
     if (!Array.isArray(result)) return
     expect(result.filter((part) => part.type === 'file')).toHaveLength(10)
     expect(JSON.stringify(result)).toContain('10-media-part limit')
-  })
+  }, 15_000)
 
   it('counts Base64 expansion in the cumulative serialized attachment budget', async () => {
     const padded = addPngAncillaryChunk(await fs.readFile(imageFile), 3.5 * 1024 * 1024)

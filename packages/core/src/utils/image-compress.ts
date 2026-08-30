@@ -502,15 +502,17 @@ async function runCompressionWorker(
 
   return new Promise<CompressResult>((resolve, reject) => {
     let settled = false
+    let outputError: Error | undefined
+    let outputResult: CompressResult | undefined
     const cleanup = (): void => {
       clearTimeout(timer)
       abortSignal?.removeEventListener('abort', onAbort)
     }
-    const fail = (error: Error): void => {
+    const fail = (error: Error, terminate = true): void => {
       if (settled) return
       settled = true
       cleanup()
-      void worker.terminate()
+      if (terminate) void worker.terminate()
       reject(error)
     }
     const onAbort = (): void => fail(abortError(abortSignal))
@@ -523,17 +525,29 @@ async function runCompressionWorker(
     worker.once('message', (output: ImageCompressWorkerOutput) => {
       if (settled) return
       if (!output.ok) {
-        fail(new Error(output.error))
+        outputError = new Error(output.error)
+        return
+      }
+      outputResult = { ...output.result, data: Buffer.from(output.result.data) }
+    })
+    worker.once('error', fail)
+    worker.once('exit', (code) => {
+      if (settled) return
+      if (code !== 0) {
+        fail(new Error(`Image compression worker exited unexpectedly with code ${code}`), false)
+        return
+      }
+      if (outputError) {
+        fail(outputError, false)
+        return
+      }
+      if (!outputResult) {
+        fail(new Error('Image compression worker exited without a result'), false)
         return
       }
       settled = true
       cleanup()
-      void worker.terminate()
-      resolve({ ...output.result, data: Buffer.from(output.result.data) })
-    })
-    worker.once('error', fail)
-    worker.once('exit', (code) => {
-      if (!settled) fail(new Error(`Image compression worker exited unexpectedly with code ${code}`))
+      resolve(outputResult)
     })
   })
 }

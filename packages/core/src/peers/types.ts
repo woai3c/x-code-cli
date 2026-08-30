@@ -2,6 +2,8 @@ export const PEER_PROTOCOL_VERSION = 1 as const
 export const MAX_REGISTRATION_BYTES = 64 * 1024
 export const MAX_REGISTRATION_CANDIDATES = 256
 
+export type PeerTransportDescriptor = { kind: 'unix'; address: string } | { kind: 'windows-pipe'; address: string }
+
 export interface PeerRegistrationV1 {
   version: 1
   instanceId: string
@@ -9,7 +11,7 @@ export interface PeerRegistrationV1 {
   sessionId?: string
   name: string
   cwd: string
-  transport: { kind: 'unix'; address: string }
+  transport: PeerTransportDescriptor
   inboxToken: string
   permissionClass: 'prompted' | 'bypass'
   status: 'idle' | 'busy' | 'waiting'

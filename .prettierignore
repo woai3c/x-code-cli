@@ -5,3 +5,4 @@ dist
 coverage
 pnpm-lock.yaml
 packages/core/native/windows-job-supervisor/target
+packages/core/native/windows-peer-broker/target

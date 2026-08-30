@@ -1,10 +1,9 @@
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { nativeSourceSha256 } from './native-artifacts.mjs'
+import { WINDOWS_NATIVE_ARTIFACTS, updateWindowsNativeManifest } from './native-artifacts.mjs'
 
 const coreDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -19,35 +18,50 @@ function run(command, args) {
   })
 }
 
+function requestedArtifacts() {
+  const optionIndex = process.argv.indexOf('--artifact')
+  if (optionIndex < 0) return Object.keys(WINDOWS_NATIVE_ARTIFACTS)
+  const value = process.argv[optionIndex + 1]
+  if (value === 'all') return Object.keys(WINDOWS_NATIVE_ARTIFACTS)
+  if (!value || !WINDOWS_NATIVE_ARTIFACTS[value]) {
+    throw new Error(`Unknown Windows native artifact ${value ?? '(missing)'}`)
+  }
+  return [value]
+}
+
+async function ensureCompleteDistNativeRoot(destinationRoot) {
+  const prebuiltRoot = path.join(coreDir, 'native', 'prebuilt', 'windows')
+  try {
+    await fs.access(path.join(destinationRoot, 'manifest.json'))
+  } catch {
+    await fs.mkdir(path.dirname(destinationRoot), { recursive: true })
+    await fs.cp(prebuiltRoot, destinationRoot, { recursive: true })
+  }
+}
+
 async function main() {
   if (process.platform !== 'win32') return
   if (process.arch !== 'x64' && process.arch !== 'arm64') {
-    throw new Error(`Windows shell supervisor does not support architecture ${process.arch}`)
+    throw new Error(`Windows native helpers do not support architecture ${process.arch}`)
   }
 
-  const nativeDir = path.join(coreDir, 'native', 'windows-job-supervisor')
-  await run('cargo', ['build', '--release', '--locked', '--manifest-path', path.join(nativeDir, 'Cargo.toml')])
-
-  const source = path.join(nativeDir, 'target', 'release', 'xc-shell-supervisor.exe')
-  const destinationDir = path.join(coreDir, 'dist', 'native', 'windows', process.arch)
-  const destination = path.join(destinationDir, 'xc-shell-supervisor.exe')
-  await fs.mkdir(destinationDir, { recursive: true })
-  await fs.copyFile(source, destination)
-  const bytes = await fs.readFile(destination)
-  const sha256 = createHash('sha256').update(bytes).digest('hex')
-
-  const manifestPath = path.join(coreDir, 'dist', 'native', 'windows', 'manifest.json')
-  let manifest = { protocolVersion: 2, artifacts: {} }
-  try {
-    manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
-  } catch {}
-  manifest.protocolVersion = 2
-  manifest.sourceSha256 = await nativeSourceSha256(coreDir)
-  manifest.artifacts[process.arch] = {
-    file: `${process.arch}/xc-shell-supervisor.exe`,
-    sha256,
+  const destinationRoot = path.join(coreDir, 'dist', 'native', 'windows')
+  await ensureCompleteDistNativeRoot(destinationRoot)
+  const artifactNames = requestedArtifacts()
+  for (const artifactName of artifactNames) {
+    const definition = WINDOWS_NATIVE_ARTIFACTS[artifactName]
+    const nativeDir = path.join(coreDir, 'native', definition.sourceDirectory)
+    await run('cargo', ['build', '--release', '--locked', '--manifest-path', path.join(nativeDir, 'Cargo.toml')])
+    const source = path.join(nativeDir, 'target', 'release', definition.file)
+    const destinationDir = path.join(destinationRoot, process.arch)
+    await fs.mkdir(destinationDir, { recursive: true })
+    await fs.copyFile(source, path.join(destinationDir, definition.file))
   }
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  await updateWindowsNativeManifest(
+    coreDir,
+    destinationRoot,
+    artifactNames.map((artifactName) => ({ arch: process.arch, artifactName })),
+  )
 }
 
 await main()

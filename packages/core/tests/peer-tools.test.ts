@@ -133,7 +133,6 @@ describe('peer model tools', () => {
     )
     const onAskAuthority = vi.fn(async ({ preview }: Parameters<NonNullable<AgentCallbacks['onAskAuthority']>>[0]) => ({
       decision: 'allow-once' as const,
-      viewedComplete: true,
       canonicalPayloadSha256: preview.outboundPayload?.sha256,
       canonicalCallSha256: preview.canonicalCallSha256,
       authorityHash: preview.authorityHash,
@@ -331,7 +330,6 @@ describe('peer model tools', () => {
     )
     const onAskAuthority = vi.fn(async ({ preview }: Parameters<NonNullable<AgentCallbacks['onAskAuthority']>>[0]) => ({
       decision: 'deny' as const,
-      viewedComplete: true,
       canonicalPayloadSha256: preview.outboundPayload?.sha256,
       canonicalCallSha256: preview.canonicalCallSha256,
       authorityHash: preview.authorityHash,
