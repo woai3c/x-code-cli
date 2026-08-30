@@ -279,7 +279,11 @@ describe('TUI cross-session messaging', () => {
           expect(request?.rawBody).toContain('<peer_message')
           // exitTui's first Ctrl+C must land on an idle beta — otherwise it
           // interrupts the in-flight turn instead of arming the exit hint.
-          await beta.waitForText('accepted held payload')
+          await beta.waitForScreen(
+            (screen) => screen.includes('accepted held payload') && !screen.includes('esc to interrupt'),
+            'idle beta after accepted held payload',
+            10_000,
+          )
         } else {
           await alpha.waitForText('denied by beta')
           expect(betaProvider.mainRequests()).toHaveLength(0)
