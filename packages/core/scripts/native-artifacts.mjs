@@ -5,7 +5,7 @@ import path from 'node:path'
 export const WINDOWS_NATIVE_ARCHES = ['x64', 'arm64']
 export const WINDOWS_NATIVE_MANIFEST_VERSION = 2
 export const WINDOWS_SUPERVISOR_PROTOCOL_VERSION = 2
-export const WINDOWS_PEER_BROKER_PROTOCOL_VERSION = 1
+export const WINDOWS_PEER_BROKER_PROTOCOL_VERSION = 2
 
 export const WINDOWS_NATIVE_ARTIFACTS = {
   shellSupervisor: {

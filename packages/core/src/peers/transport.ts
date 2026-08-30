@@ -3,14 +3,13 @@ import type { PeerTransportDescriptor } from './types.js'
 
 export interface PeerTransportServer {
   address: string
-  closed: Promise<{ expected: boolean; reason?: string }>
+  closed?: Promise<{ expected: boolean; reason?: string }>
   close(options?: { deadlineMs?: number }): Promise<void>
 }
 
 export interface PeerTransport {
-  readonly kind: PeerTransportDescriptor['kind']
-  createAddressHint(instanceId: string): string
-  validateAddress(address: string): boolean
+  readonly kind?: PeerTransportDescriptor['kind']
+  validateAddress?(address: string): boolean
   listen(options: {
     address: string
     instanceId: string

@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const HEADER_BYTES: usize = 16;
 pub const MAX_CONTROL_PAYLOAD: usize = 139_264;
 pub const MAX_PEER_FRAME_BYTES: usize = 131_072;
@@ -22,7 +22,6 @@ pub const SECURE_RUNTIME_RESULT: u8 = 0x81;
 pub const SERVER_READY: u8 = 0x82;
 pub const INBOUND_REQUEST: u8 = 0x83;
 pub const OUTBOUND_RESPONSE: u8 = 0x84;
-pub const CANCEL_ACK: u8 = 0x85;
 pub const OPERATION_ERROR: u8 = 0x86;
 pub const SERVER_FATAL: u8 = 0x87;
 pub const SHUTDOWN_COMPLETE: u8 = 0x88;
@@ -155,7 +154,6 @@ fn is_known_kind(kind: u8) -> bool {
             | SERVER_READY
             | INBOUND_REQUEST
             | OUTBOUND_RESPONSE
-            | CANCEL_ACK
             | OPERATION_ERROR
             | SERVER_FATAL
             | SHUTDOWN_COMPLETE
@@ -422,7 +420,7 @@ pub fn valid_inbox_token(value: &str) -> bool {
 }
 
 pub fn valid_pipe_name_shape(value: &str, expected_namespace: Option<&str>) -> bool {
-    const PREFIX: &str = r"\\.\pipe\x-code-peer-v1-";
+    const PREFIX: &str = r"\\.\pipe\x-code-peer-v2-";
     let Some(suffix) = value.strip_prefix(PREFIX) else {
         return false;
     };
@@ -502,11 +500,11 @@ mod tests {
     fn validators_lock_pipe_token_and_instance_shapes() {
         let namespace = "012345abcdef";
         let random = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
-        let name = format!(r"\\.\pipe\x-code-peer-v1-{namespace}-{random}");
+        let name = format!(r"\\.\pipe\x-code-peer-v2-{namespace}-{random}");
         assert!(valid_pipe_name_shape(&name, Some(namespace)));
         assert!(!valid_pipe_name_shape(&name, Some("fedcba543210")));
         assert!(!valid_pipe_name_shape(
-            r"\\.\pipe\x-code-peer-v1-012345abcdef-../../bad",
+            r"\\.\pipe\x-code-peer-v2-012345abcdef-../../bad",
             None
         ));
         assert!(valid_inbox_token(&"A".repeat(INBOX_TOKEN_BYTES)));

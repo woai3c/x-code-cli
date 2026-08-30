@@ -1,9 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveWindowsNativeArtifact, resolveWindowsNativeRoot } from '../../../native/windows-native-artifact.js'
 import { debugLog, errorMessage } from '../../../utils.js'
 import type {
   ManagedExitStatus,
@@ -31,35 +29,6 @@ export interface WindowsSupervisorArtifact {
   sha256: string
 }
 
-interface WindowsNativeArtifactManifestEntry {
-  file: string
-  protocolVersion: number
-  sha256: string
-  sourceSha256: string
-}
-
-interface WindowsSupervisorManifest {
-  manifestVersion: number
-  artifacts: Record<string, { shellSupervisor?: WindowsNativeArtifactManifestEntry }>
-}
-
-const WINDOWS_NATIVE_MANIFEST_VERSION = 2
-const WINDOWS_PE_MACHINES: Record<'x64' | 'arm64', number> = { x64: 0x8664, arm64: 0xaa64 }
-
-function verifyWindowsSupervisorPe(bytes: Buffer, arch: 'x64' | 'arm64'): void {
-  if (bytes.length < 0x40 || bytes.readUInt16LE(0) !== 0x5a4d) {
-    throw new Error(`Windows shell supervisor is not a PE executable for ${arch}`)
-  }
-  const peOffset = bytes.readUInt32LE(0x3c)
-  if (
-    peOffset + 6 > bytes.length ||
-    bytes.readUInt32LE(peOffset) !== 0x00004550 ||
-    bytes.readUInt16LE(peOffset + 4) !== WINDOWS_PE_MACHINES[arch]
-  ) {
-    throw new Error(`Windows shell supervisor PE architecture mismatch for ${arch}`)
-  }
-}
-
 export interface WindowsJobObjectProviderOptions {
   artifact?: Promise<WindowsSupervisorArtifact> | WindowsSupervisorArtifact
   executable?: string
@@ -78,67 +47,23 @@ function timeoutWake(ms: number): { promise: Promise<false>; dispose(): void } {
 }
 
 export function resolveWindowsSupervisorNativeRoot(modulePath: string): string {
-  const moduleDir = path.dirname(modulePath)
-  if (!/^windows-job\.(?:[cm]?js|ts)$/.test(path.basename(modulePath))) {
-    if (path.basename(moduleDir) === 'dist') return path.join(moduleDir, 'native', 'windows')
-    if (path.basename(moduleDir) === 'chunks' && path.basename(path.dirname(moduleDir)) === 'dist') {
-      return path.join(path.dirname(moduleDir), 'native', 'windows')
-    }
-    throw new Error(`Windows shell supervisor bundle has an unsupported package layout: ${modulePath}`)
-  }
-
-  const sourceRoot = path.dirname(path.dirname(path.dirname(moduleDir)))
-  if (path.basename(sourceRoot) === 'dist') return path.join(sourceRoot, 'native', 'windows')
-  if (path.basename(sourceRoot) === 'src') {
-    return path.join(path.dirname(sourceRoot), 'dist', 'native', 'windows')
-  }
-  throw new Error(`Windows shell supervisor module has an unsupported package layout: ${modulePath}`)
+  return resolveWindowsNativeRoot(modulePath)
 }
 
 export async function resolveWindowsSupervisorArtifact(
   arch: NodeJS.Architecture = process.arch,
 ): Promise<WindowsSupervisorArtifact> {
-  if (arch !== 'x64' && arch !== 'arm64') {
-    throw new Error(`Windows unified shell does not support architecture ${arch}`)
-  }
-  const root = resolveWindowsSupervisorNativeRoot(fileURLToPath(import.meta.url))
-  const manifestPath = path.join(root, 'manifest.json')
-  let manifest: WindowsSupervisorManifest
-  try {
-    manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as WindowsSupervisorManifest
-  } catch (error) {
-    throw new Error(`Windows shell supervisor artifact is missing for ${arch}; reinstall x-code-cli`, { cause: error })
-  }
-  if (manifest.manifestVersion !== WINDOWS_NATIVE_MANIFEST_VERSION) {
-    throw new Error(
-      `Windows native manifest mismatch: expected ${WINDOWS_NATIVE_MANIFEST_VERSION}, received ${manifest.manifestVersion}`,
-    )
-  }
-  const artifact = manifest.artifacts?.[arch]?.shellSupervisor
-  if (!artifact) throw new Error(`Windows shell supervisor manifest has no ${arch} artifact`)
-  if (artifact.protocolVersion !== WINDOWS_SUPERVISOR_PROTOCOL_VERSION) {
-    throw new Error(
-      `Windows shell supervisor manifest protocol mismatch: expected ${WINDOWS_SUPERVISOR_PROTOCOL_VERSION}, received ${artifact.protocolVersion}`,
-    )
-  }
-  if (!/^[a-f0-9]{64}$/.test(artifact.sha256) || !/^[a-f0-9]{64}$/.test(artifact.sourceSha256)) {
-    throw new Error('Windows shell supervisor manifest hash is invalid')
-  }
-  if (artifact.file !== `${arch}/xc-shell-supervisor.exe`) {
-    throw new Error(`Windows shell supervisor manifest has an invalid ${arch} path`)
-  }
-  const executablePath = path.resolve(root, artifact.file)
-  const relative = path.relative(root, executablePath)
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('Windows shell supervisor manifest points outside its native directory')
-  }
-  const bytes = await fs.readFile(executablePath)
-  verifyWindowsSupervisorPe(bytes, arch)
-  const actualHash = createHash('sha256').update(bytes).digest('hex')
-  if (actualHash !== artifact.sha256.toLowerCase()) {
-    throw new Error(`Windows shell supervisor hash mismatch for ${arch}`)
-  }
-  return { executablePath, sha256: actualHash }
+  const artifact = await resolveWindowsNativeArtifact({
+    arch,
+    nativeRoot: resolveWindowsSupervisorNativeRoot(fileURLToPath(import.meta.url)),
+    spec: {
+      artifactName: 'shellSupervisor',
+      executableName: 'xc-shell-supervisor.exe',
+      displayName: 'Windows shell supervisor',
+      protocolVersion: WINDOWS_SUPERVISOR_PROTOCOL_VERSION,
+    },
+  })
+  return { executablePath: artifact.executablePath, sha256: artifact.sha256 }
 }
 
 class WindowsManagedProcess implements ManagedProcess {

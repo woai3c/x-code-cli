@@ -56,17 +56,17 @@ describe('Windows native artifacts', () => {
         expect(artifact.sourceSha256).toMatch(/^[a-f0-9]{64}$/)
       }
       expect(manifest.artifacts[arch].shellSupervisor.protocolVersion).toBe(2)
-      expect(manifest.artifacts[arch].peerBroker.protocolVersion).toBe(1)
+      expect(manifest.artifacts[arch].peerBroker.protocolVersion).toBe(2)
     }
     expect(manifest.artifacts.x64.shellSupervisor.sourceSha256).not.toBe(manifest.artifacts.x64.peerBroker.sourceSha256)
   })
 
   it('validates protocol, path, hash, and PE architecture before launching a broker', async () => {
-    await expect(resolveWindowsPeerBrokerArtifact('x64', testRoot)).resolves.toMatchObject({ protocolVersion: 1 })
-    await expect(resolveWindowsPeerBrokerArtifact('arm64', testRoot)).resolves.toMatchObject({ protocolVersion: 1 })
+    await expect(resolveWindowsPeerBrokerArtifact('x64', testRoot)).resolves.toMatchObject({ protocolVersion: 2 })
+    await expect(resolveWindowsPeerBrokerArtifact('arm64', testRoot)).resolves.toMatchObject({ protocolVersion: 2 })
 
     const protocol = await readManifest()
-    protocol.artifacts.x64.peerBroker.protocolVersion = 2
+    protocol.artifacts.x64.peerBroker.protocolVersion = 1
     await writeManifest(protocol)
     await expect(resolveWindowsPeerBrokerArtifact('x64', testRoot)).rejects.toMatchObject({
       name: 'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',

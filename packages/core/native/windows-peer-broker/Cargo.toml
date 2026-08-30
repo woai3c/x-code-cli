@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "net", "rt", "rt-multi-thread", "time"] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security",
@@ -19,6 +20,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [profile.release]
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"

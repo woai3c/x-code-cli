@@ -29,8 +29,8 @@ mod windows_broker {
     use crate::lifecycle::{Broker, ControlOutput, sanitize_message};
     use crate::process_peer::current_process_identity;
     use crate::protocol::{
-        Frame, FrameDecoder, OPERATION_ERROR, SECURE_RUNTIME_RESULT, encode_error,
-        encode_one_string, parse_secure_runtime, validate_node_frame,
+        Frame, FrameDecoder, OPERATION_ERROR, PROTOCOL_VERSION, SECURE_RUNTIME_RESULT,
+        encode_error, encode_one_string, parse_secure_runtime, validate_node_frame,
     };
     use crate::runtime_acl::secure_runtime;
 
@@ -39,13 +39,15 @@ mod windows_broker {
         let mode = arguments.next().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "broker mode is required")
         })?;
-        if arguments.next().as_deref() != Some("--protocol")
-            || arguments.next().as_deref() != Some("1")
+        let protocol_flag = arguments.next();
+        let protocol = arguments.next().and_then(|value| value.parse::<u8>().ok());
+        if protocol_flag.as_deref() != Some("--protocol")
+            || protocol != Some(PROTOCOL_VERSION)
             || arguments.next().is_some()
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "expected --protocol 1",
+                format!("expected --protocol {PROTOCOL_VERSION}"),
             ));
         }
         match mode.as_str() {

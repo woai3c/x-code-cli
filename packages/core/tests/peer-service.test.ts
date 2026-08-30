@@ -364,7 +364,6 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const close = vi.fn(async () => {})
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: () => testHome,
       validateAddress: () => true,
       listen: vi.fn(async (options) => ({
         address: options.address,
@@ -407,7 +406,6 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     })
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: () => testHome,
       validateAddress: () => true,
       listen: vi.fn(async (options) => ({ address: options.address, closed, close: vi.fn(async () => {}) })),
       request: vi.fn(),
@@ -441,7 +439,6 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const close = vi.fn(async () => {})
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: () => testHome,
       validateAddress: () => true,
       listen: vi.fn(async (options) => {
         signalListen()
@@ -483,7 +480,6 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     let receivedSignal: AbortSignal | undefined
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: () => testHome,
       validateAddress: () => true,
       listen: vi.fn(async (options) => {
         receivedSignal = options.signal
@@ -536,7 +532,6 @@ describeUnix('PeerService over real Unix domain sockets', () => {
     const close = vi.fn(async () => {})
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: () => testHome,
       validateAddress: () => true,
       listen: vi.fn(async (options) => ({
         address: options.address,

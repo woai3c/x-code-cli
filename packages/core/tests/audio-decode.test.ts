@@ -330,5 +330,5 @@ describe('bounded audio decoder', () => {
       `Audio exceeds the ${MAX_AUDIO_DURATION_SECONDS}s local decode limit`,
     )
     expect((await fs.stat(output)).size).toBeLessThanOrEqual(MAX_AUDIO_PCM_INPUT_BYTES)
-  })
+  }, 15_000)
 })

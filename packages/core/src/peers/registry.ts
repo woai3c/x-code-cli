@@ -19,6 +19,7 @@ import {
   type WindowsPeerRuntimeSecurityProvider,
   createWindowsPeerRuntimeSecurity,
 } from './windows-peer-runtime-security.js'
+import { isValidWindowsPeerPipeAddress } from './windows-pipe-address.js'
 
 function exactKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
   const allowedSet = new Set(allowed)
@@ -27,11 +28,6 @@ function exactKeys(record: Record<string, unknown>, allowed: readonly string[]):
 
 function validIsoDate(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 64 && Number.isFinite(Date.parse(value))
-}
-
-export function isValidWindowsPeerPipeAddress(address: string, namespaceId?: string): boolean {
-  const match = /^\\\\\.\\pipe\\x-code-peer-v1-([a-f0-9]{12})-([A-Za-z0-9_-]{32})$/.exec(address)
-  return Boolean(match && (!namespaceId || match[1] === namespaceId))
 }
 
 export function parseRegistration(
@@ -282,11 +278,12 @@ export function createPeerRegistry(options: PeerRegistryOptions = {}): PeerRegis
 
     async listLive(options) {
       const scan = await this.listCandidates()
+      const activeTransportKind = options.transport.kind ?? transportKind
       const candidates = scan.candidates.filter(
         (candidate) =>
           candidate.registration.instanceId !== options.senderInstanceId &&
-          candidate.registration.transport.kind === options.transport.kind &&
-          options.transport.validateAddress(candidate.registration.transport.address),
+          candidate.registration.transport.kind === activeTransportKind &&
+          (options.transport.validateAddress?.(candidate.registration.transport.address) ?? true),
       )
       const registrations: RegistrationCandidate[] = []
       const concurrency = Math.min(16, Math.max(8, options.concurrency ?? 12))
@@ -393,7 +390,8 @@ export function createPeerRegistry(options: PeerRegistryOptions = {}): PeerRegis
         if (error.code !== 'ENOENT') throw error
       })
       if (
-        transport?.kind === registration.transport.kind &&
+        transport &&
+        (transport.kind ?? transportKind) === registration.transport.kind &&
         transport.cleanupConfirmedDeadEndpoint &&
         !remainingBeforeRemoval.truncated &&
         remainingBeforeRemoval.rejected === 0 &&

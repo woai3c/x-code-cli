@@ -1,4 +1,4 @@
-export const WINDOWS_PEER_BROKER_PROTOCOL_VERSION = 1
+export const WINDOWS_PEER_BROKER_PROTOCOL_VERSION = 2
 export const WINDOWS_PEER_BROKER_HEADER_BYTES = 16
 export const WINDOWS_PEER_BROKER_MAX_PAYLOAD_BYTES = 139_264
 export const WINDOWS_PEER_BROKER_MAX_OPERATIONS = 256
@@ -17,7 +17,6 @@ export const WindowsPeerBrokerFrameKind = {
   ServerReady: 0x82,
   InboundRequest: 0x83,
   OutboundResponse: 0x84,
-  CancelAck: 0x85,
   OperationError: 0x86,
   ServerFatal: 0x87,
   ShutdownComplete: 0x88,
@@ -165,10 +164,6 @@ class PayloadReader {
     return this.take(4).readUInt32LE(0)
   }
 
-  u8(): number {
-    return this.take(1)[0]!
-  }
-
   finish(): void {
     if (this.offset !== this.bytes.length) throw protocolError('Unexpected Windows peer broker payload suffix')
   }
@@ -247,13 +242,4 @@ export function decodeOperationErrorPayload(payload: Buffer): { code: string; me
   reader.finish()
   if (!/^PEER_[A-Z0-9_]+$/.test(code)) throw protocolError('Windows peer broker returned an invalid error code')
   return { code, message }
-}
-
-export function decodeCancelAckPayload(payload: Buffer): 'canceled' | 'too-late' {
-  const reader = new PayloadReader(payload)
-  const status = reader.u8()
-  reader.finish()
-  if (status === 0) return 'canceled'
-  if (status === 1) return 'too-late'
-  throw protocolError('Windows peer broker returned an invalid cancel acknowledgement')
 }

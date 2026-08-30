@@ -1,17 +1,19 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use tokio::runtime::Builder as RuntimeBuilder;
+
 use crate::pipe::{
     InboundHandler, OutboundPipeRequest, PipeError, PipeErrorCode, PipeServer, ServerConfig,
-    outbound_request,
+    outbound_request_async,
 };
 use crate::process_peer::current_process_identity;
 use crate::protocol::{
-    CANCEL_ACK, CANCEL_OPERATION, Frame, INBOUND_REQUEST, INBOUND_RESPONSE, INBOX_TOKEN_BYTES,
+    CANCEL_OPERATION, Frame, INBOUND_REQUEST, INBOUND_RESPONSE, INBOX_TOKEN_BYTES,
     MAX_ACTIVE_OPERATIONS, OPERATION_ERROR, OUTBOUND_REQUEST, OUTBOUND_RESPONSE, SERVER_FATAL,
     SERVER_READY, SHUTDOWN, SHUTDOWN_COMPLETE, START_SERVER, encode_error, encode_inbound_request,
     encode_one_string, encode_peer_frame, parse_outbound_request, parse_peer_frame_payload,
@@ -19,122 +21,58 @@ use crate::protocol::{
 };
 use crate::security::{Event, ProcessIdentity};
 
+const OUTBOUND_RUNTIME_THREADS: usize = 4;
+
+fn take_operation_id(next: &AtomicU32) -> Option<u32> {
+    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        current.checked_add(1)
+    })
+    .ok()
+    .filter(|operation_id| *operation_id != 0)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisterError {
     Duplicate,
     Capacity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CancelDecision {
-    Canceled,
-    TooLate,
-    Unknown,
-}
-
-#[derive(Debug)]
-struct ActiveOperation {
-    cancel_acknowledged: bool,
-}
-
 #[derive(Debug)]
 pub struct OperationBook {
-    active: HashMap<u32, ActiveOperation>,
-    tombstones: VecDeque<(u32, Instant)>,
+    active: HashSet<u32>,
     capacity: usize,
-    tombstone_ttl: Duration,
 }
 
 impl OperationBook {
-    pub fn new(capacity: usize, tombstone_ttl: Duration) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            active: HashMap::new(),
-            tombstones: VecDeque::new(),
+            active: HashSet::new(),
             capacity,
-            tombstone_ttl,
         }
     }
 
-    pub fn register(&mut self, operation_id: u32, now: Instant) -> Result<(), RegisterError> {
-        self.purge(now);
-        if self.active.contains_key(&operation_id)
-            || self
-                .tombstones
-                .iter()
-                .any(|(existing, _)| *existing == operation_id)
-        {
+    pub fn register(&mut self, operation_id: u32) -> Result<(), RegisterError> {
+        if self.active.contains(&operation_id) {
             return Err(RegisterError::Duplicate);
         }
         if operation_id == 0 || self.active.len() >= self.capacity {
             return Err(RegisterError::Capacity);
         }
-        self.active.insert(
-            operation_id,
-            ActiveOperation {
-                cancel_acknowledged: false,
-            },
-        );
+        self.active.insert(operation_id);
         Ok(())
     }
 
-    pub fn cancel(&mut self, operation_id: u32, now: Instant) -> CancelDecision {
-        self.purge(now);
-        if let Some(operation) = self.active.get_mut(&operation_id) {
-            operation.cancel_acknowledged = true;
-            CancelDecision::Canceled
-        } else if self
-            .tombstones
-            .iter()
-            .any(|(existing, _)| *existing == operation_id)
-        {
-            CancelDecision::TooLate
-        } else {
-            CancelDecision::Unknown
-        }
+    pub fn contains(&self, operation_id: u32) -> bool {
+        self.active.contains(&operation_id)
     }
 
-    pub fn complete(&mut self, operation_id: u32, now: Instant) -> bool {
-        self.purge(now);
-        if self.active.remove(&operation_id).is_none() {
-            return false;
-        }
-        self.tombstones.push_back((operation_id, now));
-        while self.tombstones.len() > self.capacity {
-            self.tombstones.pop_front();
-        }
-        true
-    }
-
-    #[cfg(test)]
-    pub fn is_cancel_acknowledged(&self, operation_id: u32) -> bool {
-        self.active
-            .get(&operation_id)
-            .is_some_and(|operation| operation.cancel_acknowledged)
-    }
-
-    pub fn is_tombstone(&mut self, operation_id: u32, now: Instant) -> bool {
-        self.purge(now);
-        self.tombstones
-            .iter()
-            .any(|(existing, _)| *existing == operation_id)
+    pub fn complete(&mut self, operation_id: u32) -> bool {
+        self.active.remove(&operation_id)
     }
 
     #[cfg(test)]
     pub fn active_len(&self) -> usize {
         self.active.len()
-    }
-
-    #[cfg(test)]
-    pub fn tombstone_len(&self) -> usize {
-        self.tombstones.len()
-    }
-
-    fn purge(&mut self, now: Instant) {
-        while self.tombstones.front().is_some_and(|(_, completed)| {
-            now.saturating_duration_since(*completed) >= self.tombstone_ttl
-        }) {
-            self.tombstones.pop_front();
-        }
     }
 }
 
@@ -186,9 +124,9 @@ struct BrokerInner {
     namespace_id: Mutex<Option<String>>,
     outbound: Mutex<OutboundState>,
     inbound: Mutex<InboundState>,
-    completion_order: Mutex<()>,
     next_inbound_id: AtomicU32,
     worker_count: AtomicUsize,
+    outbound_runtime: tokio::runtime::Runtime,
 }
 
 #[derive(Clone)]
@@ -200,6 +138,11 @@ impl Broker {
     pub fn new(output: Arc<ControlOutput>) -> io::Result<Self> {
         let identity = current_process_identity()?;
         let force_shutdown = Event::manual_reset()?;
+        let outbound_runtime = RuntimeBuilder::new_multi_thread()
+            .worker_threads(OUTBOUND_RUNTIME_THREADS)
+            .thread_name("xc-peer-outbound")
+            .enable_all()
+            .build()?;
         Ok(Self {
             inner: Arc::new(BrokerInner {
                 output,
@@ -210,16 +153,16 @@ impl Broker {
                 server: Mutex::new(None),
                 namespace_id: Mutex::new(None),
                 outbound: Mutex::new(OutboundState {
-                    book: OperationBook::new(MAX_ACTIVE_OPERATIONS, Duration::from_secs(5)),
+                    book: OperationBook::new(MAX_ACTIVE_OPERATIONS),
                     cancel_events: HashMap::new(),
                 }),
                 inbound: Mutex::new(InboundState {
-                    book: OperationBook::new(MAX_ACTIVE_OPERATIONS, Duration::from_secs(5)),
+                    book: OperationBook::new(MAX_ACTIVE_OPERATIONS),
                     responders: HashMap::new(),
                 }),
-                completion_order: Mutex::new(()),
                 next_inbound_id: AtomicU32::new(0x8000_0000),
                 worker_count: AtomicUsize::new(0),
+                outbound_runtime,
             }),
         })
     }
@@ -242,7 +185,7 @@ impl Broker {
                 Ok(false)
             }
             CANCEL_OPERATION => {
-                self.cancel_outbound(frame.operation_id)?;
+                self.cancel_outbound(frame.operation_id);
                 Ok(false)
             }
             SHUTDOWN => {
@@ -344,7 +287,7 @@ impl Broker {
                 .outbound
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match outbound.book.register(operation_id, Instant::now()) {
+            match outbound.book.register(operation_id) {
                 Ok(()) => {}
                 Err(RegisterError::Duplicate) => return Err("duplicate active operation id"),
                 Err(RegisterError::Capacity) => {
@@ -366,71 +309,38 @@ impl Broker {
             .try_into()
             .map_err(|_| "target token length is invalid")?;
         let inner = self.inner.clone();
+        let runtime = inner.outbound_runtime.handle().clone();
+        let deadline = Instant::now() + Duration::from_millis(request.timeout_ms as u64);
         inner.worker_count.fetch_add(1, Ordering::AcqRel);
-        let spawn_result = thread::Builder::new()
-            .name("xc-peer-outbound".to_owned())
-            .spawn(move || {
-                let _guard = WorkerGuard(inner.clone());
-                let deadline = Instant::now() + Duration::from_millis(request.timeout_ms as u64);
-                let result = outbound_request(OutboundPipeRequest {
-                    address: &request.address,
-                    target_token: &target_token,
-                    sender_instance_id: &request.sender_instance_id,
-                    peer_frame: &request.peer_frame,
-                    identity: &inner.identity,
-                    deadline,
-                    cancel: &cancel,
-                    force_shutdown: &inner.force_shutdown,
-                });
-                inner.finish_outbound(operation_id, result);
-            });
-        if spawn_result.is_err() {
-            self.inner.worker_count.fetch_sub(1, Ordering::AcqRel);
-            let mut outbound = self
-                .inner
-                .outbound
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            outbound.cancel_events.remove(&operation_id);
-            outbound.book.complete(operation_id, Instant::now());
-            drop(outbound);
-            self.send_operation_error(
-                operation_id,
-                "PEER_WINDOWS_OPERATION_CAPACITY",
-                "peer broker could not create an outbound worker",
-            )?;
-        }
+        runtime.spawn(async move {
+            let _guard = WorkerGuard(inner.clone());
+            let result = outbound_request_async(OutboundPipeRequest {
+                address: &request.address,
+                target_token: &target_token,
+                sender_instance_id: &request.sender_instance_id,
+                peer_frame: &request.peer_frame,
+                identity: &inner.identity,
+                deadline,
+                cancel: &cancel,
+                force_shutdown: &inner.force_shutdown,
+            })
+            .await;
+            inner.finish_outbound(operation_id, result);
+        });
         Ok(())
     }
 
-    fn cancel_outbound(&self, operation_id: u32) -> Result<(), &'static str> {
-        let _order = self
+    fn cancel_outbound(&self, operation_id: u32) {
+        let outbound = self
             .inner
-            .completion_order
+            .outbound
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let decision = {
-            let mut outbound = self
-                .inner
-                .outbound
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let decision = outbound.book.cancel(operation_id, Instant::now());
-            if decision == CancelDecision::Canceled
-                && let Some(cancel) = outbound.cancel_events.get(&operation_id)
-            {
-                let _ = cancel.signal();
-            }
-            decision
-        };
-        let status = match decision {
-            CancelDecision::Canceled => 0,
-            CancelDecision::TooLate | CancelDecision::Unknown => 1,
-        };
-        self.inner
-            .output
-            .send(CANCEL_ACK, operation_id, vec![status])
-            .map_err(|_| "control output failed")
+        if outbound.book.contains(operation_id)
+            && let Some(cancel) = outbound.cancel_events.get(&operation_id)
+        {
+            let _ = cancel.signal();
+        }
     }
 
     fn finish_inbound(&self, operation_id: u32, payload: &[u8]) -> Result<(), &'static str> {
@@ -442,16 +352,9 @@ impl Broker {
                 .inbound
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(responder) = inbound.responders.remove(&operation_id) {
-                if !inbound.book.complete(operation_id, Instant::now()) {
-                    return Err("inbound operation ownership is invalid");
-                }
-                Some(responder)
-            } else if inbound.book.is_tombstone(operation_id, Instant::now()) {
-                None
-            } else {
-                return Err("response references an unknown operation id");
-            }
+            let responder = inbound.responders.remove(&operation_id);
+            inbound.book.complete(operation_id);
+            responder
         };
         if let Some(responder) = responder {
             let _ = responder.send(peer_frame);
@@ -511,10 +414,6 @@ impl Broker {
 
 impl BrokerInner {
     fn finish_outbound(&self, operation_id: u32, result: Result<Vec<u8>, PipeError>) {
-        let _order = self
-            .completion_order
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let send_result = match result {
             Ok(peer_frame) => encode_peer_frame(&peer_frame)
                 .map_err(|_| io::Error::other("response encoding failed"))
@@ -531,7 +430,7 @@ impl BrokerInner {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         outbound.cancel_events.remove(&operation_id);
-        if !outbound.book.complete(operation_id, Instant::now()) {
+        if !outbound.book.complete(operation_id) {
             drop(outbound);
             self.report_fatal(
                 "PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH",
@@ -558,15 +457,21 @@ impl BrokerInner {
 
     fn allocate_inbound(&self, responder: mpsc::SyncSender<Vec<u8>>) -> Result<u32, PipeError> {
         for _ in 0..MAX_ACTIVE_OPERATIONS * 2 {
-            let operation_id = self.next_inbound_id.fetch_add(1, Ordering::Relaxed);
-            if operation_id == 0 {
-                continue;
-            }
+            let Some(operation_id) = take_operation_id(&self.next_inbound_id) else {
+                self.report_fatal(
+                    "PEER_WINDOWS_OPERATION_CAPACITY",
+                    "inbound operation ids are exhausted",
+                );
+                return Err(PipeError::new(
+                    PipeErrorCode::Capacity,
+                    "inbound operation ids are exhausted",
+                ));
+            };
             let mut inbound = self
                 .inbound
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match inbound.book.register(operation_id, Instant::now()) {
+            match inbound.book.register(operation_id) {
                 Ok(()) => {
                     inbound.responders.insert(operation_id, responder);
                     return Ok(operation_id);
@@ -592,7 +497,7 @@ impl BrokerInner {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         inbound.responders.remove(&operation_id);
-        inbound.book.complete(operation_id, Instant::now());
+        inbound.book.complete(operation_id);
     }
 }
 
@@ -657,10 +562,12 @@ impl InboundHandler for BrokerInner {
     }
 
     fn server_fatal(&self, error: PipeError) {
-        self.report_fatal(
-            "PEER_WINDOWS_PIPE_CREATE_FAILED",
-            &error.sanitized_message(),
-        );
+        let code = if error.code == PipeErrorCode::SecurityContextLost {
+            "PEER_WINDOWS_BROKER_SECURITY_STATE"
+        } else {
+            "PEER_WINDOWS_PIPE_CREATE_FAILED"
+        };
+        self.report_fatal(code, &error.sanitized_message());
     }
 }
 
@@ -682,6 +589,7 @@ fn pipe_operation_error(error: &PipeError) -> (&'static str, String) {
         PipeErrorCode::ProtocolMismatch => "PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH",
         PipeErrorCode::Capacity => "PEER_WINDOWS_OPERATION_CAPACITY",
         PipeErrorCode::ShuttingDown => "PEER_WINDOWS_BROKER_EXITED",
+        PipeErrorCode::SecurityContextLost => "PEER_WINDOWS_BROKER_SECURITY_STATE",
         PipeErrorCode::Io => "PEER_WINDOWS_PIPE_IO_FAILED",
     };
     (code, error.sanitized_message())
@@ -700,50 +608,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancel_ack_precedes_terminal_ownership_release() {
-        let now = Instant::now();
-        let mut book = OperationBook::new(4, Duration::from_secs(30));
-        book.register(7, now).unwrap();
-        assert_eq!(book.cancel(7, now), CancelDecision::Canceled);
-        assert!(book.is_cancel_acknowledged(7));
-        assert_eq!(book.active_len(), 1);
-        assert!(book.complete(7, now));
+    fn active_capacity_is_released_on_completion() {
+        let mut book = OperationBook::new(2);
+        book.register(1).unwrap();
+        assert_eq!(book.register(1), Err(RegisterError::Duplicate));
+        book.register(2).unwrap();
+        assert_eq!(book.register(3), Err(RegisterError::Capacity));
+        assert!(book.contains(1));
+        assert!(book.complete(1));
+        book.register(3).unwrap();
+        assert!(!book.complete(1));
+        assert!(book.complete(2));
+        assert!(book.complete(3));
         assert_eq!(book.active_len(), 0);
-        assert_eq!(book.cancel(7, now), CancelDecision::TooLate);
-    }
-
-    #[test]
-    fn active_capacity_and_tombstones_are_bounded_independently() {
-        let now = Instant::now();
-        let mut book = OperationBook::new(2, Duration::from_secs(1));
-        book.register(1, now).unwrap();
-        assert_eq!(book.register(1, now), Err(RegisterError::Duplicate));
-        book.register(2, now).unwrap();
-        assert_eq!(book.register(3, now), Err(RegisterError::Capacity));
-        assert!(book.complete(1, now));
-        book.register(3, now).unwrap();
-        assert!(book.complete(2, now));
-        assert!(book.complete(3, now));
-        assert_eq!(book.tombstone_len(), 2);
-        book.register(4, now).unwrap();
-        assert_eq!(book.cancel(99, now), CancelDecision::Unknown);
-
-        let later = now + Duration::from_secs(2);
-        book.register(5, later).unwrap();
-        assert_eq!(book.cancel(1, later), CancelDecision::Unknown);
     }
 
     #[test]
     fn rapid_successes_do_not_exhaust_active_capacity() {
-        let now = Instant::now();
-        let mut book = OperationBook::new(256, Duration::from_secs(5));
-        for operation_id in 1..=257 {
-            book.register(operation_id, now).unwrap();
-            assert!(book.complete(operation_id, now));
+        let mut book = OperationBook::new(256);
+        for operation_id in 1..=300 {
+            book.register(operation_id).unwrap();
+            assert!(book.complete(operation_id));
         }
         assert_eq!(book.active_len(), 0);
-        assert_eq!(book.tombstone_len(), 256);
-        assert_eq!(book.cancel(1, now), CancelDecision::Unknown);
-        assert_eq!(book.cancel(257, now), CancelDecision::TooLate);
+    }
+
+    #[test]
+    fn operation_ids_stop_before_wrapping() {
+        let next = AtomicU32::new(u32::MAX - 1);
+        assert_eq!(take_operation_id(&next), Some(u32::MAX - 1));
+        assert_eq!(take_operation_id(&next), None);
+        assert_eq!(take_operation_id(&next), None);
     }
 }

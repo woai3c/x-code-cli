@@ -56,7 +56,7 @@
 
 ### Features
 
-- support secure same-account peer messaging on Windows x64 and arm64 through a bundled Named Pipe broker
+- support secure same-account peer messaging on Windows x64 through a bundled Named Pipe broker, with an arm64 artifact packaged as a preview pending native-device acceptance
 - support ChatGPT subscription sign-in for OpenAI models with browser/device OAuth, automatic token refresh, and strict API-key mutual exclusion
 - unify foreground and background shell execution into managed sessions with automatic 10-second yielding, `/ps`, and `/stop`
 - use a bundled, hash-verified Windows Job Object supervisor for reliable process-tree cleanup on Windows x64 and arm64; normal Node.js builds do not require Rust

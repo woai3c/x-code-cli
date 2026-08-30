@@ -77,6 +77,81 @@ describe('TUI cross-session messaging', () => {
     }
   })
 
+  it('routes a message around three independent named terminal sessions', async () => {
+    const alphaProvider = await startFakeProvider([
+      {
+        type: 'tool-call',
+        name: 'sendMessage',
+        input: { to: 'beta', message: 'ring alpha to beta' },
+        finalText: 'alpha started ring',
+      },
+      { type: 'completion', text: 'alpha received completed ring' },
+    ])
+    const betaProvider = await startFakeProvider([
+      {
+        type: 'tool-call',
+        name: 'sendMessage',
+        input: { to: 'gamma', message: 'ring beta to gamma' },
+        finalText: 'beta forwarded ring',
+      },
+    ])
+    const gammaProvider = await startFakeProvider([
+      {
+        type: 'tool-call',
+        name: 'sendMessage',
+        input: { to: 'alpha', message: 'ring gamma to alpha' },
+        finalText: 'gamma closed ring',
+      },
+    ])
+    const workspace = await createPeerTestWorkspace('xc-pty-peer-ring-')
+    const alpha = await createTuiHarness({ workspace, provider: alphaProvider })
+    const beta = await createTuiHarness({ workspace, provider: betaProvider })
+    const gamma = await createTuiHarness({ workspace, provider: gammaProvider })
+    try {
+      await alpha.startCli(['-t', '--name', 'alpha'])
+      await beta.startCli(['-t', '--name', 'beta'])
+      await gamma.startCli(['-t', '--name', 'gamma'])
+
+      await vi.waitFor(
+        async () => {
+          const registrations = await fs.readdir(path.join(workspace.xcodeHome, 'runtime', 'peers'))
+          expect(registrations.filter((name) => name.endsWith('.json'))).toHaveLength(3)
+        },
+        { timeout: 10_000 },
+      )
+      await submitInput(alpha, '/list-agents')
+      await alpha.waitForText(/beta .*peer:[0-9a-f-]{36} .*idle/)
+      await alpha.waitForText(/gamma .*peer:[0-9a-f-]{36} .*idle/)
+      await submitInput(alpha, 'start the three-session ring')
+
+      await beta.waitForText('ring alpha to beta', 10_000)
+      await gamma.waitForText('ring beta to gamma', 10_000)
+      await alpha.waitForText('ring gamma to alpha', 10_000)
+
+      const alphaRequests = await alphaProvider.waitForMainRequests(3, 10_000)
+      const betaRequests = await betaProvider.waitForMainRequests(2, 10_000)
+      const gammaRequests = await gammaProvider.waitForMainRequests(2, 10_000)
+      expect(alphaRequests[2]?.rawBody).toContain('ring gamma to alpha')
+      expect(betaRequests[0]?.rawBody).toContain('ring alpha to beta')
+      expect(gammaRequests[0]?.rawBody).toContain('ring beta to gamma')
+      await alpha.waitForText('alpha received completed ring')
+      await beta.waitForText('beta forwarded ring')
+      await gamma.waitForText('gamma closed ring')
+
+      await exitTui(alpha)
+      await exitTui(beta)
+      await exitTui(gamma)
+    } finally {
+      await alpha.dispose()
+      await beta.dispose()
+      await gamma.dispose()
+      await alphaProvider.close()
+      await betaProvider.close()
+      await gammaProvider.close()
+      await workspace.cleanup()
+    }
+  })
+
   it('renders authority metadata and payload injection as inert visible escapes', async () => {
     const metadataInjection = `unsafe\x1b]52;c;bWV0YWRhdGE=\x07\u202e.txt`
     const payloadInjection =

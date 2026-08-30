@@ -2,7 +2,7 @@
 
 Cross-session messaging lets interactive X-Code sessions on the same machine discover one another and exchange plain-text work requests. Each participating root session keeps its own model, conversation, working directory, and local permission boundary.
 
-> This release supports macOS, Linux, and Windows x64/arm64. Print mode (`--print`) does not register a peer; Windows ia32 is unsupported.
+> This release supports macOS, Linux, and Windows x64. A Windows arm64 broker artifact is packaged as a preview but has not completed native-device acceptance. Print mode (`--print`) does not register a peer; Windows ia32 is unsupported.
 
 ## Start named sessions
 

@@ -186,12 +186,15 @@ function peerErrorCode(error: unknown, fallback = 'PEER_IO_ERROR'): string {
 export function createPeerService(options: PeerServiceOptions = {}): PeerService {
   const config: PeerMessagingConfig = resolvePeerMessagingConfig(options.config)
   const enabled = options.enabled ?? false
-  const registry = options.registry ?? createPeerRegistry()
+  const registry =
+    options.registry ?? createPeerRegistry(options.transport ? { transportKind: options.transport.kind ?? 'unix' } : {})
   const transport =
     options.transport ??
     createPlatformPeerTransport({
       getRuntimePaths: () => registry.paths(),
     })
+  const transportKind = transport.kind ?? 'unix'
+  const isTransportAddressValid = (address: string): boolean => transport.validateAddress?.(address) ?? true
   const identity = enabled
     ? (options.identity ?? createPeerIdentity({ name: options.name, cwd: options.cwd, now: options.now }))
     : null
@@ -238,8 +241,8 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
     const sender = await registry.read(senderInstanceId)
     if (
       !sender ||
-      sender.registration.transport.kind !== transport.kind ||
-      !transport.validateAddress(sender.registration.transport.address)
+      sender.registration.transport.kind !== transportKind ||
+      !isTransportAddressValid(sender.registration.transport.address)
     ) {
       throw serviceError('PEER_AUTH_FAILED', 'Sender registration is missing or unsafe')
     }
@@ -427,8 +430,8 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
       const candidate = await registry.read(targetInstanceId)
       if (
         !candidate ||
-        candidate.registration.transport.kind !== transport.kind ||
-        !transport.validateAddress(candidate.registration.transport.address)
+        candidate.registration.transport.kind !== transportKind ||
+        !isTransportAddressValid(candidate.registration.transport.address)
       ) {
         return false
       }
@@ -518,22 +521,15 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
           registrationWritesEnabled = true
           await registry.initialize(signal)
           if (!startIsCurrent()) return
-          let addressHint: string
-          try {
-            addressHint = transport.createAddressHint(identity.instanceId)
-          } catch (error) {
-            if (transport.kind !== 'unix' || errorMessage(error) !== 'PEER_RUNTIME_NOT_INITIALIZED') throw error
-            addressHint = peerSocketPath(registry.paths().socketDir, identity.instanceId)
-          }
           localServer = await transport.listen({
-            address: addressHint,
+            address: peerSocketPath(registry.paths().socketDir, identity.instanceId),
             instanceId: identity.instanceId,
             inboxToken: identity.inboxToken,
             onRequest,
             signal,
           })
           if (!startIsCurrent()) return
-          if (!transport.validateAddress(localServer.address)) {
+          if (!isTransportAddressValid(localServer.address)) {
             throw serviceError('PEER_TRANSPORT_ADDRESS_INVALID', 'Peer transport returned an invalid address')
           }
           server = localServer
@@ -545,7 +541,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
             ...(options.sessionId ? { sessionId: options.sessionId } : {}),
             name: identity.name,
             cwd: options.cwd ?? process.cwd(),
-            transport: { kind: transport.kind, address: localServer.address },
+            transport: { kind: transportKind, address: localServer.address },
             inboxToken: identity.inboxToken,
             permissionClass: options.getPermissionClass?.() ?? options.permissionClass ?? 'prompted',
             status: 'idle',
@@ -563,7 +559,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
           }, 15_000)
           heartbeat.unref()
           started = true
-          void localServer.closed.then((result) => {
+          void localServer.closed?.then((result) => {
             if (result.expected || shuttingDown || server !== localServer || !started) return
             lifecycleGeneration++
             started = false
@@ -574,7 +570,7 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
             if (heartbeat) clearInterval(heartbeat)
             heartbeat = undefined
             unavailableCode =
-              transport.kind === 'windows-pipe'
+              transportKind === 'windows-pipe'
                 ? 'PEER_WINDOWS_BROKER_EXITED'
                 : peerErrorCode(result.reason, 'PEER_IO_ERROR')
             unavailableReason = result.reason ?? 'Peer transport exited unexpectedly.'
@@ -681,8 +677,8 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
         candidate = await registry.read(retry.record.receiverInstanceId)
         if (
           !candidate ||
-          candidate.registration.transport.kind !== transport.kind ||
-          !transport.validateAddress(candidate.registration.transport.address) ||
+          candidate.registration.transport.kind !== transportKind ||
+          !isTransportAddressValid(candidate.registration.transport.address) ||
           `peer:${candidate.registration.instanceId}` !== retry.record.receiverAddress
         ) {
           throw serviceError('PEER_STALE', 'The originally resolved receiver is no longer registered')
@@ -741,8 +737,8 @@ export function createPeerService(options: PeerServiceOptions = {}): PeerService
       if (
         !current ||
         current.registration.instanceId !== prepared.candidate.registration.instanceId ||
-        current.registration.transport.kind !== transport.kind ||
-        !transport.validateAddress(current.registration.transport.address) ||
+        current.registration.transport.kind !== transportKind ||
+        !isTransportAddressValid(current.registration.transport.address) ||
         current.registration.transport.address !== prepared.candidate.registration.transport.address ||
         current.registration.inboxToken !== prepared.candidate.registration.inboxToken
       ) {

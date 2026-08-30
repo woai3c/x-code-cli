@@ -23,6 +23,10 @@ function token(): string {
   return randomBytes(32).toString('base64url')
 }
 
+function addressHint(): string {
+  return path.join(directory, 'peer.sock')
+}
+
 async function listenReplacement(address: string, sockets: Set<net.Socket>): Promise<net.Server> {
   const server = net.createServer((socket) => {
     sockets.add(socket)
@@ -55,17 +59,16 @@ async function closeReplacement(server: net.Server, sockets: Set<net.Socket>): P
 
 describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   it('closes the bound listener and removes its owned socket when post-bind initialization fails', async () => {
-    const address = path.join(directory, 'post-bind-failure.sock')
     let boundAddress: string | undefined
     const chmod = vi.fn(async (filePath: string) => {
       boundAddress = filePath
       throw new Error('simulated post-bind chmod failure')
     })
-    const transport = createUnixSocketTransport({ fileSystem: { ...fs, chmod } })
+    const transport = createUnixSocketTransport({ fileSystem: { ...fs, chmod }, getSocketDir: () => directory })
 
     await expect(
       transport.listen({
-        address,
+        address: addressHint(),
         instanceId: randomUUID(),
         inboxToken: token(),
         onRequest: async () => ({ v: 1, type: 'error', code: 'unused', message: 'unused' }),
@@ -87,13 +90,13 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('aborts a listener while post-bind initialization is in flight without leaking the socket', async () => {
-    const address = path.join(directory, 'post-bind-abort.sock')
     let signalChmod!: () => void
     const chmodStarted = new Promise<void>((resolve) => (signalChmod = resolve))
     let releaseChmod!: () => void
     const chmodGate = new Promise<void>((resolve) => (releaseChmod = resolve))
     let boundAddress: string | undefined
     const transport = createUnixSocketTransport({
+      getSocketDir: () => directory,
       fileSystem: {
         ...fs,
         chmod: vi.fn(async (filePath, mode) => {
@@ -106,7 +109,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
     })
     const controller = new AbortController()
     const listening = transport.listen({
-      address,
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: token(),
       onRequest: async () => ({ v: 1, type: 'error', code: 'unused', message: 'unused' }),
@@ -128,6 +131,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
     const replacementSockets = new Set<net.Socket>()
     let replaced = false
     const transport = createUnixSocketTransport({
+      getSocketDir: () => directory,
       fileSystem: {
         ...fs,
         lstat: vi.fn(async (filePath: string) => {
@@ -145,7 +149,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
 
     await expect(
       transport.listen({
-        address: path.join(directory, 'race.sock'),
+        address: addressHint(),
         instanceId: randomUUID(),
         inboxToken: token(),
         onRequest: async () => ({ v: 1, type: 'error', code: 'unused', message: 'unused' }),
@@ -165,6 +169,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
     let replacementIdentity: Awaited<ReturnType<typeof lstat>> | undefined
     const replacementSockets = new Set<net.Socket>()
     const transport = createUnixSocketTransport({
+      getSocketDir: () => directory,
       fileSystem: {
         ...fs,
         rename: vi.fn(async (oldPath: string, newPath: string) => {
@@ -179,7 +184,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
       },
     })
     const server = await transport.listen({
-      address: path.join(directory, 'close-lstat-rename.sock'),
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: token(),
       onRequest: async () => ({ v: 1, type: 'error', code: 'unused', message: 'unused' }),
@@ -206,6 +211,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
     let replacementIdentity: Awaited<ReturnType<typeof lstat>> | undefined
     const replacementSockets = new Set<net.Socket>()
     const transport = createUnixSocketTransport({
+      getSocketDir: () => directory,
       fileSystem: {
         ...fs,
         mkdir: vi.fn(async (filePath: string, options: { mode: number }) => {
@@ -219,7 +225,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
       },
     })
     const server = await transport.listen({
-      address: path.join(directory, 'close-rename-sentinel.sock'),
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: token(),
       onRequest: async () => ({ v: 1, type: 'error', code: 'unused', message: 'unused' }),
@@ -240,11 +246,11 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('authenticates and completes a ping/pong round trip', async () => {
-    const transport = createUnixSocketTransport()
+    const transport = createUnixSocketTransport({ getSocketDir: () => directory })
     const instanceId = randomUUID()
     const inboxToken = token()
     const server = await transport.listen({
-      address: path.join(directory, 'peer.sock'),
+      address: addressHint(),
       instanceId,
       inboxToken,
       onRequest: async (frame) => {
@@ -265,10 +271,10 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('rejects an incorrect token before dispatch', async () => {
-    const transport = createUnixSocketTransport()
+    const transport = createUnixSocketTransport({ getSocketDir: () => directory })
     const onRequest = vi.fn()
     const server = await transport.listen({
-      address: path.join(directory, 'auth.sock'),
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: token(),
       onRequest,
@@ -286,9 +292,9 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('times out and honors AbortSignal while waiting for a reply', async () => {
-    const transport = createUnixSocketTransport()
+    const transport = createUnixSocketTransport({ getSocketDir: () => directory })
     const server = await transport.listen({
-      address: path.join(directory, 'timeout.sock'),
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: token(),
       onRequest: async () => new Promise(() => {}),
@@ -303,7 +309,7 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
     const actualToken = token()
     await server.close()
     const active = await transport.listen({
-      address: path.join(directory, 'active.sock'),
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: actualToken,
       onRequest: async () => new Promise(() => {}),
@@ -324,12 +330,12 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('drops malformed and oversized raw client frames without dispatching', async () => {
-    const transport = createUnixSocketTransport()
+    const transport = createUnixSocketTransport({ getSocketDir: () => directory })
     const instanceId = randomUUID()
     const inboxToken = token()
     const onRequest = vi.fn()
     const server = await transport.listen({
-      address: path.join(directory, 'raw.sock'),
+      address: addressHint(),
       instanceId,
       inboxToken,
       onRequest,
@@ -349,10 +355,10 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('drains active connections on shutdown within the configured deadline', async () => {
-    const transport = createUnixSocketTransport()
+    const transport = createUnixSocketTransport({ getSocketDir: () => directory })
     const inboxToken = token()
     const server = await transport.listen({
-      address: path.join(directory, 'shutdown.sock'),
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken,
       onRequest: async () => new Promise(() => {}),
@@ -374,10 +380,9 @@ describe.runIf(process.platform !== 'win32')('Unix peer transport', () => {
   })
 
   it('does not unlink a replacement socket when its owned path changes identity before close', async () => {
-    const address = path.join(directory, 'replaced.sock')
-    const transport = createUnixSocketTransport()
+    const transport = createUnixSocketTransport({ getSocketDir: () => directory })
     const server = await transport.listen({
-      address,
+      address: addressHint(),
       instanceId: randomUUID(),
       inboxToken: token(),
       onRequest: async () => ({ v: 1, type: 'error', code: 'unused', message: 'unused' }),

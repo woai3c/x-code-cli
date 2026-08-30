@@ -1,18 +1,17 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { setTimeout as delay } from 'node:timers/promises'
 
-import { debugLog, errorMessage } from '../utils.js'
+import { errorMessage } from '../utils.js'
 import { NdjsonFrameDecoder, encodePeerFrame } from './protocol.js'
 import type { PeerFrameV1 } from './protocol.js'
 import { stripTerminalControls } from './terminal-sanitize.js'
 import type { PeerTransport, PeerTransportServer } from './transport.js'
 import { type WindowsPeerBrokerArtifact, resolveWindowsPeerBrokerArtifact } from './windows-peer-broker-artifact.js'
+import { type WindowsPeerBrokerProcess, spawnWindowsPeerBrokerProcess } from './windows-peer-broker-process.js'
 import {
   WINDOWS_PEER_BROKER_MAX_OPERATIONS,
-  WINDOWS_PEER_BROKER_PROTOCOL_VERSION,
   type WindowsPeerBrokerFrame,
-  WindowsPeerBrokerFrameDecoder,
   WindowsPeerBrokerFrameKind,
-  decodeCancelAckPayload,
   decodeInboundRequestPayload,
   decodeOneStringPayload,
   decodeOperationErrorPayload,
@@ -20,14 +19,16 @@ import {
   encodeOutboundRequestPayload,
   encodePeerFramePayload,
   encodeStartServerPayload,
-  encodeWindowsPeerBrokerFrame,
 } from './windows-peer-broker-protocol.js'
+import { isValidWindowsPeerPipeAddress } from './windows-pipe-address.js'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 3_000
-const TOMBSTONE_TTL_MS = 5_000
 const STARTUP_TIMEOUT_MS = 5_000
 const INBOUND_CALLBACK_TIMEOUT_MS = 29_000
-const MAX_STDERR_BYTES = 4_096
+const CAPACITY_RETRY_DELAY_MS = 10
+const CANCELED_OPERATION_TTL_MS = 125_000
+const MAX_CANCELED_OPERATIONS = WINDOWS_PEER_BROKER_MAX_OPERATIONS * 4
+const SHUTDOWN_OPERATION_ID = 0xffff_ffff
 
 interface RuntimePaths {
   namespaceId?: string
@@ -41,13 +42,11 @@ export interface WindowsNamedPipeTransportOptions {
 }
 
 interface PendingOperation {
-  state: 'active' | 'canceled'
   resolve: (frame: PeerFrameV1) => void
   reject: (error: unknown) => void
   timer: NodeJS.Timeout
   signal?: AbortSignal
   onAbort?: () => void
-  terminalSeen: boolean
 }
 
 interface StartupOperation {
@@ -76,29 +75,22 @@ function parseBusinessFrame(bytes: Buffer): PeerFrameV1 {
   return frames[0]!
 }
 
-function validPipeAddress(address: string, namespaceId?: string): boolean {
-  const match = /^\\\\\.\\pipe\\x-code-peer-v1-([a-f0-9]{12})-([A-Za-z0-9_-]{32})$/.exec(address)
-  return Boolean(match && namespaceId && match[1] === namespaceId)
-}
-
 class BrokerClient {
   readonly closed: Promise<{ expected: boolean; reason?: string }>
-  private readonly child: ChildProcessWithoutNullStreams
-  private readonly decoder = new WindowsPeerBrokerFrameDecoder()
+  private readonly brokerProcess: WindowsPeerBrokerProcess
   private readonly pending = new Map<number, PendingOperation>()
-  private readonly tombstones = new Map<number, number>()
+  private readonly canceled = new Map<number, number>()
   private readonly inbound = new Set<number>()
   private readonly onRequest: (frame: PeerFrameV1, senderInstanceId: string) => Promise<PeerFrameV1>
   private readonly requestTimeoutMs: number
   private readonly resolveClosed: (result: { expected: boolean; reason?: string }) => void
   private nextOperationId = 1
   private startup?: StartupOperation
-  private writeTail: Promise<void> = Promise.resolve()
   private expectedClose = false
   private exited = false
   private fatalReason?: string
-  private stderr = ''
   private resolveShutdown?: () => void
+  private closePromise?: Promise<void>
 
   constructor(
     artifact: WindowsPeerBrokerArtifact,
@@ -115,30 +107,15 @@ class BrokerClient {
       resolveClosed = resolve
     })
     this.resolveClosed = resolveClosed
-    this.child = options.spawnBroker(
-      artifact.executablePath,
-      ['broker', '--protocol', String(WINDOWS_PEER_BROKER_PROTOCOL_VERSION)],
-      {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-      },
-    )
-    this.child.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk))
-    this.child.stdout.once('end', () => {
-      try {
-        this.decoder.finish()
-      } catch (error) {
-        this.fail(error)
-      }
+    this.brokerProcess = spawnWindowsPeerBrokerProcess({
+      artifact,
+      mode: 'broker',
+      spawnBroker: options.spawnBroker,
+      debugKey: 'peer.windows.broker-stderr',
+      onFrame: (frame) => this.handleFrame(frame),
+      onError: (error) => this.fail(error),
+      onClose: () => this.onExit(),
     })
-    this.child.stderr.on('data', (chunk: Buffer) => {
-      if (this.stderr.length >= MAX_STDERR_BYTES) return
-      const text = stripTerminalControls(chunk.toString('utf8')).slice(0, MAX_STDERR_BYTES - this.stderr.length)
-      this.stderr += text
-      if (text) debugLog('peer.windows.broker-stderr', text)
-    })
-    this.child.once('error', (error) => this.fail(error))
-    this.child.once('exit', () => this.onExit())
   }
 
   async startServer(input: { namespaceId: string; instanceId: string; inboxToken: string }): Promise<string> {
@@ -169,6 +146,52 @@ class BrokerClient {
   }): Promise<PeerFrameV1> {
     if (options.signal?.aborted) return Promise.reject(abortError())
     const timeoutMs = Math.min(120_000, Math.max(1, options.timeoutMs ?? this.requestTimeoutMs))
+    return this.requestWithCapacityRetry(options, timeoutMs)
+  }
+
+  private async requestWithCapacityRetry(
+    options: {
+      address: string
+      targetToken: string
+      senderInstanceId: string
+      frame: PeerFrameV1
+      signal?: AbortSignal
+    },
+    timeoutMs: number,
+  ): Promise<PeerFrameV1> {
+    const deadline = Date.now() + timeoutMs
+    while (true) {
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) {
+        throw transportError('PEER_WINDOWS_REQUEST_TIMEOUT', 'Windows peer request timed out')
+      }
+      try {
+        return await this.requestOnce(options, remainingMs)
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== 'PEER_WINDOWS_OPERATION_CAPACITY') throw error
+        if (options.signal?.aborted) throw abortError()
+        const retryDelayMs = Math.min(CAPACITY_RETRY_DELAY_MS, deadline - Date.now())
+        if (retryDelayMs <= 0) throw error
+        try {
+          await delay(retryDelayMs, undefined, { signal: options.signal, ref: false })
+        } catch (delayError) {
+          if (options.signal?.aborted) throw abortError()
+          throw delayError
+        }
+      }
+    }
+  }
+
+  private requestOnce(
+    options: {
+      address: string
+      targetToken: string
+      senderInstanceId: string
+      frame: PeerFrameV1
+      signal?: AbortSignal
+    },
+    timeoutMs: number,
+  ): Promise<PeerFrameV1> {
     let payload: Buffer
     try {
       payload = encodeOutboundRequestPayload({
@@ -181,7 +204,6 @@ class BrokerClient {
     } catch (error) {
       return Promise.reject(error)
     }
-    this.purgeTombstones()
     if (this.pending.size >= WINDOWS_PEER_BROKER_MAX_OPERATIONS) {
       return Promise.reject(
         transportError('PEER_WINDOWS_OPERATION_CAPACITY', 'Windows peer broker operation capacity is exhausted'),
@@ -200,13 +222,11 @@ class BrokerClient {
       )
       timer.unref()
       this.pending.set(operationId, {
-        state: 'active',
         resolve,
         reject,
         timer,
         signal: options.signal,
         onAbort,
-        terminalSeen: false,
       })
       options.signal?.addEventListener('abort', onAbort, { once: true })
       void this.send({
@@ -217,63 +237,63 @@ class BrokerClient {
     })
   }
 
-  async close(deadlineMs: number): Promise<void> {
-    if (this.expectedClose) {
-      await this.closed
-      return
-    }
+  close(deadlineMs: number): Promise<void> {
+    this.closePromise ??= this.closeOnce(deadlineMs)
+    return this.closePromise
+  }
+
+  private async closeOnce(deadlineMs: number): Promise<void> {
     this.expectedClose = true
     if (this.exited) return
-    const operationId = this.allocateOperationId()
     const shutdown = new Promise<void>((resolve) => {
       this.resolveShutdown = resolve
     })
-    await this.send({ kind: WindowsPeerBrokerFrameKind.Shutdown, operationId, payload: Buffer.alloc(0) }).catch(
-      () => {},
-    )
+    await this.send({
+      kind: WindowsPeerBrokerFrameKind.Shutdown,
+      operationId: SHUTDOWN_OPERATION_ID,
+      payload: Buffer.alloc(0),
+    }).catch(() => {})
     let timer: NodeJS.Timeout | undefined
-    await Promise.race([
-      shutdown,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, Math.max(0, deadlineMs))
+    const acknowledged = await Promise.race([
+      shutdown.then(() => true),
+      this.closed.then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), Math.max(0, deadlineMs))
         timer.unref()
       }),
     ])
     if (timer) clearTimeout(timer)
-    if (!this.exited) this.child.kill()
-    await Promise.race([
-      this.closed.then(() => {}),
-      new Promise<void>((resolve) => {
-        const forceTimer = setTimeout(resolve, 250)
-        forceTimer.unref()
-      }),
-    ])
+    if (acknowledged) await this.waitForExit(250)
+    if (!this.exited) this.brokerProcess.kill()
+    await this.waitForExit(250)
+  }
+
+  private async waitForExit(deadlineMs: number): Promise<boolean> {
+    if (this.exited) return true
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        this.closed.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadlineMs))
+          timer.unref()
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   private allocateOperationId(): number {
-    this.purgeTombstones()
-    for (let attempt = 0; attempt <= WINDOWS_PEER_BROKER_MAX_OPERATIONS * 2; attempt++) {
-      const operationId = this.nextOperationId
-      this.nextOperationId = this.nextOperationId === 0xffff_ffff ? 1 : this.nextOperationId + 1
-      if (
-        operationId !== 0 &&
-        !this.pending.has(operationId) &&
-        !this.tombstones.has(operationId) &&
-        this.startup?.operationId !== operationId
-      ) {
-        return operationId
-      }
+    if (this.nextOperationId >= SHUTDOWN_OPERATION_ID) {
+      const failure = transportError(
+        'PEER_WINDOWS_OPERATION_CAPACITY',
+        'Windows peer broker operation IDs are exhausted',
+      )
+      this.fail(failure)
+      throw failure
     }
-    throw transportError('PEER_WINDOWS_OPERATION_CAPACITY', 'Windows peer broker operation IDs are exhausted')
-  }
-
-  private onStdout(chunk: Buffer): void {
-    if (this.exited) return
-    try {
-      for (const frame of this.decoder.push(chunk)) this.handleFrame(frame)
-    } catch (error) {
-      this.fail(error)
-    }
+    return this.nextOperationId++
   }
 
   private handleFrame(frame: WindowsPeerBrokerFrame): void {
@@ -290,9 +310,6 @@ class BrokerClient {
       case WindowsPeerBrokerFrameKind.OperationError:
         this.handleOperationError(frame)
         return
-      case WindowsPeerBrokerFrameKind.CancelAck:
-        this.handleCancelAck(frame)
-        return
       case WindowsPeerBrokerFrameKind.ServerFatal: {
         if (frame.operationId !== 0) throw this.protocolViolation('SERVER_FATAL operation ID must be zero')
         const failure = decodeOperationErrorPayload(frame.payload)
@@ -304,7 +321,9 @@ class BrokerClient {
         if (frame.operationId !== 0 || frame.payload.length !== 0) {
           throw this.protocolViolation('SHUTDOWN_COMPLETE frame is invalid')
         }
-        this.resolveShutdown?.()
+        if (!this.resolveShutdown) throw this.protocolViolation('Unexpected SHUTDOWN_COMPLETE frame')
+        this.resolveShutdown()
+        this.resolveShutdown = undefined
         return
       default:
         throw this.protocolViolation('Unexpected broker-to-Node frame kind')
@@ -384,19 +403,12 @@ class BrokerClient {
   private handleTerminal(frame: WindowsPeerBrokerFrame, failure: Error | undefined): void {
     const pending = this.pending.get(frame.operationId)
     if (!pending) {
-      if (this.tombstones.has(frame.operationId)) {
-        this.tombstones.delete(frame.operationId)
-        return
-      }
-      throw this.protocolViolation('Terminal response references an unknown operation ID')
+      if (this.consumeCanceled(frame.operationId)) return
+      throw this.protocolViolation('Unexpected terminal operation ID')
     }
     let response: PeerFrameV1 | undefined
     if (!failure && frame.kind === WindowsPeerBrokerFrameKind.OutboundResponse) {
       response = parseBusinessFrame(decodePeerFramePayload(frame.payload))
-    }
-    if (pending.state === 'canceled') {
-      pending.terminalSeen = true
-      return
     }
     this.pending.delete(frame.operationId)
     this.disposePending(pending)
@@ -404,33 +416,13 @@ class BrokerClient {
     else pending.resolve(response!)
   }
 
-  private handleCancelAck(frame: WindowsPeerBrokerFrame): void {
-    const pending = this.pending.get(frame.operationId)
-    if (!pending || pending.state !== 'canceled') {
-      if (this.tombstones.has(frame.operationId)) return
-      throw this.protocolViolation('Cancel acknowledgement references an unknown operation ID')
-    }
-    const status = decodeCancelAckPayload(frame.payload)
-    if (status === 'canceled' || pending.terminalSeen) {
-      this.pending.delete(frame.operationId)
-      this.disposePending(pending)
-      this.rememberTombstone(frame.operationId)
-    }
-  }
-
   private cancelOperation(operationId: number, reason: Error): void {
     const pending = this.pending.get(operationId)
-    if (!pending || pending.state !== 'active') return
-    pending.state = 'canceled'
+    if (!pending) return
+    this.pending.delete(operationId)
+    this.rememberCanceled(operationId)
     this.disposePending(pending)
     pending.reject(reason)
-    pending.timer = setTimeout(() => {
-      const current = this.pending.get(operationId)
-      if (current?.state !== 'canceled') return
-      this.pending.delete(operationId)
-      this.disposePending(current)
-    }, TOMBSTONE_TTL_MS)
-    pending.timer.unref()
     void this.send({
       kind: WindowsPeerBrokerFrameKind.CancelOperation,
       operationId,
@@ -443,7 +435,6 @@ class BrokerClient {
     if (!pending) return
     this.pending.delete(operationId)
     this.disposePending(pending)
-    this.rememberTombstone(operationId)
     pending.reject(error)
   }
 
@@ -452,19 +443,26 @@ class BrokerClient {
     if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort)
   }
 
-  private purgeTombstones(): void {
+  private rememberCanceled(operationId: number): void {
     const now = Date.now()
-    for (const [operationId, expiresAt] of this.tombstones) {
-      if (expiresAt <= now) this.tombstones.delete(operationId)
+    for (const [candidate, expiresAt] of this.canceled) {
+      if (expiresAt > now) continue
+      this.canceled.delete(candidate)
     }
+    if (this.canceled.size >= MAX_CANCELED_OPERATIONS) {
+      this.fail(
+        transportError('PEER_WINDOWS_OPERATION_CAPACITY', 'Windows peer broker cancellation tracking is exhausted'),
+      )
+      return
+    }
+    this.canceled.set(operationId, now + CANCELED_OPERATION_TTL_MS)
   }
 
-  private rememberTombstone(operationId: number): void {
-    this.purgeTombstones()
-    this.tombstones.set(operationId, Date.now() + TOMBSTONE_TTL_MS)
-    while (this.tombstones.size > WINDOWS_PEER_BROKER_MAX_OPERATIONS) {
-      this.tombstones.delete(this.tombstones.keys().next().value!)
-    }
+  private consumeCanceled(operationId: number): boolean {
+    const expiresAt = this.canceled.get(operationId)
+    if (expiresAt === undefined) return false
+    this.canceled.delete(operationId)
+    return expiresAt > Date.now()
   }
 
   private send(frame: WindowsPeerBrokerFrame): Promise<void> {
@@ -473,24 +471,13 @@ class BrokerClient {
         transportError('PEER_WINDOWS_BROKER_EXITED', this.fatalReason ?? 'Windows peer broker exited unexpectedly'),
       )
     }
-    const bytes = encodeWindowsPeerBrokerFrame(frame)
-    const operation = this.writeTail.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          this.child.stdin.write(bytes, (error) => {
-            if (error) reject(error)
-            else resolve()
-          })
-        }),
-    )
-    this.writeTail = operation.catch(() => {})
-    return operation
+    return this.brokerProcess.send(frame)
   }
 
   private fail(error: unknown): void {
     if (this.exited) return
     this.fatalReason = stripTerminalControls(errorMessage(error))
-    this.child.kill()
+    this.brokerProcess.kill()
   }
 
   private onExit(): void {
@@ -504,9 +491,10 @@ class BrokerClient {
     this.startup = undefined
     for (const pending of this.pending.values()) {
       this.disposePending(pending)
-      if (pending.state === 'active') pending.reject(failure)
+      pending.reject(failure)
     }
     this.pending.clear()
+    this.canceled.clear()
     this.inbound.clear()
     this.resolveShutdown?.()
     this.resolveClosed({
@@ -531,15 +519,11 @@ export function createWindowsNamedPipeTransport(options: WindowsNamedPipeTranspo
   }
   return {
     kind: 'windows-pipe',
-    createAddressHint: () => namespaceId(),
-    validateAddress: (address) => validPipeAddress(address, options.getRuntimePaths().namespaceId),
+    validateAddress: (address) => isValidWindowsPeerPipeAddress(address, options.getRuntimePaths().namespaceId),
 
     async listen(listenOptions) {
       if (server) throw transportError('PEER_WINDOWS_PIPE_CREATE_FAILED', 'Windows peer broker is already listening')
       const expectedNamespace = namespaceId()
-      if (listenOptions.address !== expectedNamespace) {
-        throw transportError('PEER_WINDOWS_PIPE_CREATE_FAILED', 'Windows peer broker namespace hint is invalid')
-      }
       if (listenOptions.signal?.aborted) throw abortError()
       const artifact = await (options.artifact ?? resolveWindowsPeerBrokerArtifact())
       if (listenOptions.signal?.aborted) throw abortError()
@@ -569,7 +553,7 @@ export function createWindowsNamedPipeTransport(options: WindowsNamedPipeTranspo
         ]).finally(() => {
           if (startupTimer) clearTimeout(startupTimer)
         })
-        if (!validPipeAddress(address, expectedNamespace)) {
+        if (!isValidWindowsPeerPipeAddress(address, expectedNamespace)) {
           throw transportError(
             'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
             'Windows peer broker returned an invalid pipe address',
@@ -596,7 +580,7 @@ export function createWindowsNamedPipeTransport(options: WindowsNamedPipeTranspo
       if (!client || !server) {
         throw transportError('PEER_WINDOWS_BROKER_EXITED', 'Windows peer broker is not running')
       }
-      if (!validPipeAddress(requestOptions.address, namespaceId())) {
+      if (!isValidWindowsPeerPipeAddress(requestOptions.address, namespaceId())) {
         throw transportError('PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH', 'Windows peer pipe address is invalid')
       }
       return client.request(requestOptions)

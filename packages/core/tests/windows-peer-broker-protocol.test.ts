@@ -3,7 +3,6 @@ import {
   WINDOWS_PEER_BROKER_MAX_PAYLOAD_BYTES,
   WindowsPeerBrokerFrameDecoder,
   WindowsPeerBrokerFrameKind,
-  decodeCancelAckPayload,
   decodeInboundRequestPayload,
   decodeOneStringPayload,
   decodeOperationErrorPayload,
@@ -38,7 +37,7 @@ describe('Windows peer broker protocol', () => {
     const valid = frame()
     for (const mutate of [
       (bytes: Buffer) => (bytes[0] = 0),
-      (bytes: Buffer) => (bytes[4] = 2),
+      (bytes: Buffer) => (bytes[4] = 1),
       (bytes: Buffer) => (bytes[5] = 0x40),
       (bytes: Buffer) => (bytes[6] = 1),
       (bytes: Buffer) => bytes.writeUInt32LE(WINDOWS_PEER_BROKER_MAX_PAYLOAD_BYTES + 1, 12),
@@ -80,7 +79,7 @@ describe('Windows peer broker protocol', () => {
     expect(start.subarray(2, 14).toString()).toBe('0123456789ab')
 
     const outbound = encodeOutboundRequestPayload({
-      address: '\\\\.\\pipe\\x-code-peer-v1-0123456789ab-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      address: '\\\\.\\pipe\\x-code-peer-v2-0123456789ab-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       targetToken: 'b'.repeat(43),
       senderInstanceId: '12345678-1234-4234-8234-123456789abc',
       timeoutMs: 3_000,
@@ -102,7 +101,7 @@ describe('Windows peer broker protocol', () => {
     expect(() => decodeOneStringPayload(Buffer.from([1, 0, 0x61, 0x00]))).toThrow('suffix')
   })
 
-  it('decodes stable operation errors and cancel acknowledgements', () => {
+  it('decodes stable operation errors', () => {
     const errorPayload = Buffer.concat([
       Buffer.from([15, 0]),
       Buffer.from('PEER_TEST_ERROR'),
@@ -110,8 +109,5 @@ describe('Windows peer broker protocol', () => {
       Buffer.from('failure'),
     ])
     expect(decodeOperationErrorPayload(errorPayload)).toEqual({ code: 'PEER_TEST_ERROR', message: 'failure' })
-    expect(decodeCancelAckPayload(Buffer.from([0]))).toBe('canceled')
-    expect(decodeCancelAckPayload(Buffer.from([1]))).toBe('too-late')
-    expect(() => decodeCancelAckPayload(Buffer.from([2]))).toThrow('invalid cancel')
   })
 })

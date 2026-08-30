@@ -145,16 +145,10 @@ async function probeListener(options: {
 
 export function createUnixSocketTransport(dependencies: UnixSocketTransportOptions = {}): PeerTransport {
   const fileSystem = dependencies.fileSystem ?? fs
-  const createAddressHint = (instanceId: string): string => {
-    const socketDir = dependencies.getSocketDir?.()
-    if (!socketDir) throw new Error('PEER_RUNTIME_NOT_INITIALIZED')
-    return path.join(socketDir, `${instanceId.slice(0, 8)}.sock`)
-  }
   const validateAddress = (address: string): boolean => validUnixAddress(address, dependencies.getSocketDir?.())
   if (process.platform === 'win32') {
     return {
       kind: 'unix',
-      createAddressHint,
       validateAddress,
       async listen() {
         throw new Error('PEER_UNSUPPORTED_PLATFORM')
@@ -167,11 +161,11 @@ export function createUnixSocketTransport(dependencies: UnixSocketTransportOptio
 
   return {
     kind: 'unix',
-    createAddressHint,
     validateAddress,
 
     async listen(options): Promise<PeerTransportServer> {
-      const address = path.join(path.dirname(options.address), `p-${randomBytes(12).toString('base64url')}.sock`)
+      const socketDir = path.dirname(options.address)
+      const address = path.join(socketDir, `p-${randomBytes(12).toString('base64url')}.sock`)
       if (Buffer.byteLength(address, 'utf8') > 103) throw new Error('PEER_SOCKET_PATH_TOO_LONG')
       const ownershipProbeSenderId = randomUUID()
       const sockets = new Set<net.Socket>()

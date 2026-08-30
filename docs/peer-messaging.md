@@ -2,7 +2,7 @@
 
 跨会话消息允许同一台机器上的多个交互式 X-Code Session 互相发现并交换纯文本工作请求。每个参与通信的根 Session 仍拥有独立的模型、对话、工作目录和本地权限边界。
 
-> 当前版本支持 macOS、Linux，以及 Windows x64 / arm64。非交互模式（`--print`）不会注册为 Peer；Windows ia32 不受支持。
+> 当前版本支持 macOS、Linux 和 Windows x64。Windows arm64 broker 产物已随包提供，但尚未完成目标设备实机验收，当前属于预览支持。非交互模式（`--print`）不会注册为 Peer；Windows ia32 不受支持。
 
 ## 启动命名 Session
 

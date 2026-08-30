@@ -15,7 +15,6 @@ function createUnsupportedTransport(): PeerTransport {
   }
   return {
     kind: 'unix',
-    createAddressHint: unsupported,
     validateAddress: () => false,
     listen: async () => unsupported(),
     request: async () => unsupported(),

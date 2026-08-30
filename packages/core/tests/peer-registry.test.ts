@@ -285,14 +285,14 @@ describe('owner-only peer registry', () => {
     const value = registration('C:\\runtime', {
       transport: {
         kind: 'windows-pipe',
-        address: '\\\\.\\pipe\\x-code-peer-v1-0123456789ab-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        address: '\\\\.\\pipe\\x-code-peer-v2-0123456789ab-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       },
     })
     expect(parseRegistration(value, { socketDir: 'C:\\runtime', namespaceId: '0123456789ab' })).not.toBeNull()
     expect(parseRegistration(value, { socketDir: 'C:\\runtime', namespaceId: 'ffffffffffff' })).toBeNull()
     expect(
       parseRegistration(
-        { ...value, transport: { kind: 'windows-pipe', address: '\\\\.\\pipe\\x-code-peer-v1-0123456789ab-..' } },
+        { ...value, transport: { kind: 'windows-pipe', address: '\\\\.\\pipe\\x-code-peer-v2-0123456789ab-..' } },
         { socketDir: 'C:\\runtime', namespaceId: '0123456789ab' },
       ),
     ).toBeNull()
@@ -314,9 +314,6 @@ describe('owner-only peer registry', () => {
     let active = 0
     let maximum = 0
     const transport: PeerTransport = {
-      kind: 'unix',
-      createAddressHint: vi.fn(),
-      validateAddress: () => true,
       listen: vi.fn() as never,
       request: async ({ address, frame }) => {
         active++
@@ -343,7 +340,6 @@ describe('owner-only peer registry', () => {
     await registry.write(value)
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: vi.fn(),
       validateAddress: () => true,
       listen: vi.fn() as never,
       request: vi.fn(async () => {
@@ -362,7 +358,6 @@ describe('owner-only peer registry', () => {
     for (let index = 0; index < 20; index++) await registry.write(registration(registry.paths().socketDir))
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: vi.fn(),
       validateAddress: () => true,
       listen: vi.fn() as never,
       request: ({ signal }) =>

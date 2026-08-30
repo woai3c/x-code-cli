@@ -58,7 +58,6 @@ describe('peer service terminal sanitization', () => {
     }
     const transport: PeerTransport = {
       kind: 'unix',
-      createAddressHint: () => '/runtime/receiver.sock',
       validateAddress: () => true,
       listen: vi.fn(async (options) => {
         onRequest = options.onRequest

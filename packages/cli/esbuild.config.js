@@ -5,7 +5,8 @@ import { builtinModules } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const OUT_DIR = fileURLToPath(new URL('./dist/', import.meta.url))
-const CORE_NATIVE_DIR = fileURLToPath(new URL('../core/dist/native/', import.meta.url))
+const CORE_WINDOWS_NATIVE_DIR = fileURLToPath(new URL('../core/dist/native/windows/', import.meta.url))
+const CLI_WINDOWS_NATIVE_DIR = fileURLToPath(new URL('./dist/native/windows/', import.meta.url))
 
 // ESM polyfills — provide __dirname, __filename, and require() for CJS compat
 const ESM_POLYFILLS = `
@@ -145,7 +146,7 @@ await esbuild.build({
 })
 
 try {
-  await cp(CORE_NATIVE_DIR, fileURLToPath(new URL('./dist/native/', import.meta.url)), { recursive: true })
+  await cp(CORE_WINDOWS_NATIVE_DIR, CLI_WINDOWS_NATIVE_DIR, { recursive: true })
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error
 }

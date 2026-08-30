@@ -1,18 +1,16 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { debugLog, errorMessage, userXcodeDir } from '../utils.js'
+import { errorMessage, userXcodeDir } from '../utils.js'
 import { stripTerminalControls } from './terminal-sanitize.js'
 import { type WindowsPeerBrokerArtifact, resolveWindowsPeerBrokerArtifact } from './windows-peer-broker-artifact.js'
+import { spawnWindowsPeerBrokerProcess } from './windows-peer-broker-process.js'
 import {
-  WINDOWS_PEER_BROKER_PROTOCOL_VERSION,
-  WindowsPeerBrokerFrameDecoder,
   WindowsPeerBrokerFrameKind,
   decodeOneStringPayload,
   decodeOperationErrorPayload,
   encodeSecureRuntimePayload,
-  encodeWindowsPeerBrokerFrame,
 } from './windows-peer-broker-protocol.js'
 
 const SECURE_RUNTIME_OPERATION_ID = 1
@@ -43,15 +41,6 @@ function runtimeError(code: string, message: string, cause?: unknown): Error {
 
 function abortError(): Error {
   return Object.assign(new Error('Windows peer runtime initialization was interrupted'), { name: 'AbortError' })
-}
-
-function waitForExit(
-  child: ChildProcessWithoutNullStreams,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', (code, signal) => resolve({ code, signal }))
-  })
 }
 
 export function createWindowsPeerRuntimeSecurity(
@@ -91,17 +80,6 @@ async function secureWindowsPeerRuntime(
   }
   const artifact = await (options.artifact ?? resolveWindowsPeerBrokerArtifact())
   if (signal?.aborted) throw abortError()
-  const spawnBroker = options.spawnBroker ?? spawn
-  const child = spawnBroker(
-    artifact.executablePath,
-    ['secure-runtime', '--protocol', String(WINDOWS_PEER_BROKER_PROTOCOL_VERSION)],
-    {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    },
-  )
-  const decoder = new WindowsPeerBrokerFrameDecoder()
-  let stderr = ''
   let settled = false
   let resolveResult!: (namespaceId: string) => void
   let rejectResult!: (error: unknown) => void
@@ -114,99 +92,85 @@ async function secureWindowsPeerRuntime(
     settled = true
     rejectResult(error)
   }
+  const brokerProcess = spawnWindowsPeerBrokerProcess({
+    artifact,
+    mode: 'secure-runtime',
+    spawnBroker: options.spawnBroker ?? spawn,
+    debugKey: 'peer.windows.runtime-helper',
+    onFrame(frame) {
+      if (settled) return
+      if (frame.operationId !== SECURE_RUNTIME_OPERATION_ID) {
+        throw runtimeError(
+          'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
+          'Windows peer runtime helper returned an unknown operation ID',
+        )
+      }
+      if (frame.kind === WindowsPeerBrokerFrameKind.SecureRuntimeResult) {
+        const namespaceId = decodeOneStringPayload(frame.payload)
+        if (!/^[a-f0-9]{12}$/.test(namespaceId)) {
+          throw runtimeError(
+            'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
+            'Windows peer runtime helper returned an invalid namespace',
+          )
+        }
+        settled = true
+        resolveResult(namespaceId)
+      } else if (frame.kind === WindowsPeerBrokerFrameKind.OperationError) {
+        const failure = decodeOperationErrorPayload(frame.payload)
+        settleError(runtimeError(failure.code, failure.message))
+      } else {
+        throw runtimeError(
+          'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
+          'Windows peer runtime helper returned an unexpected frame',
+        )
+      }
+    },
+    onError: settleError,
+    onClose() {
+      settleError(
+        runtimeError(
+          'PEER_WINDOWS_RUNTIME_UNSAFE',
+          'Windows peer runtime helper exited before completing the security check',
+        ),
+      )
+    },
+  })
   const onAbort = (): void => {
-    child.kill()
+    brokerProcess.kill()
     settleError(abortError())
   }
   signal?.addEventListener('abort', onAbort, { once: true })
-  child.stdout.on('data', (chunk: Buffer) => {
-    if (settled) return
-    try {
-      for (const frame of decoder.push(chunk)) {
-        if (frame.operationId !== SECURE_RUNTIME_OPERATION_ID) {
-          throw runtimeError(
-            'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
-            'Windows peer runtime helper returned an unknown operation ID',
-          )
-        }
-        if (frame.kind === WindowsPeerBrokerFrameKind.SecureRuntimeResult) {
-          const namespaceId = decodeOneStringPayload(frame.payload)
-          if (!/^[a-f0-9]{12}$/.test(namespaceId)) {
-            throw runtimeError(
-              'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
-              'Windows peer runtime helper returned an invalid namespace',
-            )
-          }
-          settled = true
-          resolveResult(namespaceId)
-        } else if (frame.kind === WindowsPeerBrokerFrameKind.OperationError) {
-          const failure = decodeOperationErrorPayload(frame.payload)
-          settleError(runtimeError(failure.code, failure.message))
-        } else {
-          throw runtimeError(
-            'PEER_WINDOWS_HELPER_PROTOCOL_MISMATCH',
-            'Windows peer runtime helper returned an unexpected frame',
-          )
-        }
-      }
-    } catch (error) {
-      child.kill()
-      settleError(error)
-    }
-  })
-  child.stdout.once('end', () => {
-    try {
-      decoder.finish()
-    } catch (error) {
-      settleError(error)
-    }
-  })
-  child.stderr.on('data', (chunk: Buffer) => {
-    if (stderr.length >= 4_096) return
-    stderr += stripTerminalControls(chunk.toString('utf8')).slice(0, 4_096 - stderr.length)
-  })
-  const exit = waitForExit(child)
   const timer = setTimeout(() => {
-    child.kill()
+    brokerProcess.kill()
     settleError(runtimeError('PEER_WINDOWS_RUNTIME_UNSAFE', 'Windows peer runtime security check timed out'))
   }, options.timeoutMs ?? SECURE_RUNTIME_TIMEOUT_MS)
   timer.unref()
 
   try {
-    const request = encodeWindowsPeerBrokerFrame({
+    await brokerProcess.send({
       kind: WindowsPeerBrokerFrameKind.SecureRuntime,
       operationId: SECURE_RUNTIME_OPERATION_ID,
       payload: encodeSecureRuntimePayload(root),
     })
-    await new Promise<void>((resolve, reject) => {
-      child.stdin.write(request, (error) => {
-        if (error) reject(error)
-        else {
-          child.stdin.end()
-          resolve()
-        }
-      })
-    })
+    brokerProcess.endInput()
     const namespaceId = await result
-    const status = await exit
+    const status = await brokerProcess.closed
     if (status.code !== 0) {
       throw runtimeError(
         'PEER_WINDOWS_RUNTIME_UNSAFE',
         'Windows peer runtime helper exited before completing the security check',
       )
     }
-    if (stderr) debugLog('peer.windows.runtime-helper', stderr)
     const registryDir = path.join(root, 'runtime', 'peers')
     return { registryDir, socketDir: registryDir, namespaceId }
   } catch (error) {
-    child.kill()
-    const status = await exit.catch(() => null)
-    if (stderr) debugLog('peer.windows.runtime-helper', stderr)
+    brokerProcess.kill()
+    await brokerProcess.closed
     if (error instanceof Error && (error.name === 'AbortError' || error.name.startsWith('PEER_'))) throw error
     throw runtimeError(
       'PEER_WINDOWS_RUNTIME_UNSAFE',
       `Windows peer runtime security check failed: ${errorMessage(error)}`,
-      status,
+      error,
     )
   } finally {
     clearTimeout(timer)

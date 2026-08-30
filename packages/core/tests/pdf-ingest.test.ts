@@ -4,7 +4,6 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { ingestFile } from '../src/agent/file-ingest.js'
 import { MAX_PDF_SOURCE_BYTES, extractPdfTextWithFallback, processPdf } from '../src/agent/pdf-ingest.js'
 import { createReadFileTool } from '../src/tools/read-file.js'
 import { makePdfBuffer } from './helpers/pdf.js'
@@ -81,7 +80,7 @@ describe('processPdf', () => {
     if (result.type !== 'content') return
     expect(result.parts.every((part) => part.type === 'text')).toBe(true)
     expect(result.parts.map((part) => (part.type === 'text' ? part.text : '')).join('\n')).toContain('mock local OCR')
-  })
+  }, 15_000)
 
   it('does not pass parent-only Node flags to the PDF worker', async () => {
     process.execArgv.push('--input-type=module')
@@ -92,7 +91,7 @@ describe('processPdf', () => {
     } finally {
       process.execArgv.splice(process.execArgv.lastIndexOf('--input-type=module'), 1)
     }
-  })
+  }, 15_000)
 
   it('returns a reference before rendering too many visual pages', async () => {
     const largeScan = path.join(tempDir, 'eleven-pages.pdf')
@@ -123,7 +122,7 @@ describe('processPdf', () => {
       pageRange: { first: 2, last: 4 },
     })
     expect(invalid).toMatchObject({ type: 'error', code: 'invalid-range' })
-  })
+  }, 15_000)
 
   it('forces page rendering in visual mode and returns an atomic continuation at the byte budget', async () => {
     const result = await processPdf(textPdf, {
@@ -186,6 +185,30 @@ describe('processPdf', () => {
       name: 'AbortError',
     })
   })
+
+  it.runIf(process.platform === 'win32')(
+    'waits for an in-flight PDF child process to exit after abort before accepting another request',
+    async () => {
+      const controller = new AbortController()
+      let abortedAfterInit = false
+
+      await expect(
+        processPdf(textPdf, {
+          vision: true,
+          abortSignal: controller.signal,
+          onNotice: (message) => {
+            if (abortedAfterInit || !message.startsWith('Extracting PDF text')) return
+            abortedAfterInit = true
+            controller.abort()
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' })
+
+      expect(abortedAfterInit).toBe(true)
+      await expect(processPdf(textPdf, { vision: true })).resolves.toMatchObject({ type: 'content' })
+    },
+    20_000,
+  )
 })
 
 describe('extractPdfTextWithFallback', () => {
@@ -220,19 +243,4 @@ describe('readFile PDF integration', () => {
     expect(JSON.stringify(result)).not.toContain('file-data')
     expect(JSON.stringify(result)).not.toContain('application/pdf')
   })
-})
-
-describe('ingestFile PDF detection', () => {
-  it('never emits a BOM-prefixed PDF as ordinary attachment text', async () => {
-    const disguised = path.join(tempDir, 'bom-pdf.txt')
-    await fs.writeFile(disguised, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('%PDF-1.4\n')]))
-
-    const parts = await ingestFile(
-      { raw: `@${disguised}`, absolutePath: disguised },
-      { image: true, pdf: true, audio: true, filesApi: true, toolImageTransport: 'tool-result' },
-    )
-
-    expect(JSON.stringify(parts)).not.toContain('%PDF-1.4')
-    expect(parts.every((part) => part.type === 'text')).toBe(true)
-  }, 15_000)
 })

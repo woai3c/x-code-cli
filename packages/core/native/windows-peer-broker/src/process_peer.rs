@@ -11,6 +11,11 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::security::{OwnedHandle, ProcessIdentity, identities_match, token_identity};
 
+pub enum ClientVerificationError {
+    Identity(io::Error),
+    Revert(io::Error),
+}
+
 pub fn current_process_identity() -> io::Result<ProcessIdentity> {
     let mut token = null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
@@ -67,17 +72,22 @@ pub fn verify_named_pipe_server(pipe: HANDLE, current: &ProcessIdentity) -> io::
     }
 }
 
-pub fn verify_named_pipe_client(pipe: HANDLE, current: &ProcessIdentity) -> io::Result<()> {
+pub fn verify_named_pipe_client(
+    pipe: HANDLE,
+    current: &ProcessIdentity,
+) -> Result<(), ClientVerificationError> {
     if unsafe { ImpersonateNamedPipeClient(pipe) } == 0 {
-        return Err(io::Error::new(
+        return Err(ClientVerificationError::Identity(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "client impersonation failed",
-        ));
+        )));
     }
     let guard = ImpersonationGuard { active: true };
     let result = inspect_thread_identity(current);
-    let revert_result = guard.revert();
-    result.and(revert_result)
+    match guard.revert() {
+        Ok(()) => result.map_err(ClientVerificationError::Identity),
+        Err(error) => Err(ClientVerificationError::Revert(error)),
+    }
 }
 
 fn inspect_thread_identity(current: &ProcessIdentity) -> io::Result<()> {
@@ -111,15 +121,17 @@ struct ImpersonationGuard {
 
 impl ImpersonationGuard {
     fn revert(mut self) -> io::Result<()> {
-        self.active = false;
         if unsafe { RevertToSelf() } == 0 {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "client impersonation revert failed",
-            ))
-        } else {
-            Ok(())
+            let first_error = io::Error::last_os_error();
+            if unsafe { RevertToSelf() } == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("client impersonation revert failed: {first_error}"),
+                ));
+            }
         }
+        self.active = false;
+        Ok(())
     }
 }
 
