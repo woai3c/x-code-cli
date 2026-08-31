@@ -776,17 +776,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           }
         }
         pendingToolsRef.current.clear()
-        setState((prev) => ({
-          ...prev,
-          isLoading: false,
-          activeToolCalls: [],
-          bufferingReads: false,
-          compressionLabel: null,
-          reconnectLabel: null,
-          goalStatus: finalGoal,
-          peerInfluenced: agentResult.state.contextSecurity.peerInfluenceActive,
-          stepStats: loopStateRef.current?.stepStats.slice() ?? prev.stepStats,
-        }))
         externalSignal?.removeEventListener('abort', abortFromExternal)
         if (controller.signal.aborted) {
           // NOW safe to push the interrupt notice into state.messages:
@@ -808,6 +797,21 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // the restored draft too — zero-loss like abort() itself.
           restoreQueueToDraft()
         }
+        // Keep the busy UI visible until abort persistence and queue restore
+        // finish. Clearing it earlier exposes an apparently idle prompt while
+        // the turn lease is still held, so a new submit is queued and then
+        // folded back into the draft instead of starting the recovery turn.
+        setState((prev) => ({
+          ...prev,
+          isLoading: false,
+          activeToolCalls: [],
+          bufferingReads: false,
+          compressionLabel: null,
+          reconnectLabel: null,
+          goalStatus: finalGoal,
+          peerInfluenced: agentResult.state.contextSecurity.peerInfluenceActive,
+          stepStats: loopStateRef.current?.stepStats.slice() ?? prev.stepStats,
+        }))
         return agentResult
       } catch (err) {
         const droppedPeerKeys = new Set([...(submitOptions?.peerInboxKeys ?? []), ...consumedPeerInboxKeysRef.current])
