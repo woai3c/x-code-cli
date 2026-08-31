@@ -267,21 +267,22 @@ export interface AgentLoopResult {
  *  deferred tools the model has activated via `toolSearch`.
  *
  *  Two modes:
- *  1. Top-level agent (no toolFilter) — DEFERRED loading. Core tools + the
+ *  1. Unrestricted root agent — DEFERRED loading. Core tools + the
  *     `toolSearch` entry point are loaded directly; non-core built-ins and ALL
  *     MCP tools are pushed into `state.deferredCatalog` (name-only until the
  *     model loads them). This is the whole point: a few connected MCP servers
  *     no longer cost tens of thousands of tokens of tool schema on every
  *     request.
- *  2. Sub-agent (toolFilter present) — FULL injection, unchanged. Sub-agents
- *     already run a curated, small tool set, so there's no context-bloat
- *     problem to solve and adding a search round-trip would only slow them
- *     down. They never get a deferredCatalog.
+ *  2. Sub-agent or restricted root turn — FULL injection plus tool filtering.
+ *     Sub-agents already run a curated, small tool set, while restricted root
+ *     turns need their exact allow/deny surface without a search round-trip.
+ *     Neither gets a deferredCatalog.
  *
  *  Computed once per session — the base set is stable within a session. */
 export function buildTools(options: AgentOptions, state: LoopState) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = { ...toolRegistry }
+  const hasFullRootToolSurface = state.agentRole === 'root' && !options.toolFilter
 
   // Override readFile with a cache-backed instance so re-reading an unchanged
   // file returns a stub instead of re-sending its content. Re-assigning an
@@ -289,13 +290,13 @@ export function buildTools(options: AgentOptions, state: LoopState) {
   // stays byte-stable (see cache-control.ts).
   tools.readFile = createReadFileTool(state.readFileCache, { modelId: options.modelId })
 
-  if (options.subAgentRegistry) {
+  if (state.agentRole === 'root' && options.subAgentRegistry) {
     tools.task = createTaskTool(options.subAgentRegistry)
   }
 
   // The root agent gets default-on one-shot local screenshot QA independently
   // from the opt-in interactive browser agent. Sub-agents never receive it.
-  if (!options.toolFilter && options.browserVisualCheckEnabled !== false) {
+  if (hasFullRootToolSurface && options.browserVisualCheckEnabled !== false) {
     tools[BROWSER_VISUAL_CHECK_TOOL_NAME] = browserVisualCheck
   }
 
@@ -303,16 +304,16 @@ export function buildTools(options: AgentOptions, state: LoopState) {
     tools.activateSkill = createActivateSkillTool(options.skillRegistry)
   }
 
-  if (!options.toolFilter && state.goal?.status === 'active') {
+  if (hasFullRootToolSurface && state.goal?.status === 'active') {
     tools.getGoal = createGetGoalTool(state)
     tools.updateGoal = createUpdateGoalTool(state)
   }
 
-  if (!options.toolFilter && options.memoryService) {
-    tools.memorySearch = createMemorySearchTool(options.memoryService, state, process.cwd())
+  if (hasFullRootToolSurface && options.memoryService) {
+    tools.memorySearch = createMemorySearchTool(options.memoryService, state, state.projectCwd)
   }
 
-  if (!options.toolFilter && options.peerService?.isAvailable()) {
+  if (hasFullRootToolSurface && options.peerService?.isAvailable()) {
     tools.listAgents = listAgentsTool
     tools.sendMessage = sendMessageTool
   }
@@ -329,10 +330,10 @@ export function buildTools(options: AgentOptions, state: LoopState) {
     tools[name] = manualDefinition
   }
 
-  // Deferred loading is a top-level-agent feature only. The presence of a
-  // toolFilter is the authoritative "this is a sub-agent" signal (runner.ts
-  // always passes one; the main loop never does).
-  const deferralActive = !options.toolFilter
+  // Deferred loading is reserved for an unrestricted root tool surface.
+  // Agent identity lives on LoopState; toolFilter may also constrain a root
+  // turn, such as the goal runner's final-summary request.
+  const deferralActive = hasFullRootToolSurface
   if (!deferralActive) {
     state.deferredCatalog = undefined
   }
@@ -363,7 +364,7 @@ export function buildTools(options: AgentOptions, state: LoopState) {
     // Everything fits the fixed direct budget: fall through to full injection.
   }
 
-  // ── Sub-agent path: full injection + toolFilter (unchanged behavior) ──
+  // ── Restricted path: full injection + optional toolFilter ──
   // MCP tools: declared without `execute` so the AI SDK leaves them in
   // `result.toolCalls` for processToolCalls to hand-dispatch through the
   // permission / loop-guard / abortSignal pipeline.
@@ -441,15 +442,16 @@ async function runTurnAttempt(
   // Browser sub-agents keep only their latest snapshot/screenshot. The root
   // visual-check image is even shorter-lived: once a later assistant message
   // proves the model has inspected it, replace it before any subsequent call.
-  const collapsibleToolResults = options.toolFilter
-    ? options.collapseStaleToolResults
-    : [...new Set([...(options.collapseStaleToolResults ?? []), BROWSER_VISUAL_CHECK_TOOL_NAME])]
+  const collapsibleToolResults =
+    state.agentRole === 'sub-agent'
+      ? options.collapseStaleToolResults
+      : [...new Set([...(options.collapseStaleToolResults ?? []), BROWSER_VISUAL_CHECK_TOOL_NAME])]
   if (collapsibleToolResults?.length) {
     const collapsed = collapseStaleToolResults(state.messages, collapsibleToolResults)
     transcriptChanged = collapsed || transcriptChanged
     cachePrefixRewritten ||= collapsed
   }
-  if (!options.toolFilter) {
+  if (state.agentRole === 'root') {
     const collapsed = collapseConsumedToolResults(state.messages, [BROWSER_VISUAL_CHECK_TOOL_NAME])
     transcriptChanged = collapsed || transcriptChanged
     cachePrefixRewritten ||= collapsed
@@ -609,7 +611,7 @@ async function runTurnAttempt(
       const compressed = await handleContextTooLong(state, model, callbacks, {
         hookBus: options.hookBus,
         modelId: options.modelId,
-        cwd: process.cwd(),
+        cwd: state.projectCwd,
         abortSignal: options.abortSignal,
         authority: state.executionAuthority,
       })
@@ -763,9 +765,11 @@ export async function agentLoop(
   state.turnFilesModified.clear()
   state.visualCheckCallsSinceMutation = 0
 
-  // Memory features are root-agent only: toolFilter is the authoritative
-  // sub-agent signal (runner.ts always passes one).
-  const memoryService = options.toolFilter || invocationPeerTainted ? undefined : options.memoryService
+  // Memory is available only to unrestricted root turns. A toolFilter may
+  // deliberately constrain a root invocation (for example, a goal summary),
+  // while agentRole independently controls lifecycle behavior such as rewind.
+  const memoryService =
+    state.agentRole === 'root' && !options.toolFilter && !invocationPeerTainted ? options.memoryService : undefined
   const logMemoryFailure = (tag: string) => (error: unknown) => {
     debugLog(tag, errorMessage(error))
     return null
@@ -774,7 +778,7 @@ export async function agentLoop(
   if (memoryService) {
     memoryService.setActiveModelId(options.modelId)
     memoryService.setNoticeHandler(callbacks.onMemoryWrite)
-    await memoryService.initialize(process.cwd())
+    await memoryService.initialize(state.projectCwd)
   }
 
   // ── Plugin hook: SessionStart ──
@@ -800,7 +804,7 @@ export async function agentLoop(
     const promptText = userContentToText(userMessage)
     try {
       const decisions = await options.hookBus.emit(
-        { name: 'UserPromptSubmit', session: { cwd: process.cwd(), modelId: options.modelId }, prompt: promptText },
+        { name: 'UserPromptSubmit', session: { cwd: state.projectCwd, modelId: options.modelId }, prompt: promptText },
         { signal: options.abortSignal },
       )
       const effect = aggregateUserPromptSubmit(decisions)
@@ -864,12 +868,12 @@ export async function agentLoop(
   // so memory/profile edits are reflected in the rebuilt prefix.
   let fullKnowledgeContext: string | null = state.systemPromptCache ? (state.knowledgeContext ?? null) : null
   const initialRecallQuery = memoryService
-    ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, process.cwd())
+    ? buildRecallQuery(taskTextForMeta || taskText, state.messages, turnStartMessageIndex, state.projectCwd)
     : null
 
   // Detect git repo once — cheap stat, avoids per-turn disk hit
   const isGitRepo = await fs
-    .stat(path.join(process.cwd(), '.git'))
+    .stat(path.join(state.projectCwd, '.git'))
     .then(() => true)
     .catch(() => false)
 
@@ -901,8 +905,9 @@ export async function agentLoop(
   const compressionThreshold = getCompressionThreshold(options.modelId)
 
   // Build the BASE tool set once per session (core tools + toolSearch, or the
-  // full filtered set for sub-agents). The deferred catalog — when deferral is
-  // active — is stashed on `state` here. Each turn, `composeTurnTools` splices
+  // full filtered set for sub-agents/restricted root turns). The deferred
+  // catalog — when deferral is active — is stashed on `state` here. Each turn,
+  // `composeTurnTools` splices
   // in whatever the model has activated via toolSearch so far.
   const baseTools = buildTools(options, state)
 
@@ -938,7 +943,7 @@ export async function agentLoop(
     await checkAndCompressContext(state, model, compressionThreshold, callbacks, {
       hookBus: options.hookBus,
       modelId: options.modelId,
-      cwd: process.cwd(),
+      cwd: state.projectCwd,
       abortSignal: options.abortSignal,
       authority: state.executionAuthority,
     })
@@ -948,7 +953,10 @@ export async function agentLoop(
       await memoryService.recall(initialRecallQuery, state).catch(logMemoryFailure('memory.recall-error'))
     }
     if (fullKnowledgeContext === null) {
-      fullKnowledgeContext = await buildKnowledgeContext({ memoryService: options.memoryService, cwd: process.cwd() })
+      fullKnowledgeContext = await buildKnowledgeContext({
+        memoryService: options.memoryService,
+        cwd: state.projectCwd,
+      })
       state.knowledgeContext = fullKnowledgeContext
     }
 
@@ -956,9 +964,9 @@ export async function agentLoop(
     // Snapshot the working tree AFTER compaction so that
     // markBoundaryAndReflush (which clears state.checkpoints) can't
     // evict the checkpoint we just created. Skipped for sub-agents.
-    if (turn === 1 && options.subAgentRegistry) {
+    if (turn === 1 && state.agentRole === 'root') {
       const promptPreview = userContentToText(effectiveUserMessage).slice(0, 200)
-      const ckpt = await createCheckpoint(state, promptPreview, process.cwd(), options.abortSignal)
+      const ckpt = await createCheckpoint(state, promptPreview, state.projectCwd, options.abortSignal)
       if (ckpt) void appendCheckpoint(state, ckpt)
     }
 
@@ -1069,7 +1077,7 @@ export async function agentLoop(
     if (!state.executionAuthority.peerTainted && options.hookBus?.has('TurnComplete')) {
       const event: HookEvent = {
         name: 'TurnComplete',
-        session: { cwd: process.cwd(), modelId: options.modelId },
+        session: { cwd: state.projectCwd, modelId: options.modelId },
         turn,
         tokenUsage: {
           inputTokens: state.tokenUsage.inputTokens,
@@ -1147,7 +1155,7 @@ export async function agentLoop(
               {
                 anchorMessageIndex: state.messages.length - 1,
                 placement: queuedInput.injected ? 'before-user' : 'after-tool-results',
-                repositoryId: process.cwd(),
+                repositoryId: state.projectCwd,
                 currentUserText: initialRecallQuery?.currentUserText ?? taskTextForMeta ?? taskText,
                 paths,
                 identifiers,
@@ -1244,7 +1252,7 @@ export async function agentLoop(
       turnStartMessageIndex: 0,
       filesModifiedBefore: new Set(),
       filesModifiedAfter: filesThisTurn,
-      repositoryId: process.cwd(),
+      repositoryId: state.projectCwd,
       turnStartedAt,
       turnCompletedAt: new Date().toISOString(),
       maxInputTokens: memoryConfig.maxInputTokens,
@@ -1255,7 +1263,7 @@ export async function agentLoop(
         sessionId: state.sessionId,
         turnStartMessageIndex,
         modelId: options.modelId,
-        repositoryId: process.cwd(),
+        repositoryId: state.projectCwd,
       })
       await memoryService.enqueuePostTurnJob(job).catch((error) => {
         const message = errorMessage(error)

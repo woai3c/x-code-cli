@@ -44,6 +44,17 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024
 const MAX_CHECKPOINTS = 100
 const SNAPSHOT_CONCURRENCY = 8
 
+const checkpointMutationQueues = new WeakMap<LoopState, Promise<unknown>>()
+
+function serializeCheckpointMutation<T>(state: LoopState, mutation: () => Promise<T>): Promise<T> {
+  const previous = checkpointMutationQueues.get(state) ?? Promise.resolve()
+  const current = previous.catch(() => undefined).then(mutation)
+  checkpointMutationQueues.set(state, current)
+  return current.finally(() => {
+    if (checkpointMutationQueues.get(state) === current) checkpointMutationQueues.delete(state)
+  })
+}
+
 /** Public, in-memory representation of a checkpoint. Mirrored to jsonl as
  *  a `meta:checkpoint` line so /rewind survives /resume. */
 export interface CheckpointEntry {
@@ -173,7 +184,7 @@ async function writeOrigins(sessionId: string, origins: OriginManifest, cwd: str
 export async function captureFileBeforeMutation(
   state: LoopState,
   filePath: string,
-  cwd: string = process.cwd(),
+  cwd: string = state.projectCwd,
   signal?: AbortSignal,
 ): Promise<void> {
   const absPath = path.resolve(cwd, filePath)
@@ -219,12 +230,28 @@ export async function captureFileBeforeMutation(
 export async function createCheckpoint(
   state: LoopState,
   userPromptPreview: string,
-  cwd: string = process.cwd(),
+  cwd: string = state.projectCwd,
+  signal?: AbortSignal,
+): Promise<CheckpointEntry | null> {
+  return serializeCheckpointMutation(state, () => createCheckpointUnlocked(state, userPromptPreview, cwd, signal))
+}
+
+async function createCheckpointUnlocked(
+  state: LoopState,
+  userPromptPreview: string,
+  cwd: string,
   signal?: AbortSignal,
 ): Promise<CheckpointEntry | null> {
   if (signal?.aborted) return null
-  const ckptId = generateTimestampId()
-  const ts = new Date().toISOString()
+  // Consecutive snapshots can finish within one millisecond. Advance the local
+  // timestamp until its canonical filename is unique without blocking the UI.
+  const existingIds = new Set(state.checkpoints.map((checkpoint) => checkpoint.ckptId))
+  let checkpointDate = new Date()
+  let ckptId = generateTimestampId(checkpointDate)
+  while (existingIds.has(ckptId)) {
+    checkpointDate = new Date(checkpointDate.getTime() + 1)
+    ckptId = generateTimestampId(checkpointDate)
+  }
   const messageCount = state.messages.length
   const files: Record<string, ManifestFileEntry> = {}
 
@@ -284,21 +311,43 @@ export async function createCheckpoint(
   await Promise.all(Array.from({ length: Math.min(SNAPSHOT_CONCURRENCY, paths.length) }, () => worker()))
   if (signal?.aborted) return null
 
-  const manifest: Manifest = {
-    ckptId,
-    ts,
-    messageCount,
-    userPrompt: userPromptPreview.slice(0, 200),
-    files,
-  }
   try {
     await fs.mkdir(checkpointsDir(state.sessionId, cwd), { recursive: true })
-    await fs.writeFile(manifestPath(state.sessionId, ckptId, cwd), JSON.stringify(manifest, null, 2), 'utf-8')
   } catch {
     return null
   }
 
-  const entry: CheckpointEntry = { ckptId, messageCount, ts, userPrompt: manifest.userPrompt }
+  let manifest: Manifest
+  while (true) {
+    manifest = {
+      ckptId,
+      ts: checkpointDate.toISOString(),
+      messageCount,
+      userPrompt: userPromptPreview.slice(0, 200),
+      files,
+    }
+    try {
+      await fs.writeFile(manifestPath(state.sessionId, ckptId, cwd), JSON.stringify(manifest, null, 2), {
+        encoding: 'utf-8',
+        flag: 'wx',
+      })
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null
+      existingIds.add(ckptId)
+      do {
+        checkpointDate = new Date(checkpointDate.getTime() + 1)
+        ckptId = generateTimestampId(checkpointDate)
+      } while (existingIds.has(ckptId))
+    }
+  }
+
+  const entry: CheckpointEntry = {
+    ckptId,
+    messageCount,
+    ts: manifest.ts,
+    userPrompt: manifest.userPrompt,
+  }
   state.checkpoints.push(entry)
 
   // Ring-buffer eviction. Drop oldest manifests; defer blob GC to the
@@ -346,8 +395,12 @@ export async function createCheckpoint(
 export async function restoreCheckpoint(
   state: LoopState,
   ckptId: string,
-  cwd: string = process.cwd(),
+  cwd: string = state.projectCwd,
 ): Promise<boolean> {
+  return serializeCheckpointMutation(state, () => restoreCheckpointUnlocked(state, ckptId, cwd))
+}
+
+async function restoreCheckpointUnlocked(state: LoopState, ckptId: string, cwd: string): Promise<boolean> {
   let raw: string
   try {
     raw = await fs.readFile(manifestPath(state.sessionId, ckptId, cwd), 'utf-8')
@@ -428,9 +481,9 @@ export async function restoreCheckpoint(
   const cutoffIndex = state.checkpoints.findIndex((c) => c.ckptId === ckptId)
   if (cutoffIndex >= 0) {
     const dropped = state.checkpoints.splice(cutoffIndex + 1)
-    for (const d of dropped) {
-      void fs.unlink(manifestPath(state.sessionId, d.ckptId, cwd)).catch(() => undefined)
-    }
+    await Promise.all(
+      dropped.map((entry) => fs.unlink(manifestPath(state.sessionId, entry.ckptId, cwd)).catch(() => undefined)),
+    )
   }
   await garbageCollectBlobs(state, cwd).catch(() => undefined)
   return true
@@ -458,7 +511,7 @@ async function readFileUtf8OrNull(filePath: string): Promise<string | null> {
 export async function getDiffStatsForCheckpoint(
   state: LoopState,
   ckptId: string,
-  cwd: string = process.cwd(),
+  cwd: string = state.projectCwd,
 ): Promise<DiffStats | null> {
   let raw: string
   try {

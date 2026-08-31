@@ -76,6 +76,10 @@ export interface LoopState {
   sessionId: string
   /** CLI invocation cwd captured for this runtime. Shell cwd resolution and permission storage use this stable root. */
   projectCwd: string
+  /** Runtime identity for lifecycle behavior that must not be inferred from
+   * tool filtering. Hydrated and ordinary states are roots; delegated agents
+   * opt in explicitly when their fresh state is created. */
+  agentRole: 'root' | 'sub-agent'
   /** Exact transcript path. Null for new sessions until appendHeader pins
    *  the timestamp-only path; hydrated legacy sessions preserve their
    *  original slug-prefixed path so resume keeps appending in place. */
@@ -240,6 +244,7 @@ export interface LoopState {
 export interface CreateLoopStateOptions {
   ownerSessionId?: string
   projectCwd?: string
+  agentRole?: 'root' | 'sub-agent'
   shellProvider?: ManagedShellProvider
 }
 
@@ -269,6 +274,7 @@ export function createLoopState(
     lastInputTokens: 0,
     sessionId,
     projectCwd,
+    agentRole: options.agentRole ?? 'root',
     sessionFilePath: null,
     startedAt: new Date().toISOString(),
     filesModified: new Set(),

@@ -352,7 +352,10 @@ async function runSubAgentUnlocked(
     isGitRepo,
   })
 
-  const subState = createLoopState('default', { projectCwd: parentState.projectCwd })
+  const subState = createLoopState('default', {
+    projectCwd: parentState.projectCwd,
+    agentRole: 'sub-agent',
+  })
   subState.executionAuthority = structuredClone(authority)
   subState.systemPromptCache = subSystemPrompt
 

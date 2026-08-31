@@ -246,7 +246,7 @@ describe('buildDeferredCatalog', () => {
         modelId: 'test:model',
         toolFilter: { deny: [] },
       } as any,
-      createLoopState(),
+      createLoopState('default', { agentRole: 'sub-agent' }),
     )
     expect(childTools).not.toHaveProperty('browserVisualCheck')
   })

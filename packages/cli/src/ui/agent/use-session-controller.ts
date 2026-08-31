@@ -288,7 +288,7 @@ export function useSessionController({
         if (!target) return { ok: false, reason: `Checkpoint not found: ${checkpointId}` }
 
         if (mode === 'both' || mode === 'code') {
-          const restored = await restoreCheckpoint(state, checkpointId)
+          const restored = await restoreCheckpoint(state, checkpointId, state.projectCwd)
           if (!restored) {
             return {
               ok: false,
@@ -333,7 +333,7 @@ export function useSessionController({
     async (checkpointId: string): Promise<DiffStats | null> => {
       const state = loopStateRef.current
       if (!state) return null
-      return getDiffStatsForCheckpoint(state, checkpointId)
+      return getDiffStatsForCheckpoint(state, checkpointId, state.projectCwd)
     },
     [loopStateRef],
   )

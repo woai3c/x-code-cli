@@ -82,7 +82,7 @@ describe('sub-agent shell transport closure', () => {
   )
 
   it('removes the whole shell capability when a runtime filter bypasses registry validation', async () => {
-    const state = createLoopState('default', { projectCwd: process.cwd() })
+    const state = createLoopState('default', { projectCwd: process.cwd(), agentRole: 'sub-agent' })
     try {
       const tools = buildTools(
         { modelId: 'test-model', trustMode: true, printMode: false, toolFilter: { deny: ['shellOutput'] } },

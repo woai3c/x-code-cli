@@ -168,7 +168,7 @@ describe('peer model tools', () => {
         peerService,
         toolFilter: { allow: ['listAgents', 'sendMessage'] },
       } as unknown as AgentOptions,
-      createLoopState(),
+      createLoopState('default', { agentRole: 'sub-agent' }),
     )
     expect(subAgentTools).not.toHaveProperty('listAgents')
     expect(subAgentTools).not.toHaveProperty('sendMessage')

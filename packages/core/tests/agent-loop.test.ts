@@ -10,8 +10,10 @@ import { createGoal, requestGoalBlocked } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import type { LoopState } from '../src/agent/loop-state.js'
 import { agentLoop } from '../src/agent/loop.js'
+import { createCheckpoint } from '../src/agent/snapshot.js'
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
 import { isManagedMemoryAccess, isManagedMemoryMutation } from '../src/agent/tool-execution.js'
+import { buildKnowledgeContext } from '../src/knowledge/loader.js'
 import type { LateRecallSignals, MemoryRecallAttachment } from '../src/knowledge/memory/types.js'
 import type { AgentCallbacks, TokenUsage } from '../src/types/index.js'
 
@@ -48,6 +50,10 @@ vi.mock('../src/knowledge/loader.js', () => ({
 
 vi.mock('../src/agent/session-summary.js', () => ({
   generateSessionSummary: vi.fn().mockResolvedValue({}),
+}))
+
+vi.mock('../src/agent/snapshot.js', () => ({
+  createCheckpoint: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('../src/agent/browser/visual-check.js', () => ({
@@ -406,6 +412,7 @@ describe('agent loop', () => {
     ])
 
     memoryService.enqueuePostTurnJob.mockClear()
+    const childState = createLoopState('default', { agentRole: 'sub-agent' })
     await agentLoop(
       'Remember this child result',
       {} as any,
@@ -418,8 +425,127 @@ describe('agent loop', () => {
         toolFilter: { allow: [] },
       },
       mockCallbacks,
+      childState,
     )
     expect(memoryService.enqueuePostTurnJob).not.toHaveBeenCalled()
+  })
+
+  it('uses the LoopState project cwd for every project-bound collaborator', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+    const projectCwd = path.join(os.tmpdir(), 'x-code-agent-loop-project')
+    const state = createLoopState('default', { projectCwd })
+    const memoryService = {
+      setActiveModelId: vi.fn(),
+      setNoticeHandler: vi.fn(),
+      initialize: vi.fn().mockResolvedValue(undefined),
+      recall: vi.fn().mockResolvedValue(null),
+      getConfig: vi.fn().mockReturnValue({ maxInputTokens: 12_000 }),
+      enqueuePostTurnJob: vi.fn().mockResolvedValue('created'),
+      search: vi.fn().mockResolvedValue([]),
+    }
+    const hookBus = {
+      has: vi.fn((name: string) => name === 'UserPromptSubmit' || name === 'TurnComplete'),
+      emit: vi.fn().mockResolvedValue([]),
+    }
+
+    await agentLoop(
+      'Remember this project context',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 1,
+        printMode: false,
+        memoryService: memoryService as any,
+        hookBus: hookBus as any,
+      },
+      mockCallbacks,
+      state,
+    )
+
+    expect(memoryService.initialize).toHaveBeenCalledWith(projectCwd)
+    expect(memoryService.recall.mock.calls[0]?.[0].repositoryId).toBe(projectCwd.replace(/\\/g, '/'))
+    expect(memoryService.enqueuePostTurnJob.mock.calls[0]?.[0]).toMatchObject({
+      repositoryId: projectCwd,
+      projection: { repositoryId: projectCwd },
+    })
+    expect(buildKnowledgeContext).toHaveBeenCalledWith({ memoryService, cwd: projectCwd })
+    expect(createCheckpoint).toHaveBeenCalledWith(state, 'Remember this project context', projectCwd, undefined)
+    expect(hookBus.emit.mock.calls.map(([event]) => (event as { session: { cwd: string } }).session.cwd)).toEqual([
+      projectCwd,
+      projectCwd,
+    ])
+  })
+
+  it('uses agentRole for checkpoints while a restricted root turn keeps memory disabled', async () => {
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'done' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'done' }] }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+    const memoryService = {
+      setActiveModelId: vi.fn(),
+      setNoticeHandler: vi.fn(),
+      initialize: vi.fn().mockResolvedValue(undefined),
+      recall: vi.fn().mockResolvedValue(null),
+      getConfig: vi.fn().mockReturnValue({ maxInputTokens: 12_000 }),
+      enqueuePostTurnJob: vi.fn().mockResolvedValue('created'),
+      search: vi.fn().mockResolvedValue([]),
+    }
+    const rootState = createLoopState()
+
+    await agentLoop(
+      'restricted root turn',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 1,
+        printMode: false,
+        memoryService: memoryService as any,
+        toolFilter: { allow: [] },
+      },
+      mockCallbacks,
+      rootState,
+    )
+
+    expect(memoryService.initialize).not.toHaveBeenCalled()
+    expect(memoryService.enqueuePostTurnJob).not.toHaveBeenCalled()
+    expect(createCheckpoint).toHaveBeenCalledWith(rootState, 'restricted root turn', rootState.projectCwd, undefined)
+
+    vi.mocked(createCheckpoint).mockClear()
+    const childState = createLoopState('default', { agentRole: 'sub-agent' })
+    await agentLoop(
+      'child turn',
+      {} as any,
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        maxTurns: 1,
+        printMode: false,
+        toolFilter: { allow: [] },
+      },
+      mockCallbacks,
+      childState,
+    )
+
+    expect(createCheckpoint).not.toHaveBeenCalled()
   })
 
   it('does not initialize, recall, search, or persist memory for peer-influenced turns', async () => {
@@ -955,10 +1081,13 @@ describe('agent loop', () => {
     const opts = { modelId: 'test:model', trustMode: false, maxTurns: 1, printMode: false }
     const first = await agentLoop('msg 1', {} as any, opts, mockCallbacks)
     expect(first.turnCount).toBe(1)
+    const firstInstructions = vi.mocked(streamText).mock.calls[0]?.[0].instructions
+    expect(firstInstructions).toBe(first.state.systemPromptCache)
 
     // Re-enter with the same LoopState — simulates a second user submit.
     const second = await agentLoop('msg 2', {} as any, opts, mockCallbacks, first.state)
     expect(second.turnCount).toBe(1)
+    expect(vi.mocked(streamText).mock.calls[1]?.[0].instructions).toBe(firstInstructions)
   })
 
   it('omitted maxTurns runs without a cap', async () => {

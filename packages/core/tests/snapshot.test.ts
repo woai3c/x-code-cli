@@ -103,6 +103,30 @@ describe('snapshot: roundtrip', () => {
     expect(await readFile(file, 'utf-8')).toBe('original')
   })
 
+  it('uses state.projectCwd when the ambient process cwd differs', async () => {
+    const projectDir = path.join(tempDir, 'project')
+    const file = path.join(projectDir, 'src', 'a.ts')
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, 'original', 'utf-8')
+    const state = createLoopState('default', { projectCwd: projectDir })
+    state.filesModified.add(file)
+
+    const checkpoint = await createCheckpoint(state, 'project checkpoint')
+    expect(checkpoint).not.toBeNull()
+    expect(process.cwd()).not.toBe(projectDir)
+    await expect(
+      readFile(
+        path.join(projectDir, XCODE_DIR, 'file-history', state.sessionId, 'checkpoints', `${checkpoint!.ckptId}.json`),
+        'utf-8',
+      ),
+    ).resolves.toContain(checkpoint!.ckptId)
+
+    await writeFile(file, 'modified', 'utf-8')
+    await expect(getDiffStatsForCheckpoint(state, checkpoint!.ckptId)).resolves.toMatchObject({ filesChanged: [file] })
+    await expect(restoreCheckpoint(state, checkpoint!.ckptId)).resolves.toBe(true)
+    await expect(readFile(file, 'utf-8')).resolves.toBe('original')
+  })
+
   it('returns false for an unknown checkpoint id', async () => {
     const state = createLoopState()
     expect(await restoreCheckpoint(state, 'does-not-exist', tempDir)).toBe(false)
@@ -117,6 +141,55 @@ describe('snapshot: roundtrip', () => {
     expect(ckpt!.messageCount).toBe(1)
     expect(state.checkpoints).toHaveLength(1)
     expect(state.checkpoints[0]!.ckptId).toBe(ckpt!.ckptId)
+  })
+
+  it('serializes concurrent checkpoints while keeping canonical ids unique', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-31T12:00:00.123Z'))
+    try {
+      const state = createLoopState()
+      const file = await writeWorkfile('a.ts', 'content')
+      state.filesModified.add(file)
+
+      const checkpoints = await Promise.all([
+        createCheckpoint(state, 'm1', tempDir),
+        createCheckpoint(state, 'm2', tempDir),
+        createCheckpoint(state, 'm3', tempDir),
+      ])
+
+      const ids = checkpoints.map((checkpoint) => checkpoint!.ckptId)
+      expect(new Set(ids).size).toBe(3)
+      expect(ids.every((id) => /^\d{8}-\d{6}-\d{3}$/.test(id))).toBe(true)
+      expect(state.checkpoints.map((checkpoint) => checkpoint.ckptId)).toEqual(ids)
+      expect(await lsHistory(state.sessionId, 'checkpoints')).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses exclusive manifest creation across independent states', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-31T12:00:00.123Z'))
+    try {
+      const firstState = createLoopState()
+      const secondState = createLoopState()
+      secondState.sessionId = firstState.sessionId
+      const file = await writeWorkfile('shared.ts', 'content')
+      firstState.filesModified.add(file)
+      secondState.filesModified.add(file)
+
+      const [first, second] = await Promise.all([
+        createCheckpoint(firstState, 'first', tempDir),
+        createCheckpoint(secondState, 'second', tempDir),
+      ])
+
+      expect(first).not.toBeNull()
+      expect(second).not.toBeNull()
+      expect(first!.ckptId).not.toBe(second!.ckptId)
+      expect(await lsHistory(firstState.sessionId, 'checkpoints')).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
