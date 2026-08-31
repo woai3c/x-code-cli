@@ -1,3 +1,26 @@
+## v0.6.0 (2026-08-31)
+
+### Features
+
+- add secure Windows peer messaging (#29) (3d8d77d)
+- add safe multimedia file ingestion (d593807)
+- add global context window override (2525abb)
+- add ChatGPT subscription authentication (de870b5)
+
+### Bug Fixes
+
+- align agent context and checkpoint state (809bb14)
+- preserve queued message display order (7fb6352)
+- restore reliable media ingestion and caching (73e2382)
+- stabilize media ingestion and model requests (42f7352)
+- harden multimedia ingestion edge cases (90d545c)
+- preserve complete truncated shell output (3a7e06c)
+- correct context window and mode status (b9b1e2f)
+- align prompt cache routing and diagnostics (459c872)
+- preserve user echo padding on resize (ce8a219)
+- honor ChatGPT effective context windows (8514d9b)
+- harden ChatGPT auth and model loading (2c0fed1)
+
 ## v0.5.2 (2026-08-20)
 
 ### Features
