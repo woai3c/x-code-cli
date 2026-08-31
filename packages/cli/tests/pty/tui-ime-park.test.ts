@@ -41,6 +41,7 @@ describe('IME cursor park', () => {
       [{ type: 'completion', text: streamed, chunks: streamed.split('\n'), chunkDelayMs: 120 }],
       async ({ harness }) => {
         await submitInput(harness, 'go')
+        await harness.waitForText('Working')
         await typeInput(harness, 'xy')
         // Let spinner ticks + streaming commits land AFTER our last
         // keystroke — the final flush is then a spinner/commit flush, the
