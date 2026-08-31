@@ -6,7 +6,8 @@ const MIB = 1024 * 1024
 const limits = {
   packed: 3.5 * MIB,
   unpacked: 12.75 * MIB,
-  files: 42,
+  // Release staging adds LICENSE and both README files to the locally checked package.
+  files: 45,
 }
 const cliPackage = JSON.parse(readFileSync(resolve('packages/cli/package.json'), 'utf8'))
 const requiredRuntimeDependencies = ['@vscode/ripgrep', 'fs-ext-extra-prebuilt', 'undici']
