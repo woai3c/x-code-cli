@@ -37,7 +37,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
   moonshotai: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
   alibaba: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
   zhipu: { image: true, pdf: true, audio: false, filesApi: true, toolImageTransport: 'user-message' },
-  deepseek: { image: false, pdf: false, audio: false, filesApi: false, toolImageTransport: 'unsupported' },
+  deepseek: { image: true, pdf: false, audio: false, filesApi: true, toolImageTransport: 'user-message' },
   custom: { image: false, pdf: false, audio: false, filesApi: false, toolImageTransport: 'unsupported' },
 }
 
@@ -141,8 +141,8 @@ export function capabilitiesOf(modelId: string): ProviderCapabilities {
 /** Can this specific MODEL natively see images? Unlike `capabilitiesOf` (which
  *  is provider-level — "does the API accept image parts"), this is per-model,
  *  because providers mix vision and text-only models under one id namespace
- *  (Qwen-VL vs Qwen-Max, GLM-4V vs GLM-5, kimi-k2.6 is multimodal but a plain
- *  DeepSeek is not). Used to gate the browser agent's `--caps vision` so a
+ *  (DeepSeek Flash vs V4 Pro, Qwen-VL vs Qwen-Max, GLM-4V vs GLM-5). Used to
+ *  gate the browser agent's `--caps vision` so a
  *  text-only model never gets screenshots it can't read.
  *
  *  Resolution: alias-expand, look the id up in the curated catalog and trust

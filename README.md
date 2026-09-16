@@ -60,6 +60,8 @@ The current release stores ChatGPT tokens in a plaintext credential file under `
 Alternatively, configure at least one provider API key:
 
 > **Recommended: [DeepSeek](https://platform.deepseek.com/)** — affordable and capable enough for everyday coding. Promotional credits and prices can change; check the official console for current terms.
+>
+> The default DeepSeek model is V4.1 Flash (`deepseek-flash`). It receives supported image attachments and tool screenshots natively; X-Code does not send them to a separate vision model.
 
 | Variable                       | Provider           | Sign up                                                                     |
 | ------------------------------ | ------------------ | --------------------------------------------------------------------------- |
@@ -71,6 +73,21 @@ Alternatively, configure at least one provider API key:
 | `XAI_API_KEY`                  | xAI (Grok)         | [console.x.ai](https://console.x.ai/)                                       |
 | `ZHIPU_API_KEY`                | Zhipu (GLM)        | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
 | `MOONSHOT_API_KEY`             | Moonshot (Kimi)    | [Choose a service](#moonshot-kimi-endpoints)                                |
+
+The curated `/model` catalog tracks the current API families below. Older supported entries remain selectable.
+
+| Provider  | Current catalog highlights                                      | Smart default       |
+| --------- | --------------------------------------------------------------- | ------------------- |
+| Anthropic | Claude Fable 5.1, Opus 5, Sonnet 5, Haiku 4.5                   | Claude Sonnet 5     |
+| OpenAI    | GPT-6 Astra, GPT-5.6 Sol / Terra / Luna                         | GPT-5.6 Sol         |
+| DeepSeek  | DeepSeek V4.1 Flash (native vision), V4 Pro (text only)         | DeepSeek V4.1 Flash |
+| Alibaba   | Qwen3.8 Max / Flash (native vision), Qwen3.7 and Qwen3 variants | Qwen3.8 Max         |
+| Google    | Gemini 3.8 / 3.7 / 3.6 / 3.5 Flash, Gemini 2.5                  | Gemini 3.8 Flash    |
+| xAI       | Grok 4.6, Grok 4.20 reasoning / non-reasoning                   | Grok 4.6            |
+| Zhipu     | GLM-5.3, GLM-5.3 Flash (native vision), earlier GLM models      | GLM-5.3             |
+| Moonshot  | Kimi K3, K2.7 Code / Highspeed, K2.6                            | Kimi K3             |
+
+GPT-6 Astra is intentionally not the OpenAI smart default: GPT-5.6 Sol remains the safer default for ChatGPT subscription compatibility and lower accidental API cost. Models whose reasoning cannot be disabled automatically map `/thinking off` to their lowest supported effort.
 
 **OpenAI-compatible escape hatch** (vLLM / OpenRouter / internal gateways): set both `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`, then address models as `custom:<your-model-id>`.
 
@@ -134,7 +151,7 @@ To enable the `webSearch` tool, configure any one of the following:
 
 > Tavily is recommended for first-time setup: simpler signup, LLM-optimized responses. When several keys are set, the first in the table order above wins. Set `X_CODE_WEB_SEARCH_PROVIDER` to `tavily`, `brave`, `exa`, `perplexity`, `firecrawl`, or `deepseek` to force a specific provider.
 >
-> **DeepSeek users need no extra key**: when the active model is a DeepSeek model and `DEEPSEEK_API_KEY` is set, `webSearch` automatically uses DeepSeek's built-in server-side web search. Note that each search is billed as a model turn (default `deepseek-v4-flash`), not as a flat search request.
+> **DeepSeek users need no extra key**: when the active model is a DeepSeek model and `DEEPSEEK_API_KEY` is set, `webSearch` automatically uses DeepSeek's built-in server-side web search. Note that each search is billed as a model turn (default `deepseek-flash`), not as a flat search request.
 
 </details>
 
@@ -147,7 +164,7 @@ Moonshot/Kimi credentials come from three separate services. A key only works wi
 - China Open Platform: [platform.kimi.com](https://platform.kimi.com/console/api-keys) → `https://api.moonshot.cn/v1`
 - International Open Platform: [platform.kimi.ai](https://platform.kimi.ai/console/api-keys) → `https://api.moonshot.ai/v1`
 
-After selecting a Kimi model via `/model`, an endpoint picker appears automatically.
+After selecting a Kimi model via `/model`, an endpoint picker appears automatically. On Coding Plan, the stable `kimi-for-coding` wire id currently auto-routes to K2.8 Preview; the public Moonshot API model ids remain unchanged.
 
 </details>
 
@@ -311,6 +328,8 @@ Log path: `~/.x-code/logs/debug.log` (Windows: `%USERPROFILE%\.x-code\logs\debug
 ## Build From Source
 
 Requires Node.js 22+ and pnpm 10.x.
+
+The repository pins pnpm 10.28.2 through `packageManager`. If pnpm 11 is installed globally, run `corepack enable` and use the repository-local `pnpm` (or `corepack pnpm`); running pnpm 11 directly is intentionally rejected by `engines.pnpm`.
 
 ```bash
 git clone https://github.com/woai3c/x-code-cli.git

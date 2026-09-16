@@ -659,6 +659,7 @@ export async function ingestFile(
         parts.push({ type: 'text', text: buildCompressionCaption(compressed) })
         onNotice?.(`Normalized image: ${formatBytes(buffer.length)} → ${formatBytes(compressed.data.length)}`)
       }
+      parts.push({ type: 'text', text: BUILT_IN_MEDIA_ANALYSIS_NOTE })
       return parts
     }
 
@@ -732,7 +733,11 @@ function hasCompleteLocalFile(parts: IngestedPart[], filePath: string): boolean 
     if (part.type !== 'text' || !part.text.startsWith('<<file ')) return false
     const openingEnd = part.text.indexOf('>>')
     if (openingEnd === -1 || !part.text.slice(0, openingEnd).includes(pathAttribute)) return false
-    return part.text.indexOf('<</file>>', openingEnd + 2) !== -1
+    if (part.text.indexOf('<</file>>', openingEnd + 2) !== -1) return true
+    return (
+      part.text.slice(0, openingEnd).includes('kind="image"') &&
+      parts.some((candidate) => candidate.type === 'file' && candidate.mediaType.startsWith('image/'))
+    )
   })
 }
 

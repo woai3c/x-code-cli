@@ -69,7 +69,7 @@ describe('OpenAI auth transition state', () => {
 
   it('falls back or disables deterministically when the new account has no models', () => {
     expect(planOpenAIModelReconciliation('openai:old', [], ['deepseek'], 'blocked', (id) => id)).toMatchObject({
-      modelId: 'deepseek:deepseek-v4-flash',
+      modelId: 'deepseek:deepseek-flash',
     })
     expect(planOpenAIModelReconciliation('openai:old', [], [], 'blocked', (id) => id)).toEqual({
       blockedMessage: 'blocked',

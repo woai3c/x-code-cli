@@ -362,6 +362,9 @@ async function finishLightweightCompression(
 ): Promise<void> {
   await markBoundaryAndReflush(state, undefined, candidate)
   setTrackedTranscript(state, candidate)
+  // A compacted transcript may no longer contain the file bodies that made
+  // these de-dup entries valid. Let readFile deliver them again on demand.
+  state.readFileCache.clear()
   state.lastInputTokens = 0
   markExpectedCacheMiss(state, 'compaction')
   emitCompactionHook(hookCtx, {
@@ -389,6 +392,7 @@ async function summarizeLoopState(
   )
   await markBoundaryAndReflush(state, compressed.summary, compressed.trackedMessages)
   setTrackedTranscript(state, compressed.trackedMessages)
+  state.readFileCache.clear()
   await recordCompressionUsage(state, compressed, callbacks, hookCtx)
   state.lastInputTokens = 0
   markExpectedCacheMiss(state, 'compaction')

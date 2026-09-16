@@ -22,7 +22,12 @@ import {
   XAI_PROMPT_CACHE_KEY_HEADER,
   applyCacheControl,
 } from '../src/providers/cache-control.js'
-import { createModelRegistry, kimiCodingModelId } from '../src/providers/registry.js'
+import {
+  createModelRegistry,
+  kimiCodingModelId,
+  withXaiReasoningHeader,
+  withZhipuReasoningHeader,
+} from '../src/providers/registry.js'
 
 function sseResponse(events: unknown[]): Response {
   return new Response(`${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`, {
@@ -50,6 +55,7 @@ describe('Kimi endpoint model ids', () => {
     delete process.env.MOONSHOT_API_KEY
     delete process.env.OPENAI_API_KEY
     delete process.env.XAI_API_KEY
+    delete process.env.ZHIPU_API_KEY
     fs.rmSync(testHome, { recursive: true, force: true })
   })
 
@@ -74,7 +80,7 @@ describe('Kimi endpoint model ids', () => {
     expect(registry.languageModel('moonshotai:kimi-k2.7-code').modelId).toBe('kimi-k2.7-code')
   })
 
-  it('moves xAI session affinity into the Responses prompt_cache_key body field', async () => {
+  it('moves xAI session affinity and xhigh reasoning into the Responses body', async () => {
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ error: { message: 'test stop' } }), {
@@ -87,14 +93,15 @@ describe('Kimi endpoint model ids', () => {
     const cache = applyCacheControl({
       instructions: 'stable instructions',
       messages: [{ role: 'user', content: 'hello' }],
-      modelId: 'xai:grok-4.5',
+      modelId: 'xai:grok-4.6',
       sessionId: 'session-1',
     })
     const result = streamText({
-      model: createModelRegistry().languageModel('xai:grok-4.5'),
+      model: createModelRegistry().languageModel('xai:grok-4.6'),
       instructions: cache.instructions,
       messages: cache.messages,
-      headers: cache.headers,
+      headers: withXaiReasoningHeader(cache.headers, 'xhigh'),
+      reasoning: 'xhigh',
       abortSignal: controller.signal,
       onError: () => undefined,
     })
@@ -105,11 +112,82 @@ describe('Kimi endpoint model ids', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('https://api.x.ai/v1/responses')
-    expect(JSON.parse(String(init?.body))).toMatchObject({ prompt_cache_key: 'session-1' })
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      prompt_cache_key: 'session-1',
+      reasoning: { effort: 'xhigh' },
+    })
     const headers = new Headers(init?.headers)
     expect(headers.get(XAI_PROMPT_CACHE_KEY_HEADER)).toBeNull()
     expect(headers.get('x-grok-conv-id')).toBeNull()
     expect(init?.signal).toBe(controller.signal)
+  })
+
+  it('omits unsupported reasoning parameters for the Grok 4.20 alias', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ error: { message: 'test stop' } }, { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const result = streamText({
+      model: createModelRegistry().languageModel('xai:grok-4.20'),
+      messages: [{ role: 'user', content: 'hello' }],
+      headers: withXaiReasoningHeader(undefined, undefined),
+      onError: () => undefined,
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(String(init?.body))
+    expect(body).not.toHaveProperty('reasoning')
+    expect(body).not.toHaveProperty('reasoning_effort')
+    expect(new Headers(init?.headers).get('x-x-code-xai-reasoning-effort')).toBeNull()
+  })
+
+  it('serializes max Anthropic effort with adaptive thinking enabled', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ error: { message: 'test stop' } }, { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const result = streamText({
+      model: createModelRegistry().languageModel('anthropic:claude-opus-5'),
+      messages: [{ role: 'user', content: 'hello' }],
+      reasoning: 'xhigh',
+      providerOptions: {
+        anthropic: { thinking: { type: 'adaptive' }, effort: 'max' },
+      },
+      onError: () => undefined,
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))
+    expect(body.thinking).toEqual({ type: 'adaptive' })
+    expect(body.output_config).toMatchObject({ effort: 'max' })
+  })
+
+  it('serializes the minimum Zhipu reasoning effort for always-thinking models', async () => {
+    process.env.ZHIPU_API_KEY = 'test-key'
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ error: { message: 'test stop' } }, { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const result = streamText({
+      model: createModelRegistry().languageModel('zhipu:glm-5.3-flash'),
+      messages: [{ role: 'user', content: 'hello' }],
+      headers: withZhipuReasoningHeader(undefined, 'low'),
+      onError: () => undefined,
+    })
+    for await (const _chunk of result.textStream) {
+      // The mock returns a deliberate error after the outbound request is captured.
+    }
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://open.bigmodel.cn/api/paas/v4/chat/completions')
+    expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'glm-5.3-flash', reasoning_effort: 'low' })
+    expect(new Headers(init?.headers).get('x-x-code-zhipu-reasoning-effort')).toBeNull()
   })
 
   it('serializes Anthropic cache breakpoints without putting a system role in messages', async () => {

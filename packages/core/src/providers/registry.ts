@@ -18,6 +18,7 @@ import { createOpenAIChatGPTFetch } from './openai-chatgpt-fetch.js'
 
 const KIMI_CODING_MODEL_IDS = {
   'kimi-k3': 'k3',
+  // The stable Coding Plan id currently auto-routes to K2.8 Preview.
   'kimi-k2.7-code': 'kimi-for-coding',
   'kimi-k2.7-code-highspeed': 'kimi-for-coding-highspeed',
   // Coding Plan exposes K2.6 by disabling thinking on kimi-for-coding rather
@@ -194,6 +195,7 @@ const moonshotConvertUsage = (usage: any) => {
  */
 let _zhipuReasoningEffort: string | undefined
 const ZHIPU_REASONING_HEADER = 'x-x-code-zhipu-reasoning-effort'
+const XAI_REASONING_HEADER = 'x-x-code-xai-reasoning-effort'
 
 export function setZhipuReasoningEffort(effort: string | undefined): void {
   _zhipuReasoningEffort = effort
@@ -202,8 +204,28 @@ export function setZhipuReasoningEffort(effort: string | undefined): void {
 export function withZhipuReasoningHeader(
   headers: Record<string, string | undefined> | undefined,
   effort: string | undefined,
-): Record<string, string | undefined> {
-  return { ...headers, [ZHIPU_REASONING_HEADER]: effort ?? '' }
+): Record<string, string> {
+  return withInternalReasoningHeader(headers, ZHIPU_REASONING_HEADER, effort)
+}
+
+export function withXaiReasoningHeader(
+  headers: Record<string, string | undefined> | undefined,
+  effort: string | undefined,
+): Record<string, string> {
+  return withInternalReasoningHeader(headers, XAI_REASONING_HEADER, effort)
+}
+
+function withInternalReasoningHeader(
+  headers: Record<string, string | undefined> | undefined,
+  name: string,
+  effort: string | undefined,
+): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (value !== undefined) result[key] = value
+  }
+  result[name] = effort ?? ''
+  return result
 }
 
 /** Move x-code's per-session affinity hint to the wire location required by
@@ -212,16 +234,18 @@ export function withZhipuReasoningHeader(
 const xaiPromptCacheFetch: typeof fetch = async (input, init) => {
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
   const promptCacheKey = headers.get(XAI_PROMPT_CACHE_KEY_HEADER)
+  const reasoningEffort = headers.get(XAI_REASONING_HEADER) || undefined
   headers.delete(XAI_PROMPT_CACHE_KEY_HEADER)
+  headers.delete(XAI_REASONING_HEADER)
   const sanitizedInit = { ...init, headers }
-  if (!promptCacheKey) return permanentErrorFetch(input, sanitizedInit)
+  if (!promptCacheKey && !reasoningEffort) return permanentErrorFetch(input, sanitizedInit)
 
   const url = input instanceof URL ? input : new URL(typeof input === 'string' ? input : input.url)
   if (url.pathname.endsWith('/chat/completions')) {
-    headers.set('x-grok-conv-id', promptCacheKey)
+    if (promptCacheKey) headers.set('x-grok-conv-id', promptCacheKey)
+  } else if (!url.pathname.endsWith('/responses')) {
     return permanentErrorFetch(input, sanitizedInit)
   }
-  if (!url.pathname.endsWith('/responses')) return permanentErrorFetch(input, sanitizedInit)
 
   const rawBody = init?.body ?? (input instanceof Request ? await input.clone().text() : undefined)
   if (typeof rawBody !== 'string') return permanentErrorFetch(input, sanitizedInit)
@@ -231,7 +255,18 @@ const xaiPromptCacheFetch: typeof fetch = async (input, init) => {
       return permanentErrorFetch(input, sanitizedInit)
     }
     const body = parsed as Record<string, unknown>
-    if (!body.prompt_cache_key) body.prompt_cache_key = promptCacheKey
+    if (url.pathname.endsWith('/chat/completions')) {
+      if (reasoningEffort) body.reasoning_effort = reasoningEffort
+    } else {
+      if (promptCacheKey && !body.prompt_cache_key) body.prompt_cache_key = promptCacheKey
+      if (reasoningEffort) {
+        const current =
+          body.reasoning && typeof body.reasoning === 'object' && !Array.isArray(body.reasoning)
+            ? (body.reasoning as Record<string, unknown>)
+            : {}
+        body.reasoning = { ...current, effort: reasoningEffort }
+      }
+    }
     return permanentErrorFetch(input, { ...sanitizedInit, body: JSON.stringify(body) })
   } catch {
     return permanentErrorFetch(input, sanitizedInit)

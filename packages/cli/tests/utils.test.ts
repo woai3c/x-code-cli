@@ -50,8 +50,8 @@ describe('CLI tool result summaries', () => {
 })
 
 describe('local file ingestion tool display', () => {
-  it('renders the built-in preflight as Read with portable file-name previews', () => {
-    expect(getToolLabel('fileIngest')).toBe('Read')
+  it('renders the built-in preflight as Attach with portable file-name previews', () => {
+    expect(getToolLabel('fileIngest')).toBe('Attach')
     expect(getToolInputPreview('fileIngest', { filePath: 'C:\\reports\\invoice.pdf' })).toBe('C:\\reports\\invoice.pdf')
   })
 })

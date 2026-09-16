@@ -13,7 +13,7 @@ const scenario: Scenario = {
       lines.push(`line ${i}: lorem ipsum dolor sit amet`)
     }
     // 关键标记放在尾部。前 4999 行模式完全一致 — 一个偷懒的模型只看 head
-    // 就会"按模式外推"答 `lorem ipsum dolor sit amet`（deepseek-v4-flash 实测会）；
+    // 就会"按模式外推"答 `lorem ipsum dolor sit amet`（deepseek-flash 实测会）；
     // 只有真的二次调 readFile(offset≈5000) 拿到尾部才能引用出这个 token。
     lines[4999] = 'line 5000: FINAL_SENTINEL_TOKEN_XYZ'
     await ctx.writeFile('big.txt', lines.join('\n'))

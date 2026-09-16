@@ -25,10 +25,18 @@ afterEach(() => {
 
 describe('getContextWindow', () => {
   it('returns exact value for known models', () => {
+    expect(getContextWindow('anthropic:claude-fable-5-1')).toBe(1000000)
     expect(getContextWindow('anthropic:claude-opus-4-8')).toBe(1000000)
+    expect(getContextWindow('openai:gpt-6-astra')).toBe(1050000)
     expect(getContextWindow('openai:gpt-5.6-sol')).toBe(1047576)
+    expect(getContextWindow('google:gemini-3.8-flash')).toBe(1048576)
+    expect(getContextWindow('google:gemini-3.7-flash')).toBe(1048576)
     expect(getContextWindow('google:gemini-2.5-flash')).toBe(1000000)
-    expect(getContextWindow('deepseek:deepseek-v4-flash')).toBe(1000000)
+    expect(getContextWindow('deepseek:deepseek-flash')).toBe(1000000)
+    expect(getContextWindow('alibaba:qwen3.8-max')).toBe(1000000)
+    expect(getContextWindow('alibaba:qwen3.7-plus')).toBe(1000000)
+    expect(getContextWindow('xai:grok-4.20')).toBe(1000000)
+    expect(getContextWindow('zhipu:glm-5.3-flash')).toBe(1000000)
     expect(getContextWindow('alibaba:qwen-max')).toBe(32768)
   })
 
@@ -72,8 +80,14 @@ describe('getCompressionThreshold', () => {
 
 describe('getMaxOutputTokens', () => {
   it('returns specific ceiling for known models', () => {
-    expect(getMaxOutputTokens('deepseek:deepseek-v4-flash')).toBe(131072)
-    expect(getMaxOutputTokens('alibaba:qwen3.7-plus')).toBe(32000)
+    expect(getMaxOutputTokens('deepseek:deepseek-flash')).toBe(131072)
+    expect(getMaxOutputTokens('anthropic:claude-sonnet-5')).toBe(128000)
+    expect(getMaxOutputTokens('anthropic:claude-haiku-4-5')).toBe(64000)
+    expect(getMaxOutputTokens('openai:gpt-6-astra')).toBe(128000)
+    expect(getMaxOutputTokens('google:gemini-3.8-flash')).toBe(65536)
+    expect(getMaxOutputTokens('google:gemini-3.7-flash')).toBe(65536)
+    expect(getMaxOutputTokens('alibaba:qwen3.8-flash')).toBe(65536)
+    expect(getMaxOutputTokens('alibaba:qwen3.7-plus')).toBe(65536)
     expect(getMaxOutputTokens('alibaba:qwen-max')).toBe(8192)
   })
 

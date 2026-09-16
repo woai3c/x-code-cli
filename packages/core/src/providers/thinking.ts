@@ -5,9 +5,13 @@
 // We use it as the primary mechanism for reasoning control.
 //
 // Exceptions that still need providerOptions / fetch shim injection:
+//   - deepseek: explicit tiers use native reasoningEffort so `max` does not
+//     round-trip through portable `xhigh` and emit a compatibility warning.
 //   - zhipu: goes through @ai-sdk/openai-compatible, SDK doesn't auto-translate
 //     `reasoning` for it. We inject `reasoning_effort` via fetch shim.
 //   - alibaba: uses `enableThinking` in providerOptions (no top-level support).
+//   - native `max` controls for newer Anthropic/OpenAI models also travel via
+//     providerOptions because the portable reasoning enum tops out at xhigh.
 //
 // The user-facing controls:
 //   /thinking on|off — binary toggle (maps to 'high' / 'none')
@@ -17,8 +21,8 @@
 // over the `enabled` flag. The /thinking toggle is only used as a fallback
 // for models without an explicit tier.
 import { providerOf } from './capabilities.js'
-import { PROVIDER_REASONING_TIERS } from './catalog.js'
-import type { ReasoningTierOption } from './catalog.js'
+import { PROVIDER_REASONING_PROFILES } from './catalog.js'
+import type { ReasoningTierOption, ReasoningTierProfile } from './catalog.js'
 import { getOpenAIChatGPTReasoningTiers, getOpenAIChatGPTRuntimeModel } from './openai-chatgpt-models.js'
 
 /** Whether the model exposes a granular reasoning-effort tier (vs. the
@@ -26,20 +30,30 @@ import { getOpenAIChatGPTReasoningTiers, getOpenAIChatGPTRuntimeModel } from './
  *  model families honor them — modelPattern in PROVIDER_REASONING_TIERS
  *  gates that. Drives both the /model tier picker and the effort branch
  *  in getReasoningLevel. */
+function getReasoningTierProfile(modelId: string): ReasoningTierProfile | undefined {
+  return PROVIDER_REASONING_PROFILES[providerOf(modelId)]?.find(
+    (profile) => !profile.modelPattern || profile.modelPattern.test(modelId),
+  )
+}
+
+/** Some fixed-reasoning xAI models reject the effort field entirely. The
+ * public grok-4.20 alias is not recognized by the SDK's equivalent guard. */
+export function acceptsReasoningControl(modelId: string): boolean {
+  if (providerOf(modelId) !== 'xai') return true
+  const providerModelId = modelId.slice(modelId.indexOf(':') + 1)
+  return !/^grok-4\.20(?!-multi-agent(?:$|-))/.test(providerModelId)
+}
+
 export function supportsReasoningTier(modelId: string): boolean {
   const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
   if (chatGPTTiers !== undefined) return chatGPTTiers.length > 0
-  const config = PROVIDER_REASONING_TIERS[providerOf(modelId)]
-  if (!config) return false
-  return !config.modelPattern || config.modelPattern.test(modelId)
+  return getReasoningTierProfile(modelId) !== undefined
 }
 
 export function getReasoningTierOptions(modelId: string): readonly ReasoningTierOption[] | undefined {
   const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
   if (chatGPTTiers !== undefined) return chatGPTTiers
-  const config = PROVIDER_REASONING_TIERS[providerOf(modelId)]
-  if (!config || (config.modelPattern && !config.modelPattern.test(modelId))) return undefined
-  return config.options
+  return getReasoningTierProfile(modelId)?.options
 }
 
 export type ReasoningLevel = 'provider-default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
@@ -53,6 +67,15 @@ const TIER_TO_REASONING: Record<string, ReasoningLevel> = {
   medium: 'medium',
   high: 'high',
   max: 'xhigh',
+}
+
+/** Resolve the provider-native effort after applying model support and the
+ * minimum valid effort for models that cannot turn reasoning off. */
+export function getReasoningEffort(modelId: string, enabled: boolean, effort?: string): string | undefined {
+  const profile = getReasoningTierProfile(modelId)
+  if (!profile) return undefined
+  if (effort && profile.options.some((option) => option.value === effort)) return effort
+  return !enabled ? profile.offValue : undefined
 }
 
 /**
@@ -69,7 +92,7 @@ export function getReasoningLevel(modelId: string, enabled: boolean, effort?: st
   const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
 
   // These providers use separate mechanisms (providerOptions / fetch shim)
-  if (provider === 'alibaba' || provider === 'zhipu' || provider === 'custom') {
+  if (provider === 'alibaba' || provider === 'zhipu' || provider === 'custom' || !acceptsReasoningControl(modelId)) {
     return undefined
   }
 
@@ -83,20 +106,22 @@ export function getReasoningLevel(modelId: string, enabled: boolean, effort?: st
     return chatGPTTiers[Math.floor((chatGPTTiers.length - 1) / 2)]?.value as ReasoningLevel
   }
 
-  // Tiered reasoning — user picked an explicit effort level AND the model
-  // honors it.
-  if (effort && supportsReasoningTier(modelId)) {
-    return TIER_TO_REASONING[effort] ?? (effort as ReasoningLevel)
+  const effectiveEffort = getReasoningEffort(modelId, enabled, effort)
+  // DeepSeek exposes provider-native low/high/max values. Sending the
+  // portable max equivalent (`xhigh`) makes the SDK map it back to `max`
+  // and emit a compatibility warning, so explicit tiers travel only through
+  // providerOptions.deepseek.reasoningEffort.
+  if (provider === 'deepseek' && effectiveEffort) return undefined
+  if (effectiveEffort) {
+    return TIER_TO_REASONING[effectiveEffort] ?? (effectiveEffort as ReasoningLevel)
   }
 
   return enabled ? 'high' : 'none'
 }
 
 /**
- * Build providerOptions for providers that can't use the top-level
- * `reasoning` parameter: Alibaba (enableThinking) and Zhipu (thinking toggle).
- *
- * Returns an empty object for providers that use top-level `reasoning`.
+ * Build provider-native reasoning options where the portable top-level
+ * `reasoning` value cannot express the exact provider control.
  */
 export function getThinkingProviderOptions(
   modelId: string,
@@ -106,16 +131,31 @@ export function getThinkingProviderOptions(
   const provider = providerOf(modelId)
 
   switch (provider) {
+    case 'deepseek':
+      const deepseekEffort = getReasoningEffort(modelId, enabled, effort)
+      return deepseekEffort ? { deepseek: { reasoningEffort: deepseekEffort } } : {}
+
     case 'alibaba':
       return { alibaba: { enableThinking: enabled } }
 
     case 'zhipu':
       // Binary toggle via providerOptions for models that don't use tiers.
       // Tiered models get reasoning_effort injected by the fetch shim.
-      if (effort && supportsReasoningTier(modelId)) {
-        return { zhipu: { thinking: { type: 'enabled' } } }
+      const zhipuEffort = getReasoningEffort(modelId, enabled, effort)
+      if (zhipuEffort) {
+        return { zhipu: { thinking: { type: 'enabled' }, reasoningEffort: zhipuEffort } }
       }
       return enabled ? { zhipu: { thinking: { type: 'enabled' } } } : { zhipu: { thinking: { type: 'disabled' } } }
+
+    case 'anthropic':
+      return effort === 'max' && getReasoningTierOptions(modelId)?.some((option) => option.value === 'max')
+        ? { anthropic: { thinking: { type: 'adaptive' }, effort: 'max' } }
+        : {}
+
+    case 'openai':
+      return effort === 'max' && getReasoningTierOptions(modelId)?.some((option) => option.value === 'max')
+        ? { openai: { reasoningEffort: 'max' } }
+        : {}
 
     default:
       return {}

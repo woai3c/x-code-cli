@@ -152,7 +152,7 @@ describe('stdout writer spacing', () => {
     })
 
     const plain = output.replace(/\x1b\[[0-9;]*m/g, '')
-    expect(plain).toContain('Read 2 files(invoice.pdf, analysis.docx)')
+    expect(plain).toContain('Attached 2 files(invoice.pdf, analysis.docx)')
     expect(plain.match(/Prepared for analysis\./g)).toBeNull()
   })
 

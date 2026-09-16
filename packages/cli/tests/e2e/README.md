@@ -16,7 +16,7 @@ pnpm test:e2e
 ```
 
 The runner detects which `*_API_KEY` you have set, lists the matching models,
-and asks you to pick one. Default is `deepseek:deepseek-v4-flash` (cheap, fast).
+and asks you to pick one. Default is `deepseek:deepseek-flash` (V4.1 Flash, cheap, fast, and vision-capable).
 
 ## Flags
 
@@ -34,8 +34,8 @@ pnpm test:e2e --max-turns 8        # cap agent loop turns
 
 ## Cost
 
-`deepseek-v4-flash` runs the whole suite (26 scenarios, ~50-100K tokens total)
-for roughly **$0.10–0.18 per full run**. Each scenario takes 5–30 seconds.
+`deepseek-flash` runs the whole suite (26 scenarios, ~50-100K tokens total).
+Cost varies with input/output mix, cache hits, and DeepSeek peak/off-peak pricing. Each scenario takes 5–30 seconds.
 Full suite: 4–8 minutes typically.
 
 If you only want to verify changes near a specific area, use `--filter` and
@@ -85,7 +85,7 @@ export default scenario
 | Method                        | What it does                                                     |
 | ----------------------------- | ---------------------------------------------------------------- |
 | `ctx.tmpDir`                  | Absolute path to this scenario's temp directory. CLI runs there. |
-| `ctx.modelId`                 | Resolved model id (e.g. `deepseek:deepseek-v4-flash`).           |
+| `ctx.modelId`                 | Resolved model id (e.g. `deepseek:deepseek-flash`).              |
 | `ctx.writeFile(rel, content)` | Write a file inside tmpDir.                                      |
 | `ctx.readFile(rel)`           | Read a file.                                                     |
 | `ctx.fileExists(rel)`         | Returns `Promise<boolean>`.                                      |

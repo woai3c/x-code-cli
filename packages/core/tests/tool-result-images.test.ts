@@ -45,21 +45,25 @@ describe('deliverToolImages', () => {
     expect(captionImageBuffer).not.toHaveBeenCalled()
   })
 
-  it('keeps Kimi images in canonical tool history for request-time reattachment', async () => {
-    const r = await deliverToolImages(ctx('moonshotai:kimi-k3'), 'shot taken', IMG)
-    expect(r.images).toEqual(IMG)
-    expect(r.text).toBe('shot taken')
+  it('keeps Chat Completions vision images in canonical tool history for request-time reattachment', async () => {
+    for (const modelId of ['moonshotai:kimi-k3', 'deepseek:deepseek-flash']) {
+      const r = await deliverToolImages(ctx(modelId), 'shot taken', IMG)
+      expect(r.images, modelId).toEqual(IMG)
+      expect(r.text, modelId).toBe('shot taken')
+    }
     expect(captionImageBuffer).not.toHaveBeenCalled()
   })
 
-  it('does not borrow a separate vision provider when the active Kimi model can view the image', async () => {
+  it('does not borrow a separate vision provider when the active model can view the image', async () => {
     vi.mocked(pickVisionProvider).mockReturnValue({
       provider: 'google',
       modelId: 'google:gemini-2.5-flash',
       label: 'Gemini 2.5 Flash',
     })
-    const r = await deliverToolImages(ctx('moonshotai:kimi-k3'), 'shot taken', IMG)
-    expect(r.images).toEqual(IMG)
+    for (const modelId of ['moonshotai:kimi-k3', 'deepseek:deepseek-flash']) {
+      const r = await deliverToolImages(ctx(modelId), 'shot taken', IMG)
+      expect(r.images, modelId).toEqual(IMG)
+    }
     expect(captionImageBuffer).not.toHaveBeenCalled()
   })
 
@@ -69,7 +73,7 @@ describe('deliverToolImages', () => {
       modelId: 'google:gemini-2.5-flash',
       label: 'Gemini 2.5 Flash',
     })
-    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG)
+    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-pro'), 'shot taken', IMG)
     expect(r.images).toBeUndefined()
     expect(r.text).toContain('A MAP OF BERLIN')
     expect(r.text).toContain('Privacy notice')
@@ -83,7 +87,7 @@ describe('deliverToolImages', () => {
       modelId: 'google:gemini-2.5-flash',
       label: 'Gemini 2.5 Flash',
     })
-    await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG, {
+    await deliverToolImages(ctx('deepseek:deepseek-v4-pro'), 'shot taken', IMG, {
       captionPrompt: 'Report only visible UI defects.',
       maxOutputTokens: 400,
     })
@@ -115,7 +119,7 @@ describe('deliverToolImages', () => {
           releaseUsageWrite = resolve
         }),
     )
-    const context = ctx('deepseek:deepseek-v4-flash')
+    const context = ctx('deepseek:deepseek-v4-pro')
     let completed = false
     const resultPromise = deliverToolImages(context, 'shot taken', IMG).then((result) => {
       completed = true
@@ -134,14 +138,14 @@ describe('deliverToolImages', () => {
   })
 
   it('drops the image with a clear note when no vision model is available', async () => {
-    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG)
+    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-pro'), 'shot taken', IMG)
     expect(r.images).toBeUndefined()
     expect(r.text).toContain('no vision model is available')
     expect(captionImageBuffer).not.toHaveBeenCalled()
   })
 
   it('uses a caller-specific fallback when no accessibility snapshot exists', async () => {
-    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shot taken', IMG, {
+    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-pro'), 'shot taken', IMG, {
       unavailableFallback: 'No accessibility snapshot was returned for this check.',
     })
 
@@ -157,7 +161,7 @@ describe('deliverToolImages', () => {
       label: 'Gemini 2.5 Flash',
     })
     const two = [...IMG, { data: Buffer.from('second').toString('base64'), mediaType: 'image/png' }]
-    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-flash'), 'shots', two)
+    const r = await deliverToolImages(ctx('deepseek:deepseek-v4-pro'), 'shots', two)
     expect(captionImageBuffer).toHaveBeenCalledTimes(2)
     expect(r.text).toContain('Screenshot 1')
     expect(r.text).toContain('Screenshot 2')

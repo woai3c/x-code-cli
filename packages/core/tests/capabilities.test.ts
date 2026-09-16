@@ -14,7 +14,18 @@ describe('modelSupportsVision', () => {
     expect(modelSupportsVision('anthropic:claude-haiku-4-5')).toBe(true)
     expect(modelSupportsVision('moonshotai:kimi-k3')).toBe(true)
     expect(modelSupportsVision('moonshotai:kimi-k2.6')).toBe(true)
+    expect(modelSupportsVision('deepseek:deepseek-flash')).toBe(true)
+    expect(modelSupportsVision('deepseek:deepseek-v4-flash')).toBe(true)
+    expect(modelSupportsVision('alibaba:qwen3.8-max')).toBe(true)
+    expect(modelSupportsVision('alibaba:qwen3.8-flash')).toBe(true)
+    expect(modelSupportsVision('alibaba:qwen3.7-plus')).toBe(true)
+    expect(modelSupportsVision('alibaba:qwen3.7-flash')).toBe(true)
     expect(modelSupportsVision('alibaba:qwen3-vl-flash')).toBe(true)
+    expect(modelSupportsVision('google:gemini-3.8-flash')).toBe(true)
+    expect(modelSupportsVision('google:gemini-3.7-flash')).toBe(true)
+    expect(modelSupportsVision('xai:grok-4.6')).toBe(true)
+    expect(modelSupportsVision('zhipu:glm-5.3-flash')).toBe(true)
+    expect(modelSupportsVision('moonshotai:kimi-k2.7-code-highspeed')).toBe(true)
     expect(modelSupportsVision('zhipu:glm-4.6v')).toBe(true)
   })
 
@@ -23,18 +34,18 @@ describe('modelSupportsVision', () => {
     // specific models are text-only — the per-model flag must win.
     expect(modelSupportsVision('alibaba:qwen3.7-max')).toBe(false)
     expect(modelSupportsVision('zhipu:glm-5.2')).toBe(false)
-    expect(modelSupportsVision('deepseek:deepseek-v4-flash')).toBe(false)
+    expect(modelSupportsVision('deepseek:deepseek-v4-pro')).toBe(false)
   })
 
   it('expands aliases before lookup', () => {
-    expect(modelSupportsVision('opus')).toBe(true) // → anthropic:claude-opus-4-8
-    expect(modelSupportsVision('deepseek')).toBe(false) // → deepseek:deepseek-v4-flash
+    expect(modelSupportsVision('opus')).toBe(true) // → anthropic:claude-opus-5
+    expect(modelSupportsVision('deepseek')).toBe(true) // → deepseek:deepseek-flash
   })
 
   it('falls back to provider-level capability for unlisted ids', () => {
     // Not in the catalog → defer to the provider's image capability.
     expect(modelSupportsVision('anthropic:claude-some-future-model')).toBe(true)
-    expect(modelSupportsVision('deepseek:some-future-model')).toBe(false)
+    expect(modelSupportsVision('deepseek:some-future-model')).toBe(true)
     expect(modelSupportsVision('unknownprovider:whatever')).toBe(false)
   })
 
@@ -71,13 +82,19 @@ describe('toolImageTransport capability', () => {
   })
 
   it('reattaches media in a following user message for Chat Completions providers', () => {
-    for (const id of ['moonshotai:kimi-k2.6', 'alibaba:qwen3-vl-flash', 'zhipu:glm-4.6v', 'xai:grok-4.3']) {
+    for (const id of [
+      'deepseek:deepseek-flash',
+      'moonshotai:kimi-k2.6',
+      'alibaba:qwen3-vl-flash',
+      'zhipu:glm-4.6v',
+      'xai:grok-4.3',
+    ]) {
       expect(capabilitiesOf(id).toolImageTransport, id).toBe('user-message')
     }
   })
 
   it('marks text-only and unknown providers unsupported', () => {
-    for (const id of ['deepseek:deepseek-v4', 'custom:whatever', 'unknownprovider:whatever']) {
+    for (const id of ['custom:whatever', 'unknownprovider:whatever']) {
       expect(capabilitiesOf(id).toolImageTransport, id).toBe('unsupported')
     }
   })

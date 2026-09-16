@@ -228,7 +228,7 @@ describe('readFile tool', () => {
     const filePath = path.join(tmpDir, 'image.png')
     const { Jimp } = await import('jimp')
     await fs.writeFile(filePath, await new Jimp({ width: 3, height: 2, color: 0xffffffff }).getBuffer('image/png'))
-    const tool = createReadFileTool(undefined, { modelId: 'deepseek:deepseek-v4-flash' })
+    const tool = createReadFileTool(undefined, { modelId: 'deepseek:deepseek-v4-pro' })
     const result = await tool.execute!({ filePath }, {
       toolCallId: 'image-ocr-test',
       messages: [],
@@ -237,6 +237,45 @@ describe('readFile tool', () => {
 
     expect(result).toContain('mock readFile OCR')
     expect(JSON.stringify(result)).not.toContain('image-data')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('returns native image content to DeepSeek Flash without local OCR', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-deepseek-image-'))
+    const filePath = path.join(tmpDir, 'image.png')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(filePath, await new Jimp({ width: 3, height: 2, color: 0xffffffff }).getBuffer('image/png'))
+    const tool = createReadFileTool(undefined, { modelId: 'deepseek:deepseek-flash' })
+    const result = await tool.execute!({ filePath }, {
+      toolCallId: 'deepseek-image-test',
+      messages: [],
+      abortSignal: undefined,
+    } as never)
+
+    expect(result).toMatchObject({
+      type: 'content',
+      value: expect.arrayContaining([
+        expect.objectContaining({ type: 'file', mediaType: 'image/png' }),
+        expect.objectContaining({ type: 'text', text: expect.stringContaining('Do not invoke readFile') }),
+      ]),
+    })
+    expect(JSON.stringify(result)).not.toContain('mock readFile OCR')
+    await fs.rm(tmpDir, { recursive: true })
+  })
+
+  it('does not deliver an unchanged image twice through readFile', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xc-rf-image-cache-'))
+    const filePath = path.join(tmpDir, 'image.png')
+    const { Jimp } = await import('jimp')
+    await fs.writeFile(filePath, await new Jimp({ width: 3, height: 2, color: 0xffffffff }).getBuffer('image/png'))
+    const tool = createReadFileTool(new Map(), { modelId: 'deepseek:deepseek-flash' })
+    const options = { toolCallId: 'deepseek-image-cache-test', messages: [], abortSignal: undefined } as never
+
+    const first = await tool.execute!({ filePath }, options)
+    const second = await tool.execute!({ filePath }, options)
+
+    expect(first).toMatchObject({ type: 'content' })
+    expect(second).toContain('is unchanged since its full content was added')
     await fs.rm(tmpDir, { recursive: true })
   })
 })

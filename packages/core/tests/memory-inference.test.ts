@@ -43,6 +43,52 @@ describe('memory inference policy', () => {
     expect(generate).toHaveBeenCalledWith({ maxOutputTokens: 1500, reasoning: 'low' })
   })
 
+  it('keeps current always-thinking families at their minimum effort', async () => {
+    const generate = vi.fn().mockResolvedValue({ output: {} })
+
+    await runMemoryInference({
+      modelId: 'anthropic:claude-fable-5-1',
+      maxOutputTokens: 1500,
+      maxTotalOutputTokens: 8192,
+      generate,
+    })
+
+    expect(generate).toHaveBeenCalledWith({ maxOutputTokens: 1500, reasoning: 'low' })
+  })
+
+  it('uses the minimum GLM-5.3 effort for memory inference', async () => {
+    for (const modelId of ['zhipu:glm-5.3', 'zhipu:glm-5.3-flash']) {
+      const generate = vi.fn().mockResolvedValue({ output: {} })
+
+      await runMemoryInference({
+        modelId,
+        maxOutputTokens: 1500,
+        maxTotalOutputTokens: 8192,
+        generate,
+      })
+
+      expect(generate).toHaveBeenCalledWith({
+        maxOutputTokens: 1500,
+        providerOptions: {
+          zhipu: { thinking: { type: 'enabled' }, reasoningEffort: 'low' },
+        },
+      })
+    }
+  })
+
+  it('omits unsupported reasoning controls for fixed-reasoning Grok 4.20', async () => {
+    const generate = vi.fn().mockResolvedValue({ output: {} })
+
+    await runMemoryInference({
+      modelId: 'xai:grok-4.20',
+      maxOutputTokens: 1500,
+      maxTotalOutputTokens: 8192,
+      generate,
+    })
+
+    expect(generate).toHaveBeenCalledWith({ maxOutputTokens: 1500 })
+  })
+
   it('starts OpenAI models without an off tier at low effort without temperature', async () => {
     const generate = vi.fn().mockResolvedValue({ output: {} })
 

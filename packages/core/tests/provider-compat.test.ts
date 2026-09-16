@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { createDeepSeek } from '@ai-sdk/deepseek'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
 import type { ModelMessage } from 'ai'
@@ -38,6 +39,7 @@ function imageToolResult(toolCallId: string, data: string, toolName = 'readFile'
 
 describe('stripBinaryPartsFromMessages', () => {
   it('replaces user image/file parts and tool-result media with text notices', () => {
+    const deliveredFileCache = new Map([['/tmp/image.png', { mtimeMs: 1, size: 1 }]])
     const messages = [
       {
         role: 'user',
@@ -65,7 +67,8 @@ describe('stripBinaryPartsFromMessages', () => {
       },
     ] as unknown as ModelMessage[]
 
-    expect(stripBinaryPartsFromMessages(messages)).toBe(true)
+    expect(stripBinaryPartsFromMessages(messages, deliveredFileCache)).toBe(true)
+    expect(deliveredFileCache.size).toBe(0)
 
     const userContent = messages[0]!.content as Array<{ type: string; text?: string }>
     expect(userContent.map((p) => p.type)).toEqual(['text', 'text'])
@@ -87,7 +90,7 @@ describe('stripBinaryPartsFromMessages', () => {
 })
 
 describe('reattachToolResultImagesForProvider', () => {
-  it('moves a contiguous Kimi tool-image group into one following user message', () => {
+  it('moves a contiguous DeepSeek tool-image group into one following user message', () => {
     const messages: ModelMessage[] = [
       { role: 'assistant', content: [] },
       imageToolResult('tc-1', 'AAAA1'),
@@ -95,7 +98,7 @@ describe('reattachToolResultImagesForProvider', () => {
       { role: 'assistant', content: 'continued' },
     ]
 
-    const requestMessages = reattachToolResultImagesForProvider(messages, 'moonshotai:kimi-k3')
+    const requestMessages = reattachToolResultImagesForProvider(messages, 'deepseek:deepseek-flash')
 
     expect(requestMessages.map((message) => message.role)).toEqual(['assistant', 'tool', 'tool', 'user', 'assistant'])
     for (const message of requestMessages.slice(1, 3)) {
@@ -169,7 +172,7 @@ describe('reattachToolResultImagesForProvider', () => {
   })
 
   it('leaves native and text-only transports unchanged', () => {
-    for (const modelId of ['openai:gpt-5.6-sol', 'anthropic:claude-sonnet-5', 'deepseek:deepseek-v4-flash']) {
+    for (const modelId of ['openai:gpt-5.6-sol', 'anthropic:claude-sonnet-5', 'deepseek:deepseek-v4-pro']) {
       const messages = [imageToolResult('tc-1', 'AAAA1')]
       const original = structuredClone(messages)
       const requestMessages = reattachToolResultImagesForProvider(messages, modelId)
@@ -178,13 +181,13 @@ describe('reattachToolResultImagesForProvider', () => {
     }
   })
 
-  it('serializes reattached base64 as image_url rather than tool text', async () => {
+  it('serializes DeepSeek Flash direct and tool images natively as image_url parts', async () => {
     let requestBody: {
-      messages?: Array<{ role?: string; content?: unknown }>
+      model?: string
+      messages?: Array<{ role?: string; content?: unknown; reasoning_content?: string }>
     } = {}
-    const provider = createOpenAICompatible({
-      name: 'moonshotai',
-      baseURL: 'https://example.test/v1',
+    const provider = createDeepSeek({
+      baseURL: 'https://example.test',
       apiKey: 'test-key',
       fetch: async (_input, init) => {
         requestBody = JSON.parse(String(init?.body))
@@ -193,7 +196,7 @@ describe('reattachToolResultImagesForProvider', () => {
             id: 'response-1',
             object: 'chat.completion',
             created: 0,
-            model: 'k3',
+            model: 'deepseek-flash',
             choices: [
               {
                 index: 0,
@@ -222,10 +225,12 @@ describe('reattachToolResultImagesForProvider', () => {
       },
       imageToolResult('tc-1', 'QUFBQQ=='),
     ]
-    const requestMessages = reattachToolResultImagesForProvider(messages, 'moonshotai:kimi-k3')
+    const requestMessages = reattachToolResultImagesForProvider(messages, 'deepseek:deepseek-flash')
 
-    await generateText({ model: provider('k3'), messages: requestMessages })
+    await generateText({ model: provider('deepseek-flash'), messages: requestMessages })
 
+    expect(requestBody.model).toBe('deepseek-flash')
+    expect(requestBody.messages?.find((message) => message.role === 'assistant')?.reasoning_content).toBe('')
     const toolMessage = requestBody.messages?.find((message) => message.role === 'tool')
     expect(toolMessage?.content).toBe('Loaded tc-1')
     const imageMessage = requestBody.messages?.find(
@@ -242,6 +247,34 @@ describe('reattachToolResultImagesForProvider', () => {
         type: 'image_url',
         image_url: { url: 'data:image/png;base64,QUFBQQ==' },
       },
+    ])
+
+    await generateText({
+      model: provider('deepseek-flash'),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Describe this image directly.' },
+            {
+              type: 'file',
+              data: { type: 'data', data: 'QUFBQQ==' },
+              mediaType: 'image/png',
+              filename: 'image.png',
+            },
+            { type: 'text', text: 'Analyze the supplied content directly; do not re-read the local path.' },
+          ],
+        },
+      ],
+    })
+
+    expect(requestBody.messages?.[0]?.content).toEqual([
+      { type: 'text', text: 'Describe this image directly.' },
+      {
+        type: 'image_url',
+        image_url: { url: 'data:image/png;base64,QUFBQQ==' },
+      },
+      { type: 'text', text: 'Analyze the supplied content directly; do not re-read the local path.' },
     ])
   })
 })
@@ -280,9 +313,12 @@ describe('downgradeBinaryPartsForProvider', () => {
     const messages = [{ role: 'user', content: [{ type: 'text', text: 'look' }, imagePart] }] as ModelMessage[]
     const canonical = structuredClone(messages)
 
-    const vision = await downgradeBinaryPartsForProvider(messages, 'moonshotai:kimi-k3')
-    expect(vision[0]).toEqual(messages[0])
-    const text = await downgradeBinaryPartsForProvider(messages, 'deepseek:deepseek-v4-flash')
+    for (const modelId of ['moonshotai:kimi-k3', 'deepseek:deepseek-flash']) {
+      const vision = await downgradeBinaryPartsForProvider(messages, modelId)
+      expect(vision[0], modelId).toEqual(messages[0])
+      expect(JSON.stringify(vision), modelId).not.toContain('mock compatibility OCR')
+    }
+    const text = await downgradeBinaryPartsForProvider(messages, 'deepseek:deepseek-v4-pro')
     expect(JSON.stringify(text)).toContain('mock compatibility OCR')
     expect(JSON.stringify(text)).not.toContain('"type":"file"')
     expect(messages).toEqual(canonical)
@@ -309,8 +345,8 @@ describe('downgradeBinaryPartsForProvider', () => {
       ] as ModelMessage[]
     const callsBefore = vi.mocked(ocrImage).mock.calls.length
 
-    await downgradeBinaryPartsForProvider(asMessages(first), 'deepseek:deepseek-v4-flash')
-    await downgradeBinaryPartsForProvider(asMessages(second), 'deepseek:deepseek-v4-flash')
+    await downgradeBinaryPartsForProvider(asMessages(first), 'deepseek:deepseek-v4-pro')
+    await downgradeBinaryPartsForProvider(asMessages(second), 'deepseek:deepseek-v4-pro')
 
     expect(vi.mocked(ocrImage).mock.calls.length - callsBefore).toBe(2)
   })

@@ -47,6 +47,7 @@ export interface VisionUsageEvent {
 const VISION_MODELS: Record<string, { modelId: string; label: string }> = {
   google: { modelId: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   zhipu: { modelId: 'zhipu:glm-4.6v', label: 'GLM-4.6V' },
+  deepseek: { modelId: 'deepseek:deepseek-flash', label: 'DeepSeek V4.1 Flash' },
   alibaba: { modelId: 'alibaba:qwen3-vl-flash', label: 'Qwen3-VL Flash' },
   openai: { modelId: 'openai:gpt-5.4-mini', label: 'GPT-5.4 Mini' },
   anthropic: { modelId: 'anthropic:claude-haiku-4-5', label: 'Claude Haiku 4.5' },
@@ -59,8 +60,9 @@ const VISION_MODELS: Record<string, { modelId: string; label: string }> = {
  *  last. Gemini 2.5 Flash leads because its free tier is the most
  *  generous (1500/day) and the model is also the strongest at the
  *  free price point. GLM-4.6V is second because it's cheap/free
- *  and reachable from China without a proxy. */
-const VISION_PRIORITY = ['google', 'zhipu', 'alibaba', 'openai', 'anthropic', 'moonshotai', 'xai']
+ *  and reachable from China without a proxy. DeepSeek V4.1 Flash follows as
+ *  the cheapest configured paid fallback with native vision. */
+const VISION_PRIORITY = ['google', 'zhipu', 'deepseek', 'alibaba', 'openai', 'anthropic', 'moonshotai', 'xai']
 
 /**
  * Pick the best available vision sub-agent given the keys the user has

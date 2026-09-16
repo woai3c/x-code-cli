@@ -7,39 +7,70 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..')
 
-export const DEFAULT_MODEL = 'deepseek:deepseek-v4-flash'
+export const DEFAULT_MODEL = 'deepseek:deepseek-flash'
 
 /** Provider env-var → list of model ids that can be selected when that key is set.
  *  Keep aligned with `packages/core/src/types/index.ts::PROVIDER_DETECTION_ORDER`. */
 const PROVIDER_MODELS: Record<string, string[]> = {
-  DEEPSEEK_API_KEY: ['deepseek:deepseek-v4-flash', 'deepseek:deepseek-v4-pro'],
+  DEEPSEEK_API_KEY: ['deepseek:deepseek-flash', 'deepseek:deepseek-v4-pro'],
   ANTHROPIC_API_KEY: [
+    'anthropic:claude-fable-5-1',
+    'anthropic:claude-opus-5',
     'anthropic:claude-fable-5',
     'anthropic:claude-opus-4-8',
     'anthropic:claude-sonnet-5',
     'anthropic:claude-haiku-4-5',
   ],
-  OPENAI_API_KEY: ['openai:gpt-5.6-sol', 'openai:gpt-5.6-terra', 'openai:gpt-5.6-luna', 'openai:gpt-5.4-mini'],
-  GOOGLE_GENERATIVE_AI_API_KEY: ['google:gemini-3.5-flash', 'google:gemini-2.5-pro', 'google:gemini-2.5-flash'],
-  XAI_API_KEY: ['xai:grok-4.3', 'xai:grok-4.5'],
-  ALIBABA_API_KEY: ['alibaba:qwen3.7-max', 'alibaba:qwen3.7-plus', 'alibaba:qwen3-coder-plus', 'alibaba:qwq-plus'],
-  ZHIPU_API_KEY: ['zhipu:glm-5.2', 'zhipu:glm-5', 'zhipu:glm-4.7'],
-  MOONSHOT_API_KEY: ['moonshotai:kimi-k2.6', 'moonshotai:kimi-k3'],
+  OPENAI_API_KEY: [
+    'openai:gpt-6-astra',
+    'openai:gpt-5.6-sol',
+    'openai:gpt-5.6-terra',
+    'openai:gpt-5.6-luna',
+    'openai:gpt-5.4-mini',
+  ],
+  GOOGLE_GENERATIVE_AI_API_KEY: [
+    'google:gemini-3.8-flash',
+    'google:gemini-3.7-flash',
+    'google:gemini-3.6-flash',
+    'google:gemini-3.5-flash',
+    'google:gemini-2.5-pro',
+    'google:gemini-2.5-flash',
+  ],
+  XAI_API_KEY: ['xai:grok-4.6', 'xai:grok-4.20', 'xai:grok-4.20-non-reasoning', 'xai:grok-4.5'],
+  ALIBABA_API_KEY: [
+    'alibaba:qwen3.8-max',
+    'alibaba:qwen3.8-flash',
+    'alibaba:qwen3.7-max',
+    'alibaba:qwen3.7-plus',
+    'alibaba:qwen3.7-flash',
+    'alibaba:qwen3-coder-plus',
+    'alibaba:qwq-plus',
+  ],
+  ZHIPU_API_KEY: ['zhipu:glm-5.3', 'zhipu:glm-5.3-flash', 'zhipu:glm-5.2', 'zhipu:glm-5', 'zhipu:glm-4.7'],
+  MOONSHOT_API_KEY: [
+    'moonshotai:kimi-k3',
+    'moonshotai:kimi-k2.7-code',
+    'moonshotai:kimi-k2.7-code-highspeed',
+    'moonshotai:kimi-k2.6',
+  ],
 }
 
 /** Short aliases — accepted on CLI `--model` flag. Aligns with product's
  *  `MODEL_ALIASES` table; keep them in sync. */
 export const ALIASES: Record<string, string> = {
-  fable: 'anthropic:claude-fable-5',
+  fable: 'anthropic:claude-fable-5-1',
   sonnet: 'anthropic:claude-sonnet-5',
-  opus: 'anthropic:claude-opus-4-8',
+  opus: 'anthropic:claude-opus-5',
   haiku: 'anthropic:claude-haiku-4-5',
+  gpt6: 'openai:gpt-6-astra',
+  astra: 'openai:gpt-6-astra',
   gpt5: 'openai:gpt-5.6-sol',
-  gemini: 'google:gemini-3.5-flash',
-  deepseek: 'deepseek:deepseek-v4-flash',
+  gemini: 'google:gemini-3.8-flash',
+  deepseek: 'deepseek:deepseek-flash',
   'deepseek-pro': 'deepseek:deepseek-v4-pro',
-  qwen: 'alibaba:qwen3.7-max',
-  glm: 'zhipu:glm-5.2',
+  qwen: 'alibaba:qwen3.8-max',
+  grok: 'xai:grok-4.6',
+  glm: 'zhipu:glm-5.3',
   kimi: 'moonshotai:kimi-k3',
 }
 

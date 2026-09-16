@@ -236,7 +236,7 @@ async function searchWithDeepseek(query: string, maxResults: number, signal?: Ab
     body: JSON.stringify({
       // A full (cheap) model turn powers each search; override if DeepSeek
       // retires the id or a cheaper search-capable model appears.
-      model: process.env.DEEPSEEK_SEARCH_MODEL || 'deepseek-v4-flash',
+      model: process.env.DEEPSEEK_SEARCH_MODEL || 'deepseek-flash',
       max_tokens: 4096,
       messages: [{ role: 'user', content: [{ type: 'text', text: `Perform a web search for the query: ${query}` }] }],
       // Each use is billed server-side, so don't grant more searches than the

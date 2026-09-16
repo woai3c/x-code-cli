@@ -16,7 +16,7 @@ export type ProcessedLocalPart =
 
 export const BUILT_IN_MEDIA_ANALYSIS_NOTE =
   '[Built-in local media processing succeeded. Analyze the supplied content directly. ' +
-  'Do not invoke shell, Node.js, Python, FFmpeg, or other external programs merely to re-read, parse, OCR, ' +
+  'Do not invoke readFile, shell, Node.js, Python, FFmpeg, or other external programs merely to re-read, parse, OCR, ' +
   'transcribe, or independently validate values from this attachment. Use external programs only if the built-in ' +
   'pipeline reports a failure, or the user explicitly asks for conversion, codec diagnostics, or independent validation.]'
 

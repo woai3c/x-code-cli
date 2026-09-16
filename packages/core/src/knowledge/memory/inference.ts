@@ -6,7 +6,7 @@ import { z } from 'zod'
 import type { MemoryReasoningMode } from '../../config/index.js'
 import { providerOf } from '../../providers/capabilities.js'
 import { getOpenAIChatGPTReasoningTiers } from '../../providers/openai-chatgpt-models.js'
-import { getReasoningLevel, getThinkingProviderOptions } from '../../providers/thinking.js'
+import { acceptsReasoningControl, getReasoningLevel, getThinkingProviderOptions } from '../../providers/thinking.js'
 import { debugLog } from '../../utils.js'
 
 export type MemoryReasoningControl = 'off' | 'low' | 'provider-default'
@@ -174,6 +174,7 @@ function inferenceSettings(
   omitTemperature: boolean,
 ): MemoryInferenceSettings {
   if (!modelId || control === 'provider-default') return { maxOutputTokens }
+  if (!acceptsReasoningControl(modelId)) return { maxOutputTokens }
   if (control === 'off') {
     const reasoning = getReasoningLevel(modelId, false)
     const providerOptions = getThinkingProviderOptions(modelId, false)
@@ -186,7 +187,7 @@ function inferenceSettings(
   }
   const provider = providerOf(modelId)
   if (provider === 'alibaba' || provider === 'zhipu') {
-    const providerOptions = getThinkingProviderOptions(modelId, true)
+    const providerOptions = getThinkingProviderOptions(modelId, true, 'low')
     return { maxOutputTokens, ...(Object.keys(providerOptions).length ? { providerOptions } : {}) }
   }
   if (provider === 'custom') return { maxOutputTokens }
@@ -201,9 +202,11 @@ function requiresThinking(modelId: string): boolean {
   if (provider === 'openai') {
     const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
     if (chatGPTTiers?.length && !chatGPTTiers.some((tier) => tier.value === 'none')) return true
-    return /(?:^|:)(?:gpt-5(?:$|[-.])|o[134](?:$|[-.]))/.test(normalized)
+    return /(?:^|:)(?:gpt-(?:5|6)(?:$|[-.])|o[134](?:$|[-.]))/.test(normalized)
   }
-  return provider === 'anthropic' && /claude-opus-4-5/.test(normalized)
+  if (provider === 'anthropic') return /claude-(?:fable-5|opus-4-5)/.test(normalized)
+  if (provider === 'zhipu') return /glm-5\.3(?:$|-)/.test(normalized)
+  return provider === 'xai' && /grok-(?:4\.6|4\.20)$/.test(normalized)
 }
 
 function rejectControl(modelId: string, control: MemoryReasoningControl): void {

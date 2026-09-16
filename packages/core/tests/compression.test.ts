@@ -269,11 +269,46 @@ describe('checkAndCompressContext', () => {
     const state = createLoopState()
     state.messages = padMessages(10)
     state.lastInputTokens = 999_999
+    state.readFileCache.set('/tmp/previously-read.png', { mtimeMs: 1, size: 1 })
 
     await checkAndCompressContext(state, fakeModel, 1, makeCallbacks())
 
     expect(state.lastInputTokens).toBe(0)
     expect(state.expectCacheMiss).toBe(true)
+    expect(state.readFileCache.size).toBe(0)
+  })
+
+  it('clears delivered-file de-dup state after lightweight compression rewrites history', async () => {
+    const state = createLoopState()
+    state.messages = [
+      { role: 'user', content: 'start' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'looped', toolName: 'readFile', input: { filePath: '/tmp/a' } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'looped',
+            toolName: 'readFile',
+            output: { type: 'text', value: `[loop-guard] ${'x'.repeat(10_000)}` },
+          },
+        ],
+      },
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'two' },
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ] as ModelMessage[]
+    state.lastInputTokens = 999_999
+    state.readFileCache.set('/tmp/previously-read.png', { mtimeMs: 1, size: 1 })
+
+    await checkAndCompressContext(state, fakeModel, 100, makeCallbacks())
+
+    expect(generateText).not.toHaveBeenCalled()
+    expect(state.readFileCache.size).toBe(0)
   })
 
   it('does not return until the compact boundary and recall-window reset are durable', async () => {

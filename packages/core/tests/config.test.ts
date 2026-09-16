@@ -101,8 +101,15 @@ describe('resolveModelId', () => {
 
   it('resolves alias from CLI argument', () => {
     expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-5')
-    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-4-8')
-    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-v4-flash')
+    expect(resolveModelId('fable')).toBe('anthropic:claude-fable-5-1')
+    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-5')
+    expect(resolveModelId('astra')).toBe('openai:gpt-6-astra')
+    expect(resolveModelId('gpt6')).toBe('openai:gpt-6-astra')
+    expect(resolveModelId('gemini')).toBe('google:gemini-3.8-flash')
+    expect(resolveModelId('qwen')).toBe('alibaba:qwen3.8-max')
+    expect(resolveModelId('grok')).toBe('xai:grok-4.6')
+    expect(resolveModelId('glm')).toBe('zhipu:glm-5.3')
+    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-flash')
   })
 
   it('falls back to env var X_CODE_MODEL', () => {
@@ -130,12 +137,26 @@ describe('resolveModelId', () => {
     expect(resolveModelId()).toBe('openai:gpt-5.6-sol')
   })
 
+  it('uses the updated provider smart defaults', () => {
+    const cases: Array<[string, string]> = [
+      ['GOOGLE_GENERATIVE_AI_API_KEY', 'google:gemini-3.8-flash'],
+      ['ALIBABA_API_KEY', 'alibaba:qwen3.8-max'],
+      ['XAI_API_KEY', 'xai:grok-4.6'],
+      ['ZHIPU_API_KEY', 'zhipu:glm-5.3'],
+    ]
+    for (const [envKey, expected] of cases) {
+      process.env[envKey] = 'test-key'
+      expect(resolveModelId()).toBe(expected)
+      delete process.env[envKey]
+    }
+  })
+
   it('returns null when no providers configured', () => {
     expect(resolveModelId()).toBeNull()
   })
 
   it('returns model even if provider key missing when explicitly requested', () => {
-    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-v4-flash')
+    expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-flash')
   })
 
   it('uses ChatGPT authentication as the OpenAI smart default without an API key', async () => {

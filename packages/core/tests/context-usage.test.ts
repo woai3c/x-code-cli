@@ -235,7 +235,7 @@ describe('calibrateContextBreakdown', () => {
 describe('buildContextBreakdownInput', () => {
   it('returns null before the system prompt has been built', () => {
     const state = createLoopState()
-    expect(buildContextBreakdownInput({ modelId: 'deepseek:deepseek-v4-flash' } as any, state)).toBeNull()
+    expect(buildContextBreakdownInput({ modelId: 'deepseek:deepseek-flash' } as any, state)).toBeNull()
   })
 
   it('derives the deferred-tools block from the catalog', () => {
@@ -252,7 +252,7 @@ describe('buildContextBreakdownInput', () => {
         def: makeTool('Search the web'),
       },
     ]
-    const options = { modelId: 'deepseek:deepseek-v4-flash' } as any
+    const options = { modelId: 'deepseek:deepseek-flash' } as any
     const input = buildContextBreakdownInput(options, state)!
     expect(input.systemPrompt).toBe('prompt')
     expect(input.mcpDeferredBlock).toBe(formatDeferredCapabilities([{ name: 'webSearch', source: 'builtin' }]))
@@ -264,7 +264,7 @@ describe('buildContextBreakdownInput', () => {
     const state = createLoopState()
     state.systemPromptCache = 'prompt with embedded blocks'
     state.systemPromptBlocks = { knowledge: 'knowledge', skill: 'skills block', mcpDeferred: 'mcp block' }
-    const options = { modelId: 'deepseek:deepseek-v4-flash' } as any
+    const options = { modelId: 'deepseek:deepseek-flash' } as any
     const input = buildContextBreakdownInput(options, state)!
     expect(input.knowledgeContext).toBe('knowledge')
     expect(input.skillBlock).toBe('skills block')
@@ -286,7 +286,7 @@ describe('buildContextBreakdownInput', () => {
     state.deferredCatalog = catalog
     const executor = async () => 'ok'
     state.manualToolExecutors.set('existing', executor)
-    buildContextBreakdownInput({ modelId: 'deepseek:deepseek-v4-flash' } as any, state)
+    buildContextBreakdownInput({ modelId: 'deepseek:deepseek-flash' } as any, state)
     expect(state.deferredCatalog).toBe(catalog)
     expect([...state.manualToolExecutors]).toEqual([['existing', executor]])
   })

@@ -21,8 +21,13 @@ import { listMcpResources, readMcpResource } from '../mcp/resources.js'
 import { bridgeMcpTool, toSystemPromptEntries } from '../mcp/tool-bridge.js'
 import { listAgentsTool, sendMessageTool } from '../peers/tools.js'
 import { applyCacheControl, openAICacheComparisonTtlMs } from '../providers/cache-control.js'
-import { withZhipuReasoningHeader } from '../providers/registry.js'
-import { getReasoningLevel, getThinkingProviderOptions, mergeThinkingOptions } from '../providers/thinking.js'
+import { withXaiReasoningHeader, withZhipuReasoningHeader } from '../providers/registry.js'
+import {
+  getReasoningEffort,
+  getReasoningLevel,
+  getThinkingProviderOptions,
+  mergeThinkingOptions,
+} from '../providers/thinking.js'
 import { createActivateSkillTool } from '../tools/activate-skill.js'
 import { BROWSER_VISUAL_CHECK_TOOL_NAME, browserVisualCheck } from '../tools/browser-visual-check.js'
 import { createGetGoalTool } from '../tools/get-goal.js'
@@ -516,11 +521,14 @@ async function runTurnAttempt(
   // /thinking toggle. If the user explicitly chose a reasoning effort level
   // for this model (stored in config.modelReasoningEffort), we use it.
   const effort = userConfig.modelReasoningEffort?.[options.modelId]
+  const effectiveEffort = getReasoningEffort(options.modelId, options.thinking ?? false, effort)
   const reasoningLevel = getReasoningLevel(options.modelId, options.thinking ?? false, effort)
   const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false, effort)
   const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
-  const requestHeaders =
-    options.modelId.split(':')[0] === 'zhipu' ? withZhipuReasoningHeader(cached.headers, effort) : cached.headers
+  const provider = options.modelId.split(':')[0]
+  let requestHeaders = cached.headers
+  if (provider === 'zhipu') requestHeaders = withZhipuReasoningHeader(requestHeaders, effectiveEffort)
+  if (provider === 'xai') requestHeaders = withXaiReasoningHeader(requestHeaders, effectiveEffort)
 
   const requestTimestamp = new Date().toISOString()
   let result: StreamResult
@@ -600,7 +608,7 @@ async function runTurnAttempt(
       // notices and retry once. stripBinaryPartsFromMessages returns false
       // when nothing matched — then the bad part isn't in a shape we
       // recognize, so fall through and report instead of looping forever.
-      if (stripBinaryPartsFromMessages(state.messages)) {
+      if (stripBinaryPartsFromMessages(state.messages, state.readFileCache)) {
         recalculateContextSecurity(state)
         state.transcriptRequiresSnapshot = true
         await flushPendingMessages(state)

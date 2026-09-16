@@ -584,6 +584,24 @@ describe('ingestFile', () => {
       expect(imagePart.data).toEqual({ type: 'data', data: source.toString('base64') })
       expect(JSON.parse(JSON.stringify(imagePart))).toEqual(imagePart)
     }
+    expect(JSON.stringify(parts)).toContain('Analyze the supplied content directly')
+    expect(JSON.stringify(parts)).toContain('Do not invoke readFile')
+  })
+
+  it('marks a natively attached image as already delivered for readFile de-duplication', async () => {
+    const cache = new Map()
+
+    await buildUserContent(
+      `'${imageFile}' describe this image`,
+      multimodalCaps,
+      undefined,
+      undefined,
+      undefined,
+      'deepseek:deepseek-flash',
+      cache,
+    )
+
+    expect(cache.has(imageFile)).toBe(true)
   })
 
   it('rejects GIF before session insertion for an xAI model', async () => {

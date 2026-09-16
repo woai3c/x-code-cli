@@ -247,7 +247,8 @@ async function checkReadCache(
       stub:
         `[readFile: ${filePath} is unchanged since its full content was added to this conversation ` +
         `(same mtime and size); its full content is already in the conversation above. ` +
-        `Re-read with an explicit offset/limit to revisit a specific range, or use grep to search within it.]`,
+        `Analyze that content directly instead of reading it again. For text files, use an explicit offset/limit ` +
+        `only to revisit a specific range, or use grep to search within it.]`,
     }
   }
   return { hit: false, entry: { mtimeMs: stat.mtimeMs, size: stat.size } }
@@ -337,6 +338,8 @@ Usage:
         }
 
         if (kind === 'image') {
+          const verdict = await checkReadCache(cache, filePath, false)
+          if (verdict && verdict.hit) return verdict.stub
           const stats = await fs.stat(filePath)
           if (stats.size > MAX_IMAGE_SOURCE_BYTES) {
             return `[Image ${filePath} is too large to process safely (${(stats.size / (1024 * 1024)).toFixed(1)} MB, cap ${MAX_IMAGE_SOURCE_BYTES / (1024 * 1024)} MB).]`
@@ -380,6 +383,7 @@ Usage:
           const header = compressed.changed
             ? `Loaded image: ${filePath} (compressed from ${buffer.length} to ${compressed.data.length} bytes)`
             : `Loaded image: ${filePath}`
+          if (verdict && !verdict.hit) cache?.set(filePath, verdict.entry)
           return {
             type: 'content',
             value: [
@@ -390,6 +394,7 @@ Usage:
                 mediaType: finalMime,
                 filename: path.basename(filePath),
               },
+              { type: 'text', text: BUILT_IN_MEDIA_ANALYSIS_NOTE },
             ],
           }
         }

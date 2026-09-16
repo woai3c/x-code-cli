@@ -26,7 +26,7 @@ import {
   refreshOpenAIChatGPTModelsAfterNotFound,
   resetOpenAIChatGPTModelsForTesting,
 } from '../src/providers/openai-chatgpt-models.js'
-import { getReasoningLevel } from '../src/providers/thinking.js'
+import { getReasoningLevel, getThinkingProviderOptions } from '../src/providers/thinking.js'
 
 describe('OpenAI ChatGPT model catalog', () => {
   let testHome: string
@@ -105,6 +105,28 @@ describe('OpenAI ChatGPT model catalog', () => {
     expect(headers.get('chatgpt-account-id')).toBe('account-1')
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('client_version=0.144.0')
     expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('client_version=test')
+  })
+
+  it('does not reintroduce a stale max effort after the server catalog removes it', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        models: [
+          {
+            slug: 'gpt-5.6-sol',
+            display_name: 'GPT-5.6 Sol',
+            input_modalities: ['text', 'image'],
+            default_reasoning_level: 'low',
+            supported_reasoning_levels: [{ effort: 'low' }],
+            visibility: 'list',
+          },
+        ],
+      }),
+    )
+
+    await refreshOpenAIChatGPTModels('test', { fetch: fetchMock, force: true })
+
+    expect(getReasoningLevel('openai:gpt-5.6-sol', false, 'max')).toBe('low')
+    expect(getThinkingProviderOptions('openai:gpt-5.6-sol', false, 'max')).toEqual({})
   })
 
   it('uses the raw ChatGPT context window ahead of the static OpenAI model table', async () => {

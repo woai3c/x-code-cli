@@ -24,8 +24,8 @@ import type { ToolImage } from './messages.js'
 
 // ── Image/PDF downgrade for text-only providers ───────────────────────────
 //
-// If the active provider can't receive image/file parts (DeepSeek today,
-// plus `custom` unless the user opts in), walk every message that would be
+// If the active model can't receive image/file parts (for example DeepSeek V4
+// Pro, plus `custom` unless the user opts in), walk every message that would be
 // sent on the next turn and replace each binary part with something the
 // provider CAN accept.
 //
@@ -320,7 +320,10 @@ function imagePartToBuffer(part: { image: unknown; mediaType?: string }): Buffer
  *  retry the turn. Returns true only when something actually changed, so the
  *  caller can tell "retry is worthwhile" from "the bad part isn't in a shape
  *  we recognize — report the error instead of looping". */
-export function stripBinaryPartsFromMessages(messages: ModelMessage[]): boolean {
+export function stripBinaryPartsFromMessages(
+  messages: ModelMessage[],
+  deliveredFileCache?: { clear(): void },
+): boolean {
   let changed = false
   const fileNotice = (mediaType?: string) =>
     `[File attachment omitted (${mediaType ?? 'binary'}) — the provider rejected it; removed so the session can continue.]`
@@ -358,6 +361,7 @@ export function stripBinaryPartsFromMessages(messages: ModelMessage[]): boolean 
       }
     }
   }
+  if (changed) deliveredFileCache?.clear()
   return changed
 }
 

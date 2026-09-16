@@ -200,6 +200,7 @@ describe('webSearch', () => {
       }),
     })
     const body = JSON.parse(init!.body as string)
+    expect(body.model).toBe('deepseek-flash')
     expect(body.tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }])
     // Deduped by URL, snippet stitched from the text-block citation.
     expect(result).toContain('cited snippet')

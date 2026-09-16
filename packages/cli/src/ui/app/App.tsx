@@ -2039,7 +2039,7 @@ export function App({
       // automatically on /model switch since switchModel updates
       // state.modelId. When the model has a reasoning-effort tier configured
       // (via the /model tier picker), it appends next to the name — e.g.
-      // "deepseek-v4-flash · High".
+      // "deepseek-flash · High".
       modelLabel={
         reasoningTierLabel
           ? `${renderModelLabel(state.modelId)} · ${reasoningTierLabel}`

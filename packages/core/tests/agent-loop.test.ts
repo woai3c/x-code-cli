@@ -999,7 +999,7 @@ describe('agent loop', () => {
     await agentLoop(
       'Try this task',
       {} as any,
-      { modelId: 'deepseek:deepseek-v4-flash', trustMode: false, maxTurns: 10, printMode: false },
+      { modelId: 'deepseek:deepseek-flash', trustMode: false, maxTurns: 10, printMode: false },
       mockCallbacks,
     )
 
@@ -1025,7 +1025,7 @@ describe('agent loop', () => {
     const { state } = await agentLoop(
       'Give a complete answer',
       {} as any,
-      { modelId: 'deepseek:deepseek-v4-flash', trustMode: false, maxTurns: 10, printMode: false },
+      { modelId: 'deepseek:deepseek-flash', trustMode: false, maxTurns: 10, printMode: false },
       mockCallbacks,
     )
 

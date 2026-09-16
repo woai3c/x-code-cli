@@ -108,7 +108,8 @@ const SHELL_LABELS: Record<string, string> = {
 export function getToolLabel(toolName: string): string {
   const n = normalizeToolName(toolName)
   if (n === 'shell' || n === 'bash') return SHELL_LABELS[getShellProvider().type] ?? 'Shell'
-  if (n === 'readfile' || n === 'read' || n === 'fileingest') return 'Read'
+  if (n === 'fileingest') return 'Attach'
+  if (n === 'readfile' || n === 'read') return 'Read'
   if (n === 'writefile' || n === 'write') return 'Write'
   if (n === 'edit' || n === 'update') return 'Update'
   if (n === 'glob') return 'Glob'
@@ -192,6 +193,7 @@ export interface ReadGroupSummary {
 const TABLE_OUTPUT_MAX_LINES = 30
 
 export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadGroupSummary {
+  let attachCount = 0
   let readCount = 0
   let grepCount = 0
   let globCount = 0
@@ -200,7 +202,11 @@ export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadG
 
   for (const tc of tools) {
     const n = normalizeToolName(tc.toolName)
-    if (n === 'read' || n === 'readfile' || n === 'fileingest') {
+    if (n === 'fileingest') {
+      attachCount++
+      const p = (tc.input.filePath as string) || (tc.input.file_path as string) || (tc.input.path as string) || ''
+      if (p) readPaths.push(basename(p))
+    } else if (n === 'read' || n === 'readfile') {
       readCount++
       const p = (tc.input.filePath as string) || (tc.input.file_path as string) || (tc.input.path as string) || ''
       if (p) readPaths.push(basename(p))
@@ -214,6 +220,7 @@ export function formatReadGroupSummary(tools: readonly DisplayToolCall[]): ReadG
   }
 
   const clauses: string[] = []
+  if (attachCount > 0) clauses.push(`attached ${attachCount} file${attachCount === 1 ? '' : 's'}`)
   if (readCount > 0) clauses.push(`read ${readCount} file${readCount === 1 ? '' : 's'}`)
   if (grepCount > 0) clauses.push(`searched for ${grepCount} pattern${grepCount === 1 ? '' : 's'}`)
   if (globCount > 0) clauses.push(`globbed ${globCount} pattern${globCount === 1 ? '' : 's'}`)

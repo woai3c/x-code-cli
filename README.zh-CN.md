@@ -60,6 +60,8 @@ xc logout                   # 退出并删除本地 ChatGPT 凭据
 也可以配置至少一个厂商的 API Key：
 
 > **推荐 [DeepSeek](https://platform.deepseek.com/)**：价格低、国内访问稳定，适合首次试用。赠送额度与价格可能变化，请以官方控制台为准。
+>
+> DeepSeek 默认模型为 V4.1 Flash（`deepseek-flash`）。它会原生接收支持的图片附件和工具截图，X-Code 不会将它们发送给其他视觉模型。
 
 | 环境变量                       | 厂商                | 注册地址                                                                    |
 | ------------------------------ | ------------------- | --------------------------------------------------------------------------- |
@@ -71,6 +73,21 @@ xc logout                   # 退出并删除本地 ChatGPT 凭据
 | `XAI_API_KEY`                  | xAI（Grok）         | [console.x.ai](https://console.x.ai/)                                       |
 | `ZHIPU_API_KEY`                | 智谱（GLM）         | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys)             |
 | `MOONSHOT_API_KEY`             | Moonshot（Kimi）    | [按服务选择](#moonshot-kimi-endpoints)                                      |
+
+内置 `/model` 目录已跟进以下当前 API 型号；仍可用的旧型号继续保留。
+
+| 厂商      | 当前目录重点型号                                       | 智能默认值          |
+| --------- | ------------------------------------------------------ | ------------------- |
+| Anthropic | Claude Fable 5.1、Opus 5、Sonnet 5、Haiku 4.5          | Claude Sonnet 5     |
+| OpenAI    | GPT-6 Astra、GPT-5.6 Sol / Terra / Luna                | GPT-5.6 Sol         |
+| DeepSeek  | DeepSeek V4.1 Flash（原生视觉）、V4 Pro（仅文本）      | DeepSeek V4.1 Flash |
+| 阿里通义  | Qwen3.8 Max / Flash（原生视觉）、Qwen3.7 与 Qwen3 系列 | Qwen3.8 Max         |
+| Google    | Gemini 3.8 / 3.7 / 3.6 / 3.5 Flash、Gemini 2.5         | Gemini 3.8 Flash    |
+| xAI       | Grok 4.6、Grok 4.20 推理版 / 非推理版                  | Grok 4.6            |
+| 智谱      | GLM-5.3、GLM-5.3 Flash（原生视觉）及较早 GLM 型号      | GLM-5.3             |
+| Moonshot  | Kimi K3、K2.7 Code / Highspeed、K2.6                   | Kimi K3             |
+
+GPT-6 Astra 不会自动成为 OpenAI 智能默认值：保留 GPT-5.6 Sol 可以兼顾 ChatGPT 订阅兼容性，并降低误用高价 API 的风险。对于不能关闭推理的型号，`/thinking off` 会自动降到该型号支持的最低推理档位。
 
 **OpenAI 兼容接入**（vLLM / OpenRouter / 代理网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，模型 ID 写成 `custom:<your-model-id>`。
 
@@ -134,7 +151,7 @@ setx DEEPSEEK_API_KEY "sk-..."
 
 > 推荐首次配 Tavily：注册简便，返回格式针对 LLM 优化。配置多个 key 时按上表顺序取第一个；也可通过 `X_CODE_WEB_SEARCH_PROVIDER` 显式指定（可选值：`tavily`、`brave`、`exa`、`perplexity`、`firecrawl`、`deepseek`）。
 >
-> **DeepSeek 用户无需额外 key**：当前模型为 DeepSeek 且已配置 `DEEPSEEK_API_KEY` 时，`webSearch` 自动使用 DeepSeek 内置的服务端联网搜索。注意每次搜索按一次模型调用计费（默认 `deepseek-v4-flash`），而非按搜索次数计费。
+> **DeepSeek 用户无需额外 key**：当前模型为 DeepSeek 且已配置 `DEEPSEEK_API_KEY` 时，`webSearch` 自动使用 DeepSeek 内置的服务端联网搜索。注意每次搜索按一次模型调用计费（默认 `deepseek-flash`），而非按搜索次数计费。
 
 </details>
 
@@ -147,7 +164,7 @@ Moonshot/Kimi 提供三套独立的凭证与端点，API Key 只能用于签发�
 - 国内开放平台：[platform.kimi.com](https://platform.kimi.com/console/api-keys) → `https://api.moonshot.cn/v1`
 - 国际开放平台：[platform.kimi.ai](https://platform.kimi.ai/console/api-keys) → `https://api.moonshot.ai/v1`
 
-通过 `/model` 选择 Kimi 模型后，X-Code CLI 会自动显示端点选择器。
+通过 `/model` 选择 Kimi 模型后，X-Code CLI 会自动显示端点选择器。Coding Plan 的稳定 wire id `kimi-for-coding` 当前会自动路由到 K2.8 Preview；Moonshot 开放平台的模型 ID 不变。
 
 </details>
 
@@ -311,6 +328,8 @@ set DEBUG_STDOUT=1 && xc
 ## 从源码运行
 
 需要 Node.js 22+ 和 pnpm 10.x。
+
+仓库通过 `packageManager` 固定使用 pnpm 10.28.2。如果全局安装的是 pnpm 11，请先运行 `corepack enable`，再在仓库内使用 `pnpm`（或直接使用 `corepack pnpm`）；`engines.pnpm` 会有意拒绝 pnpm 11 直接执行。
 
 ```bash
 git clone https://github.com/woai3c/x-code-cli.git

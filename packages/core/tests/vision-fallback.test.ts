@@ -89,10 +89,19 @@ describe('pickVisionProvider', () => {
     expect(pickVisionProvider()?.provider).toBe('xai')
   })
 
-  it('ignores DeepSeek key when picking — still selects vision provider if present', () => {
+  it('uses DeepSeek Flash when it is the only configured vision provider', () => {
+    process.env.DEEPSEEK_API_KEY = 'test'
+    expect(pickVisionProvider()).toEqual({
+      provider: 'deepseek',
+      modelId: 'deepseek:deepseek-flash',
+      label: 'DeepSeek V4.1 Flash',
+    })
+  })
+
+  it('prefers DeepSeek Flash over Anthropic for borrowed vision', () => {
     process.env.DEEPSEEK_API_KEY = 'test'
     process.env.ANTHROPIC_API_KEY = 'test'
-    expect(pickVisionProvider()?.provider).toBe('anthropic')
+    expect(pickVisionProvider()?.provider).toBe('deepseek')
   })
 })
 
