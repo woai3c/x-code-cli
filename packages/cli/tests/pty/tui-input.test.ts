@@ -115,10 +115,10 @@ describe('TUI input and lifecycle', () => {
         const raw = harness.raw()
         const oldReplyTail = raw.lastIndexOf('initial-finished')
         const queuedUser = raw.lastIndexOf('@"queued attachment.txt" analyze this file')
-        const readSummary = raw.lastIndexOf('Read')
+        const attachSummary = raw.lastIndexOf('Attach')
         expect(oldReplyTail).toBeGreaterThanOrEqual(0)
         expect(queuedUser).toBeGreaterThan(oldReplyTail)
-        expect(readSummary).toBeGreaterThan(queuedUser)
+        expect(attachSummary).toBeGreaterThan(queuedUser)
       },
       {
         beforeStart: async (workspace) => {
