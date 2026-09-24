@@ -23,16 +23,16 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@napi-rs/canvas": "0.1.80",
-    "@vscode/ripgrep": "^1.17.0",
-    "fs-ext-extra-prebuilt": "2.2.11",
+    "@napi-rs/canvas": "1.0.9",
+    "@vscode/ripgrep": "^1.18.0",
+    "fs-ext-extra-prebuilt": "2.2.14",
     "node-pty": "^1.1.0",
     "pdf-parse": "2.4.5",
     "tesseract.js": "7.0.0",
-    "undici": "^7.28.0"
+    "undici": "^8.10.2"
   },
   "optionalDependencies": {
-    "@fugood/whisper.node": "1.1.1",
+    "@fugood/whisper.node": "1.1.3",
     "@napi-audio/decoder": "0.1.0"
   },
   "devDependencies": {
