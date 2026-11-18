@@ -144,7 +144,6 @@ export function useGoalController({
         permissionModeRef.current = mode
         setState((previous) => ({ ...previous, permissionMode: mode }))
       },
-      onTodosUpdate: (todos) => setState((previous) => ({ ...previous, todos })),
       onShellOutput: (chunk) => setState((previous) => ({ ...previous, shellOutput: previous.shellOutput + chunk })),
       onUsageUpdate: (usage) => setState((previous) => ({ ...previous, usage })),
       onContextCompressed: (summary) => {

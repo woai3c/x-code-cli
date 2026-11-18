@@ -28,7 +28,6 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
     error: null,
     modelId: 'test:model',
     permissionMode: 'default',
-    todos: [],
     bufferingReads: false,
     compressionLabel: null,
     ingestLabel: null,

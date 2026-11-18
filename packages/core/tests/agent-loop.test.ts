@@ -95,7 +95,6 @@ describe('agent loop', () => {
       onAskUser: vi.fn().mockResolvedValue('option1'),
       onPlanApprovalRequest: vi.fn().mockResolvedValue(false),
       onPlanModeChange: vi.fn(),
-      onTodosUpdate: vi.fn(),
       onShellOutput: vi.fn(),
       onUsageUpdate: vi.fn(),
       onContextCompressed: vi.fn(),

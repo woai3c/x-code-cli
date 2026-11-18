@@ -242,7 +242,6 @@ export function useSessionController({
         shellOutput: '',
         error: null,
         reconnectLabel: null,
-        todos: [],
         queuedMessages: [],
         restoredDraft: null,
         messages: [...previousState.messages, ...converted],
@@ -316,7 +315,6 @@ export function useSessionController({
             shellOutput: '',
             error: null,
             reconnectLabel: null,
-            todos: [],
             messages: converted,
           }))
         }

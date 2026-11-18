@@ -42,7 +42,6 @@ function makeCallbacks(overrides: Partial<AgentCallbacks> = {}): AgentCallbacks 
     onAskUser: vi.fn().mockResolvedValue('ok'),
     onPlanApprovalRequest: vi.fn().mockResolvedValue(true),
     onPlanModeChange: vi.fn(),
-    onTodosUpdate: vi.fn(),
     onShellOutput: vi.fn(),
     onUsageUpdate: vi.fn(),
     onContextCompressed: vi.fn(),

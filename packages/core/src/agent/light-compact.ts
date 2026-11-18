@@ -186,16 +186,7 @@ export function lightCompactTrackedMessages(entries: readonly TrackedModelMessag
 // cache — by freeing context without rewriting the message structure.
 
 /** Tools whose results represent decisions or are already compact — never truncate. */
-const NEVER_TRUNCATE_TOOLS = new Set([
-  'edit',
-  'writeFile',
-  'task',
-  'activateSkill',
-  'todoWrite',
-  'askUser',
-  'enterPlanMode',
-  'exitPlanMode',
-])
+const NEVER_TRUNCATE_TOOLS = new Set(['edit', 'writeFile', 'task', 'activateSkill', 'askUser', 'exitPlanMode'])
 
 /** Only truncate results whose text is longer than this (chars). */
 const MIN_TRUNCATABLE_CHARS = 500

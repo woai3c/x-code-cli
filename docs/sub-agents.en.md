@@ -33,9 +33,9 @@ Five ship in the box (plus the opt-in `browser`, see below):
 > `git push`, output redirects, etc. — full list in
 > `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`).
 >
-> The `plan` built-in sub-agent does **not** include `enterPlanMode` —
-> its output is a Markdown plan, not a session-mode switch. The `/plan`
-> CLI flag and the `plan` sub-agent are different things.
+> The `plan` built-in sub-agent produces a Markdown plan rather than switching
+> the parent session's permission mode. The `/plan` CLI command/flag and the
+> `plan` sub-agent are different things.
 
 The main agent invokes them via the `task` tool:
 
@@ -266,10 +266,9 @@ shellRestrictions: [rm, sudo, npm publish, git push]
 The full set of tool names (**must be camelCase**, matches the
 `toolRegistry` keys in `packages/core/src/tools/index.ts`): `readFile`,
 `writeFile`, `edit`, `shell`, `glob`, `grep`, `listDir`, `webSearch`,
-`webFetch`, `askUser`, `enterPlanMode`, `exitPlanMode`, `todoWrite`,
-`shellOutput`, `killShell`. The `task` tool is always denied (recursion
-guard), and `memorySearch` is registered for the root agent only — sub-agents
-never receive it.
+`webFetch`, `askUser`, `exitPlanMode`, `shellOutput`, `killShell`. The
+`task` tool is always denied (recursion guard), and `memorySearch` is
+registered for the root agent only — sub-agents never receive it.
 
 When `shell` is allowed, the runner automatically adds `shellOutput` and
 `killShell` so background commands remain manageable. A definition that

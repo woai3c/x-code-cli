@@ -680,10 +680,6 @@ describe('suggestRuleLabel + buildAllowRule fallback for unrecognised shell comm
     clearSessionRules()
   })
 
-  it('returns null for enterPlanMode (no recurring action to remember)', () => {
-    expect(suggestRuleLabel('enterPlanMode', {})).toBeNull()
-  })
-
   it('returns "this MCP tool" when isMcp is true regardless of tool name', () => {
     // MCP tools used to fall through to the writeFile branch and render
     // as "all edits this session" — wrong text and wrong persistence

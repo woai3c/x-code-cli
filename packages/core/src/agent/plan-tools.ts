@@ -1,9 +1,8 @@
-// @x-code-cli/core — Plan-mode and todoWrite tool handlers.
+// @x-code-cli/core — Plan-mode exit handler.
 //
 // Extracted from tool-execution.ts to keep handleToolCall at a manageable
-// size. Each handler has the same contract: mutate state + push result via
-// pushToolResult, and return void.
-import type { AgentCallbacks, AgentOptions, TodoItem } from '../types/index.js'
+// size. Mutates state + pushes result via pushToolResult, and returns void.
+import type { AgentCallbacks } from '../types/index.js'
 import { extractText } from '../utils/message-helpers.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
 import type { LoopState } from './loop-state.js'
@@ -27,142 +26,6 @@ function lastUserMessageText(messages: LoopState['messages']): string {
     }
   }
   return ''
-}
-
-export async function handleTodoWrite(
-  input: Record<string, unknown>,
-  toolCallId: string,
-  state: LoopState,
-  callbacks: AgentCallbacks,
-  pushToolResult: PushToolResult,
-): Promise<void> {
-  type RawTodo = { content?: string; activeForm?: string; status?: TodoItem['status'] }
-  const raw = (input.todos as RawTodo[] | undefined) ?? []
-  const normalized: TodoItem[] = []
-  for (const t of raw) {
-    const content = (t.content ?? '').trim()
-    const activeForm = (t.activeForm ?? '').trim()
-    if (!content && !activeForm) continue
-    normalized.push({
-      content: content || activeForm,
-      activeForm: activeForm || content,
-      status: t.status ?? 'pending',
-    })
-  }
-  const allDone = normalized.length > 0 && normalized.every((t) => t.status === 'completed')
-  const activeCount = normalized.filter((t) => t.status === 'in_progress').length
-  if (normalized.length === 0 || (!allDone && activeCount !== 1)) {
-    const reason =
-      normalized.length === 0
-        ? 'the checklist must contain at least one item'
-        : `an active checklist must contain exactly one in_progress item; received ${activeCount}`
-    pushToolResult(state, callbacks, toolCallId, 'todoWrite', toolErrorString(reason), true)
-    return
-  }
-  state.todos = allDone ? [] : normalized
-  callbacks.onTodosUpdate(state.todos)
-  const dropped = raw.length - normalized.length
-  const droppedNote =
-    dropped > 0
-      ? ` ${dropped} entr${dropped === 1 ? 'y was' : 'ies were'} dropped because they had neither content nor activeForm — please include both fields next time so the user sees clean labels.`
-      : ''
-  // Echo the resulting list state back to the model (Claude Code returns
-  // old/new todos for the same reason): a visible state summary turns the
-  // call from fire-and-forget bookkeeping into a feedback loop the model
-  // can check against its mental model of the checklist.
-  const counts = normalized.reduce(
-    (acc, t) => {
-      acc[t.status]++
-      return acc
-    },
-    { pending: 0, in_progress: 0, completed: 0 },
-  )
-  const VERIFY_RE = /\b(verif|test|check|lint|build|typecheck|tsc)\b/i
-  const needsVerifyNudge =
-    allDone &&
-    normalized.length >= 3 &&
-    !normalized.some((t) => VERIFY_RE.test(t.content) || VERIFY_RE.test(t.activeForm))
-  const verifyNote = needsVerifyNudge
-    ? ' Before wrapping up, verify your work — run tests, lint, or type-check as appropriate for this project.'
-    : ''
-  const explanation = typeof input.explanation === 'string' ? input.explanation.trim() : ''
-  const explanationNote = explanation ? ` Note: ${explanation}` : ''
-  pushToolResult(
-    state,
-    callbacks,
-    toolCallId,
-    'todoWrite',
-    allDone
-      ? `All todos completed (${normalized.length} items). Checklist cleared.${explanationNote}${verifyNote}${droppedNote}`
-      : `Todo list updated (${counts.in_progress} in_progress, ${counts.pending} pending, ${counts.completed} completed).${explanationNote} Mark each item completed IMMEDIATELY when its work finishes — do not batch updates.${droppedNote}`,
-  )
-}
-
-export async function handleEnterPlanMode(
-  input: Record<string, unknown>,
-  toolCallId: string,
-  state: LoopState,
-  options: AgentOptions,
-  callbacks: AgentCallbacks,
-  pushToolResult: PushToolResult,
-): Promise<void> {
-  if (state.permissionMode === 'plan') {
-    pushToolResult(
-      state,
-      callbacks,
-      toolCallId,
-      'enterPlanMode',
-      'Already in plan mode. Continue the conversation; call exitPlanMode when the user has asked for an implementation and you have a plan ready.',
-    )
-    return
-  }
-  const decision = await callbacks.onAskPermission({ toolCallId, toolName: 'enterPlanMode', input })
-  if (options.abortSignal?.aborted) {
-    pushToolResult(state, callbacks, toolCallId, 'enterPlanMode', '[Tool execution interrupted by user]', true)
-    return
-  }
-  if (decision === 'no' || typeof decision === 'object') {
-    const feedback = typeof decision === 'object' ? decision.feedback.trim() : ''
-    pushToolResult(
-      state,
-      callbacks,
-      toolCallId,
-      'enterPlanMode',
-      `User declined to enter plan mode.${feedback ? ` User feedback: ${feedback}.` : ''} Continue with the user's request in default mode — make whatever edits or shell calls the task requires (subject to per-tool permission).`,
-      true,
-    )
-    return
-  }
-  state.permissionMode = 'plan'
-  state.systemPromptCache = null
-  markExpectedCacheMiss(state, 'permission-mode-change')
-  if (!state.currentPlanPath) {
-    const topic = (input.topic as string | undefined)?.trim()
-    const fallbackText = lastUserMessageText(state.messages)
-    const explicitSlug = topic && topic.length > 0 ? topic : state.taskSlug || undefined
-    state.currentPlanPath = makePlanFilePath(fallbackText, { slug: explicitSlug })
-  }
-  callbacks.onPlanModeChange('plan')
-  pushToolResult(
-    state,
-    callbacks,
-    toolCallId,
-    'enterPlanMode',
-    [
-      'Entered plan mode (user approved).',
-      '',
-      'Read-only tools are unrestricted (readFile, glob, grep, listDir, webSearch, webFetch).',
-      `Plan file path for this session: ${state.currentPlanPath}`,
-      'Use writeFile/edit on the plan file to build your plan; do NOT edit any other files',
-      'or run state-changing shell commands until the user approves your plan via exitPlanMode.',
-      '',
-      'Workflow: explore → update plan file → askUser → repeat.',
-      '',
-      'CRITICAL: when the plan is ready, call **exitPlanMode** to request approval — NOT',
-      'askUser. askUser cannot leave plan mode no matter how the user answers; only',
-      'exitPlanMode flips the mode and unblocks your writeFile/edit/shell calls.',
-    ].join('\n'),
-  )
 }
 
 export async function handleExitPlanMode(
@@ -233,10 +96,6 @@ export async function handleExitPlanMode(
         'Plan approved by user. Plan mode has been exited.',
         persisted ? `The approved plan is saved at: ${persisted}` : '',
         'You can now edit files and run shell commands. Start implementing the plan.',
-        '',
-        'For multi-step plans, call **todoWrite** first to break the plan into a',
-        'tracked checklist — the user sees a live panel of your progress and you',
-        'avoid losing track of remaining steps mid-implementation.',
       ]
         .filter(Boolean)
         .join('\n'),

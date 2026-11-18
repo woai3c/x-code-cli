@@ -2051,7 +2051,6 @@ export function App({
       backgroundTerminalWarningCount={
         visibleTerminals.filter((terminal) => terminal.status === 'termination-failed').length
       }
-      todos={state.todos}
       queuedMessages={state.queuedMessages}
       onPopQueued={popQueuedMessage}
       draftRestore={state.restoredDraft}

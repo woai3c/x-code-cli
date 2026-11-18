@@ -201,12 +201,7 @@ function classifyBuiltin(
   if (toolName === 'writeFile' || toolName === 'edit' || toolName === 'killShell') {
     return { capabilities: ['local-mutation'], paths }
   }
-  if (
-    toolName === 'enterPlanMode' ||
-    toolName === 'exitPlanMode' ||
-    toolName === 'updateGoal' ||
-    toolName === 'createGoal'
-  ) {
+  if (toolName === 'exitPlanMode' || toolName === 'updateGoal' || toolName === 'createGoal') {
     return { capabilities: ['configuration-change'] }
   }
   if (toolName === 'task') {
@@ -221,7 +216,6 @@ function classifyBuiltin(
   if (['listAgents', 'listMcpResources'].includes(toolName)) {
     return { capabilities: ['session-metadata-read'] }
   }
-  if (toolName === 'todoWrite') return { capabilities: ['local-mutation'] }
   if (['askUser', 'toolSearch'].includes(toolName)) return { capabilities: ['pure-compute'] }
   return { capabilities: ['unknown'] }
 }

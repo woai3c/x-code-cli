@@ -1049,10 +1049,6 @@ export async function agentLoop(
         hasTaskTool:
           !planMode &&
           (Object.hasOwn(baseTools, 'task') || Boolean(state.deferredCatalog?.some((entry) => entry.name === 'task'))),
-        hasTodoTool:
-          !planMode &&
-          (Object.hasOwn(baseTools, 'todoWrite') ||
-            Boolean(state.deferredCatalog?.some((entry) => entry.name === 'todoWrite'))),
         hasMemoryService: !planMode && Boolean(memoryService),
       })
       // Snapshot the exact capability blocks embedded in the prompt above.

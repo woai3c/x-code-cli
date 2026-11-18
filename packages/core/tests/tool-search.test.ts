@@ -167,18 +167,16 @@ describe('composeTurnTools', () => {
     expect(Object.keys(result)).not.toContain('ghost_tool')
   })
 
-  it('exposes only the mode transition tool valid for the current turn', () => {
+  it('hides exitPlanMode outside plan mode and exposes only planning-safe tools in plan mode', () => {
     const modeBase = {
       readFile: { id: 'read' },
       browserVisualCheck: { id: 'visual' },
-      enterPlanMode: { id: 'enter' },
       exitPlanMode: { id: 'exit' },
     }
 
     expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'default'))).toEqual([
       'readFile',
       'browserVisualCheck',
-      'enterPlanMode',
     ])
     expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'plan'))).toEqual(['readFile', 'exitPlanMode'])
   })
@@ -187,7 +185,7 @@ describe('composeTurnTools', () => {
     const base = { readFile: { id: 'read' }, writeFile: { id: 'write' }, exitPlanMode: { id: 'exit' } }
     const catalog = [
       entry('webSearch', 'Search the web', 'builtin'),
-      entry('todoWrite', 'Track tasks', 'builtin'),
+      entry('task', 'Delegate sub-agent', 'builtin'),
       entry('mcp__db__write', 'Mutate database', 'mcp', 'db'),
     ]
     const tools = composeTurnTools(base, catalog, new Set(), 'plan')
@@ -234,6 +232,8 @@ describe('buildDeferredCatalog', () => {
     const rootTools = buildTools({ modelId: 'test:model' } as any, rootState)
     expect((rootState.deferredCatalog ?? []).map((entry) => entry.name)).not.toContain('browserVisualCheck')
     expect(rootTools).toHaveProperty('browserVisualCheck')
+    expect(rootTools).not.toHaveProperty('enterPlanMode')
+    expect(rootTools).not.toHaveProperty('todoWrite')
 
     const disabledTools = buildTools(
       { modelId: 'test:model', browserVisualCheckEnabled: false } as any,
@@ -398,7 +398,7 @@ describe('buildDeferredCatalog', () => {
     expect(searchDeferredTools('upload cloud', catalog, 5)).toContain('mcp__s3__put_object')
   })
 
-  it('defers task but keeps todo direct for an explicit standard profile when the budget is exceeded', () => {
+  it('defers task for an explicit standard profile when the budget is exceeded', () => {
     const subAgentRegistry = {
       list: () => [{ name: 'reviewer', description: 'Review changes' }],
       names: () => ['reviewer'],
@@ -416,7 +416,6 @@ describe('buildDeferredCatalog', () => {
 
     expect(state.deferredCatalog?.map((entry) => entry.name)).toContain('task')
     expect(tools).not.toHaveProperty('task')
-    expect(tools).toHaveProperty('todoWrite')
     expect(tools).toHaveProperty('toolSearch')
   })
 

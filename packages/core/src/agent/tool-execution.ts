@@ -51,7 +51,7 @@ import {
   toolResultMessage,
 } from './messages.js'
 import type { ToolImage } from './messages.js'
-import { handleEnterPlanMode, handleExitPlanMode, handleTodoWrite } from './plan-tools.js'
+import { handleExitPlanMode } from './plan-tools.js'
 import { effectiveExecutionAuthority } from './provenance.js'
 import { captureFileBeforeMutation } from './snapshot.js'
 import type { SubAgentLoopRunner } from './sub-agents/runner.js'
@@ -637,10 +637,6 @@ async function handleKillShell(ctx: HandlerCtx): Promise<void> {
 /** Manual tools that bypass the loop guard and the write/shell execution pipeline. */
 const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
   ...createBuiltInToolHandlers(pushToolResult),
-  todoWrite: ({ input, toolCallId, state, callbacks }) =>
-    handleTodoWrite(input, toolCallId, state, callbacks, pushToolResult),
-  enterPlanMode: ({ input, toolCallId, state, options, callbacks }) =>
-    handleEnterPlanMode(input, toolCallId, state, options, callbacks, pushToolResult),
   exitPlanMode: ({ input, toolCallId, state, callbacks }) =>
     handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult),
   shellOutput: handleShellOutput,
@@ -1130,7 +1126,17 @@ async function handleToolCall(
     if (!(await checkWriteOrShellPermission(ctx))) return
 
     const result = await executeWriteOrShell(ctx)
-    if (result == null) return
+    if (result == null) {
+      pushToolResult(
+        state,
+        callbacks,
+        ctx.toolCallId,
+        ctx.toolName,
+        toolErrorString(`Tool "${ctx.toolName}" is not available. Use only the tools listed for this turn.`),
+        true,
+      )
+      return
+    }
 
     if (result.shellObservation) {
       await commitShellObservation(ctx, result.shellObservation)
@@ -1421,7 +1427,7 @@ function collectFulfilledToolCallIds(state: LoopState): Set<string> {
  *  the only manual tool we hand-execute in `processToolCalls` that's
  *  truly isolated:
  *    - each `runSubAgent` builds a fresh `LoopState` (own messages, own
- *      `recentToolCalls`, own todos, own permission mode)
+ *      `recentToolCalls`, own permission mode)
  *    - `parentState.tokenUsage` is updated by additive accumulation only
  *      after the sub-agent completes, so concurrent updates can't get
  *      torn (single-threaded event loop + plain `+=` writes)
@@ -1434,8 +1440,7 @@ function collectFulfilledToolCallIds(state: LoopState): Set<string> {
  *      indicator
  *    - `askUser` / permission dialogs hold the UI; running two at once
  *      would race the dialog state machine
- *    - `todoWrite` / `enterPlanMode` / `exitPlanMode` mutate `LoopState`
- *      fields that the next turn reads
+ *    - `exitPlanMode` mutates `LoopState` fields that the next turn reads
  *  Auto-executed tools (readFile / glob / grep / listDir / webFetch /
  *  webSearch) don't appear here — by the time `processToolCalls` runs,
  *  the SDK has already executed them and the skip-fulfilled pre-pass

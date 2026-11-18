@@ -11,7 +11,6 @@ import type {
   ContextSecurityState,
   ExecutionAuthority,
   PermissionMode,
-  TodoItem,
   TokenUsage,
   TrackedModelMessage,
 } from '../types/index.js'
@@ -110,28 +109,19 @@ export interface LoopState {
    *  /mcp refresh. Set together with systemPromptCache; undefined for
    *  sub-agents and pre-first-turn states. */
   systemPromptBlocks?: { knowledge: string; skill: string; mcpDeferred: string }
-  /** Current approval mode — flips between 'default' and 'plan' via
-   *  the /plan slash command (user) or the enterPlanMode/exitPlanMode
-   *  tools (model). Read by tool-execution to decide which system
-   *  prompt overlay applies and which tools are advertised. */
+  /** Current approval mode — flips via the /plan slash command or --plan
+   *  flag (user) and the exitPlanMode tool (model approval gate). Read by
+   *  tool-execution to decide which system prompt overlay applies and which
+   *  tools are advertised. */
   permissionMode: PermissionMode
   /** Path to the plan file when in plan mode (`.x-code/plans/{sessionId}.md`),
-   *  null otherwise. Created lazily the first time the model calls
-   *  `enterPlanMode` and re-used for the remainder of that plan-mode
-   *  session. Cleared on exit. */
+   *  null otherwise. Created lazily on the first plan-mode turn and re-used
+   *  for the remainder of that plan-mode session. Cleared on exit. */
   currentPlanPath: string | null
   /** Lowercase-hyphen slug derived locally from the user's first message.
    *  Used for readable plan filenames and retained in session metadata for
    *  legacy resume lookups; transcript filenames are timestamp-only. */
   taskSlug: string
-  /** Current checklist maintained by the model via the `todoWrite`
-   *  tool. Full-replacement semantics — every todoWrite call rewrites
-   *  this array. In-memory only, never persisted. Auto-cleared back
-   *  to [] when the model submits a list with all items completed.
-   *  Cleared on `/clear` and `/resume` (the new LoopState starts
-   *  fresh with []); preserved across `/compact` so a multi-step
-   *  task survives history summarisation. */
-  todos: TodoItem[]
   /** Per-user-message snapshots backing the `/rewind` command. Pushed by
    *  `createCheckpoint` (snapshot.ts) right after each user message lands
    *  in `messages`. In-memory: ring-buffered at 100 entries. Cleared by
@@ -286,12 +276,10 @@ export function createLoopState(
     systemPromptBlocks: undefined,
     permissionMode: initialMode,
     // Plan path is derived LAZILY from the user's task text once a
-    // message lands — done in agentLoop / enterPlanMode handler. We
-    // can't slugify here because the user's intent isn't visible at
-    // session-construction time.
+    // message lands — done in agentLoop. We can't slugify here because
+    // the user's intent isn't visible at session-construction time.
     currentPlanPath: null,
     taskSlug: '',
-    todos: [],
     checkpoints: [],
     checkpointFileCache: new Map(),
     persistedMessageCount: 0,

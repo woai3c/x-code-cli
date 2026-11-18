@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
 import { shell } from '../src/tools/shell.js'
 import { createTaskTool } from '../src/tools/task.js'
-import { todoWrite } from '../src/tools/todo-write.js'
 
 describe('system prompt budget and stability', () => {
   it('keeps the default prompt compact without dropping safety boundaries', () => {
@@ -13,13 +12,14 @@ describe('system prompt budget and stability', () => {
       hasBrowserVisualCheck: true,
       hasPeerTools: true,
       hasTaskTool: true,
-      hasTodoTool: true,
       hasMemoryService: true,
     })
 
     expect(prompt.length).toBeLessThan(5_000)
     expect(prompt).not.toContain('## Capabilities')
     expect(prompt).not.toContain('## Skills')
+    expect(prompt).not.toContain('## Task Management')
+    expect(prompt).not.toContain('todoWrite')
     expect(prompt).not.toMatch(/curl|PowerShell|Invoke-WebRequest/)
     expect(prompt).not.toContain('`/skill install`')
     expect(prompt).toContain('Read a file before modifying it')
@@ -125,14 +125,5 @@ describe('heavy tool description budgets', () => {
     expect(description).not.toContain('<example>')
     expect(description).toContain('Prompt contract')
     expect(description).toContain('Never run concurrent agents that can write the same files')
-  })
-
-  it('keeps todo replacement and lifecycle invariants in a compact description', () => {
-    const description = todoWrite.description ?? ''
-
-    expect(description.length).toBeLessThan(2_000)
-    expect(description).toContain('Replace the complete live checklist')
-    expect(description).toContain('exactly one item in_progress')
-    expect(description).toContain('automatically cleared')
   })
 })

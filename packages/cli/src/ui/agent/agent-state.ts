@@ -35,7 +35,6 @@ export const initialAgentState: Omit<AgentState, 'modelId' | 'permissionMode'> =
   usageBreakdown: createUsageBreakdown(),
   cacheMissSummary: scanCacheMisses([]),
   error: null,
-  todos: [],
   bufferingReads: false,
   compressionLabel: null,
   ingestLabel: null,

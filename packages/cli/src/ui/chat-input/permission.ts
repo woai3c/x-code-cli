@@ -22,8 +22,6 @@ export function permissionTitle(toolName: string, mcp?: { serverName: string; ra
       return 'Would you like to write the following file?'
     case 'edit':
       return 'Would you like to edit the following file?'
-    case 'enterPlanMode':
-      return 'Would you like to enter plan mode?'
     default:
       return `Would you like to use ${toolName}?`
   }
@@ -136,15 +134,6 @@ export function permissionContentCells(
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push({ char: ' ', style: S_NONE, width: 1 })
     cells.push(...textToCells(truncatePathFromStart(fp, Math.max(10, termWidth - 4)), S_PRIMARY))
-    return cells
-  }
-  if (toolName === 'enterPlanMode') {
-    // Plan-mode entry has no per-call input — describe the consequence
-    // so the user knows what Yes/No actually means.
-    const cells: Cell[] = []
-    cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push({ char: ' ', style: S_NONE, width: 1 })
-    cells.push(...textToCells('Read-only exploration; no edits until you approve a plan.', S_DIM))
     return cells
   }
   return null

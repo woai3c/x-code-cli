@@ -68,7 +68,7 @@ describe('peer tool capability classification', () => {
     ['shellOutput', { shellId: 'bg_1', chars: '' }, ['sensitive-read']],
     ['shellOutput', { shellId: 'bg_1', chars: 'status\r' }, ['local-mutation']],
     ['shellOutput', { shellId: 'bg_1', chars: '', cols: 120, rows: 40 }, ['local-mutation']],
-    ['enterPlanMode', {}, ['configuration-change']],
+    ['exitPlanMode', {}, ['configuration-change']],
     ['unregisteredBuiltin', {}, ['unknown']],
   ] as const)('classifies %s as %j', (toolName, input, capabilities) => {
     expect(classify(toolName, input).capabilities).toEqual(capabilities)

@@ -118,10 +118,8 @@ export function getToolLabel(toolName: string): string {
   if (n === 'websearch') return 'WebSearch'
   if (n === 'webfetch') return 'WebFetch'
   if (n === 'askuser') return 'AskUser'
-  if (n === 'enterplanmode') return 'EnterPlanMode'
   if (n === 'exitplanmode') return 'ExitPlanMode'
   if (n === 'task') return 'Task'
-  if (n === 'todowrite') return 'TodoWrite'
   return toolName
 }
 

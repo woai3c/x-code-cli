@@ -63,7 +63,7 @@ type ToolResultLike = {
  *
  * How the orphans arise:
  *   - Forward (tool_call without result): models occasionally emit
- *     malformed tool input (e.g. todoWrite with required fields
+ *     malformed tool input (e.g. a tool call with required fields
  *     missing). The SDK validates, fails, emits a tool-error event,
  *     and in some cases doesn't push a paired tool-result into
  *     response.messages. We synthesise an error result.

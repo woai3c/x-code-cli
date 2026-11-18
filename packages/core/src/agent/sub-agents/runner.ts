@@ -425,7 +425,6 @@ async function runSubAgentUnlocked(
     onAskUser: callbacks.onAskUser,
     onPlanApprovalRequest: callbacks.onPlanApprovalRequest,
     onPlanModeChange: () => {},
-    onTodosUpdate: () => {},
     onShellOutput: callbacks.onShellOutput,
     onUsageUpdate: () => {},
     onContextCompressed: () => {},

@@ -44,10 +44,6 @@ import {
   GLYPH_PROMPT_ARROW,
   GLYPH_RESULT_BRACKET,
   GLYPH_SELECT_POINTER,
-  GLYPH_TODO_BRACKET,
-  GLYPH_TODO_CHECK,
-  GLYPH_TODO_IN_PROGRESS,
-  GLYPH_TODO_PENDING,
   GLYPH_TOOL_BULLET,
   SPINNER_FRAMES,
 } from '../render/terminal-glyphs.js'
@@ -144,7 +140,6 @@ export function ChatInput({
   shellWaitStreak,
   backgroundTerminalCount = 0,
   backgroundTerminalWarningCount = 0,
-  todos,
   queuedMessages,
   onPopQueued,
   draftRestore,
@@ -1423,12 +1418,11 @@ export function ChatInput({
     // denied or hasn't produced an onToolCall yet — reserving blank rows
     // there would just shift the gap around rather than eliminate it.
     //
-    // The 11-row figure is the COMMON case: suggestRuleLabel only
-    // returns null for enterPlanMode (which runs no tools on approval),
-    // so the Always row is effectively always present. Rare 9-row
-    // dialogs (unknown tool with no content row) over-reserve by two —
-    // transient blank rows, cheaper than the stale residue an
-    // under-reserved shrink leaves behind.
+    // The 11-row figure is the COMMON case: suggestRuleLabel returns a
+    // label for standard permissioned tools, so the Always row is
+    // effectively always present. Rare 9-row dialogs (unknown tool with
+    // no content row) over-reserve by two — transient blank rows, cheaper
+    // than the stale residue an under-reserved shrink leaves behind.
     const hadPermissionLastRender = prevHadPermissionRef.current
     const runningToolCount = activeToolCalls?.length ?? 0
     if (hasNewMessages || permission) {
@@ -1780,10 +1774,9 @@ export function ChatInput({
       frame.push(boxedRow([], S_TEXT_STRONG))
 
       const ruleLabel = suggestRuleLabel(permission.toolName, permission.input, !!permission.mcp)
-      // When no rule can be suggested (e.g. powershell -Command "...",
-      // enterPlanMode), the always-option is omitted. The last row is
-      // kimi-cli's reject-with-feedback: selecting it (Enter / digit /
-      // 'f') opens an inline text field instead of resolving.
+      // When no rule can be suggested, the always-option is omitted. The
+      // last row is kimi-cli's reject-with-feedback: selecting it (Enter /
+      // digit / 'f') opens an inline text field instead of resolving.
       const options: { label: string; shortcut: string }[] = [{ label: 'Yes', shortcut: 'y' }]
       if (ruleLabel) options.push({ label: `Yes, don't ask again for: ${ruleLabel}`, shortcut: 'a' })
       options.push({ label: 'No', shortcut: 'esc' })
@@ -1908,7 +1901,6 @@ export function ChatInput({
       const separatorsAndInput = 3
       const footerRow = 1
       const spinnerRows = spinner ? 1 : 0
-      const todoRows = todos && todos.length > 0 ? todos.length : 0
       // Match the live-tool-block filter above: collapsible read-only
       // tools don't draw an indicator, so they don't consume rows here
       // either. Without this filter the select-options dialog would
@@ -1927,8 +1919,7 @@ export function ChatInput({
               return sum + 1 + histLen + (idx > 0 ? 1 : 0)
             }, 1)
           : 0
-      const fixedChrome =
-        selectBlanks + hintRows + separatorsAndInput + footerRow + spinnerRows + todoRows + activeToolRows
+      const fixedChrome = selectBlanks + hintRows + separatorsAndInput + footerRow + spinnerRows + activeToolRows
       const chromeRows = questionRows + fixedChrome
       const maxVisibleOptions = Math.max(3, Math.floor((termRows - chromeRows) / rowsPerOption))
       const totalOpts = opts.length
@@ -2090,75 +2081,6 @@ export function ChatInput({
           cells.push(...ansiTextToCells(row))
           frame.push(cells)
         }
-      }
-    }
-
-    // Todo panel. Driven by the model's `todoWrite` tool; gives the
-    // user a live view of multi-step task progress. Inspired by
-    // Claude Code's `<MessageResponse><TaskListV2/></MessageResponse>`
-    // in `Spinner.tsx:280`, but adapted to our cell-buffer where
-    // multiple anchor sources can sit above the panel.
-    //
-    // Anchor handling: the corner glyph `\u23bf` only renders on
-    // row 1 when *no* anchor exists above the panel (no spinner, no
-    // active tool calls). In that orphan case we also prepend a dim
-    // "Update Todos" header so the corner has something to attach to.
-    // When a spinner or live-tool row is already showing above, those
-    // rows already carry their own `\u23bf` connector; adding a
-    // second one here produces a visible double-corner (two `\u23bf`
-    // glyphs stacked) so we drop ours and let the items sit as plain
-    // indented rows under the existing anchor.
-    //
-    //   no anchor above            anchor above (spinner/tool)
-    //     Update Todos               \u23bf Running command...
-    //   \u23bf <icon> Task name           <icon> Task name
-    //     <icon> Task name              <icon> Task name
-    //
-    // Other choices:
-    //   - No "N tasks (X done, ...)" summary header \u2014 CC drops it; the
-    //     icon progression (\u2713 vs \u25fc vs \u25fb) IS the status.
-    //   - Completed: dim check + strikethrough dim content. Pending:
-    //     hollow square in default color (NOT dim \u2014 pending is
-    //     "waiting", not "forgotten"). In-progress: filled square in
-    //     primary + bold content — shape (filled vs hollow), weight
-    //     (bold vs regular) AND the single brand hue mark active state.
-    //   - No `activeForm` activity line. CC doesn't render one, and
-    //     when the model echoed the same phrase for both fields the
-    //     extra row was visual noise.
-    if (todos && todos.length > 0) {
-      const hasAnchorAbove = !!spinner || (activeToolCalls?.length ?? 0) > 0
-      if (!hasAnchorAbove) {
-        const headerCells: Cell[] = []
-        headerCells.push({ char: ' ', style: S_NONE, width: 1 })
-        headerCells.push(...textToCells('Update Todos', S_DIM))
-        frame.push(headerCells)
-      }
-      for (let i = 0; i < todos.length; i++) {
-        const t = todos[i]
-        const cells: Cell[] = []
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        if (i === 0 && !hasAnchorAbove) {
-          cells.push(...textToCells(GLYPH_TODO_BRACKET, S_GRAY_90))
-        } else {
-          cells.push({ char: ' ', style: S_NONE, width: 1 })
-        }
-        cells.push({ char: ' ', style: S_NONE, width: 1 })
-        if (t.status === 'completed') {
-          cells.push(...textToCells(GLYPH_TODO_CHECK, S_DIM))
-          cells.push({ char: ' ', style: S_NONE, width: 1 })
-          // ANSI 2 = dim, 9 = strikethrough.
-          cells.push(...textToCells(t.content, '\x1b[0m\x1b[2;9m'))
-        } else if (t.status === 'in_progress') {
-          cells.push(...textToCells(GLYPH_TODO_IN_PROGRESS, S_PRIMARY_BOLD))
-          cells.push({ char: ' ', style: S_NONE, width: 1 })
-          cells.push(...textToCells(t.content, S_BOLD))
-        } else {
-          cells.push(...textToCells(GLYPH_TODO_PENDING, S_RESET))
-          cells.push({ char: ' ', style: S_NONE, width: 1 })
-          cells.push(...textToCells(t.content, S_RESET))
-        }
-        frame.push(cells)
       }
     }
 
@@ -2491,8 +2413,8 @@ export function ChatInput({
     // the rationale was that pre-scroll (`\n.repeat(N)`) followed by a
     // non-atomic frame redraw produced visible "input box jitter" at
     // the bottom row. Hiding the frame cured the jitter at the cost of
-    // hiding the input box, spinner, separators, elapsed-time, active
-    // tool list, and todos for the entire reply.
+    // hiding the input box, spinner, separators, elapsed-time, and active
+    // tool list for the entire reply.
     //
     // Why we dropped it: two things changed since.
     //
@@ -2558,7 +2480,6 @@ export function ChatInput({
         `permission=${permission ? '1' : '0'} ` +
         `select=${selectRequest ? '1' : '0'} ` +
         `activeTools=${activeToolCalls?.length ?? 0} ` +
-        `todos=${todos?.length ?? 0} ` +
         `spinner=${spinner ? '1' : '0'} ` +
         `didCommit=${messages.length > writtenMessageCountRef.current ? '1' : '0'}`,
     )

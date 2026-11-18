@@ -14,10 +14,9 @@ const scenario: Scenario = {
     ctx.expect.exitCode(r, 0)
 
     // Plan mode CAN call writeFile/edit — but ONLY on the plan-storage
-    // file under `.x-code/plans/`. enterPlanMode's tool result explicitly
-    // tells the model to use writeFile on the plan file to build the plan
-    // (see plan-tools.ts:131). The invariant we care about is: no write
-    // tool touches anything outside `.x-code/plans/`.
+    // file under `.x-code/plans/` (see PLAN_MODE_OVERLAY in system-prompt.ts).
+    // The invariant we care about is: no write tool touches anything
+    // outside `.x-code/plans/`.
     const isPlanFile = (p: unknown): boolean => typeof p === 'string' && /[\\/]\.x-code[\\/]plans[\\/]/.test(p)
     for (const tc of r.toolCalls) {
       if (tc.toolName !== 'writeFile' && tc.toolName !== 'edit') continue

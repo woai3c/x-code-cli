@@ -22,7 +22,7 @@ CLI 自带 5 个（另有可选的 `browser`，见下文）：
 >
 > `shell（受限）` 表示 `shell` 工具仍可用，但 `shellRestrictions` 默认拦截破坏性命令（`rm`、`mv`、`git push`、`> redirect` 等，完整列表见 `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`）。
 >
-> `plan` 内置 sub-agent **不含** `enterPlanMode` ——它的产出是 Markdown 计划文本而不是切换主会话的权限模式。`/plan` 这个 CLI flag 跟 `plan` sub-agent 是两件事。
+> `plan` 内置 sub-agent 的产出是纯 Markdown 计划文本，不会切换主会话的权限模式。`/plan` 这个 CLI 命令/参数跟 `plan` sub-agent 是两件事。
 
 主 agent 通过 `task` 工具调用它们：
 
@@ -182,7 +182,7 @@ tools: [readFile, shell, glob]
 shellRestrictions: [rm, sudo, npm publish, git push]
 ```
 
-可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`enterPlanMode`、`exitPlanMode`、`todoWrite`、`shellOutput`、`killShell`。**`task` 工具永远禁用**（防递归），`memorySearch` 只注册给根 Agent，子 agent 拿不到。
+可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`exitPlanMode`、`shellOutput`、`killShell`。**`task` 工具永远禁用**（防递归），`memorySearch` 只注册给根 Agent，子 agent 拿不到。
 
 允许 `shell` 时，运行器会自动补上 `shellOutput` 和 `killShell`，确保后台命令可继续读取和终止。因此不能在 `disallowedTools` 中禁用任一配套工具；这种定义会被拒绝。详见 [shell-sessions.md](./shell-sessions.md)。
 

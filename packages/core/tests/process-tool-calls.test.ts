@@ -24,7 +24,6 @@ function makeCallbacks(overrides: Partial<AgentCallbacks> = {}): AgentCallbacks 
     onAskUser: vi.fn().mockResolvedValue('answer'),
     onPlanApprovalRequest: vi.fn().mockResolvedValue(true),
     onPlanModeChange: vi.fn(),
-    onTodosUpdate: vi.fn(),
     onShellOutput: vi.fn(),
     onUsageUpdate: vi.fn(),
     onContextCompressed: vi.fn(),
@@ -1157,6 +1156,47 @@ describe('processToolCalls tool media ordering', () => {
         ],
       })
     }
+  })
+  it('returns an explicit error tool-result when the model calls an unregistered or removed tool', async () => {
+    const state = createLoopState()
+    state.messages.push(
+      { role: 'user', content: 'continue resumed session' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc-removed-1', toolName: 'todoWrite', input: { todos: [] } },
+          { type: 'tool-call', toolCallId: 'tc-removed-2', toolName: 'enterPlanMode', input: {} },
+        ],
+      } as ModelMessage,
+    )
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onToolResult })
+
+    await processToolCalls(
+      [
+        { toolName: 'todoWrite', toolCallId: 'tc-removed-1', input: { todos: [] } },
+        { toolName: 'enterPlanMode', toolCallId: 'tc-removed-2', input: {} },
+      ],
+      state,
+      options,
+      callbacks,
+      stubModel,
+    )
+
+    expect(onToolResult).toHaveBeenCalledTimes(2)
+    expect(onToolResult).toHaveBeenNthCalledWith(
+      1,
+      'tc-removed-1',
+      expect.stringContaining('Tool "todoWrite" is not available'),
+      true,
+    )
+    expect(onToolResult).toHaveBeenNthCalledWith(
+      2,
+      'tc-removed-2',
+      expect.stringContaining('Tool "enterPlanMode" is not available'),
+      true,
+    )
+    expect(state.messages.slice(2).map((m) => m.role)).toEqual(['tool', 'tool'])
   })
 })
 

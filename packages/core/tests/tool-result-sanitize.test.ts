@@ -98,7 +98,7 @@ describe('repairOrphanToolCalls', () => {
   it('appends a synthetic error result for an assistant tool_call with no result', () => {
     const messages: ModelMessage[] = [
       { role: 'user', content: 'hi' } as ModelMessage,
-      assistantToolCallMsg('tc1', 'todoWrite'),
+      assistantToolCallMsg('tc1', 'askUser'),
     ]
     repairOrphanToolCalls(messages)
     expect(messages).toHaveLength(3)
@@ -117,7 +117,7 @@ describe('repairOrphanToolCalls', () => {
     const messages: ModelMessage[] = [
       { role: 'user', content: 'hi' } as ModelMessage,
       { role: 'assistant', content: 'plain reply, no tool call' } as ModelMessage,
-      toolResultMsg('orphan-id', 'todoWrite', 'Todo list updated.'),
+      toolResultMsg('orphan-id', 'askUser', 'Answered.'),
     ]
     repairOrphanToolCalls(messages)
     expect(messages).toHaveLength(2)
@@ -142,7 +142,7 @@ describe('repairOrphanToolCalls', () => {
           {
             type: 'tool-result',
             toolCallId: 'tc-orphan',
-            toolName: 'todoWrite',
+            toolName: 'askUser',
             output: { type: 'text', value: 'orphan result' },
           },
         ],
@@ -157,7 +157,7 @@ describe('repairOrphanToolCalls', () => {
 
   it('is idempotent — running twice produces the same result', () => {
     const messages: ModelMessage[] = [
-      assistantToolCallMsg('tc1', 'todoWrite'),
+      assistantToolCallMsg('tc1', 'askUser'),
       toolResultMsg('orphan', 'shell', 'orphan'),
     ]
     repairOrphanToolCalls(messages)

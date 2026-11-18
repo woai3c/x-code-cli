@@ -6,8 +6,6 @@ export type {
   PermissionLevel,
   PermissionMode,
   TokenUsage,
-  TodoItem,
-  TodoStatus,
   DisplayMessage,
   DisplayToolCall,
   AgentCallbacks,

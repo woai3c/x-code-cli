@@ -609,12 +609,6 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           // persisted to user config. Each new session starts in
           // 'default' unless `--plan` was passed.
         },
-        onTodosUpdate: (todos) => {
-          // Direct mirror — the core agent has already validated the
-          // shape and applied auto-clear semantics; we just store what
-          // it gives us so ChatInput can re-render the todo panel.
-          setState((prev) => ({ ...prev, todos }))
-        },
         onUsageUpdate: (usage) => {
           setState((prev) => ({
             ...prev,
@@ -1450,8 +1444,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       markExpectedCacheMiss(loopStateRef.current, 'permission-mode-change')
       // Clear the path on leaving plan mode so a future re-entry gets a
       // fresh slug derived from whatever the user is asking next; the
-      // path is re-derived lazily in agentLoop / enterPlanMode handler
-      // from the next user message.
+      // path is re-derived lazily in agentLoop from the next user message.
       if (next !== 'plan') loopStateRef.current.currentPlanPath = null
     }
     setState((prev) => ({ ...prev, permissionMode: next }))

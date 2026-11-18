@@ -10,7 +10,6 @@ import type {
   GoalVerifier,
   PermissionMode,
   StepStats,
-  TodoItem,
   TokenUsage,
   UsageBreakdown,
 } from '@x-code-cli/core'
@@ -100,8 +99,6 @@ export interface AgentState {
   modelId: string
   /** Live approval mode for the current session. */
   permissionMode: PermissionMode
-  /** Live checklist maintained by the model. */
-  todos: TodoItem[]
   /** Keeps the reading status stable across consecutive read-only tool calls. */
   bufferingReads: boolean
   /** Current context-compression phase, when compression is active. */

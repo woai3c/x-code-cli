@@ -495,7 +495,7 @@ export function extractCompoundRules(command: string): AllowRule[] | null {
 /**
  * Generate the display label for the "don't ask again" option.
  * Returns `null` only for tools where a "don't ask again" affordance
- * makes no sense (enterPlanMode toggles a mode, not a recurring action).
+ * makes no sense.
  *
  * Shell, single derivable prefix:   `git commit:*`
  * Shell, multiple derivable prefixes (compound where segments disagree
@@ -513,7 +513,6 @@ export function extractCompoundRules(command: string): AllowRule[] | null {
  *   tools which fall back to session-only).
  */
 export function suggestRuleLabel(toolName: string, input: Record<string, unknown>, isMcp = false): string | null {
-  if (toolName === 'enterPlanMode') return null
   if (isMcp) return 'this MCP tool'
   if (toolName === 'shell') {
     const cmd = (input.command as string) ?? ''

@@ -50,18 +50,6 @@ export const GLYPH_RESULT_BRACKET = IS_LEGACY_TERMINAL ? '|' : '⎿'
  *  GLYPH_PROMPT_ARROW and the codex CLI selection pointer. */
 export const GLYPH_SELECT_POINTER = IS_LEGACY_TERMINAL ? '>' : '\u203a'
 
-/** Todo completed check: `✓` (U+2713) → `+` */
-export const GLYPH_TODO_CHECK = IS_LEGACY_TERMINAL ? '+' : '\u2713'
-
-/** Todo in-progress filled square: `◼` (U+25FC) → `#` */
-export const GLYPH_TODO_IN_PROGRESS = IS_LEGACY_TERMINAL ? '#' : '\u25fc'
-
-/** Todo pending hollow square: `◻` (U+25FB) → `-` */
-export const GLYPH_TODO_PENDING = IS_LEGACY_TERMINAL ? '-' : '\u25fb'
-
-/** Todo panel corner bracket: `⎿` (U+23BF) → `|` (same as result bracket) */
-export const GLYPH_TODO_BRACKET = IS_LEGACY_TERMINAL ? '|' : '\u23bf'
-
 /** Blockquote left bar: `▎` (U+258E) → `|` */
 export const GLYPH_BLOCKQUOTE_BAR = IS_LEGACY_TERMINAL ? '|' : '\u258e'
 

@@ -1,5 +1,5 @@
 // ChatInput public + internal data types.
-import type { AuthorityApprovalPreview, DisplayMessage, PermissionDecision, TodoItem } from '@x-code-cli/core'
+import type { AuthorityApprovalPreview, DisplayMessage, PermissionDecision } from '@x-code-cli/core'
 
 import type { ShellWaitStreak } from '../agent/shell-session-ui.js'
 import type { TurnOwner } from '../agent/turn-coordinator.js'
@@ -25,7 +25,6 @@ export interface ChatInputProps {
   shellWaitStreak?: ShellWaitStreak | null
   backgroundTerminalCount?: number
   backgroundTerminalWarningCount?: number
-  todos?: readonly TodoItem[]
   queuedMessages?: readonly { id: string; text: string }[]
   onPopQueued?: (id: string) => void
   draftRestore?: { text: string; nonce: number } | null
