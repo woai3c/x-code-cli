@@ -11,9 +11,9 @@ playbooks, language- or framework-specific best-practice cheatsheets.
 ## TL;DR
 
 ```bash
-# A user-scope skill (available in every project)
-mkdir -p ~/.x-code/skills/code-review
-cat > ~/.x-code/skills/code-review/SKILL.md <<'EOF'
+# A user-scope skill (cross-agent standard, available in every project)
+mkdir -p ~/.agents/skills/code-review
+cat > ~/.agents/skills/code-review/SKILL.md <<'EOF'
 ---
 name: code-review
 description: Review a diff against the team checklist
@@ -37,7 +37,7 @@ EOF
 A skill is a directory with a `SKILL.md` at the top:
 
 ```
-~/.x-code/skills/<name>/
+.agents/skills/<name>/
 ├── SKILL.md           # required: YAML frontmatter + Markdown body
 ├── references/        # optional bundled resources
 ├── scripts/           # optional helper scripts
@@ -56,11 +56,13 @@ Review the diff I provide using these criteria:
 ...
 ```
 
-The frontmatter requires two fields; unknown extra fields are ignored:
+Frontmatter fields (unknown extra fields are ignored):
 
-- `name` (required) — should match the directory name; `/<name>` triggers it
-- `description` (required) — one-line summary; the agent reads it to decide
-  when to activate the skill on its own
+- `name` (recommended) — matches the directory name; defaults to the enclosing
+  directory name when omitted; `/<name>` triggers it
+- `description` (required) — one-line summary (YAML folded scalars like
+  `description: >` are also supported); the agent reads it to decide when to
+  activate the skill on its own
 
 **Bundled files**: at startup or `/skill refresh`, the CLI records every
 non-hidden file in the skill directory (capped at 50). Activation hands that
@@ -72,19 +74,29 @@ Walk through the checklist in references/checklist.md and apply each item.
 
 ---
 
-## Where skills live
+## Where skills live & auto-discovery
 
-| Scope   | Path                                   | When                                     |
-| ------- | -------------------------------------- | ---------------------------------------- |
-| User    | `~/.x-code/skills/<name>/SKILL.md`     | Personal workflows that apply everywhere |
-| Project | `<cwd>/.x-code/skills/<name>/SKILL.md` | Workflows for the launch directory       |
+X-Code adopts the cross-agent `.agents/skills` convention as primary, while
+automatically discovering `.claude/skills` (read-only Claude Code compatibility)
+and `.x-code/skills` (legacy / X-Code-specific overrides):
 
-A project-level skill overrides a plugin or user-scope skill of the same name.
-This repository gitignores its root `.x-code/`; to share skills with a team,
-publish them as a plugin (see [plugins.en.md](./plugins.en.md)).
+| Scope   | Primary path (recommended)              | Auto-discovered compatibility paths                                    | When                                               |
+| ------- | --------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------- |
+| User    | `~/.agents/skills/<name>/SKILL.md`      | `~/.x-code/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md` | Personal workflows (`/skill install` target)       |
+| Project | `<repo>/.agents/skills/<name>/SKILL.md` | `<repo>/.x-code/skills/...`, `<repo>/.claude/skills/...`               | Team-shared repo skills or local project overrides |
 
-> **Windows paths**: `~/.x-code` maps to `%USERPROFILE%\.x-code` on Windows.
-> Not repeated below.
+- **Repository chain discovery**: when launched inside a Git repository
+  subdirectory (such as `packages/cli` in a monorepo), X-Code scans from the
+  enclosing `.git` root down to the current working directory; deeper
+  directories override ancestor skills of the same name.
+- **Name-collision precedence**: across scopes **Project > Plugin > User**;
+  within each scope **`.agents` > `.x-code` > `.claude`**.
+- `.x-code/` is reserved for X-Code-specific state (`settings.local.json`,
+  sessions, memory); commit shared repository skills under `.agents/skills/`,
+  or bundle them as a plugin (see [plugins.en.md](./plugins.en.md)).
+
+> **Windows paths**: `~/` maps to `%USERPROFILE%\` on Windows. Not repeated
+> below.
 
 ---
 
@@ -123,14 +135,14 @@ activates. One clear sentence about _when_ to use it works best.
 
 ## `/skill` commands
 
-| Command                                         | Description                                                               |
-| ----------------------------------------------- | ------------------------------------------------------------------------- |
-| `/skill list`                                   | List all loaded skills with on/off state and source (user / project)      |
-| `/skill install <url>`                          | Download a SKILL.md from a URL into user scope (plain HTTP fetch, no git) |
-| `/skill refresh`                                | Re-scan skill directories + settings; takes effect immediately            |
-| `/skill enable <name> [--scope=user\|project]`  | Re-enable a disabled skill                                                |
-| `/skill disable <name> [--scope=user\|project]` | Disable a skill (file kept; effective after `/skill refresh`, or restart) |
-| `/skill uninstall <name>`                       | Delete the skill directory (rejected for plugin-sourced skills)           |
+| Command                                         | Description                                                                                        |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `/skill list`                                   | List all loaded skills with on/off state and origin (`.agents` / `.claude` / `.x-code` / `plugin`) |
+| `/skill install <url>`                          | Download a SKILL.md from a URL into `~/.agents/skills/` (plain HTTP fetch, no git)                 |
+| `/skill refresh`                                | Re-scan skill directories + settings; takes effect immediately                                     |
+| `/skill enable <name> [--scope=user\|project]`  | Re-enable a disabled skill                                                                         |
+| `/skill disable <name> [--scope=user\|project]` | Disable a skill (file kept; effective after `/skill refresh`, or restart)                          |
+| `/skill uninstall <name>`                       | Delete the skill directory (rejected for plugin and read-only `.claude` skills)                    |
 
 Disabled state is persisted to the matching scope's settings:
 
@@ -145,7 +157,7 @@ The two lists are unioned — disabled in either scope means disabled.
 
 ### Example 1: PR-review playbook (team checklist)
 
-`~/.x-code/skills/pr-review/SKILL.md`:
+`~/.agents/skills/pr-review/SKILL.md`:
 
 ```markdown
 ---
@@ -171,7 +183,7 @@ See references/api-allowlist.md for the allowed dependency list.
 End with: **GO** or **NOGO + blocking reason**.
 ```
 
-`~/.x-code/skills/pr-review/references/api-allowlist.md`:
+`~/.agents/skills/pr-review/references/api-allowlist.md`:
 
 ```markdown
 # Approved dependencies
@@ -190,7 +202,7 @@ Usage:
 
 ### Example 2: Turn benchmark text into a chart
 
-`~/.x-code/skills/perf-chart/SKILL.md`:
+`~/.agents/skills/perf-chart/SKILL.md`:
 
 ````markdown
 ---

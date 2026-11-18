@@ -11,13 +11,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import {
-  USER_XCODE_DIR,
   getScopedDisabledSkills,
   reloadSkillRegistry,
   setSkillDisabled,
   skillSettingsPath,
+  userSkillsDir,
 } from '@x-code-cli/core'
-import type { AgentOptions, SkillDefinition, SkillSettingsScope } from '@x-code-cli/core'
+import type { AgentOptions, SkillDefinition, SkillEntry, SkillSettingsScope } from '@x-code-cli/core'
 
 import { parseScopeFlag } from './scope-flag.js'
 
@@ -34,6 +34,25 @@ export interface SkillCommandDeps {
 function extractSkillName(content: string): string | null {
   const match = content.match(/^---\r?\n[\s\S]*?^name:\s*["']?([^"'\r\n]+)["']?\s*$/m)
   return match ? match[1].trim() : null
+}
+
+function isSafeSkillDirName(name: string): boolean {
+  return (
+    name.length > 0 &&
+    name !== '.' &&
+    name !== '..' &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    path.basename(name) === name
+  )
+}
+
+function formatSkillProvenance(skill: SkillEntry): string {
+  if (skill.pluginId) return `plugin: ${skill.pluginId}`
+  if (skill.origin === 'agents') return skill.source === 'user' ? 'user · ~/.agents' : 'project · .agents'
+  if (skill.origin === 'claude') return skill.source === 'user' ? 'user · ~/.claude' : 'project · .claude'
+  if (skill.origin === 'xcode') return skill.source === 'user' ? 'user · ~/.x-code' : 'project · .x-code'
+  return skill.source
 }
 
 /** Split a skill argument into `(name, scope)`, recognizing
@@ -74,8 +93,12 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
         addCommandMessage(text, 'Invalid SKILL.md: missing `name` in frontmatter.')
         return
       }
+      if (!isSafeSkillDirName(name)) {
+        addCommandMessage(text, `Invalid SKILL.md: unsafe skill name \`${name}\`.`)
+        return
+      }
 
-      const skillDir = path.join(USER_XCODE_DIR, 'skills', name)
+      const skillDir = path.join(userSkillsDir(), name)
       const skillFile = path.join(skillDir, 'SKILL.md')
       try {
         await fs.mkdir(skillDir, { recursive: true })
@@ -95,16 +118,16 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
     if (sub === 'list') {
       const skills = options.skillRegistry?.listAll() ?? []
       if (skills.length === 0) {
-        const skillsPath = path.join(USER_XCODE_DIR, 'skills', '<name>', 'SKILL.md')
+        const skillsPath = path.join(userSkillsDir(), '<name>', 'SKILL.md')
         addCommandMessage(
           text,
-          `No skills loaded. Place SKILL.md files in \`${skillsPath}\` then run \`/skill refresh\` (or restart).`,
+          `No skills loaded. Place SKILL.md files in \`.agents/skills/<name>/SKILL.md\` or \`${skillsPath}\` then run \`/skill refresh\` (or restart).`,
         )
         return
       }
       const lines = skills.map((s) => {
         const tag = s.disabled ? '[off]' : '[on] '
-        return `- ${tag} **${s.name}** (${s.source}): ${s.description}`
+        return `- ${tag} **${s.name}** (${formatSkillProvenance(s)}): ${s.description}`
       })
       addCommandMessage(text, `**Loaded skills** (${skills.length}):\n${lines.join('\n')}`)
       return
@@ -175,11 +198,12 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
       // Re-enable is symmetric: clear from the source scope first; if the
       // skill is still effectively disabled it's because the OTHER scope
       // also lists it, and we'll surface that.
+      const canonicalName = entry.name
       const effectiveScope: SkillSettingsScope = scope ?? entry.source
       const disable = sub === 'disable'
       let result: 'changed' | 'noop'
       try {
-        result = await setSkillDisabled(bareName, effectiveScope, disable)
+        result = await setSkillDisabled(canonicalName, effectiveScope, disable)
       } catch (err) {
         addCommandMessage(text, `Failed to update settings: ${err instanceof Error ? err.message : String(err)}`)
         return
@@ -189,8 +213,8 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
         addCommandMessage(
           text,
           disable
-            ? `Skill **${bareName}** is already disabled in ${effectiveScope} settings (\`${settingsFile}\`).`
-            : `Skill **${bareName}** is not disabled in ${effectiveScope} settings (\`${settingsFile}\`).`,
+            ? `Skill **${canonicalName}** is already disabled in ${effectiveScope} settings (\`${settingsFile}\`).`
+            : `Skill **${canonicalName}** is not disabled in ${effectiveScope} settings (\`${settingsFile}\`).`,
         )
         return
       }
@@ -201,9 +225,9 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
       if (!disable) {
         const other: SkillSettingsScope = effectiveScope === 'user' ? 'project' : 'user'
         try {
-          const stillDisabled = (await getScopedDisabledSkills(other)).includes(bareName)
+          const stillDisabled = (await getScopedDisabledSkills(other)).includes(canonicalName)
           if (stillDisabled) {
-            otherScopeNote = `\n_Note: \`${bareName}\` is also listed in ${other} settings (\`${skillSettingsPath(other)}\`). Run \`/skill enable ${bareName} --scope=${other}\` to fully re-enable._`
+            otherScopeNote = `\n_Note: \`${canonicalName}\` is also listed in ${other} settings (\`${skillSettingsPath(other)}\`). Run \`/skill enable ${canonicalName} --scope=${other}\` to fully re-enable._`
           }
         } catch {
           // best-effort hint — silent failure is fine
@@ -212,7 +236,7 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
       const verb = disable ? 'Disabled' : 'Enabled'
       addCommandMessage(
         text,
-        `${verb} skill **${bareName}** in ${effectiveScope} settings (\`${settingsFile}\`).${otherScopeNote}\nRun \`/skill refresh\` to apply now, or restart xc.`,
+        `${verb} skill **${canonicalName}** in ${effectiveScope} settings (\`${settingsFile}\`).${otherScopeNote}\nRun \`/skill refresh\` to apply now, or restart xc.`,
       )
       return
     }
@@ -239,10 +263,30 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
         )
         return
       }
-      const baseDir = entry.source === 'user' ? USER_XCODE_DIR : path.join(process.cwd(), '.x-code')
-      const skillDir = path.join(baseDir, 'skills', name)
+      if (entry.origin === 'claude') {
+        addCommandMessage(
+          text,
+          `Skill **${name}** comes from Claude Code's skills directory (\`${entry.dir}\`), which X-Code treats as read-only.\nUse \`/skill disable ${name}\` to hide it in X-Code, or remove \`${entry.dir}\` manually.`,
+        )
+        return
+      }
+      const skillDir = path.resolve(entry.dir)
+      if (skillDir === path.parse(skillDir).root) {
+        addCommandMessage(text, `Refusing to remove unsafe skill directory \`${skillDir}\`.`)
+        return
+      }
       try {
-        await fs.rm(skillDir, { recursive: true, force: true })
+        const stat = await fs.lstat(skillDir)
+        if (stat.isSymbolicLink()) {
+          try {
+            await fs.unlink(skillDir)
+          } catch {
+            // Windows directory junctions require non-recursive rmdir rather than unlink.
+            await fs.rmdir(skillDir)
+          }
+        } else {
+          await fs.rm(skillDir, { recursive: true, force: true })
+        }
       } catch (err) {
         addCommandMessage(text, `Failed to remove \`${skillDir}\`: ${err instanceof Error ? err.message : String(err)}`)
         return
@@ -251,14 +295,14 @@ export function createSkillCommandHandler(deps: SkillCommandDeps) {
       // at an uninstalled skill would silently swallow a future re-install
       // with the same name (it'd come back disabled).
       try {
-        await setSkillDisabled(name, 'user', false)
-        await setSkillDisabled(name, 'project', false)
+        await setSkillDisabled(entry.name, 'user', false)
+        await setSkillDisabled(entry.name, 'project', false)
       } catch {
         // best-effort — main rm already succeeded
       }
       addCommandMessage(
         text,
-        `Uninstalled skill **${name}** from \`${skillDir}\`.\nRun \`/skill refresh\` to apply now, or restart xc.`,
+        `Uninstalled skill **${entry.name}** from \`${skillDir}\`.\nRun \`/skill refresh\` to apply now, or restart xc.`,
       )
       return
     }

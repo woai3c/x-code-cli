@@ -393,7 +393,7 @@ async function main() {
   }
 
   const subAgentRegistry = await createSubAgentRegistry({ extraDirs: pluginIntegration.agentsDirs })
-  const skillRegistry = await createSkillRegistry({ extraDirs: pluginIntegration.skillsDirs })
+  const skillRegistry = await createSkillRegistry({ cwd: process.cwd(), extraDirs: pluginIntegration.skillsDirs })
   const commandRegistry = await createCommandRegistry({ extraDirs: pluginIntegration.commandsDirs })
 
   // MCP: Phase 1 — read configs + run trust dialog. This is fast (disk

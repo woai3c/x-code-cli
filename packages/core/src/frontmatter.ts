@@ -67,8 +67,10 @@ export function parseFrontmatter(raw: string, options?: ParseFrontmatterOptions)
       else foldedLines.push(line)
       continue
     }
-    if (/^\s/.test(line) && line.trim() && foldedLines.length > 0) {
-      foldedLines[foldedLines.length - 1] += ' ' + line.trim()
+    const trimmedLine = line.trim()
+    if (!trimmedLine || trimmedLine.startsWith('#')) continue
+    if (/^\s/.test(line) && foldedLines.length > 0) {
+      foldedLines[foldedLines.length - 1] += ' ' + trimmedLine
     } else {
       foldedLines.push(line)
     }
@@ -123,6 +125,14 @@ export function parseFrontmatter(raw: string, options?: ParseFrontmatterOptions)
 
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1)
+    } else if (typeof value === 'string') {
+      // Folded continuation lines turn YAML block scalars (`description: >`
+      // or `description: |-`) into `> first line second line`. Strip the
+      // unquoted block-scalar indicator so callers receive clean text.
+      const blockScalarMatch = value.match(/^[>|][+-]?(?:\s+(.*))?$/)
+      if (blockScalarMatch) {
+        value = blockScalarMatch[1] ?? ''
+      }
     }
 
     if (coerce && typeof value === 'string' && /^\d+$/.test(value)) {

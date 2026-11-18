@@ -677,3 +677,301 @@ describe('createSkillRegistry', () => {
     expect(registry.getEntry('skill-off')?.disabled).toBe(true)
   })
 })
+
+// ── Cross-agent skill discovery (.agents / .claude / .x-code) ────────────────
+
+describe('cross-agent skill discovery', () => {
+  let originalXcodeHome: string | undefined
+  const tempDirs: string[] = []
+
+  async function makeTempDir(prefix: string): Promise<string> {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+    tempDirs.push(d)
+    return d
+  }
+
+  async function writeSkill(
+    baseRoot: string,
+    dirFamily: '.agents' | '.claude' | '.x-code',
+    skillDirName: string,
+    frontmatter: string,
+    body: string,
+  ): Promise<string> {
+    const dir = path.join(baseRoot, dirFamily, 'skills', skillDirName)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'SKILL.md'), `---\n${frontmatter}\n---\n${body}`, 'utf-8')
+    return dir
+  }
+
+  beforeEach(() => {
+    originalXcodeHome = process.env.X_CODE_HOME
+    delete process.env.XC_SKILLS_DIR
+  })
+
+  afterEach(async () => {
+    if (originalXcodeHome === undefined) delete process.env.X_CODE_HOME
+    else process.env.X_CODE_HOME = originalXcodeHome
+    for (const d of tempDirs.splice(0)) {
+      await fs.rm(d, { recursive: true, force: true })
+    }
+  })
+
+  it('discovers .agents, .claude, and .x-code skills across user and project scopes with expected precedence', async () => {
+    const homeDir = await makeTempDir('xc-skill-home-')
+    const repoDir = await makeTempDir('xc-skill-repo-')
+
+    // Unique skills per origin
+    await writeSkill(homeDir, '.claude', 'u-claude', 'name: u-claude\ndescription: User claude', 'uc')
+    await writeSkill(homeDir, '.x-code', 'u-xcode', 'name: u-xcode\ndescription: User xcode', 'ux')
+    await writeSkill(homeDir, '.agents', 'u-agents', 'name: u-agents\ndescription: User agents', 'ua')
+    await writeSkill(repoDir, '.claude', 'p-claude', 'name: p-claude\ndescription: Proj claude', 'pc')
+    await writeSkill(repoDir, '.x-code', 'p-xcode', 'name: p-xcode\ndescription: Proj xcode', 'px')
+    await writeSkill(repoDir, '.agents', 'p-agents', 'name: p-agents\ndescription: Proj agents', 'pa')
+
+    // User intra-scope collision: .agents > .x-code > .claude
+    await writeSkill(homeDir, '.claude', 'u-collide', 'name: u-collide\ndescription: from claude', 'c')
+    await writeSkill(homeDir, '.x-code', 'u-collide', 'name: u-collide\ndescription: from xcode', 'x')
+    await writeSkill(homeDir, '.agents', 'u-collide', 'name: u-collide\ndescription: from agents', 'a')
+
+    // Project intra-scope collision: .agents > .x-code > .claude
+    await writeSkill(repoDir, '.claude', 'p-collide', 'name: p-collide\ndescription: proj claude', 'pc')
+    await writeSkill(repoDir, '.x-code', 'p-collide', 'name: p-collide\ndescription: proj xcode', 'px')
+    await writeSkill(repoDir, '.agents', 'p-collide', 'name: p-collide\ndescription: proj agents', 'pa')
+
+    // Cross-scope collision: project .claude still overrides user .agents and plugin
+    await writeSkill(homeDir, '.agents', 'cross', 'name: cross\ndescription: user agents', 'ua')
+    await writeSkill(repoDir, '.claude', 'cross', 'name: cross\ndescription: project claude', 'pc')
+    const pluginDir = await makeTempDir('xc-skill-plugin-')
+    await fs.mkdir(path.join(pluginDir, 'cross'), { recursive: true })
+    await fs.writeFile(
+      path.join(pluginDir, 'cross', 'SKILL.md'),
+      '---\nname: cross\ndescription: plugin cross\n---\np',
+      'utf-8',
+    )
+
+    const skills = await loadSkills({
+      homeDir,
+      cwd: repoDir,
+      extraDirs: [{ dir: pluginDir, pluginId: 'demo@local' }],
+    })
+    const registry = new SkillRegistry(skills)
+
+    expect(registry.get('u-claude')).toMatchObject({ source: 'user', origin: 'claude' })
+    expect(registry.get('u-xcode')).toMatchObject({ source: 'user', origin: 'xcode' })
+    expect(registry.get('u-agents')).toMatchObject({ source: 'user', origin: 'agents' })
+    expect(registry.get('p-claude')).toMatchObject({ source: 'project', origin: 'claude' })
+    expect(registry.get('p-xcode')).toMatchObject({ source: 'project', origin: 'xcode' })
+    expect(registry.get('p-agents')).toMatchObject({ source: 'project', origin: 'agents' })
+
+    expect(registry.get('u-collide')).toMatchObject({ description: 'from agents', origin: 'agents', source: 'user' })
+    expect(registry.get('p-collide')).toMatchObject({ description: 'proj agents', origin: 'agents', source: 'project' })
+    expect(registry.get('cross')).toMatchObject({ description: 'project claude', origin: 'claude', source: 'project' })
+  })
+
+  it('walks upward from subdirectory cwd to enclosing .git root (root -> leaf precedence)', async () => {
+    const homeDir = await makeTempDir('xc-mono-home-')
+    const repoRoot = await makeTempDir('xc-mono-repo-')
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    const pkgDir = path.join(repoRoot, 'packages', 'cli')
+    await fs.mkdir(pkgDir, { recursive: true })
+
+    await writeSkill(repoRoot, '.agents', 'shared', 'name: shared\ndescription: Root shared', 'root')
+    await writeSkill(repoRoot, '.claude', 'claude-root', 'name: claude-root\ndescription: Root claude', 'rc')
+    await writeSkill(repoRoot, '.agents', 'override-me', 'name: override-me\ndescription: Root version', 'rv')
+    await writeSkill(pkgDir, '.agents', 'override-me', 'name: override-me\ndescription: Leaf version', 'lv')
+
+    const registry = new SkillRegistry(await loadSkills({ homeDir, cwd: pkgDir }))
+    expect(registry.get('shared')?.description).toBe('Root shared')
+    expect(registry.get('claude-root')?.description).toBe('Root claude')
+    expect(registry.get('override-me')?.description).toBe('Leaf version')
+  })
+
+  it('does not walk into parent directories when cwd is outside a Git repository', async () => {
+    const homeDir = await makeTempDir('xc-nogit-home-')
+    const parentDir = await makeTempDir('xc-nogit-parent-')
+    const childDir = path.join(parentDir, 'workspace')
+    await fs.mkdir(childDir, { recursive: true })
+
+    await writeSkill(parentDir, '.agents', 'stray', 'name: stray\ndescription: Parent stray', 'stray')
+    await writeSkill(childDir, '.agents', 'local', 'name: local\ndescription: Child local', 'local')
+
+    const registry = new SkillRegistry(await loadSkills({ homeDir, cwd: childDir }))
+    expect(registry.get('stray')).toBeUndefined()
+    expect(registry.get('local')?.description).toBe('Child local')
+  })
+
+  it('does not promote user skills to project scope when launched directly in homeDir', async () => {
+    const homeDir = await makeTempDir('xc-inhome-')
+    await writeSkill(homeDir, '.agents', 'my-skill', 'name: my-skill\ndescription: User skill', 'body')
+
+    const skills = await loadSkills({ homeDir, cwd: homeDir })
+    expect(skills).toHaveLength(1)
+    expect(skills[0]).toMatchObject({ name: 'my-skill', source: 'user', origin: 'agents' })
+  })
+
+  it('confines user-scope discovery and userSkillsDir() to X_CODE_HOME when set', async () => {
+    const { userSkillsDir } = await import('../src/skills/registry.js')
+    const sandboxHome = await makeTempDir('xc-sandbox-home-')
+    const emptyProj = await makeTempDir('xc-sandbox-proj-')
+    process.env.X_CODE_HOME = sandboxHome
+
+    expect(userSkillsDir()).toBe(path.join(sandboxHome, 'skills'))
+
+    await fs.mkdir(path.join(sandboxHome, 'skills', 'sandboxed'), { recursive: true })
+    await fs.writeFile(
+      path.join(sandboxHome, 'skills', 'sandboxed', 'SKILL.md'),
+      '---\nname: sandboxed\ndescription: Inside sandbox\n---\nsandbox body',
+      'utf-8',
+    )
+
+    const skills = await loadSkills({ cwd: emptyProj })
+    expect(skills.map((s) => s.name)).toEqual(['sandboxed'])
+    expect(skills[0]).toMatchObject({ source: 'user', origin: 'xcode' })
+  })
+
+  it('supports omitted name (falls back to directory name) and YAML block scalar descriptions', async () => {
+    const homeDir = await makeTempDir('xc-compat-home-')
+    const repoDir = await makeTempDir('xc-compat-repo-')
+
+    await writeSkill(
+      repoDir,
+      '.claude',
+      'inferred-name',
+      'description: >-\n  Multi-line folded\n  Claude skill description',
+      'Skill body',
+    )
+    await writeSkill(
+      repoDir,
+      '.agents',
+      'literal-block',
+      'name: literal-block\ndescription: |\n  Literal block\n  second line',
+      'Body 2',
+    )
+    await writeSkill(
+      repoDir,
+      '.agents',
+      'quoted-angle',
+      'name: quoted-angle\ndescription: "> keep leading angle"',
+      'Body 3',
+    )
+
+    const registry = new SkillRegistry(await loadSkills({ homeDir, cwd: repoDir }))
+    expect(registry.get('inferred-name')?.description).toBe('Multi-line folded Claude skill description')
+    expect(registry.get('literal-block')?.description).toBe('Literal block second line')
+    expect(registry.get('quoted-angle')?.description).toBe('> keep leading angle')
+  })
+
+  it('follows symlinked skill directories (npx skills layout)', async () => {
+    const homeDir = await makeTempDir('xc-symlink-home-')
+    const repoDir = await makeTempDir('xc-symlink-repo-')
+
+    const targetDir = await writeSkill(
+      repoDir,
+      '.agents',
+      'linked-skill',
+      'name: linked-skill\ndescription: Canonical skill',
+      'Body',
+    )
+    await fs.writeFile(path.join(targetDir, 'helper.txt'), 'helper', 'utf-8')
+
+    // Also link an alias under .claude/skills using junction on Windows so
+    // unprivileged Windows runners don't fail with EPERM.
+    const claudeSkillsRoot = path.join(repoDir, '.claude', 'skills')
+    await fs.mkdir(claudeSkillsRoot, { recursive: true })
+    await fs.symlink(
+      targetDir,
+      path.join(claudeSkillsRoot, 'claude-only-link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    // Rename frontmatter omission scenario: create a skill without `name` so the symlink's dir name wins
+    const namelessTarget = path.join(repoDir, 'shared-store', 'nameless')
+    await fs.mkdir(namelessTarget, { recursive: true })
+    await fs.writeFile(
+      path.join(namelessTarget, 'SKILL.md'),
+      '---\ndescription: Linked nameless skill\n---\nBody',
+      'utf-8',
+    )
+    await fs.writeFile(path.join(namelessTarget, 'ref.md'), '# Ref', 'utf-8')
+    await fs.symlink(
+      namelessTarget,
+      path.join(claudeSkillsRoot, 'nameless-link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+
+    const registry = new SkillRegistry(await loadSkills({ homeDir, cwd: repoDir }))
+    expect(registry.get('nameless-link')).toMatchObject({
+      description: 'Linked nameless skill',
+      origin: 'claude',
+      files: ['ref.md'],
+    })
+  })
+
+  it('reloadSkillRegistry preserves initial cwd and plugin extraDirs when called with no args', async () => {
+    const { createSkillRegistry, reloadSkillRegistry } = await import('../src/skills/registry.js')
+    const homeDir = await makeTempDir('xc-reload-home-')
+    const repoDir = await makeTempDir('xc-reload-repo-')
+    const pluginDir = await makeTempDir('xc-reload-plugin-')
+
+    await fs.mkdir(path.join(pluginDir, 'p-skill'), { recursive: true })
+    await fs.writeFile(
+      path.join(pluginDir, 'p-skill', 'SKILL.md'),
+      '---\nname: p-skill\ndescription: Plugin skill\n---\nplugin body',
+      'utf-8',
+    )
+
+    const registry = await createSkillRegistry({
+      homeDir,
+      cwd: repoDir,
+      extraDirs: [{ dir: pluginDir, pluginId: 'demo@local' }],
+    })
+    expect(registry.names()).toEqual(['p-skill'])
+
+    await writeSkill(repoDir, '.agents', 'new-proj', 'name: new-proj\ndescription: Added project skill', 'body')
+    const summary = await reloadSkillRegistry(registry)
+    expect(summary.added).toEqual(['new-proj'])
+    expect(summary.unchanged).toEqual(['p-skill'])
+    expect(registry.names().sort()).toEqual(['new-proj', 'p-skill'])
+  })
+
+  it('preserves multi-paragraph YAML block scalars across blank lines and strips indented comments', async () => {
+    const homeDir = await makeTempDir('xc-multipar-home-')
+    const repoDir = await makeTempDir('xc-multipar-repo-')
+
+    await writeSkill(
+      repoDir,
+      '.agents',
+      'multi-para',
+      'name: multi-para\ndescription: >\n  First paragraph.\n\n  # Indented comment\n  Note: second paragraph after blank line.',
+      'Body',
+    )
+
+    const registry = new SkillRegistry(await loadSkills({ homeDir, cwd: repoDir }))
+    expect(registry.get('multi-para')?.description).toBe('First paragraph. Note: second paragraph after blank line.')
+  })
+
+  it('resolves mixed-case skill names case-insensitively and honors repo-root disabledSkills from subdirectories', async () => {
+    const { createSkillRegistry } = await import('../src/skills/registry.js')
+    const { skillSettingsPath } = await import('../src/skills/settings.js')
+    const homeDir = await makeTempDir('xc-case-home-')
+    const sandboxSettings = await makeTempDir('xc-case-settings-')
+    process.env.X_CODE_HOME = sandboxSettings
+
+    const repoRoot = await makeTempDir('xc-case-repo-')
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    const subDir = path.join(repoRoot, 'packages', 'sub')
+    await fs.mkdir(subDir, { recursive: true })
+
+    await writeSkill(repoRoot, '.claude', 'PR-Review', 'description: Mixed-case dir skill', 'Body')
+    await writeSkill(repoRoot, '.agents', 'muted-at-root', 'name: muted-at-root\ndescription: Disabled at root', 'Body')
+
+    const rootSettings = skillSettingsPath('project', repoRoot)
+    await fs.mkdir(path.dirname(rootSettings), { recursive: true })
+    await fs.writeFile(rootSettings, JSON.stringify({ disabledSkills: ['muted-at-root'] }), 'utf-8')
+
+    const registry = await createSkillRegistry({ homeDir, cwd: subDir })
+    // Router lowercases `/PR-Review` to `pr-review` — case-insensitive lookup must resolve it
+    expect(registry.get('pr-review')?.name).toBe('PR-Review')
+    expect(registry.get('muted-at-root')).toBeUndefined()
+    expect(registry.getEntry('muted-at-root')?.disabled).toBe(true)
+  })
+})

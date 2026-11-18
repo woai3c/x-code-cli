@@ -13,6 +13,7 @@ import path from 'node:path'
 
 import { mutateSettingsFile, readSettingsFile } from '../settings-io.js'
 import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { collectProjectSkillDirs } from './loader.js'
 
 export type SkillSettingsScope = 'user' | 'project'
 
@@ -20,9 +21,9 @@ interface SkillSettings {
   disabledSkills?: string[]
 }
 
-export function skillSettingsPath(scope: SkillSettingsScope): string {
+export function skillSettingsPath(scope: SkillSettingsScope, cwd: string = process.cwd()): string {
   if (scope === 'user') return path.join(userXcodeDir(), 'settings.json')
-  return path.join(process.cwd(), XCODE_DIR, 'settings.local.json')
+  return path.join(cwd, XCODE_DIR, 'settings.local.json')
 }
 
 function disabledSkillsFrom(obj: Record<string, unknown>): string[] {
@@ -32,16 +33,22 @@ function disabledSkillsFrom(obj: Record<string, unknown>): string[] {
   return list
 }
 
-async function readSettings(scope: SkillSettingsScope): Promise<SkillSettings> {
-  const obj = await readSettingsFile(skillSettingsPath(scope))
+async function readSettings(scope: SkillSettingsScope, cwd?: string): Promise<SkillSettings> {
+  const obj = await readSettingsFile(skillSettingsPath(scope, cwd))
   return { disabledSkills: disabledSkillsFrom(obj) }
 }
 
-export async function loadDisabledSkillsSet(): Promise<Set<string>> {
-  const [u, p] = await Promise.all([readSettings('user'), readSettings('project')])
+export async function loadDisabledSkillsSet(cwd: string = process.cwd()): Promise<Set<string>> {
+  const projectDirs = await collectProjectSkillDirs(cwd)
+  const [u, ...projectSets] = await Promise.all([
+    readSettings('user', cwd),
+    ...projectDirs.map((dir) => readSettings('project', dir)),
+  ])
   const merged = new Set<string>()
   for (const name of u.disabledSkills ?? []) merged.add(name)
-  for (const name of p.disabledSkills ?? []) merged.add(name)
+  for (const p of projectSets) {
+    for (const name of p.disabledSkills ?? []) merged.add(name)
+  }
   return merged
 }
 

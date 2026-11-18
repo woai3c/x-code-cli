@@ -411,8 +411,15 @@ export {
   reloadSkillRegistry,
   formatSkillActivationBody,
   wrapActivatedSkill,
+  userSkillsDir,
 } from './skills/registry.js'
-export type { SkillDefinition, SkillEntry, SkillReloadSummary } from './skills/registry.js'
+export type {
+  LoadSkillsOptions,
+  SkillDefinition,
+  SkillEntry,
+  SkillOrigin,
+  SkillReloadSummary,
+} from './skills/registry.js'
 export { getScopedDisabledSkills, setSkillDisabled, skillSettingsPath } from './skills/settings.js'
 export type { SkillSettingsScope } from './skills/settings.js'
 

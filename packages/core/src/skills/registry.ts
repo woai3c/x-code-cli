@@ -16,14 +16,26 @@
 // loop's buildTools, App.tsx's slash-command tab completion, …) stays
 // pointed at the right thing without needing to be re-wired.
 import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
-import { type LoadSkillsOptions, loadSkills } from './loader.js'
+import { type LoadSkillsOptions, loadSkills, userSkillsDir } from './loader.js'
 import { loadDisabledSkillsSet } from './settings.js'
+
+export { userSkillsDir }
+export type { LoadSkillsOptions }
+
+/** Directory family a skill was discovered from:
+ *  - `'agents'` — `.agents/skills` (primary open Agent Skills standard)
+ *  - `'claude'` — `.claude/skills` (read-only Claude Code compatibility)
+ *  - `'xcode'`  — `.x-code/skills` (legacy / X-Code-specific override)
+ *  - `'plugin'` — plugin-contributed `skills/` directory */
+export type SkillOrigin = 'agents' | 'claude' | 'xcode' | 'plugin'
 
 export interface SkillDefinition {
   name: string
   description: string
   content: string
   source: 'user' | 'project'
+  /** Directory family this skill was discovered from. */
+  origin?: SkillOrigin
   /** Absolute path to the skill's directory (the one containing SKILL.md).
    *  Used at activation time so the model can resolve relative paths to
    *  bundled scripts / references / assets. */
@@ -50,14 +62,28 @@ export type SkillReloadSummary = ReloadSummary
 
 export class SkillRegistry {
   private byName: Map<string, SkillEntry>
+  private loadOptions: LoadSkillsOptions
 
-  constructor(skills: SkillDefinition[], disabled: ReadonlySet<string> = new Set()) {
+  constructor(
+    skills: SkillDefinition[],
+    disabled: ReadonlySet<string> = new Set(),
+    loadOptions: LoadSkillsOptions = {},
+  ) {
     this.byName = new Map()
+    this.loadOptions = { ...loadOptions }
     // Last-write wins: project skills override user-scope skills of the
     // same name because loadSkills() returns user-scope first, then project.
     for (const skill of skills) {
       this.byName.set(skill.name, { ...skill, disabled: disabled.has(skill.name) })
     }
+  }
+
+  getLoadOptions(): LoadSkillsOptions {
+    return this.loadOptions
+  }
+
+  setLoadOptions(opts: LoadSkillsOptions): void {
+    this.loadOptions = { ...opts }
   }
 
   /** Replace the in-memory skill list with a fresh load. Used by
@@ -80,17 +106,30 @@ export class SkillRegistry {
         prev.description !== entry.description ||
         prev.content !== entry.content ||
         prev.source !== entry.source ||
+        prev.origin !== entry.origin ||
+        prev.dir !== entry.dir ||
         prev.disabled !== entry.disabled,
     )
     this.byName = next
     return summary
   }
 
-  /** Enabled skill by name. Disabled skills are hidden from the agent loop
-   *  and slash-command dispatch — use `getEntry()` if you need to inspect
-   *  the disabled flag (the /skill list handler does). */
+  private findEntry(name: string): SkillEntry | undefined {
+    const exact = this.byName.get(name)
+    if (exact) return exact
+    const lower = name.toLowerCase()
+    for (const [key, entry] of this.byName) {
+      if (key.toLowerCase() === lower) return entry
+    }
+    return undefined
+  }
+
+  /** Enabled skill by name (exact match preferred, case-insensitive fallback
+   *  because slash-command routing lowercases `/SkillName` inputs). Disabled
+   *  skills are hidden from the agent loop and slash-command dispatch — use
+   *  `getEntry()` if you need to inspect the disabled flag. */
   get(name: string): SkillDefinition | undefined {
-    const entry = this.byName.get(name)
+    const entry = this.findEntry(name)
     if (!entry || entry.disabled) return undefined
     return entry
   }
@@ -112,7 +151,7 @@ export class SkillRegistry {
   }
 
   getEntry(name: string): SkillEntry | undefined {
-    return this.byName.get(name)
+    return this.findEntry(name)
   }
 }
 
@@ -153,18 +192,22 @@ export function wrapActivatedSkill(skill: SkillDefinition): string {
 }
 
 export async function createSkillRegistry(opts: LoadSkillsOptions = {}): Promise<SkillRegistry> {
-  const [skills, disabled] = await Promise.all([loadSkills(opts), loadDisabledSkillsSet()])
-  return new SkillRegistry(skills, disabled)
+  const [skills, disabled] = await Promise.all([loadSkills(opts), loadDisabledSkillsSet(opts.cwd)])
+  return new SkillRegistry(skills, disabled, opts)
 }
 
 /** Re-scan skill directories + settings.json, then mutate the given
  *  registry in place. Caller is responsible for invalidating any
  *  systemPromptCache that embedded the previous skill list — the
- *  /skill refresh handler does exactly this. */
+ *  /skill refresh handler does exactly this. When `opts` is omitted,
+ *  reuses the `LoadSkillsOptions` captured at creation / last update
+ *  so `/skill refresh` preserves `cwd` and plugin `extraDirs`. */
 export async function reloadSkillRegistry(
   registry: SkillRegistry,
-  opts: LoadSkillsOptions = {},
+  opts?: LoadSkillsOptions,
 ): Promise<SkillReloadSummary> {
-  const [skills, disabled] = await Promise.all([loadSkills(opts), loadDisabledSkillsSet()])
+  const effectiveOpts = opts ? { ...registry.getLoadOptions(), ...opts } : registry.getLoadOptions()
+  if (opts) registry.setLoadOptions(effectiveOpts)
+  const [skills, disabled] = await Promise.all([loadSkills(effectiveOpts), loadDisabledSkillsSet(effectiveOpts.cwd)])
   return registry.reload(skills, disabled)
 }

@@ -9,9 +9,9 @@
 ## TL;DR
 
 ```bash
-# 用户级 skill（所有项目可用）
-mkdir -p ~/.x-code/skills/code-review
-cat > ~/.x-code/skills/code-review/SKILL.md <<'EOF'
+# 用户级 skill（跨工具通用标准，所有项目可用）
+mkdir -p ~/.agents/skills/code-review
+cat > ~/.agents/skills/code-review/SKILL.md <<'EOF'
 ---
 name: code-review
 description: 按公司清单审查改动
@@ -35,7 +35,7 @@ EOF
 一个 skill 就是一个目录，里面有一个 `SKILL.md`：
 
 ```
-~/.x-code/skills/<name>/
+.agents/skills/<name>/
 ├── SKILL.md           # 必需，YAML frontmatter + Markdown body
 ├── references/        # 可选，bundled 资源
 ├── scripts/           # 可选，可执行脚本
@@ -54,10 +54,10 @@ description: 按公司清单审查改动（被 agent 拿来判断是否激活时
 ...
 ```
 
-frontmatter 必须包含下面两个字段；其他未知字段会被忽略：
+frontmatter 字段规则（其他未知字段会被忽略）：
 
-- `name`（必需）：与目录名一致；激活命令就是 `/<name>`
-- `description`（必需）：一句话描述，agent 会读它来决定是否在合适场景主动激活
+- `name`（推荐）：与目录名一致；省略时默认回退为父目录名，激活命令就是 `/<name>`
+- `description`（必需）：一句话描述（支持 `description: >` 多行折叠语法），agent 会读它来决定是否在合适场景主动激活
 
 **bundled 文件**：CLI 在启动或 `/skill refresh` 重载 registry 时，自动列出 `SKILL.md` 同级及子目录的所有文件（限 50 个）。激活 skill 时，这份缓存列表会交给 agent，agent 可以按相对路径读取文件：
 
@@ -67,16 +67,20 @@ frontmatter 必须包含下面两个字段；其他未知字段会被忽略：
 
 ---
 
-## Skills 存放位置
+## Skills 存放位置与自动识别
 
-| Scope | 路径                                   | 何时用            |
-| ----- | -------------------------------------- | ----------------- |
-| 用户  | `~/.x-code/skills/<name>/SKILL.md`     | 个人通用工作流    |
-| 项目  | `<cwd>/.x-code/skills/<name>/SKILL.md` | `xc` 启动目录使用 |
+X-Code 优先采用跨 Agent 通用标准 `.agents/skills`，同时自动兼容识别 Claude Code 的 `.claude/skills`（只读兼容）与历史 `.x-code/skills`：
 
-项目级同名 skill 会覆盖 plugin 和用户级同名 skill。本仓库根目录的 `.x-code/` 已被 gitignore；团队共享 skill 建议发布成 plugin（见 [plugins.md](./plugins.md)）。
+| Scope | 首选路径（推荐）                        | 自动兼容路径                                                           | 何时用                                          |
+| ----- | --------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------- |
+| 用户  | `~/.agents/skills/<name>/SKILL.md`      | `~/.x-code/skills/<name>/SKILL.md`、`~/.claude/skills/<name>/SKILL.md` | 个人通用工作流（`/skill install` 默认写入位置） |
+| 项目  | `<repo>/.agents/skills/<name>/SKILL.md` | `<repo>/.x-code/skills/...`、`<repo>/.claude/skills/...`               | 提交进 Git 的团队共享或本地覆盖                 |
 
-> **Windows 路径**：`~/.x-code` 在 Windows 上是 `%USERPROFILE%\.x-code`，下文不再重复。
+- **Git 仓库目录链回溯**：在 Git 仓库子目录（如 monorepo 的 `packages/cli`）启动 `xc` 时，会从仓库根目录（`.git` 所在目录）逐层扫描到当前目录，子目录同名 skill 覆盖上层目录。
+- **同名覆盖优先级**：跨层 **项目 > Plugin > 用户**；同一层内 **`.agents` > `.x-code` > `.claude`**。
+- `.x-code/` 目录仅用于存放 X-Code 独有配置与运行态（如 `settings.local.json`）；团队共享 skill 可直接提交到 `.agents/skills/`，或发布成 plugin（见 [plugins.md](./plugins.md)）。
+
+> **Windows 路径**：`~/` 在 Windows 上对应 `%USERPROFILE%\`，下文不再重复。
 
 ---
 
@@ -111,14 +115,14 @@ description: 用于检查 React Hook 调用是否符合 rules-of-hooks
 
 ## `/skill` 命令族
 
-| 命令                                            | 说明                                                                 |
-| ----------------------------------------------- | -------------------------------------------------------------------- |
-| `/skill list`                                   | 列出所有已加载 skill，含 on/off 状态 + 来源（user / project）        |
-| `/skill install <url>`                          | 从 URL 下载一个 SKILL.md 装到用户级（直接 HTTP fetch，无 git）       |
-| `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                                 |
-| `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                               |
-| `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，跑 `/skill refresh` 立即生效，或下次启动） |
-| `/skill uninstall <name>`                       | 删除 skill 目录（仅对非 plugin 来源的 skill 生效）                   |
+| 命令                                            | 说明                                                                                            |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `/skill list`                                   | 列出所有已加载 skill，含 on/off 状态 + 具体来源（`.agents` / `.claude` / `.x-code` / `plugin`） |
+| `/skill install <url>`                          | 从 URL 下载一个 SKILL.md 安装到 `~/.agents/skills/`（直接 HTTP fetch，无 git）                  |
+| `/skill refresh`                                | 重扫 skill 目录 + 设置文件，立即生效                                                            |
+| `/skill enable <name> [--scope=user\|project]`  | 启用一个被禁用的 skill                                                                          |
+| `/skill disable <name> [--scope=user\|project]` | 禁用一个 skill（保留文件，跑 `/skill refresh` 立即生效，或下次启动）                            |
+| `/skill uninstall <name>`                       | 删除 skill 目录（`plugin` 与只读兼容的 `.claude` 来源会被保护拒绝）                             |
 
 启用状态写到对应 scope 的 settings：
 
@@ -133,7 +137,7 @@ description: 用于检查 React Hook 调用是否符合 rules-of-hooks
 
 ### 例 1：PR 评审范式（公司内部清单）
 
-`~/.x-code/skills/pr-review/SKILL.md`：
+`~/.agents/skills/pr-review/SKILL.md`：
 
 ```markdown
 ---
@@ -159,7 +163,7 @@ description: 按公司 PR 评审清单逐项检查并给出 GO/NOGO
 最后给一个总评：**GO** 或 **NOGO + 阻塞原因**。
 ```
 
-`~/.x-code/skills/pr-review/references/api-allowlist.md`：
+`~/.agents/skills/pr-review/references/api-allowlist.md`：
 
 ```markdown
 # 允许的依赖列表
@@ -178,7 +182,7 @@ description: 按公司 PR 评审清单逐项检查并给出 GO/NOGO
 
 ### 例 2：把命令行输出转成图表
 
-`~/.x-code/skills/perf-chart/SKILL.md`：
+`~/.agents/skills/perf-chart/SKILL.md`：
 
 ````markdown
 ---
