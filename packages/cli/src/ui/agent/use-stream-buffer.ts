@@ -73,24 +73,40 @@ import { debugLog } from '@x-code-cli/core'
  *  indented paragraph — is rare in AI output and the streaming-feel
  *  win is large: list items appear one at a time as the model emits
  *  them instead of popping in as a finished block. */
+function firstNonWhitespaceChar(text: string, start: number, end: number): string {
+  for (let i = start; i < end; i++) {
+    const code = text.charCodeAt(i)
+    if (code === 0x20 || code === 0x09 || code === 0x0d || code === 0x0b || code === 0x0c) continue
+    if (code > 0x7f && /\s/.test(text[i]!)) continue
+    return text[i]!
+  }
+  return ''
+}
+
 export function hasOpenCodeFence(text: string): boolean {
-  const fences = text.match(/^```/gm)
-  return !!fences && fences.length % 2 !== 0
+  if (text.includes('\r')) {
+    const fences = text.match(/^```/gm)
+    return !!fences && fences.length % 2 !== 0
+  }
+  let inFence = false
+  let pos = 0
+  while (pos <= text.length) {
+    if (text.charCodeAt(pos) === 0x60 && text.charCodeAt(pos + 1) === 0x60 && text.charCodeAt(pos + 2) === 0x60) {
+      inFence = !inFence
+    }
+    const nl = text.indexOf('\n', pos)
+    if (nl < 0) break
+    pos = nl + 1
+  }
+  return inFence
 }
 
 export function hasOpenMarkdownBlock(text: string): boolean {
   if (hasOpenCodeFence(text)) return true
-
-  const lines = text.split('\n')
-  // Strip the ONE trailing '' that `split('\n')` produces for text
-  // ending in a newline — that's a split artifact, not a real blank line.
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  if (lines.length === 0) return false
-
-  const lastLine = lines[lines.length - 1]
-  if (lastLine.trim() === '') return false
-  if (lastLine.trimStart().startsWith('|')) return true
-  return false
+  const end = text.endsWith('\n') ? text.length - 1 : text.length
+  if (end <= 0) return false
+  const lastNL = text.lastIndexOf('\n', end - 1)
+  return firstNonWhitespaceChar(text, lastNL + 1, end) === '|'
 }
 
 /** Return the position just past the LATEST safe single-`\n` in `text`,
@@ -98,20 +114,42 @@ export function hasOpenMarkdownBlock(text: string): boolean {
  *  end inside an open multi-line block — committing that prefix gives
  *  the markdown renderer something it can fully format.
  *
- *  Scans backward from the end so the first hit IS the latest safe cut
- *  (no need to walk every newline tracking a maximum). */
+ *  Walks line boundaries in a single linear pass with zero substring
+ *  allocations so multi-hundred-line tables or code blocks do not stall
+ *  the UI thread on per-token deltas. */
 export function findSafeBoundary(text: string): number {
-  let scan = text.length
-  while (scan > 0) {
-    const found = text.lastIndexOf('\n', scan - 1)
-    if (found < 0) return -1
-    const prefix = text.slice(0, found + 1)
-    if (!hasOpenMarkdownBlock(prefix)) {
-      return found + 1
+  if (text.includes('\r')) {
+    let scan = text.length
+    while (scan > 0) {
+      const found = text.lastIndexOf('\n', scan - 1)
+      if (found < 0) return -1
+      const prefix = text.slice(0, found + 1)
+      if (!hasOpenMarkdownBlock(prefix)) {
+        return found + 1
+      }
+      scan = found
     }
-    scan = found
+    return -1
   }
-  return -1
+  let inFence = false
+  let latestSafe = -1
+  let lineStart = 0
+  while (lineStart < text.length) {
+    const nl = text.indexOf('\n', lineStart)
+    if (nl < 0) break
+    if (
+      text.charCodeAt(lineStart) === 0x60 &&
+      text.charCodeAt(lineStart + 1) === 0x60 &&
+      text.charCodeAt(lineStart + 2) === 0x60
+    ) {
+      inFence = !inFence
+    }
+    if (!inFence && firstNonWhitespaceChar(text, lineStart, nl) !== '|') {
+      latestSafe = nl + 1
+    }
+    lineStart = nl + 1
+  }
+  return latestSafe
 }
 
 // When a code fence is open, the normal `\n\n` safe-boundary logic holds
@@ -226,7 +264,7 @@ export function useStreamBuffer(appendMessage: (msg: DisplayMessage) => void): S
       if (!delta) return
       debugLog('buffer.append', `chars=${delta.length} bytes=${Buffer.byteLength(delta, 'utf8')}`)
       bufferRef.current += delta
-      const boundary = findSafeBoundary(bufferRef.current)
+      const boundary = delta.includes('\n') ? findSafeBoundary(bufferRef.current) : -1
       if (boundary > 0) {
         const chunk = bufferRef.current.slice(0, boundary)
         bufferRef.current = bufferRef.current.slice(boundary)

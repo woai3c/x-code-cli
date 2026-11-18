@@ -69,6 +69,7 @@ import {
 import { authorityViewerLines, authorityVisibleText } from './authority-display.js'
 import { type Cell, ansiTextToCells, cellsEqual, renderRowToAnsi, textToCells } from './cells.js'
 import { type FileEntry, applyCompletion, detectAtToken, scoreAndRank, useFileCompletion } from './file-completion.js'
+import { buildInteractiveKey, decideFlushAction } from './flush-scheduler.js'
 import { buildVisualLines, computePostContentScrollRows, locateVisualCursor, moveCursorVisual } from './geometry.js'
 import { useInputHistory } from './input-history.js'
 import {
@@ -406,9 +407,25 @@ export function ChatInput({
   // cascading renders / the react-hooks/set-state-in-effect lint).
   const [spinnerFrame, setSpinnerFrame] = useState(0)
   const loadingStartRef = useRef<number>(0)
+  const spinnerActive = spinner != null
+  const interactiveKey = buildInteractiveKey({
+    text,
+    cursor,
+    completionIndex,
+    atCompletionIndex,
+    atDismissed,
+    permissionSelected,
+    permissionFeedback,
+    selectIndex,
+    freeform,
+    authoritySelected,
+    authorityPage,
+    notice,
+  })
+  const lastFlushedInteractiveKeyRef = useRef(interactiveKey)
 
   useEffect(() => {
-    if (!spinner) {
+    if (!spinnerActive) {
       loadingStartRef.current = 0
       return
     }
@@ -423,7 +440,7 @@ export function ChatInput({
     // machine. A full breathe cycle is now 12 frames × 200ms = 2.4s,
     // which still feels alive without feeling jittery.
     return () => clearInterval(timer)
-  }, [spinner])
+  }, [spinnerActive])
 
   const { stdout } = useStdout()
   const termWidth = stdout?.columns ?? 80
@@ -3349,6 +3366,7 @@ export function ChatInput({
     // `hasDiff || targetMoved` early-return).
     if (preBuf === BSU && buf === '') {
       lastFlushTimeRef.current = Date.now()
+      lastFlushedInteractiveKeyRef.current = interactiveKey
       // Empty diff means the current render's frame matches what's
       // already on screen (prevFrameRef). If a deferred flush is
       // pending, it was scheduled by an earlier render whose frame
@@ -3363,6 +3381,9 @@ export function ChatInput({
       // it stuck on screen until the next tool call's grow overwrote
       // it. Symptom users reported as "read tool appears then
       // disappears between consecutive reads".
+      if (deferredFlushRef.current !== null || deferredImmediateRef.current !== null) {
+        flushGenRef.current++
+      }
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
@@ -3449,6 +3470,7 @@ export function ChatInput({
       if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
       lastFlushTimeRef.current = Date.now()
       lastFlushedSpinnerFrameRef.current = spinner != null ? spinnerFrame : null
+      lastFlushedInteractiveKeyRef.current = interactiveKey
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
       lastFrameTopRef.current = frameTop
@@ -3480,160 +3502,80 @@ export function ChatInput({
       flushGenRef.current++
     }
 
-    // `hasNewMessages` (not `didCommitMessages`) drives the scheduler:
-    // a render that processed new messages — even if every one got
-    // buffered by the read-group collapser and produced zero scrollback
-    // bytes — is still "real" state change and must paint promptly.
-    // Without this, the post-result render of a buffered read tool
-    // takes the deferred path (160ms delay) and the previous render's
-    // grow-frame (the `● Read(file) / ⎿ Running…` live indicator) sits
-    // staged in the deferred timer. It fires later — long after the
-    // read actually finished — leaving a stale live indicator on screen
-    // until the next read's grow overwrites it. Visible symptom users
-    // reported: the `● Read` row "appears then disappears" between
-    // consecutive read tools.
-    if (didCommitMessages || hasNewMessages || didClearScreen || didResize) {
-      // Invalidate a deferred frame as soon as structural output is observed,
-      // not only after it reaches stdout. Its timer may already have queued a
-      // setImmediate and cleared deferredFlushRef; without this generation
-      // bump that stale callback can paint first, clear pending scrollback,
-      // or strand a resize erase that cannot be reconstructed next render.
-      flushGenRef.current++
+    const cancelDeferredFlush = (reason?: string) => {
       if (deferredFlushRef.current !== null) {
         clearTimeout(deferredFlushRef.current)
         deferredFlushRef.current = null
-        debugLog('chatinput.flush.deferred-cancelled', `${didResize ? 'resize' : 'commit'} superseded deferred frame`)
+        if (reason) debugLog('chatinput.flush.deferred-cancelled', reason)
       }
       if (deferredImmediateRef.current !== null) {
         clearImmediate(deferredImmediateRef.current)
         deferredImmediateRef.current = null
       }
-      // Newer commit's payload (incl. fresher scrollback + spinner glyph)
-      // supersedes any previously throttled commit.
+    }
+
+    const cancelCommitThrottle = (reason: string) => {
       if (commitThrottleRef.current !== null) {
         clearTimeout(commitThrottleRef.current)
         commitThrottleRef.current = null
-        debugLog('chatinput.flush.commit-throttle-superseded', 'newer commit replaces throttled')
+        debugLog('chatinput.flush.commit-throttle-superseded', reason)
       }
-      const dt = Date.now() - lastFlushTimeRef.current
-      // Minimum gap between consecutive stdout writes. Two writes inside
-      // the same terminal paint window (~16ms vsync) appear as flicker
-      // even when each is wrapped in BSU/ESU — DEC 2026 sync is per-write
-      // atomic but doesn't span writes. Most common cause: a 160ms spinner
-      // deferred-fire (T) followed by a useStreamBuffer drain commit
-      // (T+10–50ms). Throttling the commit to land ≥50ms after the last
-      // write puts it in a fresh paint cycle. 50ms = ~3 vsyncs, enough
-      // headroom on terminals that buffer multiple frames.
-      const MIN_COMMIT_GAP_MS = 50
-      // /clear and resize payloads are exempt from the gap throttle: their
-      // one-shot erase bytes cannot be re-collected by a later render. In
-      // particular, advancing lastTermWidthRef before a throttled resize
-      // flush lets the next reasoning/spinner render cancel the only payload
-      // that erases xterm.js's reflowed old frame.
-      if (!didClearScreen && !didResize && lastFlushTimeRef.current > 0 && dt < MIN_COMMIT_GAP_MS) {
-        const delay = MIN_COMMIT_GAP_MS - dt
-        const capturedGen = flushGenRef.current
-        commitThrottleRef.current = setTimeout(() => {
-          commitThrottleRef.current = null
-          if (flushGenRef.current !== capturedGen) {
-            debugLog(
-              'chatinput.flush.commit-throttled-stale',
-              `gen ${capturedGen}->${flushGenRef.current}, skipping stale flush`,
-            )
-            return
-          }
-          doFlush()
-          debugLog('chatinput.flush.commit-throttled-fired', `delay=${delay}ms`)
-        }, delay)
-        debugLog('chatinput.flush.commit-throttled', `delay=${delay}ms dt=${dt}ms`)
-      } else {
-        doFlush()
-      }
-    } else {
-      // A throttled commit is in flight. If this non-commit frame has a
-      // DIFFERENT height (dialog opening/closing, error row, etc.) it
-      // supersedes the throttled commit — cancel the stale throttle and
-      // let this frame through immediately. Height-preserving frames
-      // (spinner ticks) can safely wait.
-      if (commitThrottleRef.current !== null) {
-        const heightChanged = nextH !== lastFrameHRef.current
-        if (!heightChanged) {
-          debugLog('chatinput.flush.deferred-skipped', 'commit throttle pending')
+    }
+
+    const now = Date.now()
+    const isStructuralCommit = didCommitMessages || hasNewMessages || didClearScreen || didResize
+    const hasUnflushedUserInput = interactiveKey !== lastFlushedInteractiveKeyRef.current
+    const spinnerTicked = spinner != null && spinnerFrame !== lastFlushedSpinnerFrameRef.current
+    const decision = decideFlushAction({
+      isStructuralCommit,
+      isOneShotImmediate: didClearScreen || didResize,
+      hasUnflushedUserInput,
+      hasPendingCommitThrottle: commitThrottleRef.current !== null,
+      heightChanged: nextH !== lastFrameHRef.current,
+      spinnerTicked,
+      lastFlushTime: lastFlushTimeRef.current,
+      now,
+    })
+
+    if (decision.kind === 'skip') {
+      debugLog(
+        decision.reason === 'commit-throttle-pending'
+          ? 'chatinput.flush.deferred-skipped'
+          : 'chatinput.flush.coalesced',
+        decision.reason === 'commit-throttle-pending'
+          ? 'commit throttle pending'
+          : `dt=${now - lastFlushTimeRef.current}ms spinner=${spinnerTicked ? 1 : 0}`,
+      )
+      return
+    }
+
+    // Invalidate any in-flight deferred macrotask before replacing or flushing.
+    flushGenRef.current++
+    cancelDeferredFlush(isStructuralCommit ? `${didResize ? 'resize' : 'commit'} superseded deferred frame` : undefined)
+    if (decision.kind === 'throttle-commit' || decision.cancelCommitThrottle) {
+      cancelCommitThrottle(isStructuralCommit ? 'newer commit replaces throttled' : 'superseded by non-commit update')
+    }
+
+    if (decision.kind === 'flush-now') {
+      doFlush()
+    } else if (decision.kind === 'throttle-commit') {
+      const delay = decision.delayMs
+      const capturedGen = flushGenRef.current
+      commitThrottleRef.current = setTimeout(() => {
+        commitThrottleRef.current = null
+        if (flushGenRef.current !== capturedGen) {
+          debugLog(
+            'chatinput.flush.commit-throttled-stale',
+            `gen ${capturedGen}->${flushGenRef.current}, skipping stale flush`,
+          )
           return
         }
-        clearTimeout(commitThrottleRef.current)
-        commitThrottleRef.current = null
-        debugLog(
-          'chatinput.flush.commit-throttle-superseded-by-height',
-          `nextH=${nextH} lastH=${lastFrameHRef.current}`,
-        )
-      }
-      const now = Date.now()
-      // Only coalesce identical-height frames (spinner ticks, single-cell
-      // input edits). A frame-height change signals a structural update —
-      // dialog opening/closing, error row appearing, etc. — and must paint
-      // even when it lands within 16ms of the previous write. Coalescing
-      // a height-changing frame used to strand the UI on the old frame
-      // when the event that triggered it (e.g. stream end → permission
-      // prompt render) also happened to be the last thing that would ever
-      // re-render: the spinner interval clears on `spinner === null`, no
-      // further React ticks arrive, and the dropped payload carrying the
-      // prompt is never retried. Symptom: tool-call row stuck showing
-      // "⠴ Running... (↓ N tokens)" forever with frozen input.
-      const isSpinnerTick = nextH === lastFrameHRef.current
-      // True when this render's only meaningful change is the spinner
-      // glyph cycling — content/text/dialogs are unchanged. We can be
-      // far more aggressive about dropping these because the next commit
-      // will repaint the entire frame anyway, picking up the latest
-      // spinner glyph as part of the full redraw.
-      const spinnerTicked = spinner != null && spinnerFrame !== lastFlushedSpinnerFrameRef.current
-      // Coalesce. Only drop back-to-back same-height frames within a
-      // single terminal refresh window (16ms) — anything wider gets
-      // through. The job of preventing spinner-vs-commit flicker is
-      // handed to the deferred-fire mechanism below: a wide spinner
-      // deferMs lets in-flight commits clearTimeout the deferred,
-      // turning would-be near-collisions into single commit-only
-      // writes. We deliberately do NOT coalesce against commit time
-      // here — that approach (drop spinner-only frames during
-      // streaming) tied the spinner glyph to commit cadence, which is
-      // visibly jittery at the variable 50-300ms gaps that
-      // useStreamBuffer's COMMIT_BATCH_MS produces.
-      const coalesceWindow = 16
-      const dt = now - lastFlushTimeRef.current
-      if (isSpinnerTick && dt < coalesceWindow) {
-        debugLog('chatinput.flush.coalesced', `dt=${dt}ms spinner=${spinnerTicked ? 1 : 0}`)
-        return
-      }
-      if (deferredFlushRef.current !== null) {
-        clearTimeout(deferredFlushRef.current)
-      }
-      if (deferredImmediateRef.current !== null) {
-        clearImmediate(deferredImmediateRef.current)
-        deferredImmediateRef.current = null
-      }
-      // Spinner ticks defer 160ms. Rationale:
-      //   - useStreamBuffer drains 150ms after a chunk queues, then a
-      //     React render scheduling adds ~10ms before our commit lands.
-      //     A 160ms defer lets that drain-driven commit reliably hit
-      //     the clearTimeout above BEFORE our spinner-only write fires,
-      //     collapsing the spinner+commit pair into a single commit-only
-      //     write (the commit's full-frame redraw repaints the spinner
-      //     glyph anyway).
-      //   - Previous value was 100ms. Symptom: spinner outer-enter at
-      //     queue+42ms → defer fires at queue+142ms; drain commit at
-      //     queue+160ms — spinner wrote 18ms before commit, two stdout
-      //     writes per vsync = visible flicker.
-      //   - Must remain strictly less than the 200ms spinner-tick
-      //     interval — at ≥200ms a back-to-back tick would re-arm the
-      //     timer perpetually and the spinner would freeze.
-      // Typing edits keep the original 8ms so held-key echo stays snappy.
-      const deferMs = spinnerTicked ? 160 : 8
-      // Capture flush generation at SCHEDULE time. If a commit-path
-      // doFlush() runs before our timer fires, flushGenRef advances and
-      // our deferred frame becomes stale (its cells were built from a
-      // pre-commit React state). setImmediate yields one Node tick so
-      // any React commit queued in the same macrotask flushes first;
-      // the staleness check then short-circuits us.
+        doFlush()
+        debugLog('chatinput.flush.commit-throttled-fired', `delay=${delay}ms`)
+      }, delay)
+      debugLog('chatinput.flush.commit-throttled', `delay=${delay}ms dt=${now - lastFlushTimeRef.current}ms`)
+    } else {
+      const deferMs = decision.delayMs
       const flushId = flushGenRef.current
       deferredFlushRef.current = setTimeout(() => {
         deferredFlushRef.current = null

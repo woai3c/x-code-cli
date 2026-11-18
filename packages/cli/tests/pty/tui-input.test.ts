@@ -6,6 +6,7 @@ import path from 'node:path'
 import { loadSession } from '@x-code-cli/core'
 
 import { GLYPH_PROMPT_ARROW } from '../../src/ui/render/terminal-glyphs.js'
+import { waitFor } from '../fixtures/cli-test-helpers.js'
 import { exitTui, inputLine, submitInput, typeInput, withTui } from './test-context.js'
 
 describe('TUI input and lifecycle', () => {
@@ -262,6 +263,32 @@ describe('TUI input and lifecycle', () => {
             fs.writeFile(path.join(workspace.cwd, 'space file #1.txt'), 'space\n'),
           ])
         },
+      },
+    )
+  })
+
+  it('echoes rapid keystrokes live while an assistant reply is actively streaming', async () => {
+    const chunks = Array.from({ length: 30 }, (_, index) => `stream-row-${index}\n`)
+    await withTui(
+      'input-live-echo-during-stream',
+      [{ type: 'completion', text: '', chunks, chunkDelayMs: 60 }],
+      async ({ harness }) => {
+        await submitInput(harness, 'stream rows')
+        await waitFor(() => harness.text().includes('stream-row-0'), 'initial streamed row', 5_000)
+
+        let typed = ''
+        for (const ch of ['t', 'y', 'p', 'i', 'n', 'g', '-', '中', '文']) {
+          typed += ch
+          harness.write(ch)
+          await waitFor(
+            () => inputLine(harness) === `${GLYPH_PROMPT_ARROW} ${typed}`,
+            `live echo for ${JSON.stringify(typed)}`,
+            1_000,
+          )
+        }
+
+        await harness.waitForText('stream-row-29', 10_000)
+        expect(inputLine(harness)).toBe(`${GLYPH_PROMPT_ARROW} typing-中文`)
       },
     )
   })

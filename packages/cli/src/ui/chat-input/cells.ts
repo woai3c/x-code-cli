@@ -6,7 +6,7 @@
 // skip the trailing half of a CJK pair without re-emitting the glyph.
 import { stripTerminalControls } from '@x-code-cli/core'
 
-import { charWidth, graphemes } from '../render/text-width.js'
+import { charWidth, graphemes, isAsciiPrintable } from '../render/text-width.js'
 import { S_NONE } from './palette.js'
 
 export interface Cell {
@@ -36,6 +36,13 @@ export function renderRowToAnsi(cells: Cell[]): string {
 }
 
 export function textToCells(text: string, style: string): Cell[] {
+  if (isAsciiPrintable(text)) {
+    const cells: Cell[] = new Array(text.length)
+    for (let i = 0; i < text.length; i++) {
+      cells[i] = { char: text[i]!, style, width: 1 }
+    }
+    return cells
+  }
   const cells: Cell[] = []
   for (const ch of graphemes(stripTerminalControls(text))) cells.push({ char: ch, style, width: charWidth(ch) })
   return cells

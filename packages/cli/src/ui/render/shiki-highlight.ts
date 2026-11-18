@@ -48,12 +48,15 @@ const SHIKI_THEMES: Record<Exclude<SyntaxThemeName, 'ansi'>, string> = {
 }
 
 let currentShikiTheme: string | null = SHIKI_THEMES['one-dark']
+const shellHighlightCache = new Map<string, string>()
+const MAX_SHELL_HIGHLIGHT_CACHE = 64
 
 /** Mirror of setSyntaxTheme — called from the same two sites (startup
  *  config apply, `/theme` switch) so the shiki path follows the active
  *  UI theme. */
 export function setShikiTheme(name: SyntaxThemeName): void {
   currentShikiTheme = name === 'ansi' ? null : SHIKI_THEMES[name]
+  shellHighlightCache.clear()
 }
 
 // ─── Language registry ───
@@ -320,7 +323,17 @@ export function highlightCodeShiki(code: string, fenceLang: string | undefined):
  *  (live tool row, committed scrollback row, permission dialog) must go
  *  through this one helper so their coloring can't drift apart. */
 export function highlightShellCommand(command: string): string {
-  return highlightCodeShiki(command, 'shell') ?? highlightLine(command, 'shell')
+  const engineKey = highlighter && currentShikiTheme && loadedLangs.has('bash') ? currentShikiTheme : 'fallback'
+  const cacheKey = `${engineKey}\0${command}`
+  const cached = shellHighlightCache.get(cacheKey)
+  if (cached !== undefined) return cached
+  const highlighted = highlightCodeShiki(command, 'shell') ?? highlightLine(command, 'shell')
+  if (shellHighlightCache.size >= MAX_SHELL_HIGHLIGHT_CACHE) {
+    const oldest = shellHighlightCache.keys().next().value
+    if (oldest !== undefined) shellHighlightCache.delete(oldest)
+  }
+  shellHighlightCache.set(cacheKey, highlighted)
+  return highlighted
 }
 
 /** Test hook: true once the engine finished warming up. */

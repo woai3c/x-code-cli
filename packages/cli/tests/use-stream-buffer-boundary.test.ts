@@ -17,4 +17,22 @@ describe('stream buffer markdown boundaries', () => {
 
     expect(hasOpenCodeFence(code)).toBe(true)
   })
+
+  it('cuts right before an open table and releases once a blank line closes it', () => {
+    const withIntro = 'intro paragraph\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+    expect(findSafeBoundary(withIntro)).toBe('intro paragraph\n'.length)
+
+    const closedTable = `${withIntro}\n`
+    expect(hasOpenMarkdownBlock(closedTable)).toBe(false)
+    expect(findSafeBoundary(closedTable)).toBe(closedTable.length)
+  })
+
+  it('holds pipes and blank lines inside an open code fence until the closing fence', () => {
+    const openFence = '```markdown\n| a | b |\n\nplain line\n'
+    expect(findSafeBoundary(openFence)).toBe(-1)
+
+    const closedFence = `${openFence}\`\`\`\n`
+    expect(hasOpenCodeFence(closedFence)).toBe(false)
+    expect(findSafeBoundary(closedFence)).toBe(closedFence.length)
+  })
 })
