@@ -73,14 +73,51 @@ import { debugLog } from '@x-code-cli/core'
  *  indented paragraph — is rare in AI output and the streaming-feel
  *  win is large: list items appear one at a time as the model emits
  *  them instead of popping in as a finished block. */
-function firstNonWhitespaceChar(text: string, start: number, end: number): string {
-  for (let i = start; i < end; i++) {
+function hasUnescapedTablePipe(text: string, start: number, end: number): boolean {
+  const firstPipe = text.indexOf('|', start)
+  if (firstPipe < 0 || firstPipe >= end) return false
+  let i = start
+  while (i < end) {
     const code = text.charCodeAt(i)
-    if (code === 0x20 || code === 0x09 || code === 0x0d || code === 0x0b || code === 0x0c) continue
-    if (code > 0x7f && /\s/.test(text[i]!)) continue
-    return text[i]!
+    if (code === 0x5c /* \ */) {
+      i += 2
+      continue
+    }
+    if (code === 0x60 /* ` */) {
+      let ticks = 1
+      while (i + ticks < end && text.charCodeAt(i + ticks) === 0x60) ticks++
+      let close = i + ticks
+      let matched = -1
+      while (close < end) {
+        if (text.charCodeAt(close) === 0x60) {
+          let run = 1
+          while (close + run < end && text.charCodeAt(close + run) === 0x60) run++
+          if (run === ticks) {
+            matched = close + run
+            break
+          }
+          close += run
+          continue
+        }
+        close++
+      }
+      if (matched >= 0) {
+        i = matched
+        continue
+      }
+      i += ticks
+      continue
+    }
+    if (code === 0x7c /* | */) {
+      if (i + 1 < end && text.charCodeAt(i + 1) === 0x7c) {
+        i += 2
+        continue
+      }
+      return true
+    }
+    i++
   }
-  return ''
+  return false
 }
 
 export function hasOpenCodeFence(text: string): boolean {
@@ -106,7 +143,7 @@ export function hasOpenMarkdownBlock(text: string): boolean {
   const end = text.endsWith('\n') ? text.length - 1 : text.length
   if (end <= 0) return false
   const lastNL = text.lastIndexOf('\n', end - 1)
-  return firstNonWhitespaceChar(text, lastNL + 1, end) === '|'
+  return hasUnescapedTablePipe(text, lastNL + 1, end)
 }
 
 /** Return the position just past the LATEST safe single-`\n` in `text`,
@@ -144,7 +181,7 @@ export function findSafeBoundary(text: string): number {
     ) {
       inFence = !inFence
     }
-    if (!inFence && firstNonWhitespaceChar(text, lineStart, nl) !== '|') {
+    if (!inFence && !hasUnescapedTablePipe(text, lineStart, nl)) {
       latestSafe = nl + 1
     }
     lineStart = nl + 1

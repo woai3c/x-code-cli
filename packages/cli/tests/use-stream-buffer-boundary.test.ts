@@ -35,4 +35,22 @@ describe('stream buffer markdown boundaries', () => {
     expect(hasOpenCodeFence(closedFence)).toBe(false)
     expect(findSafeBoundary(closedFence)).toBe(closedFence.length)
   })
+
+  it('holds pipe-less GFM tables and blockquoted tables while allowing inline code pipes to flush', () => {
+    const pipelessTable = 'intro\n参数 | 说明\n--- | ---\ntimeout | 超时\n'
+    expect(hasOpenMarkdownBlock(pipelessTable)).toBe(true)
+    expect(findSafeBoundary(pipelessTable)).toBe('intro\n'.length)
+
+    const quotedTable = 'intro\n> | a | b |\n> | --- | --- |\n'
+    expect(hasOpenMarkdownBlock(quotedTable)).toBe(true)
+    expect(findSafeBoundary(quotedTable)).toBe('intro\n'.length)
+
+    const inlineCodePipe = '请运行 `cat a.txt | wc -l` 查看结果\n'
+    expect(hasOpenMarkdownBlock(inlineCodePipe)).toBe(false)
+    expect(findSafeBoundary(inlineCodePipe)).toBe(inlineCodePipe.length)
+
+    const logicalOr = '当满足 a || b 条件时自动返回\n'
+    expect(hasOpenMarkdownBlock(logicalOr)).toBe(false)
+    expect(findSafeBoundary(logicalOr)).toBe(logicalOr.length)
+  })
 })

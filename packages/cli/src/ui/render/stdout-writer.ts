@@ -41,6 +41,11 @@ import { GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET, GLYPH_TOOL_BU
 import { sliceByWidth, visualWidth } from './text-width.js'
 import { chalk as c, paint, paintEchoArrow, paintEchoBg, paintEchoFg } from './tokens.js'
 
+const ANSI_STRIP_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
+function stripAnsiCodes(s: string): string {
+  return s.replace(ANSI_STRIP_RE, '')
+}
+
 /** Function that writes to stdout through Ink's log-update coordination. */
 export type InkWrite = (data: string) => void
 
@@ -54,7 +59,7 @@ function truncatePreview(s: string, maxLen: number): string {
   return s.slice(0, maxLen - 1) + GLYPH_ELLIPSIS
 }
 
-function formatToolCall(tc: DisplayToolCall): string {
+function formatToolCall(tc: DisplayToolCall, columns?: number): string {
   const label = authorityVisibleText(getToolLabel(tc.toolName))
   const rawPreview = authorityVisibleText(getToolInputPreview(tc.toolName, tc.input))
   // Cap the preview so long Bash commands / file paths don't wrap into a
@@ -63,7 +68,8 @@ function formatToolCall(tc: DisplayToolCall): string {
   // ` ● <label>(` and we close with `)`, so reserve label.length + 5 cells
   // for decoration; leave a small safety margin for the trailing
   // `\x1b[K` / cursor positioning the terminal may add.
-  const cols = Math.max(40, process.stdout.columns ?? 120)
+  const termCols = columns ?? process.stdout.columns ?? 120
+  const cols = Math.max(40, termCols)
   const decoration = label.length + 5
   const safetyMargin = 4
   const maxPreviewLen = Math.max(40, cols - decoration - safetyMargin)
@@ -99,8 +105,8 @@ function formatToolCall(tc: DisplayToolCall): string {
   // edits keep the regular markdown summary so the red error message lands
   // where the user expects to read it.
   if (tc.editPayload && !isFailure) {
-    const cols = Math.max(40, process.stdout.columns ?? 120)
-    const diffLines = renderEditDiff(tc.editPayload, cols)
+    const diffCols = Math.max(40, termCols)
+    const diffLines = renderEditDiff(tc.editPayload, diffCols)
     const head = `   ${c.gray(GLYPH_RESULT_BRACKET)}  ${diffLines[0] ?? ''}`
     const body = diffLines.slice(1)
     const durSuffix = durationStr ? c.gray(` (${durationStr})`) : ''
@@ -117,7 +123,8 @@ function formatToolCall(tc: DisplayToolCall): string {
   // render as plain red text so failures stand out in scrollback —
   // matches Claude Code's behavior of coloring the stderr/exit-code
   // block in red for non-zero shell exits.
-  const rendered = isFailure ? resultSummary : renderMarkdown(resultSummary).replace(/\n+$/, '')
+  const markdownWidth = Math.max(10, termCols - RESULT_INDENT.length - 1)
+  const rendered = isFailure ? resultSummary : renderMarkdown(resultSummary, markdownWidth).replace(/\n+$/, '')
 
   // Strip blank lines — markdown rendering inserts paragraph spacing
   // between blocks, which makes the tool-result summary look sparse
@@ -134,9 +141,21 @@ function formatToolCall(tc: DisplayToolCall): string {
   const head = `   ${c.gray(GLYPH_RESULT_BRACKET)}  ${paintLine(lines[0] ?? '')}`
   const tail = lines.slice(1).map((l) => `${RESULT_INDENT}${paintLine(l)}`)
   // Duration goes on the last visible line of the body so it reads like
-  // "... +13 lines (1.2s)" on truncated summaries.
+  // "... +13 lines (1.2s)" on truncated summaries — unless that last line
+  // would exceed `termCols - 1` (e.g. a full-width box-drawing table bottom
+  // border), in which case place the duration on its own indented line so it
+  // never triggers an uncounted terminal auto-wrap above the live frame.
   const combined = tail.length > 0 ? [head, ...tail] : [head]
-  combined[combined.length - 1] = combined[combined.length - 1] + durSuffix
+  if (durSuffix && durationStr) {
+    const lastLine = combined[combined.length - 1]!
+    const lastWidth = visualWidth(stripAnsiCodes(lastLine))
+    const durWidth = durationStr.length + 3 // ` (${durationStr})`
+    if (lastWidth + durWidth > termCols - 1) {
+      combined.push(`${RESULT_INDENT}${c.gray(`(${durationStr})`)}`)
+    } else {
+      combined[combined.length - 1] = lastLine + durSuffix
+    }
+  }
   return `${line1}\n${combined.join('\n')}`
 }
 
@@ -249,9 +268,9 @@ function isCollapsibleMessage(msg: DisplayMessage): boolean {
  *  `formatToolCall` produces inside `writeMessageToStdout`'s tool loop.
  *  Extracted so flush can reuse it without re-deriving the prepend-blank
  *  rule. */
-function writeToolRow(write: InkWrite, tc: DisplayToolCall): void {
+function writeToolRow(write: InkWrite, tc: DisplayToolCall, columns?: number): void {
   const lead = prevWriteEndedWithBlankRow ? '' : '\n'
-  write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n'))
+  write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc, columns)) + '\n'))
   prevWriteEndedWithBlankRow = false
   prevWriteWasStreamingChunk = false
 }
@@ -282,19 +301,19 @@ function writeCollapsedGroup(write: InkWrite, tools: readonly DisplayToolCall[])
  *  when `isLoading` is false (so a chain that ends without a closing
  *  text message — e.g. user abort — still gets its summary committed
  *  rather than left dangling in the buffer). */
-export function flushPendingReadGroup(write: InkWrite): void {
+export function flushPendingReadGroup(write: InkWrite, columns?: number): void {
   if (pendingReadGroup.length === 0) return
   const buffered = pendingReadGroup
   pendingReadGroup = []
   if (buffered.length === 1) {
-    writeToolRow(write, buffered[0]!)
+    writeToolRow(write, buffered[0]!, columns)
   } else {
     writeCollapsedGroup(write, buffered)
   }
 }
 
 /** Print a DisplayMessage to stdout. */
-export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void {
+export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage, columns?: number): void {
   if (msg.content) {
     msg = { ...msg, content: stripTerminalControls(msg.content) }
   }
@@ -323,7 +342,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
     for (const tc of msg.toolCalls!) pendingReadGroup.push(tc)
     return
   }
-  flushPendingReadGroup(write)
+  flushPendingReadGroup(write, columns)
 
   if (msg.kind === 'peer-message') {
     const content = normalizeLineEndings(msg.content)
@@ -352,7 +371,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
   if (msg.role === 'user') {
     const content = normalizeLineEndings(msg.content)
     debugLog('stdout.user', content)
-    writeUserMessage(write, content, msg.kind === 'command-echo')
+    writeUserMessage(write, content, msg.kind === 'command-echo', columns)
     // writeUserMessage always emits a trailing `\n\n` (or `\n` for the
     // compact slash-echo) — in both cases the next entity will sit on a
     // fresh row with the preceding blank already in place.
@@ -404,7 +423,7 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       // writes that already ended with `\n\n` the flag is true and we
       // skip the leading newline so we don't double-blank.
       const lead = prevWriteEndedWithBlankRow ? '' : '\n'
-      write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc)) + '\n'))
+      write(toCRLF(lead + normalizeLineEndings(formatToolCall(tc, columns)) + '\n'))
       prevWriteEndedWithBlankRow = false
       prevWriteWasStreamingChunk = false
     }
@@ -443,8 +462,11 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
       return
     }
 
-    // Two-space indent matches the assistant body spacing used throughout.
-    const body = renderMarkdown(content)
+    // Two-space indent matches the assistant body spacing used throughout;
+    // reserve one trailing column so a table's right border never triggers
+    // delayed-wrap in the terminal's last column.
+    const termCols = columns ?? process.stdout.columns ?? 80
+    const body = renderMarkdown(content, Math.max(10, termCols - 3))
     const indented = normalizeLineEndings(body)
       .split('\n')
       .map((line) => (line ? `  ${line}` : line))
@@ -501,9 +523,9 @@ export function writeMessageToStdout(write: InkWrite, msg: DisplayMessage): void
  * line so the `  ⎿  result` line that follows sits directly under the
  * echo's bottom padding row, matching Claude Code's 2-line command block.
  */
-function writeUserMessage(write: InkWrite, content: string, compact = false): void {
+function writeUserMessage(write: InkWrite, content: string, compact = false, columns?: number): void {
   const bg = paintEchoBg()
-  const cols = process.stdout.columns ?? 0
+  const cols = columns ?? process.stdout.columns ?? 0
   const arrow = paint('border')(GLYPH_PROMPT_ARROW)
   const lines = content.split('\n')
   const [first = '', ...rest] = lines
