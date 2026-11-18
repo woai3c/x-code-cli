@@ -52,6 +52,7 @@ import { startChatGPTModelPreload } from './chatgpt-model-preload.js'
 import { getCleanupController } from './cleanup-controller.js'
 import { parseCliArgs } from './cli-args.js'
 import { restoreInvocationCwd } from './launch-cwd.js'
+import { installEnvProxy } from './network/proxy.js'
 import { startCliPeerService } from './peer-lifecycle.js'
 import { runPluginCli } from './plugins/cli.js'
 import { runShutdownPhases } from './shutdown-coordinator.js'
@@ -66,6 +67,14 @@ import { VERSION } from './version.js'
 
 restoreInvocationCwd()
 installTerminalStreamErrorGuards([process.stdout, process.stderr])
+
+// A proxy exported in the terminal must be enough on its own, the way it is for
+// other agent CLIs. Node's built-in fetch ignores HTTP(S)_PROXY unless
+// NODE_USE_ENV_PROXY is also set, so install the dispatcher here — at module top
+// level, before any provider, webFetch, or update-check request is built.
+if (installEnvProxy()) {
+  debugLog('proxy.env', 'installed dispatcher from HTTP_PROXY/HTTPS_PROXY/ALL_PROXY')
+}
 
 // Route AI SDK warnings to debugLog instead of letting them blast straight
 // to stderr. The default `console.warn` path bypasses ChatInput's

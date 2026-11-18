@@ -91,6 +91,12 @@ GPT-6 Astra 不会自动成为 OpenAI 智能默认值：保留 GPT-5.6 Sol 可�
 
 **OpenAI 兼容接入**（vLLM / OpenRouter / 代理网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，模型 ID 写成 `custom:<your-model-id>`。
 
+**公司 / 本地代理**：在启动 `xc` 的终端里导出 `HTTPS_PROXY`（也可选 `HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`）即可，不需要 `NODE_USE_ENV_PROXY`，也不需要改配置文件。环回地址（`localhost`、`127.0.0.1`、`::1`）默认不走代理，除非 `NO_PROXY` 另有指定。
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7897
+```
+
 <details>
 <summary><b>各 Shell 配置方式</b>（点击展开）</summary>
 
