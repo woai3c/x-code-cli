@@ -35,7 +35,9 @@ export interface ChatInputProps {
   commands?: readonly SlashCommand[]
   permissionMode?: 'default' | 'acceptEdits' | 'plan'
   contextUsage?: { used: number; window: number } | null
+  tokenSpeed?: { tokensPerSecond: number; isEstimate: boolean } | null
   modelLabel?: string
+  cwd?: string
 }
 
 /** One row in the slash-completion menu. Top-level command rows and

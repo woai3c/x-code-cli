@@ -196,6 +196,13 @@ export function App({
   const unavailableModelRef = useRef<{ authRevision: string; message: string; modelId: string } | null>(null)
   const openAIAuthTransitionRef = useRef(createOpenAIAuthTransitionState(getOpenAIAuthSnapshot()))
   const checkedOpenAIEntitlementKeyRef = useRef<string | null>(null)
+  const workspaceCwd = useMemo(() => {
+    try {
+      return process.cwd()
+    } catch {
+      return ''
+    }
+  }, [])
 
   // Reasoning-effort tier label for the current model (e.g. "High", "Max"),
   // shown in the footer next to the model name. Kept in state instead of
@@ -2035,6 +2042,7 @@ export function App({
           ? { used: state.usage.currentContextTokens, window: getContextWindow(state.modelId) }
           : null
       }
+      tokenSpeed={state.tokenSpeed}
       // Footer right side: active model label, always shown. Re-renders
       // automatically on /model switch since switchModel updates
       // state.modelId. When the model has a reasoning-effort tier configured
@@ -2045,6 +2053,7 @@ export function App({
           ? `${renderModelLabel(state.modelId)} · ${reasoningTierLabel}`
           : renderModelLabel(state.modelId)
       }
+      cwd={workspaceCwd}
       activeToolCalls={state.activeToolCalls}
       shellWaitStreak={state.shellWaitStreak}
       backgroundTerminalCount={visibleTerminals.length}

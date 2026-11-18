@@ -32,6 +32,7 @@ export const initialAgentState: Omit<AgentState, 'modelId' | 'permissionMode'> =
     reasoningTokens: 0,
     currentContextTokens: 0,
   },
+  tokenSpeed: null,
   usageBreakdown: createUsageBreakdown(),
   cacheMissSummary: scanCacheMisses([]),
   error: null,

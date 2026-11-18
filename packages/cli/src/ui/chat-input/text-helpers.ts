@@ -3,8 +3,12 @@
 // `../../text-width.js` — the single source of truth for the chat-input
 // frame, scrollback diff, and markdown table layout. The helpers below
 // build on top of those primitives.
+import os from 'node:os'
+
+import { stripTerminalControls } from '@x-code-cli/core'
+
 import { GLYPH_ELLIPSIS } from '../render/terminal-glyphs.js'
-import { charWidth, visualWidth } from '../render/text-width.js'
+import { charWidth, sliceByWidth, visualWidth } from '../render/text-width.js'
 import type { Cell } from './cells.js'
 
 export function truncateCellRow(cells: Cell[], maxWidth: number): Cell[] {
@@ -88,6 +92,140 @@ export function truncatePathFromStart(p: string, maxCols: number): string {
     acc = next
   }
   return '…/' + acc
+}
+
+function parseCrossPlatformPath(raw: string): {
+  prefix: string
+  segments: string[]
+  normalized: string
+  isWindows: boolean
+} {
+  const slashed = raw.replace(/\\/g, '/')
+  const uncMatch = slashed.match(/^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/)
+  if (uncMatch) {
+    const prefix = `//${uncMatch[1]}/${uncMatch[2]}`
+    const rest = uncMatch[3] ?? ''
+    const segments = rest.split('/').filter(Boolean)
+    const normalized = segments.length > 0 ? `${prefix}/${segments.join('/')}` : prefix
+    return { prefix, segments, normalized, isWindows: true }
+  }
+  const driveMatch = slashed.match(/^([a-zA-Z]:)(?:\/(.*))?$/)
+  if (driveMatch) {
+    const drive = driveMatch[1]!
+    const rest = driveMatch[2] ?? ''
+    const segments = rest.split('/').filter(Boolean)
+    const normalized = segments.length > 0 ? `${drive}/${segments.join('/')}` : `${drive}/`
+    return { prefix: `${drive}/`, segments, normalized, isWindows: true }
+  }
+  if (slashed.startsWith('/')) {
+    const segments = slashed.slice(1).split('/').filter(Boolean)
+    const normalized = segments.length > 0 ? `/${segments.join('/')}` : '/'
+    return { prefix: '/', segments, normalized, isWindows: false }
+  }
+  const segments = slashed.split('/').filter(Boolean)
+  return { prefix: '', segments, normalized: segments.join('/'), isWindows: false }
+}
+
+function safeHomeDir(): string {
+  try {
+    return os.homedir()
+  } catch {
+    return ''
+  }
+}
+
+function sanitizeSingleLinePath(value: string): string {
+  return stripTerminalControls(value.replace(/[\r\n\t]+/g, ' ')).replace(/\n+/g, ' ')
+}
+
+/** Format a working-directory path for the single-line status footer.
+ *  Contracts the user's home directory to `~`, preserves up to the trailing two
+ *  directory segments (`~/…/parent/leaf`), and degrades gracefully down to the
+ *  leaf directory name as `maxCols` shrinks. Returns `''` when budget is too
+ *  small to display a recognizable name. */
+export function formatCwdForFooter(cwd: string, maxCols: number, homeDir?: string): string {
+  if (!cwd || maxCols <= 0) return ''
+  const cleanCwd = sanitizeSingleLinePath(cwd)
+  if (!cleanCwd) return ''
+  const resolvedHome = homeDir !== undefined ? homeDir : safeHomeDir()
+  const cleanHome = resolvedHome ? sanitizeSingleLinePath(resolvedHome) : ''
+
+  const parsedCwd = parseCrossPlatformPath(cleanCwd)
+  const parsedHome = cleanHome ? parseCrossPlatformPath(cleanHome) : null
+
+  let candidates: string[] | null = null
+  if (parsedHome && parsedHome.prefix !== '' && (parsedHome.segments.length > 0 || parsedHome.prefix !== '/')) {
+    const caseInsensitive = parsedCwd.isWindows || parsedHome.isWindows
+    const cwdKey = caseInsensitive ? parsedCwd.normalized.toLowerCase() : parsedCwd.normalized
+    const homeBase = parsedHome.normalized.replace(/\/$/, '')
+    const homeKey = caseInsensitive ? homeBase.toLowerCase() : homeBase
+    if (cwdKey === (caseInsensitive ? parsedHome.normalized.toLowerCase() : parsedHome.normalized)) {
+      candidates = ['~']
+    } else if (homeKey.length > 0 && cwdKey.startsWith(`${homeKey}/`)) {
+      const relSegs = parsedCwd.segments.slice(parsedHome.segments.length)
+      if (relSegs.length === 1) {
+        candidates = [`~/${relSegs[0]!}`, relSegs[0]!]
+      } else if (relSegs.length === 2) {
+        candidates = [`~/${relSegs[0]!}/${relSegs[1]!}`, `~/${GLYPH_ELLIPSIS}/${relSegs[1]!}`, relSegs[1]!]
+      } else if (relSegs.length > 2) {
+        const parent = relSegs[relSegs.length - 2]!
+        const leaf = relSegs[relSegs.length - 1]!
+        candidates = [`~/${GLYPH_ELLIPSIS}/${parent}/${leaf}`, `~/${GLYPH_ELLIPSIS}/${leaf}`, leaf]
+      }
+    }
+  }
+
+  if (!candidates) {
+    const { prefix, segments } = parsedCwd
+    const joinPrefix = prefix.endsWith('/') || !prefix ? prefix : `${prefix}/`
+    if (segments.length === 0) {
+      candidates = [prefix || cleanCwd]
+    } else if (segments.length === 1) {
+      candidates = [`${joinPrefix}${segments[0]!}`, segments[0]!]
+    } else if (segments.length === 2) {
+      candidates = [
+        `${joinPrefix}${segments[0]!}/${segments[1]!}`,
+        `${joinPrefix}${GLYPH_ELLIPSIS}/${segments[1]!}`,
+        segments[1]!,
+      ]
+    } else {
+      const parent = segments[segments.length - 2]!
+      const leaf = segments[segments.length - 1]!
+      candidates = [`${joinPrefix}${GLYPH_ELLIPSIS}/${parent}/${leaf}`, `${joinPrefix}${GLYPH_ELLIPSIS}/${leaf}`, leaf]
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (visualWidth(candidate) <= maxCols) return candidate
+  }
+  const fallbackLeaf = candidates[candidates.length - 1]!
+  if (maxCols >= 8) {
+    const sliced = sliceByWidth(fallbackLeaf, maxCols - 1)
+    return sliced ? `${sliced}${GLYPH_ELLIPSIS}` : ''
+  }
+  return ''
+}
+
+/** Format live or finalized token generation throughput for the footer. */
+export function formatTokenSpeed(speed: { tokensPerSecond: number; isEstimate: boolean }): string {
+  const { tokensPerSecond, isEstimate } = speed
+  if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return ''
+  if (isEstimate) {
+    return `~${Math.max(1, Math.round(tokensPerSecond))} tok/s`
+  }
+  if (tokensPerSecond >= 100) {
+    return `${Math.round(tokensPerSecond)} tok/s`
+  }
+  return `${tokensPerSecond.toFixed(1)} tok/s`
+}
+
+export function sameFormattedTokenSpeed(
+  a: { tokensPerSecond: number; isEstimate: boolean } | null | undefined,
+  b: { tokensPerSecond: number; isEstimate: boolean } | null | undefined,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.isEstimate === b.isEstimate && formatTokenSpeed(a) === formatTokenSpeed(b)
 }
 
 /** Strip ANSI CSI + OSC escape sequences so visual width math ignores them.

@@ -99,6 +99,8 @@ import { inputReducer } from './reducer.js'
 import {
   countContentRows,
   countSpillRiskRows,
+  formatCwdForFooter,
+  formatTokenSpeed,
   skipByWidth,
   truncateCellRow,
   truncatePathFromStart,
@@ -119,6 +121,7 @@ const BOX_INNER_PAD = 4
 const inputViewportWidth = (termWidth: number): number => Math.max(20, termWidth - PROMPT_WIDTH - BOX_INNER_PAD - 1)
 const MAX_AT_RESULTS = 50
 const MAX_VISIBLE_MENU_ITEMS = 8
+const MAX_FOOTER_CWD_COLS = 24
 
 export function ChatInput({
   messages,
@@ -150,7 +153,9 @@ export function ChatInput({
   commands = [],
   permissionMode = 'default',
   contextUsage,
+  tokenSpeed,
   modelLabel,
+  cwd,
 }: ChatInputProps) {
   const [{ text, cursor }, dispatch] = useReducer(inputReducer, { text: '', cursor: 0 })
   const textRef = useRef('')
@@ -239,6 +244,7 @@ export function ChatInput({
    *  (~24ms) so the next text-stream commit can absorb them, but typing
    *  must defer briefly (~8ms) or it visibly stutters under a held key. */
   const lastFlushedSpinnerFrameRef = useRef<number | null>(null)
+  const lastFlushedLiveSpeedKeyRef = useRef<string | null>(null)
   /** Height of the frame currently sitting at the bottom of the terminal
    *  (the value that prevFrameRef was last set to). Tracked separately
    *  because prevFrameRef gets reset to [] on transitions (post-hidden,
@@ -2205,16 +2211,40 @@ export function ChatInput({
       leftCells = cells
     }
 
-    const rightCells: Cell[] = []
-    if (modelLabel) rightCells.push(...textToCells(modelLabel, S_MODEL))
+    const maxFooterWidth = Math.max(20, termWidth - 1)
+    const rightSegments: Cell[][] = []
+    if (modelLabel) rightSegments.push(textToCells(modelLabel, S_MODEL))
     if (contextUsage && contextUsage.used > 0 && contextUsage.window > 0) {
       const pct = Math.round((contextUsage.used / contextUsage.window) * 100)
       const usage = `${formatTokenCount(contextUsage.used)} / ${formatTokenCount(contextUsage.window)} · ${pct}%`
       const usageStyle = pct >= 80 ? S_ERROR : pct >= 70 ? S_WARNING : S_USAGE
-      if (modelLabel) rightCells.push(...textToCells(' · ', S_DIM))
-      rightCells.push(...textToCells('ctx ', S_DIM))
-      rightCells.push(...textToCells(usage, usageStyle))
+      rightSegments.push([...textToCells('ctx ', S_DIM), ...textToCells(usage, usageStyle)])
     }
+    const formattedSpeed = tokenSpeed ? formatTokenSpeed(tokenSpeed) : ''
+    if (formattedSpeed) {
+      rightSegments.push(textToCells(formattedSpeed, S_DIM))
+    }
+
+    const cellRowWidth = (row: Cell[]): number => row.reduce((sum, cell) => sum + cell.width, 0)
+    const leftWidth = leftCells ? cellRowWidth(leftCells) : 0
+    const coreRightWidth = rightSegments.reduce((sum, seg, idx) => sum + cellRowWidth(seg) + (idx > 0 ? 3 : 0), 0)
+    if (cwd) {
+      const leadingSepWidth = leftWidth > 0 ? 5 : 1
+      const cwdSepWidth = rightSegments.length > 0 ? 3 : 0
+      const physicalMaxFooterWidth = Math.max(0, termWidth - 1)
+      const availableForCwd = Math.min(
+        MAX_FOOTER_CWD_COLS,
+        physicalMaxFooterWidth - leftWidth - leadingSepWidth - coreRightWidth - cwdSepWidth,
+      )
+      const formattedCwd = formatCwdForFooter(cwd, availableForCwd)
+      if (formattedCwd) rightSegments.push(textToCells(formattedCwd, S_DIM))
+    }
+
+    const rightCells: Cell[] = []
+    rightSegments.forEach((seg, idx) => {
+      if (idx > 0) rightCells.push(...textToCells(' · ', S_DIM))
+      rightCells.push(...seg)
+    })
 
     if (leftCells || rightCells.length > 0) {
       // Footer row built as a NARROW cell sequence — left + ` · ` + right —
@@ -2236,7 +2266,6 @@ export function ChatInput({
       // We can't right-justify cheaply without re-architecting the
       // commit path.
       const cells: Cell[] = []
-      const leftWidth = leftCells ? leftCells.reduce((sum, c) => sum + c.width, 0) : 0
       if (leftCells) cells.push(...leftCells)
       if (rightCells.length > 0) {
         if (leftWidth > 0) {
@@ -2249,7 +2278,7 @@ export function ChatInput({
       // Truncate defensively: the model label made this row longer than it
       // used to be, and a hard physical wrap would desync the cell-diff
       // grid (same reasoning as the menu-row truncation above).
-      frame.push(truncateCellRow(cells, Math.max(20, termWidth - 1)))
+      frame.push(truncateCellRow(cells, maxFooterWidth))
     }
 
     // Completion menu — at most one of slash / at renders per frame
@@ -3285,9 +3314,11 @@ export function ChatInput({
     // write entirely is the same trick Claude Code uses
     // (D:\res\claude-code\src\ink\ink.tsx:623, 668-671 — the
     // `hasDiff || targetMoved` early-return).
+    const liveSpeedKey = spinner != null && tokenSpeed?.isEstimate && formattedSpeed ? formattedSpeed : null
     if (preBuf === BSU && buf === '') {
       lastFlushTimeRef.current = Date.now()
       lastFlushedInteractiveKeyRef.current = interactiveKey
+      lastFlushedLiveSpeedKeyRef.current = liveSpeedKey
       // Empty diff means the current render's frame matches what's
       // already on screen (prevFrameRef). If a deferred flush is
       // pending, it was scheduled by an earlier render whose frame
@@ -3391,6 +3422,7 @@ export function ChatInput({
       if (!ok) debugLog('chatinput.flush.backpressure', 'process.stdout.write returned false')
       lastFlushTimeRef.current = Date.now()
       lastFlushedSpinnerFrameRef.current = spinner != null ? spinnerFrame : null
+      lastFlushedLiveSpeedKeyRef.current = liveSpeedKey
       lastFlushedInteractiveKeyRef.current = interactiveKey
       prevFrameRef.current = frame
       lastFrameHRef.current = nextH
@@ -3447,13 +3479,14 @@ export function ChatInput({
     const isStructuralCommit = didCommitMessages || hasNewMessages || didClearScreen || didResize
     const hasUnflushedUserInput = interactiveKey !== lastFlushedInteractiveKeyRef.current
     const spinnerTicked = spinner != null && spinnerFrame !== lastFlushedSpinnerFrameRef.current
+    const liveSpeedTicked = liveSpeedKey !== null && liveSpeedKey !== lastFlushedLiveSpeedKeyRef.current
     const decision = decideFlushAction({
       isStructuralCommit,
       isOneShotImmediate: didClearScreen || didResize,
       hasUnflushedUserInput,
       hasPendingCommitThrottle: commitThrottleRef.current !== null,
       heightChanged: nextH !== lastFrameHRef.current,
-      spinnerTicked,
+      spinnerTicked: spinnerTicked || liveSpeedTicked,
       lastFlushTime: lastFlushTimeRef.current,
       now,
     })

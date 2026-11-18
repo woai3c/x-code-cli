@@ -55,6 +55,7 @@ import type {
   TerminationReason,
 } from '@x-code-cli/core'
 
+import { sameFormattedTokenSpeed } from '../chat-input/text-helpers.js'
 import { cloneCacheMissSummary, initialAgentState } from './agent-state.js'
 import { createGoalToolLifecycleCallbacks, createToolLifecycleCallbacks } from './agent-tool-lifecycle.js'
 import { authorityApproval } from './authority-approval.js'
@@ -417,7 +418,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           options.modelId = preflight.modelId
           invalidateModelDependentState(loopStateRef.current)
           options.memoryService?.setActiveModelId(preflight.modelId)
-          setState((prev) => ({ ...prev, modelId: preflight.modelId! }))
+          setState((prev) => ({
+            ...prev,
+            modelId: preflight.modelId!,
+            tokenSpeed: prev.modelId === preflight.modelId ? prev.tokenSpeed : null,
+          }))
         }
       }
       preflight?.onApplied?.()
@@ -620,6 +625,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
               ? cloneCacheMissSummary(loopStateRef.current.cacheMissSummary)
               : prev.cacheMissSummary,
           }))
+        },
+        onTokenSpeedUpdate: (tokenSpeed) => {
+          setState((prev) => (sameFormattedTokenSpeed(prev.tokenSpeed, tokenSpeed) ? prev : { ...prev, tokenSpeed }))
         },
         onCompressionProgress: (description) => {
           setState((prev) => ({ ...prev, compressionLabel: description }))
@@ -1393,7 +1401,11 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
       modelIdRef.current = newModelId
       invalidateModelDependentState(loopStateRef.current)
       options.memoryService?.setActiveModelId(newModelId)
-      setState((prev) => ({ ...prev, modelId: newModelId }))
+      setState((prev) => ({
+        ...prev,
+        modelId: newModelId,
+        tokenSpeed: null,
+      }))
     },
     [options.memoryService],
   )

@@ -38,6 +38,7 @@ import type {
   StreamRetryEvent,
 } from '@x-code-cli/core'
 
+import { sameFormattedTokenSpeed } from '../chat-input/text-helpers.js'
 import type { GoalToolLifecycleCallbacks } from './agent-tool-lifecycle.js'
 import { authorityApproval } from './authority-approval.js'
 import { OTHER_OPTION } from './question-options.js'
@@ -146,6 +147,10 @@ export function useGoalController({
       },
       onShellOutput: (chunk) => setState((previous) => ({ ...previous, shellOutput: previous.shellOutput + chunk })),
       onUsageUpdate: (usage) => setState((previous) => ({ ...previous, usage })),
+      onTokenSpeedUpdate: (tokenSpeed) =>
+        setState((previous) =>
+          sameFormattedTokenSpeed(previous.tokenSpeed, tokenSpeed) ? previous : { ...previous, tokenSpeed },
+        ),
       onContextCompressed: (summary) => {
         appendMessage({
           id: `compress-${Date.now()}`,

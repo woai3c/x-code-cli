@@ -4,6 +4,7 @@
 // orchestrates the per-turn streaming + tool dispatch loop.
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 
 import { streamText } from 'ai'
 import type { LanguageModel, ModelMessage, UserContent } from 'ai'
@@ -75,7 +76,7 @@ import { repairOrphanTrackedToolCalls } from './tool-result-sanitize.js'
 import { buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
 import { appendTrackedMessage, recalculateContextSecurity } from './tracked-messages.js'
 import { classifyTurnFailure, collectTurnResponse, streamChunksToUI } from './turn-stream.js'
-import type { FinalTurnOutcome, StreamAttemptTracker, TurnOutcome } from './turn-stream.js'
+import type { FinalTurnOutcome, StepSpeedAccumulator, StreamAttemptTracker, TurnOutcome } from './turn-stream.js'
 
 /** Prepend an injected context block to a UserContent payload. Used by
  *  the UserPromptSubmit hook decision: plugins can inject context (e.g.
@@ -429,6 +430,7 @@ async function runTurnAttempt(
   /** Current turn number — diagnostic only, threaded in so the debug log
    *  can tag each finish with which iteration of the outer loop it was. */
   turn: number,
+  stepSpeed: StepSpeedAccumulator,
 ): Promise<TurnOutcome> {
   // Defensive sweep BEFORE every API call: if the previous turn left
   // an assistant tool_call without a paired tool_result anywhere in
@@ -539,6 +541,7 @@ async function runTurnAttempt(
   if (provider === 'xai') requestHeaders = withXaiReasoningHeader(requestHeaders, effectiveEffort)
 
   const requestTimestamp = new Date().toISOString()
+  tracker.requestStartedAtMs = performance.now()
   let result: StreamResult
   try {
     result = streamText({
@@ -598,7 +601,17 @@ async function runTurnAttempt(
   drainStreamResult(result)
 
   try {
-    await streamChunksToUI(result, callbacks, state, options, tracker, attemptControl, recoveryText, retrying)
+    await streamChunksToUI(
+      result,
+      callbacks,
+      state,
+      options,
+      tracker,
+      attemptControl,
+      recoveryText,
+      retrying,
+      stepSpeed,
+    )
   } catch (err) {
     // Silently drain all pending AI SDK promises so unhandled-rejection
     // warnings (NoOutputGeneratedError) don't leak to stderr.
@@ -652,6 +665,8 @@ async function runTurnAttempt(
       tracker.suppressedReplay,
       requestTimestamp,
       openAICacheComparisonTtlMs(options.modelId, openAIAuthMode),
+      tracker,
+      stepSpeed,
     )
     debugLog(
       'turn.finish',
@@ -684,6 +699,7 @@ async function runTurn(
   effectiveTools: Record<string, any>,
   turnMessages: ModelMessage[],
   turn: number,
+  stepSpeed: StepSpeedAccumulator,
 ): Promise<FinalTurnOutcome> {
   const configuredRetries = options.streamMaxRetries ?? DEFAULT_STREAM_CONFIG.maxRetries
   const maxRetries = Number.isSafeInteger(configuredRetries)
@@ -722,6 +738,7 @@ async function runTurn(
         retryCount > 0,
         userConfig,
         turn,
+        stepSpeed,
       )
     } finally {
       attemptControl.dispose()
@@ -862,6 +879,7 @@ export async function agentLoop(
   const baselineInput = state.tokenUsage.inputTokens
   const baselineOutput = state.tokenUsage.outputTokens
   let stepToolCallCount = 0
+  const stepSpeed: StepSpeedAccumulator = { outputTokens: 0, durationMs: 0 }
 
   // Derive the task slug locally. It is used for plan-file names and
   // retained in session metadata for legacy lookup compatibility.
@@ -1079,7 +1097,17 @@ export async function agentLoop(
       state.permissionMode,
     )
 
-    const outcome = await runTurn(state, model, options, systemPrompt, callbacks, effectiveTools, turnMessages, turn)
+    const outcome = await runTurn(
+      state,
+      model,
+      options,
+      systemPrompt,
+      callbacks,
+      effectiveTools,
+      turnMessages,
+      turn,
+      stepSpeed,
+    )
 
     // ── Plugin hook: TurnComplete ──
     // Fires regardless of finish reason (including error / abort) so

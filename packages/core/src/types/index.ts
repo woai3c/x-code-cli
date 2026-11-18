@@ -201,6 +201,11 @@ export interface TokenUsage {
   currentContextTokens: number
 }
 
+export interface TokenSpeedUpdate {
+  tokensPerSecond: number
+  isEstimate: boolean
+}
+
 // ─── Display messages ───
 
 export interface DisplayMessage {
@@ -290,6 +295,8 @@ export interface AgentCallbacks {
   onPlanModeChange: (mode: PermissionMode) => void
   onShellOutput: (chunk: string) => void
   onUsageUpdate: (usage: TokenUsage) => void
+  /** Optional live/completed token generation speed (tok/s) for the UI status bar. */
+  onTokenSpeedUpdate?: (update: TokenSpeedUpdate) => void
   onContextCompressed: (summary: string) => void
   /** Fired at each phase boundary during context compression so the UI
    *  can show a spinner label that tracks progress. */

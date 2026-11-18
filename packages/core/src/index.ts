@@ -5,6 +5,7 @@ export type {
   PermissionDecision,
   PermissionLevel,
   PermissionMode,
+  TokenSpeedUpdate,
   TokenUsage,
   DisplayMessage,
   DisplayToolCall,

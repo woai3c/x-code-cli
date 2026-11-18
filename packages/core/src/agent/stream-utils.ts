@@ -5,7 +5,9 @@ import type { ModelMessage } from 'ai'
 export interface StreamResult {
   stream: AsyncIterable<{
     type: string
+    id?: string
     text?: string
+    delta?: string
     toolName?: string
     input?: unknown
     output?: unknown

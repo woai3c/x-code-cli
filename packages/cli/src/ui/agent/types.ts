@@ -10,6 +10,7 @@ import type {
   GoalVerifier,
   PermissionMode,
   StepStats,
+  TokenSpeedUpdate,
   TokenUsage,
   UsageBreakdown,
 } from '@x-code-cli/core'
@@ -92,6 +93,7 @@ export interface AgentState {
   /** One-shot request to restore queued text to the input after an aborted turn. */
   restoredDraft: { text: string; nonce: number } | null
   usage: TokenUsage
+  tokenSpeed?: TokenSpeedUpdate | null
   usageBreakdown: UsageBreakdown
   cacheMissSummary: CacheMissSummary
   error: string | null

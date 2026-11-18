@@ -246,6 +246,7 @@ export function useSessionController({
         restoredDraft: null,
         messages: [...previousState.messages, ...converted],
         usage: { ...loaded.tokenUsage },
+        tokenSpeed: null,
         usageBreakdown: loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown(),
         cacheMissSummary: cloneCacheMissSummary(loaded.cacheMissSummary ?? scanCacheMisses(loaded.providerTurns ?? [])),
         stepStats: loaded.stepStats.slice(),
@@ -315,6 +316,7 @@ export function useSessionController({
             shellOutput: '',
             error: null,
             reconnectLabel: null,
+            tokenSpeed: null,
             messages: converted,
           }))
         }
