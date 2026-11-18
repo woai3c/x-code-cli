@@ -1,3 +1,10 @@
+## v0.6.2 (2026-11-18)
+
+### Features
+
+- honour terminal HTTP(S)\_PROXY and ALL_PROXY (214fa11)
+- refresh model catalog and track reasoning tokens (5152807)
+
 ## v0.6.1 (2026-09-16)
 
 ### Features
