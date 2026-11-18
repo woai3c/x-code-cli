@@ -110,6 +110,11 @@ export async function streamChunksToUI(
       if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
       const isError = /^Error(?:\s|:)/i.test(raw.trimStart())
       callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw), isError)
+    } else if (chunk.type === 'reasoning-delta') {
+      // Providers only send thought summaries when the request asks for them
+      // (Gemini includeThoughts). There is no renderer for them yet, so record
+      // the volume and drop the payload instead of pricing it into the turn.
+      debugLog('stream.reasoning-delta', `bytes=${Buffer.byteLength(chunk.text ?? '', 'utf8')}`)
     } else if (chunk.type === 'tool-error') {
       markToolActivity()
       const toolCallId = chunk.toolCallId ?? ''
@@ -179,6 +184,11 @@ export async function collectTurnResponse(
       'cache.usage',
       `model=${effectiveModelId} input=${turnUsage.inputTokens ?? 'unreported'} read=${turnUsage.cacheReadTokens ?? 'unreported'} write=${turnUsage.cacheCreationTokens ?? 'unreported'} readReported=${turnUsage.cacheReadReported} writeReported=${turnUsage.cacheCreationReported} expectedMiss=${expectedMissReasons.join(',') || 'none'}`,
     )
+    // Separate line on purpose: this is the value to compare across turns when
+    // a provider looks like it stopped thinking. A 0 can mean either the
+    // provider billed no reasoning tokens or it omitted the field entirely —
+    // a missing thought summary on its own is not evidence either way.
+    debugLog('thinking.usage', `model=${effectiveModelId} reasoningTokens=${normalized.reasoningTokens}`)
     const cacheMiss = appendProviderTurnUsage(state, turnUsage)
     if (cacheMiss && !cacheMiss.expected) {
       debugLog(

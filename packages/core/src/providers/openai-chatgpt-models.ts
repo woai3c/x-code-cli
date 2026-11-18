@@ -15,8 +15,9 @@ const SHARED_MODEL_REFRESH_TIMEOUT_MS = 8 * 1000
 
 // The ChatGPT models endpoint interprets `client_version` as an official
 // Codex protocol compatibility version, not this product's package version.
-// GPT-5.6 requires at least 0.144.0; sending x-code's independent 0.x version
-// makes the endpoint legitimately return an empty picker catalog.
+// The current model generation requires at least 0.144.0; sending x-code's
+// independent 0.x version makes the endpoint legitimately return an empty
+// picker catalog.
 const OPENAI_CODEX_COMPATIBILITY_VERSION = '0.144.0'
 
 export interface OpenAIChatGPTRuntimeModel extends ProviderModel {
@@ -54,8 +55,8 @@ interface AuthSnapshot {
 
 const FALLBACK_MODELS: OpenAIChatGPTRuntimeModel[] = [
   {
-    id: 'openai:gpt-5.6-sol',
-    label: 'GPT-5.6 Sol',
+    id: 'openai:gpt-6.2-astra',
+    label: 'GPT-6.2 Astra',
     description: 'ChatGPT subscription — frontier agentic coding model',
     vision: true,
     contextWindow: 272000,
@@ -65,28 +66,12 @@ const FALLBACK_MODELS: OpenAIChatGPTRuntimeModel[] = [
       { effort: 'high' },
       { effort: 'xhigh' },
       { effort: 'max' },
-      { effort: 'ultra' },
     ],
   },
   {
-    id: 'openai:gpt-5.6-terra',
-    label: 'GPT-5.6 Terra',
-    description: 'ChatGPT subscription — balanced agentic coding model',
-    vision: true,
-    contextWindow: 272000,
-    supportedReasoningLevels: [
-      { effort: 'low' },
-      { effort: 'medium' },
-      { effort: 'high' },
-      { effort: 'xhigh' },
-      { effort: 'max' },
-      { effort: 'ultra' },
-    ],
-  },
-  {
-    id: 'openai:gpt-5.6-luna',
-    label: 'GPT-5.6 Luna',
-    description: 'ChatGPT subscription — fast agentic coding model',
+    id: 'openai:gpt-6.2-sol',
+    label: 'GPT-6.2 Sol',
+    description: 'ChatGPT subscription — everyday coding and agentic model',
     vision: true,
     contextWindow: 272000,
     supportedReasoningLevels: [
@@ -98,20 +83,32 @@ const FALLBACK_MODELS: OpenAIChatGPTRuntimeModel[] = [
     ],
   },
   {
-    id: 'openai:gpt-5.5',
-    label: 'GPT-5.5',
-    description: 'ChatGPT subscription model',
+    id: 'openai:gpt-6.1-terra',
+    label: 'GPT-6.1 Terra',
+    description: 'ChatGPT subscription — fast visual-reasoning and computer-use model',
     vision: true,
     contextWindow: 272000,
-    supportedReasoningLevels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }, { effort: 'xhigh' }],
+    supportedReasoningLevels: [
+      { effort: 'low' },
+      { effort: 'medium' },
+      { effort: 'high' },
+      { effort: 'xhigh' },
+      { effort: 'max' },
+    ],
   },
   {
-    id: 'openai:gpt-5.2',
-    label: 'GPT-5.2',
-    description: 'ChatGPT subscription model',
+    id: 'openai:gpt-6-luna',
+    label: 'GPT-6 Luna',
+    description: 'ChatGPT subscription — high-volume tier',
     vision: true,
     contextWindow: 272000,
-    supportedReasoningLevels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }, { effort: 'xhigh' }],
+    supportedReasoningLevels: [
+      { effort: 'low' },
+      { effort: 'medium' },
+      { effort: 'high' },
+      { effort: 'xhigh' },
+      { effort: 'max' },
+    ],
   },
 ]
 

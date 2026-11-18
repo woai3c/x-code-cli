@@ -133,15 +133,15 @@ function alibabaSystemMessage(system: string): SystemModelMessage {
   }
 }
 
-/** GPT-5.6 model variants share the new prompt_cache_options contract. */
+/** GPT-5.6 and GPT-6 model variants share the prompt_cache_options contract. */
 function supportsOpenAIExplicitPromptCaching(modelId: string): boolean {
-  return /^openai:gpt-5\.6(?:$|-)/.test(modelId)
+  return /^openai:gpt-(?:5\.6|6)(?:\.[12])?(?:$|-)/.test(modelId)
 }
 
 const CHATGPT_CACHE_COMPARISON_TTL_MS = 5 * 60 * 1000
 const OPENAI_EXPLICIT_CACHE_TTL_MS = 30 * 60 * 1000
 
-/** Diagnostic comparison window for adjacent OpenAI turns. Platform GPT-5.6
+/** Diagnostic comparison window for adjacent OpenAI turns. Platform GPT-5.6/GPT-6
  *  receives an explicit 30-minute TTL. ChatGPT's private transport exposes no
  *  TTL control, so use a conservative five-minute window and avoid labeling
  *  older provider-default evictions as byte-instability regressions. */

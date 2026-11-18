@@ -17,7 +17,7 @@ export async function parseCliArgs(args: string[] = hideBin(process.argv)) {
     .option('model', {
       alias: 'm',
       type: 'string',
-      describe: 'Model to use (e.g. sonnet, deepseek, openai:gpt-5.6-sol)',
+      describe: 'Model to use (e.g. sonnet, deepseek, openai:gpt-6.2-sol)',
     })
     .option('trust', {
       alias: 't',

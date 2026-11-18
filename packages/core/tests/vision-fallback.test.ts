@@ -62,14 +62,14 @@ describe('pickVisionProvider', () => {
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'test'
     const sub = pickVisionProvider()
     expect(sub?.provider).toBe('google')
-    expect(sub?.modelId).toBe('google:gemini-2.5-flash')
+    expect(sub?.modelId).toBe('google:gemini-4-hydrogen')
   })
 
-  it('picks GLM-4V when only Zhipu key is configured', () => {
+  it('picks GLM-5.3 Flash when only Zhipu key is configured', () => {
     process.env.ZHIPU_API_KEY = 'test'
     const sub = pickVisionProvider()
     expect(sub?.provider).toBe('zhipu')
-    expect(sub?.modelId).toBe('zhipu:glm-4.6v')
+    expect(sub?.modelId).toBe('zhipu:glm-5.3-flash')
   })
 
   it('prefers Google over Zhipu when both are configured', () => {

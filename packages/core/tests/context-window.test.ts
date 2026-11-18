@@ -25,19 +25,24 @@ afterEach(() => {
 
 describe('getContextWindow', () => {
   it('returns exact value for known models', () => {
-    expect(getContextWindow('anthropic:claude-fable-5-1')).toBe(1000000)
-    expect(getContextWindow('anthropic:claude-opus-4-8')).toBe(1000000)
-    expect(getContextWindow('openai:gpt-6-astra')).toBe(1050000)
-    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(1047576)
+    expect(getContextWindow('anthropic:claude-fable-5-2')).toBe(1000000)
+    expect(getContextWindow('anthropic:claude-haiku-5-5')).toBe(1000000)
+    expect(getContextWindow('openai:gpt-6.2-astra')).toBe(1050000)
+    expect(getContextWindow('openai:gpt-6.2-sol')).toBe(1050000)
+    expect(getContextWindow('openai:gpt-6.1-terra')).toBe(1050000)
+    expect(getContextWindow('google:gemini-4-carbon')).toBe(1048576)
+    expect(getContextWindow('google:gemini-4-argon')).toBe(1048576)
+    expect(getContextWindow('google:gemini-4-hydrogen')).toBe(1048576)
     expect(getContextWindow('google:gemini-3.8-flash')).toBe(1048576)
-    expect(getContextWindow('google:gemini-3.7-flash')).toBe(1048576)
-    expect(getContextWindow('google:gemini-2.5-flash')).toBe(1000000)
     expect(getContextWindow('deepseek:deepseek-flash')).toBe(1000000)
+    expect(getContextWindow('alibaba:qwen4-max')).toBe(1000000)
     expect(getContextWindow('alibaba:qwen3.8-max')).toBe(1000000)
-    expect(getContextWindow('alibaba:qwen3.7-plus')).toBe(1000000)
-    expect(getContextWindow('xai:grok-4.20')).toBe(1000000)
+    expect(getContextWindow('xai:grok-4.7')).toBe(500000)
+    expect(getContextWindow('xai:grok-4.6')).toBe(500000)
     expect(getContextWindow('zhipu:glm-5.3-flash')).toBe(1000000)
-    expect(getContextWindow('alibaba:qwen-max')).toBe(32768)
+    expect(getContextWindow('zhipu:glm-4.7-flash')).toBe(200000)
+    expect(getContextWindow('moonshotai:kimi-k3.1-pro')).toBe(1000000)
+    expect(getContextWindow('moonshotai:kimi-k3')).toBe(1000000)
   })
 
   it('falls back to provider-level default for unknown models', () => {
@@ -53,8 +58,8 @@ describe('getContextWindow', () => {
   it('forces the user override for every model and provider', () => {
     expect(setContextWindowOverride(64000)).toBe(64000)
     expect(getContextWindowOverride()).toBe(64000)
-    expect(getContextWindow('anthropic:claude-opus-4-8')).toBe(64000)
-    expect(getContextWindow('openai:gpt-5.6-sol')).toBe(64000)
+    expect(getContextWindow('anthropic:claude-opus-5-5')).toBe(64000)
+    expect(getContextWindow('openai:gpt-6.2-sol')).toBe(64000)
     expect(getContextWindow('unknownprovider:somemodel')).toBe(64000)
   })
 
@@ -62,44 +67,49 @@ describe('getContextWindow', () => {
     setContextWindowOverride(64000)
     expect(setContextWindowOverride(32767)).toBeUndefined()
     expect(setContextWindowOverride('invalid')).toBeUndefined()
-    expect(getContextWindow('alibaba:qwen-max')).toBe(32768)
+    expect(getContextWindow('alibaba:qwen3.8-max')).toBe(1000000)
   })
 })
 
 describe('getCompressionThreshold', () => {
   it('is context window * COMPRESSION_TRIGGER_RATIO', () => {
-    const window = getContextWindow('anthropic:claude-opus-4-8')
-    expect(getCompressionThreshold('anthropic:claude-opus-4-8')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
+    const window = getContextWindow('anthropic:claude-opus-5-5')
+    expect(getCompressionThreshold('anthropic:claude-opus-5-5')).toBe(Math.floor(window * COMPRESSION_TRIGGER_RATIO))
   })
 
   it('uses the forced context window', () => {
     setContextWindowOverride(40000)
-    expect(getCompressionThreshold('anthropic:claude-opus-4-8')).toBe(32000)
+    expect(getCompressionThreshold('anthropic:claude-opus-5-5')).toBe(32000)
   })
 })
 
 describe('getMaxOutputTokens', () => {
   it('returns specific ceiling for known models', () => {
     expect(getMaxOutputTokens('deepseek:deepseek-flash')).toBe(131072)
-    expect(getMaxOutputTokens('anthropic:claude-sonnet-5')).toBe(128000)
-    expect(getMaxOutputTokens('anthropic:claude-haiku-4-5')).toBe(64000)
-    expect(getMaxOutputTokens('openai:gpt-6-astra')).toBe(128000)
+    expect(getMaxOutputTokens('anthropic:claude-sonnet-5-5')).toBe(128000)
+    expect(getMaxOutputTokens('anthropic:claude-haiku-5-5')).toBe(128000)
+    expect(getMaxOutputTokens('openai:gpt-6.2-astra')).toBe(128000)
+    expect(getMaxOutputTokens('openai:gpt-6.2-sol')).toBe(128000)
+    expect(getMaxOutputTokens('openai:gpt-6.1-terra')).toBe(128000)
+    expect(getMaxOutputTokens('google:gemini-4-carbon')).toBe(65536)
+    expect(getMaxOutputTokens('google:gemini-4-argon')).toBe(65536)
+    expect(getMaxOutputTokens('google:gemini-4-hydrogen')).toBe(65536)
     expect(getMaxOutputTokens('google:gemini-3.8-flash')).toBe(65536)
-    expect(getMaxOutputTokens('google:gemini-3.7-flash')).toBe(65536)
+    expect(getMaxOutputTokens('alibaba:qwen4-max')).toBe(262144)
     expect(getMaxOutputTokens('alibaba:qwen3.8-flash')).toBe(65536)
-    expect(getMaxOutputTokens('alibaba:qwen3.7-plus')).toBe(65536)
-    expect(getMaxOutputTokens('alibaba:qwen-max')).toBe(8192)
+    expect(getMaxOutputTokens('zhipu:glm-5.3')).toBe(131072)
+    expect(getMaxOutputTokens('zhipu:glm-4.7-flash')).toBe(131072)
   })
 
   it('returns default for models without an explicit cap', () => {
-    // Current Zhipu vision models (glm-4.6v, glm-5v-turbo) don't have
-    // explicit max-output-token caps — they fall through to the default.
-    expect(getMaxOutputTokens('zhipu:glm-4.6v')).toBe(16384)
-    expect(getMaxOutputTokens('zhipu:glm-5v-turbo')).toBe(16384)
+    // xAI and Moonshot tiers don't have explicit max-output-token caps — they
+    // fall through to the default.
+    expect(getMaxOutputTokens('xai:grok-4.7')).toBe(16384)
+    expect(getMaxOutputTokens('moonshotai:kimi-k3.1-pro')).toBe(16384)
   })
 
   it('returns default for unknown models', () => {
-    expect(getMaxOutputTokens('openai:gpt-5.6-sol')).toBe(16384)
+    expect(getMaxOutputTokens('openai:gpt-99')).toBe(16384)
     expect(getMaxOutputTokens('unknownprovider:model')).toBe(16384)
   })
 })

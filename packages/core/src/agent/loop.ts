@@ -524,6 +524,14 @@ async function runTurnAttempt(
   const effectiveEffort = getReasoningEffort(options.modelId, options.thinking ?? false, effort)
   const reasoningLevel = getReasoningLevel(options.modelId, options.thinking ?? false, effort)
   const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false, effort)
+  // Gemini returns thought summaries only when the request opts in, and this
+  // client has no renderer for them: reasoning deltas are counted and dropped
+  // by turn-stream. Ask for them during debug runs only, so the summary shows
+  // up in debug.log next to the billed `thinking.usage` line while interactive
+  // turns keep sending the same request body.
+  if (process.env.DEBUG_STDOUT === '1' && (options.thinking ?? false) && options.modelId.startsWith('google:')) {
+    thinkingOptions.google = { ...(thinkingOptions.google ?? {}), thinkingConfig: { includeThoughts: true } }
+  }
   const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
   const provider = options.modelId.split(':')[0]
   let requestHeaders = cached.headers
@@ -647,7 +655,7 @@ async function runTurnAttempt(
     )
     debugLog(
       'turn.finish',
-      `reason=${finishReason} turn=${turn} input=${state.lastInputTokens} total=${state.tokenUsage.totalTokens}`,
+      `reason=${finishReason} turn=${turn} input=${state.lastInputTokens} output=${state.tokenUsage.outputTokens} reasoning=${state.tokenUsage.reasoningTokens} total=${state.tokenUsage.totalTokens}`,
     )
     return { kind: 'done', finishReason, result }
   } catch (err) {

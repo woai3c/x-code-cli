@@ -228,7 +228,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 ```text
 xc [options] [prompt]
 
---model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-5.6-sol）
+--model, -m <id>      指定模型（如 sonnet、deepseek、openai:gpt-6.2-sol）
 --trust, -t           信任模式：跳过普通工具确认（含 Peer 触发的工作）
 --print, -p           非交互模式：输出结果后退出
 --plan                Plan 模式（只读探索，批准后才执行）

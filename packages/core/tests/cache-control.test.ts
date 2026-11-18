@@ -194,11 +194,11 @@ describe('applyCacheControl', () => {
       expect(cacheKey('openai:gpt-5.6-sol', 'sys-a')).not.toBe(cacheKey('openai:gpt-5.6-terra', 'sys-a'))
     })
 
-    it('adds GPT-5.6 cache options and an explicit stable-system breakpoint', () => {
+    it('adds GPT-6 cache options and an explicit stable-system breakpoint', () => {
       const out = applyCacheControl({
         instructions: 'stable system prompt',
         messages: baseMessages,
-        modelId: 'openai:gpt-5.6-sol',
+        modelId: 'openai:gpt-6.2-sol',
         sessionId: 'abc',
       })
       const options = out.providerOptions?.openai as {

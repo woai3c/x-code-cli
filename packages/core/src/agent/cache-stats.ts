@@ -134,7 +134,7 @@ export function createProviderTurnUsage(options: {
 function cacheTtlMs(turn: ProviderTurnUsage): number | null {
   if (turn.cacheComparisonTtlMs !== undefined) return turn.cacheComparisonTtlMs
   if (turn.modelId.startsWith('anthropic:') || turn.modelId.startsWith('alibaba:')) return 5 * 60 * 1000
-  if (/^openai:gpt-5\.6(?:$|-)/.test(turn.modelId)) return 30 * 60 * 1000
+  if (/^openai:gpt-(?:5\.6|6)(?:\.[12])?(?:$|-)/.test(turn.modelId)) return 30 * 60 * 1000
   return null
 }
 

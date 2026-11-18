@@ -343,7 +343,7 @@ describe('OpenAI ChatGPT model catalog', () => {
       .mockResolvedValueOnce(Response.json({ models: [{ slug: 'recovered-model', visibility: 'list' }] }))
 
     const fallback = await refreshOpenAIChatGPTModels('test', { fetch: fetchMock })
-    expect(fallback.some((model) => model.id === 'openai:gpt-5.6-sol')).toBe(true)
+    expect(fallback.some((model) => model.id === 'openai:gpt-6.2-sol')).toBe(true)
     expect(getOpenAIChatGPTModelCatalogState()).toMatchObject({ source: 'fallback', error: 'offline' })
 
     const recovered = await refreshOpenAIChatGPTModels('test', { fetch: fetchMock })
@@ -442,7 +442,7 @@ describe('OpenAI ChatGPT model catalog', () => {
     const models = await refreshOpenAIChatGPTModels('test', { fetch: offlineFetch })
     expect(offlineFetch).toHaveBeenCalledOnce()
     expect(models.some((model) => model.id === 'openai:invalid-cached-model')).toBe(false)
-    expect(models.some((model) => model.id === 'openai:gpt-5.6-sol')).toBe(true)
+    expect(models.some((model) => model.id === 'openai:gpt-6.2-sol')).toBe(true)
   })
 
   it('forces one authenticated catalog refresh after a model 404', async () => {
@@ -466,7 +466,7 @@ describe('OpenAI ChatGPT model catalog', () => {
       force: true,
     })
 
-    expect(models.some((model) => model.id === 'openai:gpt-5.6-sol')).toBe(true)
+    expect(models.some((model) => model.id === 'openai:gpt-6.2-sol')).toBe(true)
     expect(getOpenAIChatGPTModelCatalogState()).toMatchObject({
       source: 'fallback',
       error: 'ChatGPT model catalog response is invalid.',

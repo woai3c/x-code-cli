@@ -10,6 +10,7 @@ export interface UsageDelta {
   outputTokens: number
   cacheReadTokens: number
   cacheCreationTokens: number
+  reasoningTokens: number
   cacheReadReported: boolean
   cacheCreationReported: boolean
 }
@@ -58,6 +59,7 @@ function emptyUsageDelta(): UsageDelta {
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
+    reasoningTokens: 0,
     cacheReadReported: false,
     cacheCreationReported: false,
   }
@@ -76,11 +78,15 @@ export function createUsageBreakdown(): UsageBreakdown {
 }
 
 export function cloneUsageBreakdown(breakdown: UsageBreakdown): UsageBreakdown {
+  // Rebuilt over an empty delta so buckets persisted before a field existed
+  // restore as 0 instead of undefined (undefined would turn `+=` into NaN).
   return {
     bySource: Object.fromEntries(
-      Object.entries(breakdown.bySource).map(([source, usage]) => [source, { ...usage }]),
+      Object.entries(breakdown.bySource).map(([source, usage]) => [source, { ...emptyUsageDelta(), ...usage }]),
     ) as Record<UsageSource, UsageDelta>,
-    byModel: Object.fromEntries(Object.entries(breakdown.byModel).map(([modelId, usage]) => [modelId, { ...usage }])),
+    byModel: Object.fromEntries(
+      Object.entries(breakdown.byModel).map(([modelId, usage]) => [modelId, { ...emptyUsageDelta(), ...usage }]),
+    ) as Record<string, UsageDelta>,
   }
 }
 
@@ -96,12 +102,22 @@ export function normalizeLanguageModelUsage(usage: LanguageModelUsage | Record<s
       : undefined
   const cacheRead = detailValue(details, inputObject, 'cacheReadTokens', 'cacheRead')
   const cacheCreation = detailValue(details, inputObject, 'cacheWriteTokens', 'cacheWrite')
+  const outputObject =
+    raw.outputTokens && typeof raw.outputTokens === 'object' ? (raw.outputTokens as Record<string, unknown>) : undefined
+  const outputDetails =
+    raw.outputTokenDetails && typeof raw.outputTokenDetails === 'object'
+      ? (raw.outputTokenDetails as Record<string, unknown>)
+      : undefined
+  // Gemini reports thoughtsTokenCount, OpenAI/Anthropic report reasoning
+  // tokens; the SDK funnels both into outputTokenDetails.reasoningTokens.
+  const reasoning = detailValue(outputDetails, outputObject, 'reasoningTokens', 'reasoning')
 
   return {
     inputTokens: tokenTotal(raw.inputTokens),
     outputTokens: tokenTotal(raw.outputTokens),
     cacheReadTokens: cacheRead.value,
     cacheCreationTokens: cacheCreation.value,
+    reasoningTokens: reasoning.value,
     cacheReadReported: cacheRead.reported,
     cacheCreationReported: cacheCreation.reported,
   }
@@ -112,6 +128,7 @@ function addDelta(target: UsageDelta, delta: UsageDelta): void {
   target.outputTokens += delta.outputTokens
   target.cacheReadTokens += delta.cacheReadTokens
   target.cacheCreationTokens += delta.cacheCreationTokens
+  target.reasoningTokens += delta.reasoningTokens
   target.cacheReadReported ||= delta.cacheReadReported
   target.cacheCreationReported ||= delta.cacheCreationReported
 }
@@ -121,6 +138,7 @@ function addTokenUsage(target: TokenUsage, delta: UsageDelta): void {
   target.outputTokens += delta.outputTokens
   target.cacheReadTokens += delta.cacheReadTokens
   target.cacheCreationTokens += delta.cacheCreationTokens
+  target.reasoningTokens += delta.reasoningTokens
   target.totalTokens = target.inputTokens + target.outputTokens
 }
 
@@ -147,6 +165,7 @@ export function accumulateChildUsage(parent: LoopState, child: LoopState, fallba
   combined.outputTokens = child.tokenUsage.outputTokens
   combined.cacheReadTokens = child.tokenUsage.cacheReadTokens
   combined.cacheCreationTokens = child.tokenUsage.cacheCreationTokens
+  combined.reasoningTokens = child.tokenUsage.reasoningTokens
   for (const [, usage] of modelEntries) {
     combined.cacheReadReported ||= usage.cacheReadReported
     combined.cacheCreationReported ||= usage.cacheCreationReported

@@ -60,6 +60,8 @@ describe('Kimi endpoint model ids', () => {
   })
 
   it('maps platform model ids to the Coding Plan wire ids', () => {
+    expect(kimiCodingModelId('kimi-k3.1-pro')).toBe('k3.1-pro')
+    expect(kimiCodingModelId('kimi-k3.1-pro-highspeed')).toBe('k3.1-pro-highspeed')
     expect(kimiCodingModelId('kimi-k3')).toBe('k3')
     expect(kimiCodingModelId('kimi-k2.7-code')).toBe('kimi-for-coding')
     expect(kimiCodingModelId('kimi-k2.7-code-highspeed')).toBe('kimi-for-coding-highspeed')
@@ -70,12 +72,15 @@ describe('Kimi endpoint model ids', () => {
   it('uses Coding Plan wire ids only on the Coding Plan endpoint', () => {
     saveUserConfig({ baseUrls: { moonshotai: 'https://api.kimi.com/coding/v1' } })
     let registry = createModelRegistry()
+    expect(registry.languageModel('moonshotai:kimi-k3.1-pro').modelId).toBe('k3.1-pro')
+    expect(registry.languageModel('moonshotai:kimi-k3.1-pro-highspeed').modelId).toBe('k3.1-pro-highspeed')
     expect(registry.languageModel('moonshotai:kimi-k3').modelId).toBe('k3')
     expect(registry.languageModel('moonshotai:kimi-k2.7-code').modelId).toBe('kimi-for-coding')
     expect(registry.languageModel('moonshotai:kimi-k2.6').modelId).toBe('kimi-for-coding')
 
     saveUserConfig({ baseUrls: { moonshotai: 'https://api.moonshot.ai/v1' } })
     registry = createModelRegistry()
+    expect(registry.languageModel('moonshotai:kimi-k3.1-pro').modelId).toBe('kimi-k3.1-pro')
     expect(registry.languageModel('moonshotai:kimi-k3').modelId).toBe('kimi-k3')
     expect(registry.languageModel('moonshotai:kimi-k2.7-code').modelId).toBe('kimi-k2.7-code')
   })

@@ -5,8 +5,10 @@ import {
   accumulateChildUsage,
   accumulateUsage,
   attributedModelId,
+  cloneUsageBreakdown,
   normalizeLanguageModelUsage,
 } from '../src/agent/usage.js'
+import type { UsageBreakdown } from '../src/agent/usage.js'
 
 describe('usage normalization', () => {
   it('accepts numeric AI SDK usage without double-counting cache tokens', () => {
@@ -21,9 +23,25 @@ describe('usage normalization', () => {
       outputTokens: 20,
       cacheReadTokens: 60,
       cacheCreationTokens: 10,
+      reasoningTokens: 0,
       cacheReadReported: true,
       cacheCreationReported: true,
     })
+  })
+
+  it('separates billed thinking tokens from visible output', () => {
+    // Gemini reports thoughtsTokenCount; the SDK folds it into
+    // outputTokenDetails.reasoningTokens (already included in outputTokens).
+    const gemini = normalizeLanguageModelUsage({
+      inputTokens: 40,
+      outputTokens: 779,
+      outputTokenDetails: { textTokens: 716, reasoningTokens: 63 },
+    } as any)
+    const compatible = normalizeLanguageModelUsage({ outputTokens: { total: 90, text: 30, reasoning: 60 } })
+
+    expect(gemini.reasoningTokens).toBe(63)
+    expect(compatible.reasoningTokens).toBe(60)
+    expect(compatible.outputTokens).toBe(90)
   })
 
   it('accepts compatible-provider object token shapes', () => {
@@ -56,11 +74,12 @@ describe('usage normalization', () => {
 })
 
 describe('usage attribution', () => {
-  const delta = (inputTokens: number, outputTokens: number) => ({
+  const delta = (inputTokens: number, outputTokens: number, reasoningTokens = 0) => ({
     inputTokens,
     outputTokens,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
+    reasoningTokens,
     cacheReadReported: false,
     cacheCreationReported: false,
   })
@@ -82,6 +101,47 @@ describe('usage attribution', () => {
     )
     expect(sourceTotal).toBe(28)
     expect(modelTotal).toBe(28)
+  })
+
+  it('backfills buckets restored from a session written by an older version', () => {
+    // Old sessions have no reasoningTokens in their persisted breakdown; a
+    // plain spread would leave it undefined and poison later `+=` with NaN.
+    const legacyBucket = {
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadReported: false,
+      cacheCreationReported: false,
+    }
+    const legacy = {
+      bySource: { main: legacyBucket },
+      byModel: { 'google:gemini-3.8-flash': legacyBucket },
+    } as unknown as UsageBreakdown
+
+    const cloned = cloneUsageBreakdown(legacy)
+    expect(cloned.bySource.main.reasoningTokens).toBe(0)
+    expect(cloned.byModel['google:gemini-3.8-flash']?.reasoningTokens).toBe(0)
+
+    const state = createLoopState()
+    state.usageBreakdown = cloned
+    accumulateUsage(state, {
+      source: 'main',
+      modelId: 'google:gemini-3.8-flash',
+      usage: { ...delta(0, 0, 5) },
+    })
+    expect(state.usageBreakdown.bySource.main.reasoningTokens).toBe(5)
+    expect(state.tokenUsage.reasoningTokens).toBe(5)
+  })
+
+  it('accumulates thinking tokens alongside the totals they are part of', () => {
+    const state = createLoopState()
+    accumulateUsage(state, { source: 'main', modelId: 'google:gemini-3.8-flash', usage: delta(10, 2, 1200) })
+    accumulateUsage(state, { source: 'main', modelId: 'google:gemini-3.8-flash', usage: delta(10, 2, 800) })
+
+    expect(state.tokenUsage.reasoningTokens).toBe(2000)
+    expect(state.tokenUsage.outputTokens).toBe(4)
+    expect(state.usageBreakdown.byModel['google:gemini-3.8-flash']?.reasoningTokens).toBe(2000)
   })
 
   it('folds all child requests once into sub-agent while retaining child model buckets', () => {

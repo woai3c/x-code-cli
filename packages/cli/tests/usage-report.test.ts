@@ -12,6 +12,7 @@ describe('formatUsageReport context detail', () => {
       totalTokens: 1_300,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
+      reasoningTokens: 0,
       currentContextTokens: 1_000,
     }
     const context: ContextBreakdown = {
@@ -42,6 +43,7 @@ describe('formatUsageReport context detail', () => {
       totalTokens: 26_838,
       cacheReadTokens: 13_312,
       cacheCreationTokens: 0,
+      reasoningTokens: 0,
       currentContextTokens: 18_202,
     }
     const cacheMissSummary: CacheMissSummary = {

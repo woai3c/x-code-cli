@@ -199,6 +199,12 @@ export interface TokenUsage {
    *  Billed at a premium over normal input rate but unlocks cheap reads on
    *  subsequent turns. Zero on providers that don't separate creation from read. */
   cacheCreationTokens: number
+  /** Thinking tokens the provider actually billed, already included in
+   *  `outputTokens` (Gemini `thoughtsTokenCount`, OpenAI/Anthropic reasoning
+   *  tokens). Purely informational, and the only trustworthy readout for
+   *  "did the server really think this turn" — thought summaries may be
+   *  absent from the response even when thinking ran normally. */
+  reasoningTokens: number
   /** Current context-window occupancy — `input_tokens + output_tokens` of
    *  the MOST RECENT API response (`inputTokens` already includes cache_read
    *  + cache_write since AI SDK v6 normalises them into one field). Unlike

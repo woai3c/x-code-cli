@@ -96,52 +96,54 @@ describe('resolveModelId', () => {
   })
 
   it('resolves from CLI argument', () => {
-    expect(resolveModelId('anthropic:claude-sonnet-5')).toBe('anthropic:claude-sonnet-5')
+    expect(resolveModelId('anthropic:claude-sonnet-5-5')).toBe('anthropic:claude-sonnet-5-5')
   })
 
   it('resolves alias from CLI argument', () => {
-    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-5')
-    expect(resolveModelId('fable')).toBe('anthropic:claude-fable-5-1')
-    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-5')
-    expect(resolveModelId('astra')).toBe('openai:gpt-6-astra')
-    expect(resolveModelId('gpt6')).toBe('openai:gpt-6-astra')
-    expect(resolveModelId('gemini')).toBe('google:gemini-3.8-flash')
-    expect(resolveModelId('qwen')).toBe('alibaba:qwen3.8-max')
-    expect(resolveModelId('grok')).toBe('xai:grok-4.6')
+    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-5-5')
+    expect(resolveModelId('fable')).toBe('anthropic:claude-fable-5-2')
+    expect(resolveModelId('opus')).toBe('anthropic:claude-opus-5-5')
+    expect(resolveModelId('astra')).toBe('openai:gpt-6.2-astra')
+    expect(resolveModelId('gpt6')).toBe('openai:gpt-6.2-astra')
+    expect(resolveModelId('sol')).toBe('openai:gpt-6.2-sol')
+    expect(resolveModelId('terra')).toBe('openai:gpt-6.1-terra')
+    expect(resolveModelId('gemini')).toBe('google:gemini-4-hydrogen')
+    expect(resolveModelId('qwen')).toBe('alibaba:qwen4-max')
+    expect(resolveModelId('grok')).toBe('xai:grok-4.7')
     expect(resolveModelId('glm')).toBe('zhipu:glm-5.3')
     expect(resolveModelId('deepseek')).toBe('deepseek:deepseek-flash')
   })
 
   it('falls back to env var X_CODE_MODEL', () => {
-    process.env.X_CODE_MODEL = 'openai:gpt-5.6-sol'
-    expect(resolveModelId()).toBe('openai:gpt-5.6-sol')
+    process.env.X_CODE_MODEL = 'openai:gpt-6.2-sol'
+    expect(resolveModelId()).toBe('openai:gpt-6.2-sol')
   })
 
   it('resolves alias from X_CODE_MODEL env var', () => {
     process.env.X_CODE_MODEL = 'sonnet'
-    expect(resolveModelId()).toBe('anthropic:claude-sonnet-5')
+    expect(resolveModelId()).toBe('anthropic:claude-sonnet-5-5')
   })
 
   it('CLI argument takes precedence over X_CODE_MODEL', () => {
-    process.env.X_CODE_MODEL = 'openai:gpt-5.6-sol'
-    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-5')
+    process.env.X_CODE_MODEL = 'openai:gpt-6.2-sol'
+    expect(resolveModelId('sonnet')).toBe('anthropic:claude-sonnet-5-5')
   })
 
   it('falls back to smart default from env API key', () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    expect(resolveModelId()).toBe('anthropic:claude-sonnet-5')
+    expect(resolveModelId()).toBe('anthropic:claude-sonnet-5-5')
   })
 
   it('follows provider detection order', () => {
     process.env.OPENAI_API_KEY = 'test-key'
-    expect(resolveModelId()).toBe('openai:gpt-5.6-sol')
+    expect(resolveModelId()).toBe('openai:gpt-6.2-sol')
   })
 
   it('uses the updated provider smart defaults', () => {
     const cases: Array<[string, string]> = [
-      ['GOOGLE_GENERATIVE_AI_API_KEY', 'google:gemini-3.8-flash'],
-      ['ALIBABA_API_KEY', 'alibaba:qwen3.8-max'],
-      ['XAI_API_KEY', 'xai:grok-4.6'],
+      ['GOOGLE_GENERATIVE_AI_API_KEY', 'google:gemini-4-hydrogen'],
+      ['ALIBABA_API_KEY', 'alibaba:qwen4-max'],
+      ['XAI_API_KEY', 'xai:grok-4.7'],
       ['ZHIPU_API_KEY', 'zhipu:glm-5.3'],
     ]
     for (const [envKey, expected] of cases) {
@@ -167,7 +169,7 @@ describe('resolveModelId', () => {
       expiresAt: Date.now() + 60_000,
     })
     resetOpenAIAuthContextForTesting()
-    expect(resolveModelId()).toBe('openai:gpt-5.6-sol')
+    expect(resolveModelId()).toBe('openai:gpt-6.2-sol')
   })
 })
 

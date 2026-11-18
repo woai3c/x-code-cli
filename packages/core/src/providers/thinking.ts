@@ -116,6 +116,19 @@ export function getReasoningLevel(modelId: string, enabled: boolean, effort?: st
     return TIER_TO_REASONING[effectiveEffort] ?? (effectiveEffort as ReasoningLevel)
   }
 
+  // Gemini 3.8 Flash and Gemini 4 reject thinkingLevel "minimal", so the
+  // portable `none` would fail the turn with HTTP 400. Catalog profiles
+  // already declare offValue 'low'; unlisted ids from these generations get
+  // the same floor. Earlier Gemini 3 releases and Gemini 2.5 keep `none` —
+  // it maps to a valid minimal level or thinkingBudget 0 there.
+  if (
+    provider === 'google' &&
+    !enabled &&
+    /^gemini-(?:3\.8|4)(?:[.-]|$)/.test(modelId.slice(modelId.indexOf(':') + 1))
+  ) {
+    return 'low'
+  }
+
   return enabled ? 'high' : 'none'
 }
 

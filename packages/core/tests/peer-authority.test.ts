@@ -186,6 +186,7 @@ describe('peer authority decisions', () => {
         totalTokens: 0,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
+        reasoningTokens: 0,
         currentContextTokens: 0,
       },
       turnCount: 0,

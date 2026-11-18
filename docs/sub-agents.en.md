@@ -172,7 +172,7 @@ name: my-agent # required; the model invokes this name in task()
 description: One sentence on when to use this agent. The model reads this to decide. # required
 tools: [readFile, grep, glob] # optional: whitelist of allowed tools (camelCase)
 disallowedTools: [shell] # optional: deny on top of the whitelist
-model: anthropic:claude-haiku-4-5 # optional: override the parent model (use a cheaper one)
+model: anthropic:claude-haiku-5-5 # optional: override the parent model (use a cheaper one)
 maxTurns: 15 # optional: hard turn cap (default 30)
 shellRestrictions: [rm, mv] # optional: keyword blacklist for shell commands (only meaningful when shell is in tools)
 ---
@@ -196,7 +196,7 @@ also type-checked when present; an invalid file is skipped with a warning.
 name: bench-runner
 description: Run the benchmark suite once in isolation and report numbers + any regression
 tools: [shell, readFile]
-model: anthropic:claude-haiku-4-5
+model: anthropic:claude-haiku-5-5
 maxTurns: 8
 shellRestrictions: [rm, sudo, npm publish]
 ---

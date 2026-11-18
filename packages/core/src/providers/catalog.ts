@@ -55,10 +55,11 @@ export interface ProviderInfo {
   keyUrl: string
   /** Hand-curated models shown in the interactive `/model` picker. Users can
    *  still type any full id into `/model <provider>:<model>` for variants
-   *  not listed here. Vision flags reflect model FAMILY: Claude / GPT /
-   *  Gemini / Grok flagships, DeepSeek Flash, and Kimi K2.x are multimodal;
-   *  Qwen-Max / GLM text flagships and DeepSeek V4 Pro are text-only; the
-   *  dedicated *-VL / GLM-4V / *-vision-preview models see images. */
+   *  not listed here. Each provider lists a light/medium/high ladder drawn
+   *  from its current generation. Vision flags reflect model FAMILY:
+   *  Claude 5.5 / GPT-6 / Gemini 4 and Gemini 3.8 Flash / Grok 4.x / Kimi K3 /
+   *  Qwen4 and Qwen3.8 / GLM-5.3 Flash are multimodal; DeepSeek V4 Pro,
+   *  GLM-5.3 and GLM-4.7-Flash are text-only. */
   models: readonly ProviderModel[]
   /** Providers that serve multiple endpoints for the same API (regional
    *  platforms, plan-specific gateways, etc.). When a user picks a model
@@ -77,9 +78,9 @@ export interface ProviderInfo {
    *
    *  `modelPattern` gates each profile to the models that actually honor it:
    *  within a provider, only some model families expose the granular knob
-   *  (e.g. thinkingLevel is Gemini 3-only, Kimi's reasoningEffort is
-   *  K3-only). Models that don't match fall back to the binary /thinking
-   *  toggle. */
+   *  (e.g. thinkingLevel is Gemini 4-only, Kimi's reasoningEffort is
+   *  K3-series-only). Models that don't match fall back to the binary
+   *  /thinking toggle. */
   reasoningTiers?: readonly ReasoningTierProfile[]
 }
 
@@ -93,49 +94,31 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   {
     name: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
-    defaultModel: 'anthropic:claude-sonnet-5',
+    defaultModel: 'anthropic:claude-sonnet-5-5',
     keyUrl: 'https://console.anthropic.com/',
     models: [
       {
-        id: 'anthropic:claude-fable-5-1',
-        label: 'Fable 5.1',
-        description: 'Newest adaptive-reasoning flagship, 1M context',
+        id: 'anthropic:claude-fable-5-2',
+        label: 'Fable 5.2',
+        description: 'Newest frontier model for long-horizon agentic work, 1M context',
         vision: true,
       },
       {
-        id: 'anthropic:claude-opus-5',
-        label: 'Opus 5',
-        description: 'Latest Opus for complex reasoning and agentic coding, 1M context',
+        id: 'anthropic:claude-sonnet-5-5',
+        label: 'Sonnet 5.5',
+        description: 'Best balance, near-flagship coding at $2/$10, 1M context',
         vision: true,
       },
       {
-        id: 'anthropic:claude-fable-5',
-        label: 'Fable 5',
-        description: 'Most capable model, strongest reasoning + agentic, 1M context',
-        vision: true,
-      },
-      {
-        id: 'anthropic:claude-opus-4-8',
-        label: 'Opus 4.8',
-        description: 'Top Opus-tier, complex reasoning + agentic coding, 1M context',
-        vision: true,
-      },
-      {
-        id: 'anthropic:claude-sonnet-5',
-        label: 'Sonnet 5',
-        description: 'Best balance, near-Opus coding at $3/$15, 1M context',
-        vision: true,
-      },
-      {
-        id: 'anthropic:claude-haiku-4-5',
-        label: 'Haiku 4.5',
-        description: 'Fastest, cheapest — $1/$5, shorter replies',
+        id: 'anthropic:claude-haiku-5-5',
+        label: 'Haiku 5.5',
+        description: 'Fastest, cheapest tier, 1M context',
         vision: true,
       },
     ],
     reasoningTiers: [
       {
-        modelPattern: /claude-fable-5(?:-1)?$/,
+        modelPattern: /claude-(?:fable-5-2|opus-5-5)$/,
         offValue: 'low',
         options: [
           { label: 'Low', value: 'low', description: 'Minimum adaptive reasoning' },
@@ -146,7 +129,7 @@ export const PROVIDERS: readonly ProviderInfo[] = [
         ],
       },
       {
-        modelPattern: /claude-(?:opus-(?:5|4-8)|sonnet-5)$/,
+        modelPattern: /claude-(?:sonnet-5-5|haiku-5-5)$/,
         options: [
           { label: 'Low', value: 'low', description: 'Minimal reasoning, fastest' },
           { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
@@ -160,49 +143,37 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   {
     name: 'openai',
     envKey: 'OPENAI_API_KEY',
-    defaultModel: 'openai:gpt-5.6-sol',
+    defaultModel: 'openai:gpt-6.2-sol',
     keyUrl: 'https://platform.openai.com/api-keys',
     models: [
       {
-        id: 'openai:gpt-6-astra',
-        label: 'GPT-6 Astra',
-        description: 'Newest flagship, 1.05M context and 128k output',
+        id: 'openai:gpt-6.2-astra',
+        label: 'GPT-6.2 Astra',
+        description: 'Newest flagship, 1.05M context and 128K output, $8/$40',
         vision: true,
       },
       {
-        id: 'openai:gpt-5.6-sol',
-        label: 'GPT-5.6 Sol',
-        description: 'Flagship reasoning and coding tier, $4/$20, 1M context',
+        id: 'openai:gpt-6.2-sol',
+        label: 'GPT-6.2 Sol',
+        description: 'Everyday coding and agentic tier, $2/$10, 1.05M context',
         vision: true,
       },
       {
-        id: 'openai:gpt-5.6-terra',
-        label: 'GPT-5.6 Terra',
-        description: 'Balanced tier, $2/$12, 1M context',
+        id: 'openai:gpt-6.1-terra',
+        label: 'GPT-6.1 Terra',
+        description: 'Fast visual-reasoning and computer-use tier, $1/$5, 1.05M context',
         vision: true,
       },
       {
-        id: 'openai:gpt-5.6-luna',
-        label: 'GPT-5.6 Luna',
-        description: 'Budget tier, $0.20/$1.20, 1M context',
-        vision: true,
-      },
-      {
-        id: 'openai:gpt-5.4-mini',
-        label: 'GPT-5.4 Mini',
-        description: 'Cheap mini model, $0.75/$4.50',
-        vision: true,
-      },
-      {
-        id: 'openai:gpt-5.4-nano',
-        label: 'GPT-5.4 Nano',
-        description: 'Cheapest, $0.20/$1.25',
+        id: 'openai:gpt-6-luna',
+        label: 'GPT-6 Luna',
+        description: 'Cheapest high-volume tier, 1.05M context',
         vision: true,
       },
     ],
     reasoningTiers: [
       {
-        modelPattern: /gpt-6-astra$/,
+        modelPattern: /gpt-6\.2-astra$/,
         offValue: 'low',
         options: [
           { label: 'Low', value: 'low', description: 'Minimum supported reasoning' },
@@ -213,31 +184,13 @@ export const PROVIDERS: readonly ProviderInfo[] = [
         ],
       },
       {
-        modelPattern: /gpt-5\.6(?:-(?:sol|terra|luna))?$/,
+        modelPattern: /(?:gpt-6\.2-sol|gpt-6\.1-terra|gpt-6-luna)$/,
         options: [
           { label: 'Low', value: 'low', description: 'Fast, concise reasoning' },
           { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
           { label: 'High', value: 'high', description: 'Thorough reasoning' },
           { label: 'XHigh', value: 'xhigh', description: 'Very deep reasoning' },
           { label: 'Max', value: 'max', description: 'Maximum reasoning depth' },
-        ],
-      },
-      {
-        modelPattern: /gpt-5\.5$/,
-        options: [
-          { label: 'Low', value: 'low', description: 'Fast, concise reasoning' },
-          { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
-          { label: 'High', value: 'high', description: 'Thorough reasoning' },
-          { label: 'XHigh', value: 'xhigh', description: 'Maximum reasoning depth' },
-        ],
-      },
-      {
-        modelPattern: /gpt-5\.4-(?:mini|nano)$/,
-        options: [
-          { label: 'Low', value: 'low', description: 'Fast, concise reasoning' },
-          { label: 'Medium', value: 'medium', description: 'Balanced (default)' },
-          { label: 'High', value: 'high', description: 'Thorough reasoning' },
-          { label: 'XHigh', value: 'xhigh', description: 'Maximum reasoning depth' },
         ],
       },
     ],
@@ -276,13 +229,19 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   {
     name: 'alibaba',
     envKey: 'ALIBABA_API_KEY',
-    defaultModel: 'alibaba:qwen3.8-max',
+    defaultModel: 'alibaba:qwen4-max',
     keyUrl: 'https://dashscope.console.aliyun.com/apiKey',
     models: [
       {
+        id: 'alibaba:qwen4-max',
+        label: 'Qwen4 Max',
+        description: 'Newest flagship with native vision, 1M context',
+        vision: true,
+      },
+      {
         id: 'alibaba:qwen3.8-max',
         label: 'Qwen3.8 Max',
-        description: 'Newest flagship with native vision, 1M context',
+        description: 'Previous flagship with native vision, 1M context',
         vision: true,
       },
       {
@@ -291,96 +250,42 @@ export const PROVIDERS: readonly ProviderInfo[] = [
         description: 'Fast multimodal model with 1M context',
         vision: true,
       },
-      {
-        id: 'alibaba:qwen3.7-max',
-        label: 'Qwen3.7 Max',
-        description: 'Latest flagship, 1M context, reasoning-native',
-        vision: false,
-      },
-      {
-        id: 'alibaba:qwen3.7-plus',
-        label: 'Qwen3.7 Plus',
-        description: 'Multimodal mid-tier with 1M context',
-        vision: true,
-      },
-      {
-        id: 'alibaba:qwen3.7-flash',
-        label: 'Qwen3.7 Flash',
-        description: 'Fast multimodal model with 1M context',
-        vision: true,
-      },
-      {
-        id: 'alibaba:qwen3-coder-plus',
-        label: 'Qwen3 Coder Plus',
-        description: 'Coding-focused, 1M context',
-        vision: false,
-      },
-      {
-        id: 'alibaba:qwq-plus',
-        label: 'QwQ Plus',
-        description: 'Dedicated reasoning model',
-        vision: false,
-      },
-      {
-        id: 'alibaba:qwen3-vl-plus',
-        label: 'Qwen3-VL Plus',
-        description: 'Vision-language flagship',
-        vision: true,
-      },
-      {
-        id: 'alibaba:qwen3-vl-flash',
-        label: 'Qwen3-VL Flash',
-        description: 'Cheap/fast vision-language model',
-        vision: true,
-      },
     ],
   },
   {
     name: 'google',
     envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
-    defaultModel: 'google:gemini-3.8-flash',
+    defaultModel: 'google:gemini-4-hydrogen',
     keyUrl: 'https://aistudio.google.com/apikey',
     models: [
       {
+        id: 'google:gemini-4-carbon',
+        label: 'Gemini 4 Carbon',
+        description: 'Strongest reasoning for long-horizon agentic work, 1M context',
+        vision: true,
+      },
+      {
+        id: 'google:gemini-4-argon',
+        label: 'Gemini 4 Argon',
+        description: 'Efficient frontier reasoning model, 1M context',
+        vision: true,
+      },
+      {
+        id: 'google:gemini-4-hydrogen',
+        label: 'Gemini 4 Hydrogen',
+        description: 'Fast, low-cost everyday agentic model, 1M context',
+        vision: true,
+      },
+      {
         id: 'google:gemini-3.8-flash',
         label: 'Gemini 3.8 Flash',
-        description: 'Newest multimodal flagship, 1M context and 64k output',
-        vision: true,
-      },
-      {
-        id: 'google:gemini-3.7-flash',
-        label: 'Gemini 3.7 Flash',
-        description: 'Previous-generation multimodal agentic model, 1M context',
-        vision: true,
-      },
-      {
-        id: 'google:gemini-3.6-flash',
-        label: 'Gemini 3.6 Flash',
-        description: 'Fast multimodal agentic model, 1M context',
-        vision: true,
-      },
-      {
-        id: 'google:gemini-3.5-flash',
-        label: 'Gemini 3.5 Flash',
-        description: 'Latest flagship, agentic + coding, 1M context',
-        vision: true,
-      },
-      {
-        id: 'google:gemini-2.5-pro',
-        label: 'Gemini 2.5 Pro',
-        description: '1M context, strong long-doc handling',
-        vision: true,
-      },
-      {
-        id: 'google:gemini-2.5-flash',
-        label: 'Gemini 2.5 Flash',
-        description: 'Cheaper/faster tier, 1M context',
+        description: 'Flash-tier workhorse for long-horizon coding and agents, 1M context',
         vision: true,
       },
     ],
     reasoningTiers: [
       {
-        modelPattern: /gemini-3\.[78]-flash$/,
+        modelPattern: /gemini-4-/,
         offValue: 'low',
         options: [
           { label: 'Low', value: 'low', description: 'Minimum supported reasoning' },
@@ -389,12 +294,11 @@ export const PROVIDERS: readonly ProviderInfo[] = [
         ],
       },
       {
-        modelPattern: /gemini-3\.[56]-flash$/,
-        offValue: 'minimal',
+        modelPattern: /gemini-3\.8-flash$/,
+        offValue: 'low',
         options: [
-          { label: 'Minimal', value: 'minimal', description: 'Minimum supported reasoning' },
           { label: 'Low', value: 'low', description: 'Lower latency, lower cost' },
-          { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
+          { label: 'Medium', value: 'medium', description: 'Balanced reasoning (default)' },
           { label: 'High', value: 'high', description: 'Deeper reasoning, higher quality' },
         ],
       },
@@ -403,41 +307,39 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   {
     name: 'xai',
     envKey: 'XAI_API_KEY',
-    defaultModel: 'xai:grok-4.6',
+    defaultModel: 'xai:grok-4.7',
     keyUrl: 'https://console.x.ai/',
     models: [
       {
+        id: 'xai:grok-4.7',
+        label: 'Grok 4.7',
+        description: 'Newest flagship for coding and agentic work, $2/$6, 500k context',
+        vision: true,
+      },
+      {
         id: 'xai:grok-4.6',
         label: 'Grok 4.6',
-        description: 'Recommended flagship, native vision and 500k context',
-        vision: true,
-      },
-      {
-        id: 'xai:grok-4.20',
-        label: 'Grok 4.20',
-        description: 'Fixed-reasoning model with native vision and 1M context',
-        vision: true,
-      },
-      {
-        id: 'xai:grok-4.20-non-reasoning',
-        label: 'Grok 4.20 Non-Reasoning',
-        description: 'Low-latency non-reasoning variant with 1M context',
+        description: 'Previous flagship, native vision and 500k context',
         vision: true,
       },
       {
         id: 'xai:grok-4.5',
         label: 'Grok 4.5',
-        description: 'Flagship, agentic coding, $2/$6, 500k context',
-        vision: true,
-      },
-      {
-        id: 'xai:grok-4.3',
-        label: 'Grok 4.3',
-        description: 'General-purpose, $1.25/$2.50, 1M context',
+        description: 'Lower-cost agentic coding tier, 500k context',
         vision: true,
       },
     ],
     reasoningTiers: [
+      {
+        modelPattern: /grok-4\.7$/,
+        offValue: 'low',
+        options: [
+          { label: 'Low', value: 'low', description: 'Minimum supported reasoning' },
+          { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
+          { label: 'High', value: 'high', description: 'Deeper reasoning' },
+          { label: 'XHigh', value: 'xhigh', description: 'Maximum supported reasoning' },
+        ],
+      },
       {
         modelPattern: /grok-4\.6$/,
         offValue: 'low',
@@ -457,15 +359,6 @@ export const PROVIDERS: readonly ProviderInfo[] = [
           { label: 'High', value: 'high', description: 'Maximum reasoning depth' },
         ],
       },
-      {
-        modelPattern: /grok-4\.3$/,
-        options: [
-          { label: 'Low', value: 'low', description: 'Faster, cheaper responses' },
-          { label: 'Medium', value: 'medium', description: 'Balanced reasoning' },
-          { label: 'High', value: 'high', description: 'Deeper reasoning' },
-          { label: 'XHigh', value: 'xhigh', description: 'Maximum supported reasoning' },
-        ],
-      },
     ],
   },
   {
@@ -477,44 +370,20 @@ export const PROVIDERS: readonly ProviderInfo[] = [
       {
         id: 'zhipu:glm-5.3',
         label: 'GLM-5.3',
-        description: 'Newest reasoning flagship with 1M context',
+        description: 'Newest reasoning flagship for coding and agents, 1M context',
         vision: false,
       },
       {
         id: 'zhipu:glm-5.3-flash',
         label: 'GLM-5.3 Flash',
-        description: 'Fast native-multimodal model with 1M context',
+        description: 'Mid-tier native multimodal model with 1M context',
         vision: true,
       },
       {
-        id: 'zhipu:glm-5.2',
-        label: 'GLM-5.2',
-        description: 'Latest flagship, $1.40/$4.40, 1M context',
+        id: 'zhipu:glm-4.7-flash',
+        label: 'GLM-4.7 Flash',
+        description: 'Free lightweight text model with 200k context',
         vision: false,
-      },
-      {
-        id: 'zhipu:glm-5',
-        label: 'GLM-5',
-        description: 'Agentic engineering model, $1/$3.20, 200k context',
-        vision: false,
-      },
-      {
-        id: 'zhipu:glm-4.7',
-        label: 'GLM-4.7',
-        description: 'Cost-efficient, $0.60/$2.20, 128k context',
-        vision: false,
-      },
-      {
-        id: 'zhipu:glm-5v-turbo',
-        label: 'GLM-5V Turbo',
-        description: 'Vision model, $1.20/$4',
-        vision: true,
-      },
-      {
-        id: 'zhipu:glm-4.6v',
-        label: 'GLM-4.6V',
-        description: 'Cheap vision model, $0.30/$0.90',
-        vision: true,
       },
     ],
     reasoningTiers: [
@@ -527,43 +396,30 @@ export const PROVIDERS: readonly ProviderInfo[] = [
           { label: 'Max', value: 'max', description: 'Deep reasoning (default)' },
         ],
       },
-      {
-        modelPattern: /glm-5\.2$/,
-        options: [
-          { label: 'High', value: 'high', description: 'Enhanced reasoning' },
-          { label: 'Max', value: 'max', description: 'Deep reasoning (default)' },
-        ],
-      },
     ],
   },
   {
     name: 'moonshotai',
     envKey: 'MOONSHOT_API_KEY',
-    defaultModel: 'moonshotai:kimi-k3',
+    defaultModel: 'moonshotai:kimi-k3.1-pro',
     keyUrl: 'https://platform.moonshot.ai/console/api-keys',
     models: [
       {
+        id: 'moonshotai:kimi-k3.1-pro',
+        label: 'Kimi K3.1 Pro',
+        description: 'Newest flagship, 1M context, native multimodal',
+        vision: true,
+      },
+      {
         id: 'moonshotai:kimi-k3',
         label: 'Kimi K3',
-        description: 'Flagship, 2.8T params, 1M context, native multimodal',
+        description: 'Previous-generation flagship, 1M context, native multimodal',
         vision: true,
       },
       {
-        id: 'moonshotai:kimi-k2.7-code',
-        label: 'Kimi K2.7 Code',
-        description: 'Dedicated coding model, 256k context',
-        vision: true,
-      },
-      {
-        id: 'moonshotai:kimi-k2.7-code-highspeed',
-        label: 'Kimi K2.7 Code Highspeed',
-        description: 'High-speed coding variant, 256k context',
-        vision: true,
-      },
-      {
-        id: 'moonshotai:kimi-k2.6',
-        label: 'Kimi K2.6',
-        description: 'Multimodal general-purpose, 256k context',
+        id: 'moonshotai:kimi-k3.1-pro-highspeed',
+        label: 'Kimi K3.1 Pro Highspeed',
+        description: 'Same intelligence about 2-3x faster, 1M context',
         vision: true,
       },
     ],
@@ -574,8 +430,9 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     ],
     reasoningTiers: [
       {
-        // reasoning_effort is K3-only; K2.x uses the binary thinking switch.
+        // reasoning_effort is K3-series-only; K2.x uses the binary thinking switch.
         modelPattern: /kimi-k3/,
+        offValue: 'low',
         options: [
           { label: 'Low', value: 'low', description: 'Faster, concise reasoning' },
           { label: 'High', value: 'high', description: 'Deeper reasoning' },
@@ -589,20 +446,22 @@ export const PROVIDERS: readonly ProviderInfo[] = [
 // ─── Model aliases ───
 
 export const MODEL_ALIASES: Record<string, string> = {
-  fable: 'anthropic:claude-fable-5-1',
-  sonnet: 'anthropic:claude-sonnet-5',
-  opus: 'anthropic:claude-opus-5',
-  haiku: 'anthropic:claude-haiku-4-5',
-  gpt6: 'openai:gpt-6-astra',
-  astra: 'openai:gpt-6-astra',
-  gpt5: 'openai:gpt-5.6-sol',
-  gemini: 'google:gemini-3.8-flash',
+  fable: 'anthropic:claude-fable-5-2',
+  sonnet: 'anthropic:claude-sonnet-5-5',
+  opus: 'anthropic:claude-opus-5-5',
+  haiku: 'anthropic:claude-haiku-5-5',
+  gpt6: 'openai:gpt-6.2-astra',
+  astra: 'openai:gpt-6.2-astra',
+  sol: 'openai:gpt-6.2-sol',
+  terra: 'openai:gpt-6.1-terra',
+  luna: 'openai:gpt-6-luna',
+  gemini: 'google:gemini-4-hydrogen',
   deepseek: 'deepseek:deepseek-flash',
   'deepseek-pro': 'deepseek:deepseek-v4-pro',
-  qwen: 'alibaba:qwen3.8-max',
-  grok: 'xai:grok-4.6',
+  qwen: 'alibaba:qwen4-max',
+  grok: 'xai:grok-4.7',
   glm: 'zhipu:glm-5.3',
-  kimi: 'moonshotai:kimi-k3',
+  kimi: 'moonshotai:kimi-k3.1-pro',
 }
 
 // ─── Derived views (legacy shapes kept for existing consumers) ───

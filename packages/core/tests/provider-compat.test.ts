@@ -293,7 +293,7 @@ describe('downgradeBinaryPartsForProvider', () => {
     ] as ModelMessage[]
     const canonical = structuredClone(messages)
 
-    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-6.2-sol')
 
     expect(messages).toEqual(canonical)
     expect(projected).not.toBe(messages)
@@ -397,7 +397,7 @@ describe('downgradeBinaryPartsForProvider', () => {
     ] as ModelMessage[]
     const canonical = structuredClone(messages)
 
-    const projected = await downgradeBinaryPartsForProvider(messages, 'xai:grok-4.3')
+    const projected = await downgradeBinaryPartsForProvider(messages, 'xai:grok-4.7')
 
     expect(JSON.stringify(projected)).toContain('accepts only PNG, JPEG')
     expect(JSON.stringify(projected)).not.toContain('"type":"file"')
@@ -429,7 +429,7 @@ describe('downgradeBinaryPartsForProvider', () => {
     ] as ModelMessage[]
     const canonical = structuredClone(messages)
 
-    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-6.2-sol')
 
     expect(JSON.stringify(projected)).toMatch(/animated image\/gif|non-animated/i)
     expect(JSON.stringify(projected)).not.toContain('"type":"file"')
@@ -481,7 +481,7 @@ describe('downgradeBinaryPartsForProvider', () => {
       },
     ] as unknown as ModelMessage[]
 
-    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-6.2-sol')
     expect(JSON.stringify(projected)).toContain('before')
     expect(JSON.stringify(projected)).toContain('Legacy file attachment omitted')
     expect(JSON.stringify(projected)).not.toContain('file-data')
@@ -506,7 +506,7 @@ describe('downgradeBinaryPartsForProvider', () => {
       },
     ] as unknown as ModelMessage[]
 
-    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-5.6-sol')
+    const projected = await downgradeBinaryPartsForProvider(messages, 'openai:gpt-6.2-sol')
     expect(JSON.stringify(projected)).toContain('Legacy file attachment omitted')
     expect(JSON.stringify(projected)).not.toContain('application/pdf')
     expect(JSON.stringify(messages)).toContain('application/pdf')

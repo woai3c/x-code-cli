@@ -182,7 +182,7 @@ describe('readFile tool', () => {
     const filePath = path.join(tmpDir, 'unsupported.gif')
     const { Jimp } = await import('jimp')
     await fs.writeFile(filePath, await new Jimp({ width: 2, height: 2, color: 0xffffffff }).getBuffer('image/gif'))
-    const tool = createReadFileTool(undefined, { modelId: 'xai:grok-4.3' })
+    const tool = createReadFileTool(undefined, { modelId: 'xai:grok-4.7' })
 
     const result = await tool.execute!({ filePath }, {
       toolCallId: 'xai-gif-test',
@@ -210,7 +210,7 @@ describe('readFile tool', () => {
         singleFrame.subarray(trailer),
       ]),
     )
-    const tool = createReadFileTool(undefined, { modelId: 'openai:gpt-5.6-sol' })
+    const tool = createReadFileTool(undefined, { modelId: 'openai:gpt-6.2-sol' })
 
     const result = await tool.execute!({ filePath }, {
       toolCallId: 'openai-animated-gif-test',

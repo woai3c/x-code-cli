@@ -32,7 +32,7 @@ export interface VisionProvider {
   provider: string
   /** Full <provider>:<model> id passed to the AI SDK registry. */
   modelId: string
-  /** Short label for UI notices ("Gemini 2.5 Flash"). */
+  /** Short label for UI notices ("Gemini 4 Hydrogen"). */
   label: string
 }
 
@@ -45,23 +45,21 @@ export interface VisionUsageEvent {
  *  favor cheap / free-tier offerings — the goal is a quick caption, not
  *  deep analysis. */
 const VISION_MODELS: Record<string, { modelId: string; label: string }> = {
-  google: { modelId: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  zhipu: { modelId: 'zhipu:glm-4.6v', label: 'GLM-4.6V' },
+  google: { modelId: 'google:gemini-4-hydrogen', label: 'Gemini 4 Hydrogen' },
+  zhipu: { modelId: 'zhipu:glm-5.3-flash', label: 'GLM-5.3 Flash' },
   deepseek: { modelId: 'deepseek:deepseek-flash', label: 'DeepSeek V4.1 Flash' },
-  alibaba: { modelId: 'alibaba:qwen3-vl-flash', label: 'Qwen3-VL Flash' },
-  openai: { modelId: 'openai:gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-  anthropic: { modelId: 'anthropic:claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-  moonshotai: { modelId: 'moonshotai:kimi-k2.6', label: 'Kimi K2.6' },
-  xai: { modelId: 'xai:grok-4.3', label: 'Grok 4.3' },
+  alibaba: { modelId: 'alibaba:qwen3.8-flash', label: 'Qwen3.8 Flash' },
+  openai: { modelId: 'openai:gpt-6-luna', label: 'GPT-6 Luna' },
+  anthropic: { modelId: 'anthropic:claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+  moonshotai: { modelId: 'moonshotai:kimi-k3.1-pro', label: 'Kimi K3.1 Pro' },
+  xai: { modelId: 'xai:grok-4.7', label: 'Grok 4.7' },
 }
 
 /** Order in which we try providers when picking a vision sub-agent.
- *  Free tiers and cheap-per-image models go first; heavier flagships
- *  last. Gemini 2.5 Flash leads because its free tier is the most
- *  generous (1500/day) and the model is also the strongest at the
- *  free price point. GLM-4.6V is second because it's cheap/free
- *  and reachable from China without a proxy. DeepSeek V4.1 Flash follows as
- *  the cheapest configured paid fallback with native vision. */
+ *  Cheap/fast tiers go first; heavier flagships last. Gemini 4 Hydrogen
+ *  leads because it is the cheapest current Gemini tier, GLM-5.3 Flash
+ *  follows as the cheapest multimodal model reachable from China without a
+ *  proxy, and DeepSeek V4.1 Flash is the cheapest configured paid fallback. */
 const VISION_PRIORITY = ['google', 'zhipu', 'deepseek', 'alibaba', 'openai', 'anthropic', 'moonshotai', 'xai']
 
 /**

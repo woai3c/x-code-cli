@@ -877,6 +877,7 @@ describe('session-store: hydrateLoopState', () => {
       totalTokens: 55,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
+      reasoningTokens: 0,
       currentContextTokens: 55,
     }
     await appendHeader(s, 'anthropic:claude-sonnet-5', 'q')
@@ -952,6 +953,7 @@ describe('session-store: forkSession', () => {
       totalTokens: 100,
       cacheReadTokens: 20,
       cacheCreationTokens: 0,
+      reasoningTokens: 0,
       currentContextTokens: 40,
     }
     source.messages = [

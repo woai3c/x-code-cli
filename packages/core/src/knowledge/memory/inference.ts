@@ -197,16 +197,16 @@ function inferenceSettings(
 function requiresThinking(modelId: string): boolean {
   const normalized = modelId.toLowerCase()
   const provider = providerOf(normalized)
-  if (provider === 'google') return /gemini-(?:2\.5-pro|3(?:[.\-]|$))/.test(normalized)
+  if (provider === 'google') return /gemini-(?:2\.5-pro|[34](?:[.\-]|$))/.test(normalized)
   if (provider === 'deepseek') return /(?:^|:)deepseek-reasoner(?:$|[-.])/.test(normalized)
   if (provider === 'openai') {
     const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
     if (chatGPTTiers?.length && !chatGPTTiers.some((tier) => tier.value === 'none')) return true
     return /(?:^|:)(?:gpt-(?:5|6)(?:$|[-.])|o[134](?:$|[-.]))/.test(normalized)
   }
-  if (provider === 'anthropic') return /claude-(?:fable-5|opus-4-5)/.test(normalized)
+  if (provider === 'anthropic') return /claude-(?:fable-5|opus-(?:4-5|5)|sonnet-5|haiku-(?:4-5|5))/.test(normalized)
   if (provider === 'zhipu') return /glm-5\.3(?:$|-)/.test(normalized)
-  return provider === 'xai' && /grok-(?:4\.6|4\.20)$/.test(normalized)
+  return provider === 'xai' && /grok-4\.(?:6|7|20)$/.test(normalized)
 }
 
 function rejectControl(modelId: string, control: MemoryReasoningControl): void {

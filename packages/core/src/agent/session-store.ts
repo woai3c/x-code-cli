@@ -1224,6 +1224,7 @@ const EMPTY_USAGE: TokenUsage = {
   totalTokens: 0,
   cacheReadTokens: 0,
   cacheCreationTokens: 0,
+  reasoningTokens: 0,
   currentContextTokens: 0,
 }
 
@@ -1482,7 +1483,9 @@ export async function loadSession(filePath: string): Promise<LoadedSession | nul
     committedTranscriptEpochId,
     transcriptIntegrity,
     transcriptRequiresSnapshot,
-    tokenUsage: lastUsage?.usage ?? EMPTY_USAGE,
+    // Merge over EMPTY_USAGE so sessions written before a usage field existed
+    // still expose a complete TokenUsage to UI resume and /usage readers.
+    tokenUsage: lastUsage?.usage ? { ...EMPTY_USAGE, ...lastUsage.usage } : EMPTY_USAGE,
     usageBreakdown: lastUsage?.breakdown ?? createUsageBreakdown(),
     providerTurns,
     cacheMissSummary: lastUsage?.cacheMissSummary
@@ -1772,7 +1775,10 @@ export function hydrateLoopState(
   state.committedTranscriptEpochId = loaded.committedTranscriptEpochId
   state.transcriptIntegrity = loaded.transcriptIntegrity
   state.transcriptRequiresSnapshot = loaded.transcriptRequiresSnapshot
-  state.tokenUsage = { ...loaded.tokenUsage }
+  // Merge over EMPTY_USAGE so sessions persisted before a token-usage field
+  // existed restore as 0 instead of undefined (undefined would turn every
+  // later `+=` into NaN).
+  state.tokenUsage = { ...EMPTY_USAGE, ...loaded.tokenUsage }
   state.usageBreakdown = loaded.usageBreakdown ? cloneUsageBreakdown(loaded.usageBreakdown) : createUsageBreakdown()
   state.providerTurns = loaded.providerTurns?.slice() ?? []
   const scannedCacheMissSummary = scanCacheMisses(state.providerTurns)

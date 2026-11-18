@@ -102,7 +102,7 @@ name: my-agent # 必需，模型在 task() 里用这个名字调用
 description: 一句话说清何时该用，模型会读这个做决定。 # 必需
 tools: [readFile, grep, glob] # 可选，限定允许的工具白名单（注意 camelCase）
 disallowedTools: [shell] # 可选，在白名单之上再禁
-model: anthropic:claude-haiku-4-5 # 可选，覆盖父 model（用更便宜的）
+model: anthropic:claude-haiku-5-5 # 可选，覆盖父 model（用更便宜的）
 maxTurns: 15 # 可选，硬上限轮次，默认 30
 shellRestrictions: [rm, mv] # 可选，shell 命令关键字黑名单（只在 shell 在 tools 里时有意义）
 ---
@@ -124,7 +124,7 @@ shellRestrictions: [rm, mv] # 可选，shell 命令关键字黑名单（只在 s
 name: bench-runner
 description: 在隔离环境跑一次基准测试，返回数字 + 是否回归
 tools: [shell, readFile]
-model: anthropic:claude-haiku-4-5
+model: anthropic:claude-haiku-5-5
 maxTurns: 8
 shellRestrictions: [rm, sudo, npm publish]
 ---

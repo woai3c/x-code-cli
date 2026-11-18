@@ -228,7 +228,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 ```text
 xc [options] [prompt]
 
---model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-5.6-sol)
+--model, -m <id>      Model to use (e.g. sonnet, deepseek, openai:gpt-6.2-sol)
 --trust, -t           Trust mode: skip ordinary tool confirmations, including peer-triggered work
 --print, -p           Non-interactive mode: print result and exit
 --plan                Start in plan mode (read-only; user approves before edits)

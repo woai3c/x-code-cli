@@ -17,6 +17,8 @@ import { OPENAI_SESSION_ID_HEADER, XAI_PROMPT_CACHE_KEY_HEADER } from './cache-c
 import { createOpenAIChatGPTFetch } from './openai-chatgpt-fetch.js'
 
 const KIMI_CODING_MODEL_IDS = {
+  'kimi-k3.1-pro': 'k3.1-pro',
+  'kimi-k3.1-pro-highspeed': 'k3.1-pro-highspeed',
   'kimi-k3': 'k3',
   // The stable Coding Plan id currently auto-routes to K2.8 Preview.
   'kimi-k2.7-code': 'kimi-for-coding',
@@ -121,6 +123,8 @@ export function createModelRegistry() {
       })
       providers.moonshotai = customProvider({
         languageModels: {
+          'kimi-k3.1-pro': codingProvider(kimiCodingModelId('kimi-k3.1-pro')),
+          'kimi-k3.1-pro-highspeed': codingProvider(kimiCodingModelId('kimi-k3.1-pro-highspeed')),
           'kimi-k3': codingProvider(kimiCodingModelId('kimi-k3')),
           'kimi-k2.7-code': codingProvider(kimiCodingModelId('kimi-k2.7-code')),
           'kimi-k2.7-code-highspeed': codingProvider(kimiCodingModelId('kimi-k2.7-code-highspeed')),

@@ -963,6 +963,51 @@ describe('agent loop', () => {
     ])
   })
 
+  it('records billed thinking tokens without rendering thought summaries', async () => {
+    const mockChunks = [
+      { type: 'reasoning-delta', text: 'pondering the request' },
+      { type: 'text-delta', text: 'Answer' },
+    ]
+
+    const mockAsyncIterable = {
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of mockChunks) yield chunk
+      },
+    }
+
+    vi.mocked(streamText).mockReturnValue({
+      stream: mockAsyncIterable,
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'Answer' }] }),
+      // Gemini shape: thinking tokens are billed inside outputTokens.
+      usage: Promise.resolve({
+        inputTokens: 40,
+        outputTokens: 220,
+        outputTokenDetails: { textTokens: 70, reasoningTokens: 150 },
+      }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    const { state } = await agentLoop(
+      'Think about it',
+      {} as any,
+      { modelId: 'google:gemini-3.8-flash', trustMode: false, maxTurns: 1, printMode: false },
+      mockCallbacks,
+    )
+
+    const usageArg = vi.mocked(mockCallbacks.onUsageUpdate).mock.calls[0][0] as TokenUsage
+    expect(usageArg.reasoningTokens).toBe(150)
+    expect(usageArg.outputTokens).toBe(220)
+    expect(state.tokenUsage.reasoningTokens).toBe(150)
+    // Summaries are diagnostics only — they must never reach the transcript.
+    expect(mockCallbacks.onTextDelta).toHaveBeenCalledWith('Answer')
+    expect(mockCallbacks.onTextDelta).not.toHaveBeenCalledWith('pondering the request')
+    expect(state.messages).toEqual([
+      { role: 'user', content: 'Think about it' },
+      { role: 'assistant', content: 'Answer' },
+    ])
+  })
+
   it('stops at finishReason stop (single turn)', async () => {
     vi.mocked(streamText).mockReturnValue({
       stream: {

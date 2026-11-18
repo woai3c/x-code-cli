@@ -185,15 +185,15 @@ describe('cache miss estimation', () => {
     })
   })
 
-  it('treats GPT-5.6 turns after the configured 30-minute TTL as expected misses', () => {
+  it('treats GPT-6 turns after the configured 30-minute TTL as expected misses', () => {
     const previous = turn({
-      modelId: 'openai:gpt-5.6-sol',
+      modelId: 'openai:gpt-6.2-sol',
       input: 8_000,
       cacheRead: 6_000,
       timestamp: '2026-08-07T00:00:00.000Z',
     })
     const current = turn({
-      modelId: 'openai:gpt-5.6-sol',
+      modelId: 'openai:gpt-6.2-sol',
       input: 9_000,
       cacheRead: 0,
       timestamp: '2026-08-07T00:31:00.000Z',

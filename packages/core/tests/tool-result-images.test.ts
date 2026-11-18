@@ -37,7 +37,7 @@ describe('deliverToolImages', () => {
   })
 
   it('passes images through in tool results on native transports', async () => {
-    for (const modelId of ['anthropic:claude-sonnet-5', 'openai:gpt-5.6-sol', 'google:gemini-2.5-flash']) {
+    for (const modelId of ['anthropic:claude-sonnet-5-5', 'openai:gpt-6.2-sol', 'google:gemini-4-carbon']) {
       const r = await deliverToolImages(ctx(modelId), 'shot taken', IMG)
       expect(r.images, modelId).toEqual(IMG)
       expect(r.text, modelId).toBe('shot taken')
@@ -46,7 +46,7 @@ describe('deliverToolImages', () => {
   })
 
   it('keeps Chat Completions vision images in canonical tool history for request-time reattachment', async () => {
-    for (const modelId of ['moonshotai:kimi-k3', 'deepseek:deepseek-flash']) {
+    for (const modelId of ['moonshotai:kimi-k3.1-pro', 'deepseek:deepseek-flash']) {
       const r = await deliverToolImages(ctx(modelId), 'shot taken', IMG)
       expect(r.images, modelId).toEqual(IMG)
       expect(r.text, modelId).toBe('shot taken')
@@ -60,7 +60,7 @@ describe('deliverToolImages', () => {
       modelId: 'google:gemini-2.5-flash',
       label: 'Gemini 2.5 Flash',
     })
-    for (const modelId of ['moonshotai:kimi-k3', 'deepseek:deepseek-flash']) {
+    for (const modelId of ['moonshotai:kimi-k3.1-pro', 'deepseek:deepseek-flash']) {
       const r = await deliverToolImages(ctx(modelId), 'shot taken', IMG)
       expect(r.images, modelId).toEqual(IMG)
     }

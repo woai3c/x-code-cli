@@ -369,7 +369,7 @@ export interface UserConfig {
    *  Browser Use; visual checks remain default-on unless explicitly false. */
   browser?: BrowserConfig
   /** Per-model reasoning effort levels chosen via the /model tier picker.
-   *  Key = full model id (e.g. "openai:gpt-5.6-sol"), value = effort label
+   *  Key = full model id (e.g. "openai:gpt-6.2-sol"), value = effort label
    *  (e.g. "medium"). When present, it overrides the /thinking toggle for
    *  that model — tier knows what the user actually wants; /thinking is a
    *  coarse fallback for models without an explicit tier. */
