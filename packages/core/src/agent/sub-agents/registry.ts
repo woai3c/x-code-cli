@@ -41,12 +41,13 @@ export class SubAgentRegistry {
     return this.agents.get(name)
   }
 
-  list(): SubAgentDefinition[] {
-    return [...this.agents.values()]
+  list(opts?: { includeInternal?: boolean }): SubAgentDefinition[] {
+    const all = [...this.agents.values()]
+    return opts?.includeInternal ? all : all.filter((a) => !a.internal)
   }
 
-  names(): string[] {
-    return [...this.agents.keys()]
+  names(opts?: { includeInternal?: boolean }): string[] {
+    return this.list(opts).map((a) => a.name)
   }
 
   /** Add or remove the browser agent in place — driven by `/browser on|off`.
@@ -71,7 +72,12 @@ export class SubAgentRegistry {
     const summary = diffNamedEntries(
       previous,
       next,
-      (prev, agent) => prev.prompt !== agent.prompt || prev.source !== agent.source || prev.pluginId !== agent.pluginId,
+      (prev, agent) =>
+        prev.prompt !== agent.prompt ||
+        prev.model !== agent.model ||
+        prev.source !== agent.source ||
+        prev.pluginId !== agent.pluginId ||
+        prev.internal !== agent.internal,
     )
     this.agents = next
     return summary

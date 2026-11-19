@@ -861,6 +861,28 @@ function findDeniedShellKeyword(command: string, restrictions: readonly string[]
   return restrictions.find((keyword) => keyword.trim() && lowerCommand.includes(keyword.toLowerCase())) ?? null
 }
 
+function recordStateFileModified(state: LoopState, absPath: string): void {
+  state.filesModified.add(absPath)
+  state.checkpointFileCache.delete(absPath)
+  const target = state.rewindTargetState
+  if (target && target !== state) {
+    target.filesModified.add(absPath)
+    target.checkpointFileCache.delete(absPath)
+  }
+}
+
+function recordTurnFileMutationSucceeded(state: LoopState, absPath: string): void {
+  state.turnFilesModified.add(absPath)
+  state.readFileCache.delete(absPath)
+  state.visualCheckCallsSinceMutation = 0
+  const target = state.rewindTargetState
+  if (target && target !== state) {
+    target.turnFilesModified.add(absPath)
+    target.readFileCache.delete(absPath)
+    target.visualCheckCallsSinceMutation = 0
+  }
+}
+
 /** Run the underlying side-effecting tool body for writeFile/edit/shell.
  *  Auto-executed tools return early because the AI SDK has already produced
  *  their result. Returns the post-execution { output, isError } pair, or
@@ -878,8 +900,7 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
       const beforeWrite = async (filePath: string) => {
         const absPath = path.resolve(state.projectCwd, filePath)
         await captureFileBeforeMutation(state, absPath, state.projectCwd, options.abortSignal)
-        state.filesModified.add(absPath)
-        state.checkpointFileCache.delete(absPath)
+        recordStateFileModified(state, absPath)
         trackedPath = absPath
       }
       const output = await executeWriteTool(toolName, input, toolCallId, callbacks, options.abortSignal, beforeWrite)
@@ -888,8 +909,7 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
       // those as errored results so the scrollback line flips to red.
       const isError = isToolErrorString(output)
       if (!isError && trackedPath) {
-        state.turnFilesModified.add(trackedPath)
-        state.visualCheckCallsSinceMutation = 0
+        recordTurnFileMutationSucceeded(state, trackedPath)
       }
       return { output, isError }
     }
@@ -909,11 +929,9 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
           const newContent = applySedSubstitution(original, sedInfo)
           if (original !== newContent) {
             await captureFileBeforeMutation(state, absPath, state.projectCwd, options.abortSignal)
-            state.filesModified.add(absPath)
-            state.checkpointFileCache.delete(absPath)
+            recordStateFileModified(state, absPath)
             await fs.writeFile(absPath, newContent, { encoding: 'utf-8', signal: options.abortSignal })
-            state.turnFilesModified.add(absPath)
-            state.visualCheckCallsSinceMutation = 0
+            recordTurnFileMutationSucceeded(state, absPath)
           }
           return { output: 'Done', isError: false }
         } catch {

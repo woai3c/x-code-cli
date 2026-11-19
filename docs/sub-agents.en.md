@@ -13,15 +13,13 @@ doesn't pollute the main conversation.
 
 ## Built-in sub-agents
 
-Five ship in the box (plus the opt-in `browser`, see below):
+Three core sub-agents ship by default (plus the opt-in `browser`, and an internal `goal-verifier` used automatically by `/goal`):
 
-| Name              | Best for                                                                       | Tool whitelist                                                                       |
-| ----------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `explore`         | Searching a large codebase for a symbol / keyword / call chain; read-only      | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted)                          |
-| `general-purpose` | Catch-all research / multi-step tasks that don't fit elsewhere                 | default full tool set (minus `task`)                                                 |
-| `plan`            | Given a task, explore the code and produce an implementation plan              | `readFile`, `glob`, `grep`, `listDir` (read-only)                                    |
-| `code-reviewer`   | Reviewing diffs / PRs                                                          | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted)                          |
-| `goal-verifier`   | Read-only independent verification for `/goal` completion, returns strict JSON | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted, read-only commands only) |
+| Name      | Best for                                                                  | Tool whitelist                                              |
+| --------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `explore` | Searching a large codebase for a symbol / keyword / call chain; read-only | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted) |
+| `plan`    | Given a task, explore the code and produce an implementation plan         | `readFile`, `glob`, `grep`, `listDir` (read-only)           |
+| `worker`  | Implementing code changes, fixing tests, and running bounded tasks        | default full tool set (minus `task`)                        |
 
 > Tool names are **camelCase** — they match the keys in `toolRegistry`
 > (`packages/core/src/tools/index.ts`). The snake_case spellings
@@ -51,9 +49,23 @@ session.
 
 ---
 
+## Configuring sub-agent models (`/agent`)
+
+Every sub-agent **inherits the main conversation's active model by default** (`inherit`). When using an architect-executor workflow (for example, keeping `explore` and `plan` on the main flagship model while setting `worker` to a faster or lower-cost coding model), configure models live without restarting via `/agent`:
+
+- `/agent` — interactive two-step picker (choose `worker` / `explore` / `plan` or `All sub-agents`, then choose a model or `Inherit`)
+- `/agent list` — list registered sub-agents and their effective models
+- `/agent worker <model|inherit>` — set or reset `worker`'s model (aliases supported, e.g. `/agent worker sol`, `/agent worker inherit`)
+- `/agent model <model|inherit>` — set or reset the default model for all sub-agents
+- `/agent reset` — reset all sub-agents back to inheriting the main model
+
+Settings persist in `~/.x-code/config.json` under `subAgentModels` and `subAgentModel`. Resolution precedence: `subAgentModels[name]` > custom `.md` frontmatter `model` > `subAgentModel` > parent session model.
+
+---
+
 ## Browser automation
 
-`browser` is a sixth built-in sub-agent, but it is **not registered by
+`browser` is an opt-in built-in sub-agent and is **not registered by
 default**. It drives a real browser (powered by
 [@playwright/mcp](https://github.com/microsoft/playwright-mcp)) for tasks that
 `webFetch` / `webSearch` can't handle: logged-in pages, JS-rendered SPAs, form
@@ -235,11 +247,14 @@ auto-dispatches via task:
    sub-agents simultaneously.
 3. **Plan mode inherited**: when the parent session is in plan mode,
    **all** sub-agents have their write tools (`writeFile` / `edit` /
-   `shell`) denied — `general-purpose` included.
-4. **Isolated context**: a sub-agent doesn't see the parent's message history.
+   `shell`) denied — `worker` included.
+4. **Rewind integration**: files edited or created by `worker` (or custom
+   sub-agents) via `edit` / `writeFile` are recorded in the root session's
+   checkpoints so `/rewind` rolls them back cleanly.
+5. **Isolated context**: a sub-agent doesn't see the parent's message history.
    It receives its definition prompt, project knowledge, relevant recalled
    memory, and the `prompt` argument passed to `task()`.
-5. **Shared token usage**: sub-agent token use rolls up into the
+6. **Shared token usage**: sub-agent token use rolls up into the
    parent's total.
 
 ---

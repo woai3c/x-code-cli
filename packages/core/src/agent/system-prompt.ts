@@ -39,7 +39,7 @@ const PEER_RULES = `
 const DELEGATION_RULES = `
 
 ## Delegation
-Use direct tools for focused work. Delegate broad investigation with a self-contained prompt, trust a complete result, and never run concurrent writers against the same files.`
+Use direct tools for focused work. Delegate broad exploration (\`explore\`), planning (\`plan\`), or bounded implementation and verification (\`worker\`) with a self-contained prompt, trust a complete result, and never run concurrent writers against the same files.`
 
 const MEMORY_RULES = `
 
@@ -78,6 +78,7 @@ export function buildSubAgentSystemPrompt(options: {
   agentPrompt: string
   knowledgeContext: string
   isGitRepo: boolean
+  cwd?: string
 }): string {
   const shellProvider = getShellProvider()
   return `You are a specialized subagent invoked by a parent coding assistant.
@@ -88,7 +89,7 @@ ${options.agentPrompt}
 # Environment
 - Platform: ${process.platform}
 - Shell: ${shellProvider.type}
-- Working Directory: ${process.cwd()}
+- Working Directory: ${options.cwd ?? process.cwd()}
 - Is Git Repo: ${options.isGitRepo ? 'yes' : 'no'}
 
 # Knowledge context

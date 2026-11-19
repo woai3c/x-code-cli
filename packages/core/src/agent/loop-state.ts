@@ -175,6 +175,9 @@ export interface LoopState {
   knowledgeContext?: string
   /** Whether cwd is a git repo. Cached for sub-agent system prompts. */
   isGitRepo?: boolean
+  /** Root session state that owns `/rewind` checkpoints when this state is a
+   *  delegated sub-agent, so child file writes are reversible from the root. */
+  rewindTargetState?: LoopState
 
   /** Session-scoped read de-dup cache (absolute path → last-delivered mtime+size).
    *  readFile returns a short stub instead of re-sending full content when a

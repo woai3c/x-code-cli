@@ -203,7 +203,7 @@ describe('peer authority decisions', () => {
           authority: PEER_AUTHORITY,
           parentState: { executionAuthority: PEER_AUTHORITY },
           parentOptions: { trustMode: true },
-          agentName: 'general-purpose',
+          agentName: 'worker',
         } as any,
         {} as any,
       ),

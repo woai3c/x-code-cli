@@ -60,6 +60,7 @@ import { formatCompactionResult, formatTokenCount, parseBooleanArg } from '../ut
 import { getHeaderRowCount } from './AppHeader.js'
 import { refreshCatalogAfterCommittedLogin } from './chatgpt-login-postflight.js'
 import { SLASH_COMMANDS } from './command-content.js'
+import { createAgentCommandHandler } from './commands/agent.js'
 import { formatStopResult } from './commands/background-terminal.js'
 import { createBrowserCommandHandler } from './commands/browser.js'
 import { createContextCommandHandler } from './commands/context.js'
@@ -750,6 +751,7 @@ export function App({
           login: handleLogin,
           logout: handleLogout,
           model: handleModelSwitch,
+          agent: handleAgent,
           context: handleContext,
           thinking: handleThinkingToggle,
           theme: handleThemeSwitch,
@@ -1943,6 +1945,13 @@ export function App({
   const { handleContext } = createContextCommandHandler({
     modelId: state.modelId,
     addCommandMessage,
+  })
+
+  const { handleAgent } = createAgentCommandHandler({
+    options,
+    modelId: state.modelId,
+    addCommandMessage,
+    askQuestion,
   })
 
   const { handleBrowser } = createBrowserCommandHandler({

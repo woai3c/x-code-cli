@@ -346,8 +346,80 @@ export function resolveStreamConfig(config: UserConfig = loadUserConfig()): Stre
   return { maxRetries, idleTimeoutMs }
 }
 
+export type SubAgentModelSource = 'override' | 'frontmatter' | 'default' | 'inherit'
+
+export interface SubAgentModelSelection {
+  modelId: string | undefined
+  source: SubAgentModelSource
+  configuredModelId?: string
+}
+
+/** Normalize a sub-agent model spec ("inherit" / blank -> undefined; aliases expanded). */
+export function normalizeSubAgentModelSpec(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.toLowerCase() === 'inherit') return undefined
+  return MODEL_ALIASES[trimmed] ?? trimmed
+}
+
+function isSafeSubAgentKey(name: string): boolean {
+  return Boolean(name) && name !== '__proto__' && name !== 'constructor' && name !== 'prototype'
+}
+
+export function resolveSubAgentModelsConfig(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const out: Record<string, string> = {}
+  for (const [rawName, rawModel] of Object.entries(value as Record<string, unknown>)) {
+    const name = rawName.trim()
+    const model = normalizeSubAgentModelSpec(rawModel)
+    if (isSafeSubAgentKey(name) && model) {
+      Object.defineProperty(out, name, {
+        value: model,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** Resolve the configured model for a sub-agent before runtime provider lookup.
+ *  Precedence: per-agent config override > frontmatter model > global subAgentModel > inherit parent.
+ *  Internal runtime verifiers (e.g. goal-verifier) ignore the global subAgentModel fallback
+ *  so auditing stays on the main model unless explicitly targeted by name. */
+export function resolveSubAgentModelSelection(
+  agent: { name: string; model?: string; internal?: boolean },
+  parentModelId?: string,
+  config: UserConfig = loadUserConfig(),
+): SubAgentModelSelection {
+  const rawOverride =
+    isSafeSubAgentKey(agent.name) && config.subAgentModels && Object.hasOwn(config.subAgentModels, agent.name)
+      ? config.subAgentModels[agent.name]
+      : undefined
+  const override = normalizeSubAgentModelSpec(rawOverride)
+  if (override) {
+    return { modelId: override, source: 'override', configuredModelId: override }
+  }
+  const frontmatter = normalizeSubAgentModelSpec(agent.model)
+  if (frontmatter) {
+    return { modelId: frontmatter, source: 'frontmatter', configuredModelId: frontmatter }
+  }
+  if (!agent.internal) {
+    const globalDefault = normalizeSubAgentModelSpec(config.subAgentModel)
+    if (globalDefault) {
+      return { modelId: globalDefault, source: 'default', configuredModelId: globalDefault }
+    }
+  }
+  return { modelId: parentModelId, source: 'inherit' }
+}
+
 export interface UserConfig {
   model?: string
+  /** Default model for sub-agents when neither per-agent override nor frontmatter model is set. */
+  subAgentModel?: string
+  /** Per-sub-agent model overrides keyed by sub-agent name (e.g. { worker: "openai:gpt-6.2-sol" }). */
+  subAgentModels?: Record<string, string>
   thinking?: boolean
   /** User-forced context window in tokens. Overrides model/provider metadata
    *  uniformly until cleared with `/context reset`. */
@@ -400,6 +472,16 @@ export function loadUserConfig(): UserConfig {
     const parsed = JSON.parse(raw) as unknown
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const config = parsed as UserConfig
+      if ('subAgentModel' in config) {
+        const normalized = normalizeSubAgentModelSpec(config.subAgentModel)
+        if (normalized) config.subAgentModel = normalized
+        else delete config.subAgentModel
+      }
+      if ('subAgentModels' in config) {
+        const normalized = resolveSubAgentModelsConfig(config.subAgentModels)
+        if (normalized) config.subAgentModels = normalized
+        else delete config.subAgentModels
+      }
       if ('browser' in config) config.browser = resolveBrowserConfig(config.browser)
       if ('peerMessaging' in config) config.peerMessaging = resolvePeerMessagingConfig(config.peerMessaging)
       return config

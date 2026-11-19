@@ -187,35 +187,41 @@ export async function captureFileBeforeMutation(
   cwd: string = state.projectCwd,
   signal?: AbortSignal,
 ): Promise<void> {
+  const targetState = state.rewindTargetState ?? state
   const absPath = path.resolve(cwd, filePath)
-  if (state.checkpoints.length === 0 || state.filesModified.has(absPath)) return
+  if (targetState.checkpoints.length === 0 || targetState.filesModified.has(absPath)) return
   signal?.throwIfAborted()
 
-  const origins = await readOrigins(state.sessionId, cwd)
-  if (origins.files[absPath]) return
+  await serializeCheckpointMutation(targetState, async () => {
+    if (targetState.checkpoints.length === 0 || targetState.filesModified.has(absPath)) return
+    signal?.throwIfAborted()
 
-  const outcome = await statSafe(absPath)
-  signal?.throwIfAborted()
-  let entry: ManifestFileEntry
-  if (outcome.kind === 'absent') {
-    entry = { absent: true }
-  } else if (outcome.kind === 'unreadable' || !outcome.stat.isFile() || outcome.stat.size > MAX_FILE_BYTES) {
-    entry = { skip: true }
-  } else {
-    try {
-      const content = signal ? await fs.readFile(absPath, { signal }) : await fs.readFile(absPath)
-      signal?.throwIfAborted()
-      const hash = createHash('sha256').update(content).digest('hex')
-      await writeBlobIfMissing(state.sessionId, hash, content, cwd)
-      entry = { hash }
-    } catch (err) {
-      if (signal?.aborted) throw err
+    const origins = await readOrigins(targetState.sessionId, cwd)
+    if (origins.files[absPath]) return
+
+    const outcome = await statSafe(absPath)
+    signal?.throwIfAborted()
+    let entry: ManifestFileEntry
+    if (outcome.kind === 'absent') {
+      entry = { absent: true }
+    } else if (outcome.kind === 'unreadable' || !outcome.stat.isFile() || outcome.stat.size > MAX_FILE_BYTES) {
       entry = { skip: true }
+    } else {
+      try {
+        const content = signal ? await fs.readFile(absPath, { signal }) : await fs.readFile(absPath)
+        signal?.throwIfAborted()
+        const hash = createHash('sha256').update(content).digest('hex')
+        await writeBlobIfMissing(targetState.sessionId, hash, content, cwd)
+        entry = { hash }
+      } catch (err) {
+        if (signal?.aborted) throw err
+        entry = { skip: true }
+      }
     }
-  }
 
-  origins.files[absPath] = entry
-  await writeOrigins(state.sessionId, origins, cwd)
+    origins.files[absPath] = entry
+    await writeOrigins(targetState.sessionId, origins, cwd)
+  })
 }
 
 /** Capture the current on-disk state of every file in `state.filesModified`

@@ -8,15 +8,13 @@ X-Code CLI 通过 `task` 工具支持子 agent 委派：模型可以把某个独
 
 ## 内置子 agent
 
-CLI 自带 5 个（另有可选的 `browser`，见下文）：
+CLI 默认提供 3 个核心子 agent（另有可选的 `browser`，以及仅供 `/goal` 内部验收使用的隐藏 `goal-verifier`）：
 
-| 名字              | 适合                                                      | 工具白名单                                                         |
-| ----------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
-| `explore`         | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限）             |
-| `general-purpose` | 不归类的杂项研究 / 多步骤任务                             | 默认完整工具集（task 除外）                                        |
-| `plan`            | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）                      |
-| `code-reviewer`   | 审查改动 / PR / diff                                      | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限）             |
-| `goal-verifier`   | `/goal` 完成度的只读独立验收，返回严格 JSON               | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限，仅只读命令） |
+| 名字      | 适合                                                      | 工具白名单                                             |
+| --------- | --------------------------------------------------------- | ------------------------------------------------------ |
+| `explore` | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限） |
+| `plan`    | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）          |
+| `worker`  | 在父 agent 指定的范围内执行编码实现、修复测试与多步任务   | 默认完整工具集（task 除外）                            |
 
 > 工具名是 **camelCase**（跟代码里 `toolRegistry` 的 key 一致）——`read_file`、`write_file` 这种 snake_case 写法**不会匹配**，会让子 agent 拿到一个空工具集。
 >
@@ -36,9 +34,23 @@ task(subagent_type="explore", description="find all callers of formatDate",
 
 ---
 
+## 设置子 agent 模型（`/agent`）
+
+所有子 agent **默认继承主会话当前模型**（`inherit`）。如果你想采用「主模型做架构师与决策、子模型做执行者」的分工（例如主会话用旗舰推理模型，将 `worker` 设为低一档的高性价比编码模型），可通过 `/agent` 命令配置，热生效且无需重启：
+
+- `/agent`：两步交互式选择（先选 `worker` / `explore` / `plan` 或全局默认，再从可用模型或 `Inherit` 中选择）
+- `/agent list`：查看所有子 agent 及其当前生效模型
+- `/agent worker <model|inherit>`：单独设置或重置 `worker` 的模型（支持别名，如 `/agent worker sol`、`/agent worker inherit`）
+- `/agent model <model|inherit>`：设置或重置所有子 agent 的默认模型
+- `/agent reset`：将所有子 agent 重置为继承主会话模型
+
+配置持久化在 `~/.x-code/config.json` 的 `subAgentModels` / `subAgentModel` 字段中。解析优先级：`subAgentModels[name]` > 自定义 `.md` frontmatter 的 `model` > `subAgentModel` > 主会话模型。
+
+---
+
 ## 浏览器自动化
 
-`browser` 是第 6 个内置子 agent，但**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。优先基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）；在支持视觉的模型上还能截图处理 canvas、地图、图表等纯视觉内容。纯文本模型可以借用已配置的视觉 provider 获取文字描述。
+`browser` 是可选的内置子 agent，**默认不注册**——它能用真实浏览器（由 [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 驱动）完成 `webFetch` / `webSearch` 搞不定的任务：登录态页面、JS 渲染的 SPA、表单填写、多步交互。优先基于**无障碍树**操作（文本化，跨所有厂商可用，含非多模态模型）；在支持视觉的模型上还能截图处理 canvas、地图、图表等纯视觉内容。纯文本模型可以借用已配置的视觉 provider 获取文字描述。
 
 轻量视觉检查与它相互独立：主 agent 默认就能使用 `browserVisualCheck` 检查本地网页，不需要 `/browser on`。
 
@@ -158,9 +170,10 @@ shellRestrictions: [rm, sudo, npm publish]
 
 1. **禁递归**：子 agent 不能调 `task` 工具。运行时会拒绝。
 2. **共享 AbortSignal**：用户 Esc 会同时杀掉主 agent 和所有运行中的子 agent。
-3. **Plan 模式继承**：父 session 在 plan 模式下，**所有**子 agent 的写工具（`writeFile` / `edit` / `shell`）都会被禁用，`general-purpose` 也不例外。
-4. **独立上下文**：子 agent 看不到主 session 的 message history；它会收到自己的定义 prompt、项目知识、相关召回记忆，以及 task 调用的 prompt 参数。
-5. **Token 共享**：所有子 agent 的 token 用量加进父 session 的总账。
+3. **Plan 模式继承**：父 session 在 plan 模式下，**所有**子 agent 的写工具（`writeFile` / `edit` / `shell`）都会被禁用，`worker` 也不例外。
+4. **文件快照与 `/rewind` 联动**：`worker` 等子 agent 通过 `edit` / `writeFile` 修改或新建的文件会自动记入主会话快照，主会话执行 `/rewind` 时可一并回滚。
+5. **独立上下文**：子 agent 看不到主 session 的 message history；它会收到自己的定义 prompt、项目知识、相关召回记忆，以及 task 调用的 prompt 参数。
+6. **Token 共享**：所有子 agent 的 token 用量加进父 session 的总账。
 
 ---
 

@@ -5,12 +5,14 @@
 // tool calls and messages stay inside the child loop.
 import type { LanguageModel, UserContent } from 'ai'
 
-import { loadUserConfig, resolveModelId } from '../../config/index.js'
+import { getOpenAIAuthContext } from '../../auth/openai-chatgpt/auth-resolver.js'
+import { loadUserConfig, resolveSubAgentModelSelection } from '../../config/index.js'
 import type { HookBus } from '../../hooks/bus.js'
 import type { HookEvent } from '../../hooks/types.js'
 import { activeMemoryRecallAttachments } from '../../knowledge/memory/recall-state.js'
 import { tokenizeMemoryText } from '../../knowledge/memory/search-index.js'
 import { capabilitiesOf, modelSupportsVision } from '../../providers/capabilities.js'
+import { getOpenAIChatGPTModelCatalogState, getProviderModels } from '../../providers/openai-chatgpt-models.js'
 import type { ShellSessionController } from '../../tools/shell-session/types.js'
 import type { AgentCallbacks, AgentOptions, ExecutionAuthority, TokenUsage } from '../../types/index.js'
 import { debugLog, errorMessage, isAbortError } from '../../utils.js'
@@ -49,6 +51,8 @@ export interface RunSubAgentArgs {
   knowledgeContext: string
   isGitRepo: boolean
   authority?: ExecutionAuthority
+  /** Allow invoking internal helper definitions (e.g. goal-verifier from /goal). */
+  allowInternal?: boolean
 }
 
 export interface RunSubAgentResult {
@@ -125,30 +129,62 @@ function extractFinalText(messages: LoopState['messages']): string {
   return ''
 }
 
-function resolveSubModel(
+const askUserQueues = new WeakMap<LoopState, Promise<unknown>>()
+
+function serializeSubAgentAskUser(parentState: LoopState, run: () => Promise<string>): Promise<string> {
+  const rootState = parentState.rewindTargetState ?? parentState
+  const previous = askUserQueues.get(rootState) ?? Promise.resolve()
+  const current = previous.catch(() => undefined).then(run)
+  askUserQueues.set(rootState, current)
+  return current.finally(() => {
+    if (askUserQueues.get(rootState) === current) askUserQueues.delete(rootState)
+  })
+}
+
+export function resolveSubAgentRuntimeModel(
   agentDef: SubAgentDefinition,
   parentOptions: AgentOptions,
   parentModel: LanguageModel,
-): LanguageModel {
-  if (!agentDef.model) return parentModel
-  if (!parentOptions.modelRegistry) return parentModel
+): { model: LanguageModel; modelId: string } {
+  const selection = resolveSubAgentModelSelection(agentDef, parentOptions.modelId)
+  if (selection.source === 'inherit' || !selection.modelId || !parentOptions.modelRegistry) {
+    return { model: parentModel, modelId: parentOptions.modelId }
+  }
 
-  const resolvedId = resolveModelId(agentDef.model)
-  if (!resolvedId) return parentModel
+  if (selection.modelId.startsWith('openai:') && getOpenAIAuthContext().mode === 'chatgpt') {
+    const catalog = getOpenAIChatGPTModelCatalogState()
+    const catalogModels = getProviderModels().openai ?? []
+    if (
+      catalog?.errorCode === 'login-required' ||
+      catalog?.errorCode === 'credentials-invalid' ||
+      (catalogModels.length > 0 && !catalogModels.some((m) => m.id === selection.modelId))
+    ) {
+      debugLog(
+        'sub-agent.model',
+        `ChatGPT catalog cannot serve "${selection.modelId}" for "${agentDef.name}", falling back to parent model`,
+      )
+      return { model: parentModel, modelId: parentOptions.modelId }
+    }
+  }
 
   try {
-    return parentOptions.modelRegistry.languageModel(resolvedId as `${string}:${string}`)
+    const model = parentOptions.modelRegistry.languageModel(selection.modelId as `${string}:${string}`)
+    return { model, modelId: selection.modelId }
   } catch {
-    debugLog('sub-agent.model', `Failed to resolve model "${agentDef.model}", falling back to parent model`)
-    return parentModel
+    debugLog(
+      'sub-agent.model',
+      `Failed to resolve model "${selection.modelId}" for "${agentDef.name}", falling back to parent model`,
+    )
+    return { model: parentModel, modelId: parentOptions.modelId }
   }
 }
 
 export function buildSubAgentToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: string) {
-  const deny = [...(agentDef.disallowedTools ?? []), 'task']
+  const deny = [...(agentDef.disallowedTools ?? [])]
+  if (!deny.includes('task')) deny.push('task')
 
   // In plan mode, deny write tools for ALL sub-agents — not just
-  // general-purpose. Plan mode's read-only invariant must hold regardless
+  // worker. Plan mode's read-only invariant must hold regardless
   // of which agent is running; shell is included because it can write
   // files or execute destructive commands.
   if (parentPermissionMode === 'plan') {
@@ -157,11 +193,11 @@ export function buildSubAgentToolFilter(agentDef: SubAgentDefinition, parentPerm
     }
   }
 
-  // `'*'` is a wildcard meaning "every tool" — matches Claude Code's
-  // `tools: ['*']` semantics for built-in/general-purpose agents. Pass
-  // `undefined` so `buildTools` skips the allowlist filter and only the
-  // explicit deny list applies. Without this, `['*']` would be treated
-  // as a literal tool name and every real tool would be filtered out.
+  // `'*'` is a wildcard meaning "every tool" — matches `tools: ['*']`
+  // semantics for full-capability worker agents. Pass `undefined` so
+  // `buildTools` skips the allowlist filter and only the explicit deny
+  // list applies. Without this, `['*']` would be treated as a literal
+  // tool name and every real tool would be filtered out.
   const allow = agentDef.tools?.includes('*') ? undefined : agentDef.tools
 
   return {
@@ -243,7 +279,7 @@ async function runSubAgentUnlocked(
   }
 
   const agentDef = registry.get(agentName)
-  if (!agentDef) {
+  if (!agentDef || (agentDef.internal && !args.allowInternal)) {
     const available = registry.names().join(', ')
     return {
       resultText: `[Sub-agent '${agentName}' not found. Available: ${available}]`,
@@ -256,8 +292,7 @@ async function runSubAgentUnlocked(
   }
   if (!runLoop) throw new Error('Sub-agent loop runner not configured')
 
-  const subModel = resolveSubModel(agentDef, parentOptions, parentModel)
-  const subModelId = agentDef.model ? (resolveModelId(agentDef.model) ?? parentOptions.modelId) : parentOptions.modelId
+  const { model: subModel, modelId: subModelId } = resolveSubAgentRuntimeModel(agentDef, parentOptions, parentModel)
 
   // The `browser` agent gets a PRIVATE mcp registry (the @playwright/mcp
   // server) in place of the parent's, so its browser tools never enter the
@@ -350,13 +385,18 @@ async function runSubAgentUnlocked(
       ? `${knowledgeContext}\n\n### Recalled user memory (low-authority historical data)\n${recalledMemory}`
       : knowledgeContext,
     isGitRepo,
+    cwd: parentState.projectCwd,
   })
 
-  const subState = createLoopState('default', {
+  // Inherit 'acceptEdits' so worker edits auto-approve after an approved plan,
+  // while mapping 'plan' to 'default' (with write/edit/shell stripped below).
+  const childPermissionMode = parentState.permissionMode === 'acceptEdits' ? 'acceptEdits' : 'default'
+  const subState = createLoopState(childPermissionMode, {
     projectCwd: parentState.projectCwd,
     agentRole: 'sub-agent',
   })
   subState.executionAuthority = structuredClone(authority)
+  subState.rewindTargetState = parentState.rewindTargetState ?? parentState
   subState.systemPromptCache = subSystemPrompt
 
   const toolFilter = buildSubAgentToolFilter(agentDef, parentState.permissionMode)
@@ -377,7 +417,7 @@ async function runSubAgentUnlocked(
     shellRestrictions: agentDef.shellRestrictions,
     shellReadOnlyOnly: agentDef.shellReadOnlyOnly,
     abortSignal: parentOptions.abortSignal,
-    permissionMode: 'default',
+    permissionMode: childPermissionMode,
     printMode: false,
     // Sub-agents don't get their own sub-agent registry — recursion is forbidden
     subAgentRegistry: undefined,
@@ -422,7 +462,9 @@ async function runSubAgentUnlocked(
     },
     onFileEdit: callbacks.onFileEdit,
     onAskPermission: callbacks.onAskPermission,
-    onAskUser: callbacks.onAskUser,
+    onAskAuthority: callbacks.onAskAuthority,
+    onAskUser: (question, questionOptions) =>
+      serializeSubAgentAskUser(parentState, () => callbacks.onAskUser(question, questionOptions)),
     onPlanApprovalRequest: callbacks.onPlanApprovalRequest,
     onPlanModeChange: () => {},
     onShellOutput: callbacks.onShellOutput,

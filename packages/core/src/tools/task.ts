@@ -19,16 +19,16 @@ function buildTaskToolDescription(registry: SubAgentRegistry): string {
   const agents = registry.list()
   const agentList = agents.map((a) => `  - ${a.name}: ${a.description}`).join('\n')
 
-  return `Launch an isolated sub-agent for broad investigation or review. It receives a fresh context and returns only its final conclusion.
+  return `Launch an isolated sub-agent with a fresh context window and return only its final conclusion.
 
 Available sub-agents:
 ${agentList}
 
-Use it when a directed search is insufficient. Do not delegate known-symbol searches, a few specific files, or direct questions.
+Use direct tools for quick lookups or small edits. Delegate when broad exploration, upfront planning, or bounded implementation work benefits from an isolated context or parallel execution.
 
 Prompt contract:
-- Give a valid subagent_type, a 3-5 word description, and a self-contained prompt with the goal, paths or symbols, known facts, constraints, write permission, and required output.
-- Ask for concrete snippets or file:line references when needed, and trust a complete result instead of repeating its exploration.
+- Give a valid subagent_type, a 3-5 word description, and a self-contained prompt with the goal, target paths or symbols, known facts, scope boundaries, write permission, verification checks to run, and required output.
+- Ask for concrete snippets or file:line references when needed, and trust a complete result instead of repeating its work.
 
 Independent read-only agents may run concurrently in one assistant message. Never run concurrent agents that can write the same files or resources.`
 }

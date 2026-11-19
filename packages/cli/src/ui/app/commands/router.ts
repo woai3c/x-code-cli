@@ -12,6 +12,7 @@ interface SlashCommandHandlers {
   login: AsyncHandler
   logout: AsyncHandler
   model: AsyncHandler
+  agent: AsyncHandler
   context: (commandText: string, argument: string) => void
   thinking: AsyncHandler
   theme: AsyncHandler
@@ -75,6 +76,10 @@ export async function routeSlashCommand(text: string, router: SlashCommandRouter
 
     case 'model':
       void handlers.model(text, argument)
+      return
+
+    case 'agent':
+      void handlers.agent(text, argument)
       return
 
     case 'context':

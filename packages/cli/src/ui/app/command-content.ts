@@ -17,6 +17,16 @@ export const SLASH_COMMANDS = [
     argumentHint: '[model-id|refresh]',
   },
   {
+    name: '/agent',
+    description: 'Inspect sub-agents and configure sub-agent models (no-arg = picker) — saved',
+    argumentHint: '[list|<name> [model|inherit]|reset]',
+    subcommands: [
+      { name: 'list', description: 'List sub-agents and their effective models' },
+      { name: 'model', description: 'Set default or per-agent sub-agent model (or inherit)' },
+      { name: 'reset', description: 'Reset all sub-agent models to inherit the main model' },
+    ],
+  },
+  {
     name: '/context',
     description: 'Override the context window for every model (no-arg = show status) — saved',
     argumentHint: '[tokens|reset]',

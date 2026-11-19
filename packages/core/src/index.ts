@@ -43,10 +43,13 @@ export {
   DEFAULT_MEMORY_CONFIG,
   DEFAULT_PEER_MESSAGING_CONFIG,
   DEFAULT_STREAM_CONFIG,
+  normalizeSubAgentModelSpec,
   resolveMemoryConfig,
   resolvePeerMessagingConfig,
   resolveStreamConfig,
   resolveModelId,
+  resolveSubAgentModelSelection,
+  resolveSubAgentModelsConfig,
   getAvailableProviders,
   getEnvVarName,
   loadUserConfig,
@@ -83,6 +86,8 @@ export type {
   MemoryRecallConfig,
   PeerMessagingConfig,
   StreamConfig,
+  SubAgentModelSelection,
+  SubAgentModelSource,
   UserConfig,
 } from './config/index.js'
 

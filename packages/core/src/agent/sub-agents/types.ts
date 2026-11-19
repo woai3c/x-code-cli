@@ -20,6 +20,9 @@ export interface SubAgentDefinition {
   shellReadOnlyOnly?: boolean
   /** Where this definition came from */
   source: 'built-in' | 'user' | 'project'
+  /** Internal runtime helper agent (e.g. goal-verifier) hidden from the task
+   *  tool and /agent UI while remaining addressable by internal callers. */
+  internal?: boolean
   /** When this sub-agent comes from a plugin contribution, the owning
    *  plugin's id (`name@marketplace`). */
   pluginId?: string

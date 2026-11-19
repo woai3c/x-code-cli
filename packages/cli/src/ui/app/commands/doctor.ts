@@ -4,7 +4,12 @@
 // availability, MCP server health, plugin load errors, custom agent parse
 // state, and knowledge file sizes. Modelled after Claude Code's /doctor
 // but scoped to what x-code-cli actually needs.
-import { getAvailableProviders, getEnvVarName, getOpenAIAuthStatus } from '@x-code-cli/core'
+import {
+  getAvailableProviders,
+  getEnvVarName,
+  getOpenAIAuthStatus,
+  resolveSubAgentModelSelection,
+} from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
 
 import { VERSION } from '../../../version.js'
@@ -133,11 +138,12 @@ export function createDoctorCommandHandler(deps: DoctorCommandDeps) {
       const builtIn = agents.filter((a) => a.source === 'built-in').length
       const custom = agents.length - builtIn
       lines.push(`- Total: ${agents.length} (${builtIn} built-in, ${custom} custom)`)
-      if (custom > 0) {
-        const customAgents = agents.filter((a) => a.source !== 'built-in')
-        for (const a of customAgents) {
-          lines.push(`  • ${a.name} (${a.source}${a.pluginId ? `, plugin: ${a.pluginId}` : ''})`)
-        }
+      for (const a of agents) {
+        const selection = resolveSubAgentModelSelection(a, modelId)
+        const modelText =
+          selection.source === 'inherit' ? `inherit (${modelId})` : `${selection.modelId} (${selection.source})`
+        const srcText = a.pluginId ? `${a.source}, plugin: ${a.pluginId}` : a.source
+        lines.push(`  • ${a.name} (${srcText}) — ${modelText}`)
       }
       sections.push(lines.join('\n'))
     }

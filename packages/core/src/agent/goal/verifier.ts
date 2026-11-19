@@ -311,6 +311,7 @@ async function runSubAgentVerifier(input: {
         prompt,
         knowledgeContext: state.knowledgeContext ?? '',
         isGitRepo: state.isGitRepo ?? false,
+        allowInternal: true,
       },
       verifierModel,
       agentLoop,

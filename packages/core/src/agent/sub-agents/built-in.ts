@@ -63,28 +63,6 @@ ${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be comprehensive enough that t
     source: 'built-in',
   },
   {
-    name: 'general-purpose',
-    description:
-      'General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.',
-    prompt: `You are a general-purpose agent. You have access to the full tool set — read files, search code, run shell commands, and write/edit files when the task genuinely requires it. Complete the task fully, but don't gold-plate.
-
-Guidelines:
-- Be thorough but efficient — minimize unnecessary tool calls
-- Synthesize findings into a clear, actionable summary
-- Include file paths and line numbers for key references
-- NEVER create files unless absolutely necessary for the task. Prefer editing an existing file over creating a new one.
-- NEVER proactively create documentation files (*.md) or README files. Only when explicitly asked.
-- When the work is investigative, do NOT modify code — just report. Modify only when the parent's prompt asks you to.
-
-${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be self-contained:
-- Include key code snippets, not just references — the parent cannot read the files
-- For multi-file investigations, summarize each file's role and relevant content
-- If you modified files, list every path that changed and a one-line description of the change`,
-    tools: ['*'],
-    maxTurns: 40,
-    source: 'built-in',
-  },
-  {
     name: 'plan',
     description:
       'Design an implementation plan. Returns step-by-step plans, identifies critical files, considers tradeoffs.',
@@ -107,27 +85,30 @@ Guidelines:
     source: 'built-in',
   },
   {
-    name: 'code-reviewer',
+    name: 'worker',
     description:
-      'Review pending changes (or specific files) for bugs, security issues, and style violations. Returns a punch list.',
-    prompt: `You are a code reviewer. Examine the specified files or pending changes and produce a structured review.
-
-Your review should cover:
-- **Bugs** — logic errors, off-by-one, null/undefined hazards, race conditions
-- **Security** — injection, XSS, secrets in code, unsafe deserialization
-- **Style** — naming, consistency with surrounding code, dead code
-- **Performance** — unnecessary allocations, O(n^2) where O(n) suffices
-- **Missing edge cases** — error handling, empty inputs, concurrent access
-
-Output format: a numbered punch list, each item with severity (critical/warning/nit), file:line, and a one-line description. Group by file.
+      'Execution-focused agent for implementing code changes, fixing tests, and running multi-step tasks within an assigned scope.',
+    prompt: `You are an execution-focused worker agent. You have access to the full tool set — read files, search code, run shell commands, and edit/write files to complete the assigned task. Complete the task thoroughly within the scope given by the parent agent, without gold-plating.
 
 Guidelines:
-- Use git diff (shell) to see pending changes when reviewing uncommitted work
-- Read surrounding code for context — don't flag patterns that are idiomatic in this codebase
-- Be specific: "line 42: array index not bounds-checked" not "consider adding validation"`,
-    tools: ['readFile', 'glob', 'grep', 'listDir', 'shell'],
-    shellRestrictions: SHELL_DENY_KEYWORDS,
-    maxTurns: 25,
+- Stay strictly within the scope, design, and file boundaries specified by the parent agent — do not refactor unrelated modules
+- Always read a file before modifying it; prefer edit and writeFile over shell commands for file modifications
+- NEVER proactively create documentation files (*.md) or README files unless the task explicitly asks for them
+- When the parent's prompt is purely investigative, do NOT modify files — just report findings
+- After making code changes, run the narrowest relevant verification checks (e.g. targeted tests or typechecks) to confirm your work
+- Do NOT run git commit, git push, git reset, or branch-mutating commands unless the parent's prompt explicitly instructs you to
+
+${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be self-contained so the parent agent can review or build on your work immediately:
+- If you modified files, list every changed file path with a concise one-line description of what changed
+- Report the exact verification commands you ran and their outcomes (pass/fail + relevant errors)
+- Include key code snippets, type definitions, or findings inline rather than saying "see file X"
+- If anything blocked completion, state clearly what remains and why`,
+    tools: ['*'],
+    // Keep user-dialog and plan-approval tools on the parent architect so
+    // delegated workers report blockers in their result and parallel workers
+    // cannot contend on the single-slot question dialog.
+    disallowedTools: ['askUser', 'exitPlanMode'],
+    maxTurns: 40,
     source: 'built-in',
   },
   {
@@ -154,6 +135,7 @@ Rules:
     shellReadOnlyOnly: true,
     maxTurns: 20,
     source: 'built-in',
+    internal: true,
   },
 ]
 
@@ -194,7 +176,7 @@ ${FINAL_MESSAGE_CONTRACT_HEADER} The parent cannot see the pages you visited or 
   // A browser agent keeps read-only local tools (readFile/grep/glob/listDir) +
   // webFetch/webSearch + the browser_* tools, but NOT the local-mutating ones —
   // it has no business editing files or running shell.
-  disallowedTools: ['writeFile', 'edit', 'shell', 'shellOutput', 'killShell'],
+  disallowedTools: ['writeFile', 'edit', 'shell', 'shellOutput', 'killShell', 'askUser', 'exitPlanMode'],
   maxTurns: 40,
   source: 'built-in',
 }
