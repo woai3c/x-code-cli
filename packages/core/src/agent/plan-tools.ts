@@ -2,7 +2,7 @@
 //
 // Extracted from tool-execution.ts to keep handleToolCall at a manageable
 // size. Mutates state + pushes result via pushToolResult, and returns void.
-import type { AgentCallbacks } from '../types/index.js'
+import type { AgentCallbacks, AgentOptions } from '../types/index.js'
 import { extractText } from '../utils/message-helpers.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
 import type { LoopState } from './loop-state.js'
@@ -34,6 +34,7 @@ export async function handleExitPlanMode(
   state: LoopState,
   callbacks: AgentCallbacks,
   pushToolResult: PushToolResult,
+  options?: Pick<AgentOptions, 'printMode'>,
 ): Promise<void> {
   if (state.permissionMode !== 'plan') {
     pushToolResult(
@@ -100,6 +101,24 @@ export async function handleExitPlanMode(
       ]
         .filter(Boolean)
         .join('\n'),
+    )
+    return
+  }
+  if (options?.printMode) {
+    const persisted = savedPath ?? state.currentPlanPath
+    pushToolResult(
+      state,
+      callbacks,
+      toolCallId,
+      'exitPlanMode',
+      [
+        'Plan approval is unavailable in non-interactive (--print) mode; staying in read-only plan mode.',
+        persisted ? `The plan file is saved at: ${persisted}` : '',
+        'Present your final written plan or response directly in your assistant message now and stop without calling exitPlanMode or askUser again.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      false,
     )
     return
   }

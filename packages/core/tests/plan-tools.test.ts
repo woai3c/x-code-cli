@@ -110,4 +110,19 @@ describe('handleExitPlanMode', () => {
     expect(captured[0].isError).toBe(true)
     expect(captured[0].output).toContain('Plan rejected')
   })
+
+  it('tells the model to finish in writing without looping when approval is unavailable in printMode', async () => {
+    const state = createLoopState('plan')
+    state.currentPlanPath = path.join(tmpHome, 'plan-print.md')
+    const callbacks = makeCallbacks({
+      onPlanApprovalRequest: vi.fn().mockResolvedValue(false),
+    })
+    await handleExitPlanMode({ plan: 'print mode plan' }, 'tc1', state, callbacks, recordPushToolResult, {
+      printMode: true,
+    })
+    expect(state.permissionMode).toBe('plan')
+    expect(captured[0].isError).toBe(false)
+    expect(captured[0].output).toContain('unavailable in non-interactive (--print) mode')
+    expect(captured[0].output).toContain('without calling exitPlanMode or askUser again')
+  })
 })

@@ -10,10 +10,20 @@ import { runToolSearch } from './tool-search/resolve.js'
 /** Build the self-contained handlers that bypass the standard write/shell pipeline. */
 export function createBuiltInToolHandlers(pushToolResult: PushToolResult): Record<string, ToolHandler> {
   const handleAskUser = async (context: ToolHandlerContext): Promise<void> => {
-    const { input, toolCallId, toolName, state, callbacks } = context
+    const { input, toolCallId, toolName, state, options: loopOptions, callbacks } = context
     const question = input.question as string
     const options = input.options as { label: string; description: string }[]
     const answer = await callbacks.onAskUser(question, options)
+    if (!answer && loopOptions.printMode) {
+      pushToolResult(
+        state,
+        callbacks,
+        toolCallId,
+        toolName,
+        'Interactive questions are unavailable in non-interactive (--print) mode. Proceed using repository evidence and state any assumptions directly in your response without calling askUser again.',
+      )
+      return
+    }
     pushToolResult(state, callbacks, toolCallId, toolName, `User answered: ${answer}`)
   }
 

@@ -70,7 +70,7 @@ Keep the plan concise but executable. Include context and intended outcome, the 
 
 The UI adds "Chat about this" and "Skip interview and plan immediately" to askUser options. Do not add them yourself. If the latter is selected, finish the plan with current information and call exitPlanMode.
 
-End each planning turn with askUser when information is missing, or exitPlanMode when the plan is ready. askUser never approves or exits Plan mode; exitPlanMode is the only approval path.`
+If the user asked only for analysis, Q&A, or a written description without making changes, reply directly in writing without calling exitPlanMode. Otherwise, end each planning turn with askUser when information is missing, or exitPlanMode when the implementation plan is ready. askUser never approves or exits Plan mode; exitPlanMode is the only approval path.`
 
 /** Build a focused system prompt for a sub-agent invocation.
  *  Shorter than the parent prompt — no plan-mode overlay, no independent memory

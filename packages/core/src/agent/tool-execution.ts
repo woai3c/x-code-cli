@@ -638,8 +638,8 @@ async function handleKillShell(ctx: HandlerCtx): Promise<void> {
 /** Manual tools that bypass the loop guard and the write/shell execution pipeline. */
 const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
   ...createBuiltInToolHandlers(pushToolResult),
-  exitPlanMode: ({ input, toolCallId, state, callbacks }) =>
-    handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult),
+  exitPlanMode: ({ input, toolCallId, state, callbacks, options }) =>
+    handleExitPlanMode(input, toolCallId, state, callbacks, pushToolResult, options),
   shellOutput: handleShellOutput,
   killShell: handleKillShell,
 }

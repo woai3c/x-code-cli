@@ -14,7 +14,7 @@ import { z } from 'zod'
  *  whether to proceed or iterate. */
 export const exitPlanMode = tool({
   description:
-    'Submit the completed plan file for user Yes/No approval to leave plan mode and enter acceptEdits implementation mode. If rejected, revise the plan file and call exitPlanMode again.',
+    'Submit the completed plan file for user Yes/No approval to leave plan mode and enter acceptEdits implementation mode. Do NOT call this for research, Q&A, or when the user asked only for a written explanation without making changes — reply directly in writing instead. If rejected, revise the plan file or clarify via askUser before calling exitPlanMode again.',
   inputSchema: z.object({
     plan: z
       .string()
