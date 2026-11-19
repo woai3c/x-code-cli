@@ -71,23 +71,20 @@ const TIER_TO_REASONING: Record<string, ReasoningLevel> = {
 
 /** Resolve the provider-native effort after applying model support and the
  * minimum valid effort for models that cannot turn reasoning off. */
-export function getReasoningEffort(modelId: string, enabled: boolean, effort?: string): string | undefined {
+export function getReasoningEffort(modelId: string, enabled?: boolean, effort?: string): string | undefined {
   const profile = getReasoningTierProfile(modelId)
   if (!profile) return undefined
   if (effort && profile.options.some((option) => option.value === effort)) return effort
-  return !enabled ? profile.offValue : undefined
+  return enabled === false ? profile.offValue : undefined
 }
 
 /**
  * Compute the top-level `reasoning` value for streamText/generateText.
- * Returns undefined when the model doesn't support reasoning control
- * (custom provider, or Alibaba/Zhipu which use different mechanisms).
- *
- * For providers that support the SDK's top-level `reasoning` parameter
- * (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot), this is all
- * that's needed — the SDK handles the provider-specific translation.
+ * Returns undefined when the model doesn't support reasoning control, when
+ * neither an explicit tier nor `/thinking` toggle was set (preserving each
+ * provider's native default), or for Alibaba/Zhipu/custom providers.
  */
-export function getReasoningLevel(modelId: string, enabled: boolean, effort?: string): ReasoningLevel | undefined {
+export function getReasoningLevel(modelId: string, enabled?: boolean, effort?: string): ReasoningLevel | undefined {
   const provider = providerOf(modelId)
   const chatGPTTiers = getOpenAIChatGPTReasoningTiers(modelId)
 
@@ -100,7 +97,12 @@ export function getReasoningLevel(modelId: string, enabled: boolean, effort?: st
     if (chatGPTTiers.length === 0) return undefined
     const supported = chatGPTTiers.map((tier) => tier.value)
     if (effort && supported.includes(effort)) return effort as ReasoningLevel
-    if (!effort && !enabled && supported.includes('none')) return 'none'
+    if (!effort && enabled === false) {
+      for (const minLevel of ['none', 'minimal', 'low']) {
+        if (supported.includes(minLevel)) return minLevel as ReasoningLevel
+      }
+    }
+    if (!effort && enabled === true && supported.includes('high')) return 'high'
     const declaredDefault = getOpenAIChatGPTRuntimeModel(modelId)?.defaultReasoningLevel
     if (declaredDefault && supported.includes(declaredDefault)) return declaredDefault as ReasoningLevel
     return chatGPTTiers[Math.floor((chatGPTTiers.length - 1) / 2)]?.value as ReasoningLevel
@@ -115,6 +117,8 @@ export function getReasoningLevel(modelId: string, enabled: boolean, effort?: st
   if (effectiveEffort) {
     return TIER_TO_REASONING[effectiveEffort] ?? (effectiveEffort as ReasoningLevel)
   }
+
+  if (enabled === undefined) return undefined
 
   // Gemini 3.8 Flash and Gemini 4 reject thinkingLevel "minimal", so the
   // portable `none` would fail the turn with HTTP 400. Catalog profiles
@@ -138,27 +142,30 @@ export function getReasoningLevel(modelId: string, enabled: boolean, effort?: st
  */
 export function getThinkingProviderOptions(
   modelId: string,
-  enabled: boolean,
+  enabled?: boolean,
   effort?: string,
 ): Record<string, Record<string, unknown>> {
   const provider = providerOf(modelId)
 
   switch (provider) {
-    case 'deepseek':
+    case 'deepseek': {
       const deepseekEffort = getReasoningEffort(modelId, enabled, effort)
       return deepseekEffort ? { deepseek: { reasoningEffort: deepseekEffort } } : {}
+    }
 
     case 'alibaba':
-      return { alibaba: { enableThinking: enabled } }
+      return enabled === undefined ? {} : { alibaba: { enableThinking: enabled } }
 
-    case 'zhipu':
+    case 'zhipu': {
       // Binary toggle via providerOptions for models that don't use tiers.
       // Tiered models get reasoning_effort injected by the fetch shim.
       const zhipuEffort = getReasoningEffort(modelId, enabled, effort)
       if (zhipuEffort) {
         return { zhipu: { thinking: { type: 'enabled' }, reasoningEffort: zhipuEffort } }
       }
+      if (enabled === undefined) return {}
       return enabled ? { zhipu: { thinking: { type: 'enabled' } } } : { zhipu: { thinking: { type: 'disabled' } } }
+    }
 
     case 'anthropic':
       return effort === 'max' && getReasoningTierOptions(modelId)?.some((option) => option.value === 'max')

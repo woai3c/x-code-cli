@@ -21,10 +21,6 @@ vi.mock('ai', async () => {
   return { ...actual, generateText: vi.fn() }
 })
 
-vi.mock('../src/agent/session-summary.js', () => ({
-  generateSessionSummary: vi.fn().mockResolvedValue({ summary: 'session summary' }),
-}))
-
 vi.mock('../src/agent/session-store.js', () => ({
   appendUsage: vi.fn().mockResolvedValue(undefined),
   markBoundaryAndReflush: vi.fn().mockResolvedValue(undefined),

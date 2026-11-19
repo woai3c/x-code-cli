@@ -12,7 +12,6 @@ export type {
   AgentCallbacks,
   AgentOptions,
   StreamRetryEvent,
-  SessionSummary,
   ModelMessage,
   LanguageModel,
   ExecutionAuthority,
@@ -300,7 +299,6 @@ export type {
   TopicMetadataPatch,
   TurnMemoryProjection,
 } from './knowledge/memory/types.js'
-export { generateSessionSummary } from './agent/session-summary.js'
 
 // Sub-agents
 export { createSubAgentRegistry, createBuiltInRegistry, SubAgentRegistry } from './agent/sub-agents/index.js'

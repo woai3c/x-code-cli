@@ -439,12 +439,10 @@ async function main() {
     maxTurns: argv['max-turns'],
     streamMaxRetries: streamConfig.maxRetries,
     streamIdleTimeoutMs: streamConfig.idleTimeoutMs,
-    // Read the persisted /thinking toggle from disk. Default false so a
-    // launch on a config-less machine matches the pre-feature baseline
-    // (provider-default thinking behavior, no surprise latency / cost
-    // jumps). The /thinking command in App.tsx hot-swaps this flag
-    // without restart via useAgent's setThinking.
-    thinking: userConfig.thinking ?? false,
+    // Read the persisted /thinking toggle from disk. Leave undefined when
+    // unset so unconfigured launches respect each model's native default
+    // reasoning effort; `/thinking on|off` explicitly overrides it.
+    thinking: userConfig.thinking,
     toolProfile: userConfig.experimentalToolProfile === 'standard' ? 'standard' : 'full',
     browserVisualCheckEnabled: userConfig.browser?.visualCheck !== false,
     // Plan mode is session-scoped (matches Claude Code) — only the

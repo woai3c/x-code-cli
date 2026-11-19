@@ -40,7 +40,7 @@ import { XCODE_DIR, debugLog, isAbortError } from '../utils.js'
 import { runBrowserVisualCheck } from './browser/visual-check.js'
 import { createBuiltInToolHandlers } from './built-in-tool-handlers.js'
 import { computeEditDiff } from './diff.js'
-import { checkForLoop, recordToolCall } from './loop-guard.js'
+import { checkForLoop, hashToolCall, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
 import { isManagedMemoryAccess, isManagedMemoryMutation } from './managed-memory-boundary.js'
 import {
@@ -54,6 +54,7 @@ import type { ToolImage } from './messages.js'
 import { handleExitPlanMode } from './plan-tools.js'
 import { effectiveExecutionAuthority } from './provenance.js'
 import { captureFileBeforeMutation } from './snapshot.js'
+import { isPlanModeSafeSubAgent } from './sub-agents/runner.js'
 import type { SubAgentLoopRunner } from './sub-agents/runner.js'
 import type { ToolExecutionControl, ToolHandler, ToolHandlerContext } from './tool-handler-context.js'
 import { VISUAL_CHECK_CAPTION_PROMPT, deliverToolImages } from './tool-image-delivery.js'
@@ -656,6 +657,18 @@ const BYPASS_LOOP_GUARD_HANDLERS: Record<string, ToolHandler> = {
  *  `deferred` collects messages that must land AFTER the iteration's tool
  *  results — pushing them mid-loop creates the
  *  `assistant → tool A → user → tool B` pattern that DeepSeek 400s on. */
+const loopGuardQuestionQueues = new WeakMap<LoopState, Promise<unknown>>()
+
+function serializeLoopGuardAskUser(state: LoopState, run: () => Promise<string>): Promise<string> {
+  const rootState = state.rewindTargetState ?? state
+  const previous = loopGuardQuestionQueues.get(rootState) ?? Promise.resolve()
+  const current = previous.catch(() => undefined).then(run)
+  loopGuardQuestionQueues.set(rootState, current)
+  return current.finally(() => {
+    if (loopGuardQuestionQueues.get(rootState) === current) loopGuardQuestionQueues.delete(rootState)
+  })
+}
+
 async function applyLoopGuard(ctx: HandlerCtx, deferred: ModelMessage[]): Promise<boolean> {
   const { toolName, input, toolCallId, state, callbacks } = ctx
   const loopCheck = checkForLoop(state, toolName, input, toolCallId)
@@ -672,23 +685,25 @@ async function applyLoopGuard(ctx: HandlerCtx, deferred: ModelMessage[]): Promis
   pushToolResult(state, callbacks, toolCallId, toolName, guardMessage, true)
 
   if (loopCheck.kind === 'hard-block') {
-    const answer = await callbacks
-      .onAskUser(`The model keeps calling ${toolName} with identical arguments. How do you want to proceed?`, [
+    const answer = await serializeLoopGuardAskUser(state, () =>
+      callbacks.onAskUser(`The model keeps calling ${toolName} with identical arguments. How do you want to proceed?`, [
         { label: 'Pause', description: 'Pause the turn — you can type a new instruction.' },
         { label: 'Continue', description: 'Let the model keep trying; the loop guard stays armed.' },
-      ])
-      .catch(() => 'Pause')
+      ]),
+    ).catch(() => 'Pause')
     if (answer.toLowerCase().startsWith('pause')) {
       // Clear the recent-calls window so the guard doesn't immediately
       // re-trigger on the next turn if the model legitimately retries
       // once with the same args under the user's guidance.
       state.recentToolCalls = []
-      // Defer until after the iteration so the user-role message lands at
-      // the END of this turn's messages, not between tool results.
-      deferred.push({
-        role: 'user',
-        content: '[loop-guard] User paused the loop. Wait for further instructions rather than calling more tools.',
-      })
+      if (!deferred.some((msg) => msg.role === 'user' && String(msg.content).startsWith('[loop-guard] User paused'))) {
+        // Defer until after the iteration so the user-role message lands at
+        // the END of this turn's messages, not between tool results.
+        deferred.push({
+          role: 'user',
+          content: '[loop-guard] User paused the loop. Wait for further instructions rather than calling more tools.',
+        })
+      }
     }
   }
   return true
@@ -950,7 +965,12 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
     }
     const manualExecutor = state.manualToolExecutors.get(toolName)
     if (manualExecutor) {
-      const value = await manualExecutor(input, { toolCallId, abortSignal: options.abortSignal })
+      const toolContext = toolName === 'webSearch' ? { modelProvider: options.modelId.split(':')[0] } : undefined
+      const value = await manualExecutor(input, {
+        toolCallId,
+        abortSignal: options.abortSignal,
+        ...(toolContext ? { context: toolContext } : {}),
+      })
       if (value && typeof value === 'object' && (value as { type?: unknown }).type === 'content') {
         const parts = (value as { value?: unknown[] }).value ?? []
         const output = parts
@@ -966,8 +986,15 @@ async function executeWriteOrShell(ctx: HandlerCtx): Promise<{
           .join('\n')
         return { output: output || '[Structured content returned]', isError: false, structuredOutput: value }
       }
-      const output = typeof value === 'string' ? value : JSON.stringify(value)
-      return { output: output ?? '', isError: false }
+      const isObjectError =
+        Boolean(value && typeof value === 'object') &&
+        ((value as Record<string, unknown>).ok === false ||
+          ((value as Record<string, unknown>).error !== undefined &&
+            (value as Record<string, unknown>).error !== null &&
+            (value as Record<string, unknown>).error !== false))
+      const output = (typeof value === 'string' ? value : JSON.stringify(value)) ?? ''
+      const isTextError = /^Error(?:\s|:)/i.test(output.trimStart())
+      return { output, isError: isObjectError || isTextError }
     }
     return null
   } catch (err) {
@@ -1192,6 +1219,11 @@ const PLAN_MODE_EXECUTABLE_TOOLS = new Set([
   'writeFile',
   'edit',
   'exitPlanMode',
+  'task',
+  'memorySearch',
+  'activateSkill',
+  'listMcpResources',
+  'readMcpResource',
 ])
 
 function sameResolvedPath(left: string, right: string): boolean {
@@ -1215,6 +1247,24 @@ function enforcePlanModeBoundary(ctx: HandlerCtx): boolean {
       true,
     )
     return false
+  }
+  if (ctx.toolName === 'task') {
+    const agentName = typeof ctx.input.subagent_type === 'string' ? ctx.input.subagent_type.trim() : ''
+    const def = ctx.options.subAgentRegistry?.get(agentName)
+    if (!isPlanModeSafeSubAgent(def)) {
+      pushToolResult(
+        ctx.state,
+        ctx.callbacks,
+        ctx.toolCallId,
+        ctx.toolName,
+        toolErrorString(
+          `sub-agent "${agentName || '(empty)'}" is unavailable in plan mode; only read-only sub-agents (explore, plan) may run before plan approval`,
+        ),
+        true,
+      )
+      return false
+    }
+    return true
   }
   if (ctx.toolName !== 'writeFile' && ctx.toolName !== 'edit') return true
 
@@ -1439,37 +1489,49 @@ function collectFulfilledToolCallIds(state: LoopState): Set<string> {
   return ids
 }
 
-/** Group consecutive `task` tool-calls into a single batch so they can be
- *  dispatched in parallel; everything else gets a singleton batch and
- *  dispatches one-at-a-time. Sub-agents launched by the `task` tool are
- *  the only manual tool we hand-execute in `processToolCalls` that's
- *  truly isolated:
- *    - each `runSubAgent` builds a fresh `LoopState` (own messages, own
- *      `recentToolCalls`, own permission mode)
- *    - `parentState.tokenUsage` is updated by additive accumulation only
- *      after the sub-agent completes, so concurrent updates can't get
- *      torn (single-threaded event loop + plain `+=` writes)
- *    - permission dialogs from concurrent sub-agents queue naturally on
- *      the parent UI's `permissionResolversRef`
- *  Every other manual tool mutates shared state and must stay serial:
- *    - `writeFile` / `edit` mutate the filesystem and `state.filesModified`
- *    - `shell` streams stdout/stderr to the parent UI as it arrives —
- *      interleaved bytes from concurrent shells would scramble the live
- *      indicator
- *    - `askUser` / permission dialogs hold the UI; running two at once
- *      would race the dialog state machine
- *    - `exitPlanMode` mutates `LoopState` fields that the next turn reads
- *  Auto-executed tools (readFile / glob / grep / listDir / webFetch /
- *  webSearch) don't appear here — by the time `processToolCalls` runs,
- *  the SDK has already executed them and the skip-fulfilled pre-pass
- *  short-circuits them out. */
-export function partitionToolCalls(calls: ToolCall[]): ToolCall[][] {
+const PARALLEL_SAFE_READ_TOOLS = new Set([
+  'readFile',
+  'glob',
+  'grep',
+  'listDir',
+  'webFetch',
+  'webSearch',
+  'listMcpResources',
+  'readMcpResource',
+  'activateSkill',
+  'getGoal',
+  'listAgents',
+])
+
+export interface PartitionToolCallsOptions {
+  /** Disable parallel read batching when peer-influenced authority checks may
+   *  open the single-slot authority approval dialog. */
+  allowParallelReads?: boolean
+}
+
+/** Group consecutive `task` calls or consecutive side-effect-free read/search
+ *  calls into parallel batches; mutating, interactive, and shell-streaming
+ *  tools stay in singleton batches and execute serially. Duplicate read calls
+ *  within a batch split at the duplicate boundary so `readFileCache` de-dup
+ *  and loop-guard thresholds remain deterministic. */
+export function partitionToolCalls(calls: ToolCall[], options: PartitionToolCallsOptions = {}): ToolCall[][] {
+  const allowParallelReads = options.allowParallelReads !== false
   const batches: ToolCall[][] = []
   let i = 0
   while (i < calls.length) {
+    const first = calls[i]!
     let end = i + 1
-    if (calls[i]!.toolName === 'task') {
+    if (first.toolName === 'task') {
       while (end < calls.length && calls[end]!.toolName === 'task') {
+        end++
+      }
+    } else if (allowParallelReads && PARALLEL_SAFE_READ_TOOLS.has(first.toolName)) {
+      const seenHashes = new Set([hashToolCall(first.toolName, first.input)])
+      while (end < calls.length && PARALLEL_SAFE_READ_TOOLS.has(calls[end]!.toolName)) {
+        const candidate = calls[end]!
+        const hash = hashToolCall(candidate.toolName, candidate.input)
+        if (seenHashes.has(hash)) break
+        seenHashes.add(hash)
         end++
       }
     }
@@ -1548,7 +1610,10 @@ export async function processToolCalls(
   // a plain `await handleToolCall(...)` — Promise.all over a single
   // promise resolves the same way — so the parallel path uniformly
   // handles both cases.
-  const batches = partitionToolCalls(liveCalls)
+  const authority = effectiveExecutionAuthority(state.executionAuthority, state.contextSecurity)
+  const batches = partitionToolCalls(liveCalls, {
+    allowParallelReads: !authority.peerTainted && authority.source !== 'peer',
+  })
   let dispatched = 0
   for (const batch of batches) {
     // User pressed Esc / Ctrl+C. A managed shell that reached ready remains

@@ -37,6 +37,7 @@ export const initialAgentState: Omit<AgentState, 'modelId' | 'permissionMode'> =
   cacheMissSummary: scanCacheMisses([]),
   error: null,
   bufferingReads: false,
+  isReasoning: false,
   compressionLabel: null,
   ingestLabel: null,
   reconnectLabel: null,

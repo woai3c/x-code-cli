@@ -249,4 +249,61 @@ describe('MemoryService.search', () => {
     await service.shutdown(0)
     await fs.rm(root, { recursive: true, force: true })
   })
+
+  it('ignores synthetic user messages when grounding memorySearch and auto-runs semantic selector on zero lexical hits', async () => {
+    const root = await makeMemoryRoot()
+    await writeTopic(
+      root,
+      topicMarkdown({
+        id: 'deployment-workflow',
+        type: 'workflow',
+        description: 'Production deployment checklist',
+        aliases: ['release checklist'],
+        keywords: ['production', 'deploy'],
+        facts: [{ id: 'workflow.deploy.verify', content: '- Run the smoke suite before production deployment.' }],
+      }),
+      'deployment-workflow',
+    )
+    vi.mocked(streamText).mockReturnValueOnce({
+      output: Promise.resolve({ topicIds: ['deployment-workflow'] }),
+      usage: Promise.resolve({}),
+    } as never)
+    const service = new MemoryService({
+      memoryRoot: root,
+      config: memoryConfig,
+      resolveModel: () => ({}) as LanguageModel,
+    })
+    service.setActiveModelId('test:model')
+    await service.initialize(process.cwd())
+
+    const state = createLoopState()
+    state.messages = [
+      { role: 'user', content: '按照我之前说的部署方案执行' },
+      { role: 'user', content: '[loop-guard] Stop repeating the failing command.' },
+      { role: 'user', content: 'Attached media from tool result:' },
+      { role: 'user', content: '## Exited Plan Mode\n\nYou have exited plan mode.' },
+      { role: 'user', content: '[Previous conversation summary]\nuntrusted summary keyword' },
+    ] as never[]
+    const tool = createMemorySearchTool(service, state, process.cwd())
+
+    const rejectedSingleStopword = await (tool as any).execute({ query: '的' }, { toolCallId: 'memory-stopword' })
+    expect(rejectedSingleStopword).toMatchObject({
+      error: expect.stringContaining('grounded'),
+    })
+    const rejectedSummaryLeak = await (tool as any).execute(
+      { query: 'untrusted summary keyword' },
+      { toolCallId: 'memory-summary-leak' },
+    )
+    expect(rejectedSummaryLeak).toMatchObject({
+      error: expect.stringContaining('grounded'),
+    })
+
+    const result = await (tool as any).execute({ query: '部署方案' }, { toolCallId: 'memory-auto-sem' })
+
+    expect(result).toMatchObject({
+      results: [expect.objectContaining({ topicId: 'deployment-workflow' })],
+    })
+    await service.shutdown(0)
+    await fs.rm(root, { recursive: true, force: true })
+  })
 })

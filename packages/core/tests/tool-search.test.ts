@@ -181,7 +181,7 @@ describe('composeTurnTools', () => {
     expect(Object.keys(composeTurnTools(modeBase, undefined, new Set(), 'plan'))).toEqual(['readFile', 'exitPlanMode'])
   })
 
-  it('restores planning-safe web tools from the deferred catalog and hides other deferred tools', () => {
+  it('restores planning-safe read/delegation tools from the deferred catalog and hides mutating MCP tools', () => {
     const base = { readFile: { id: 'read' }, writeFile: { id: 'write' }, exitPlanMode: { id: 'exit' } }
     const catalog = [
       entry('webSearch', 'Search the web', 'builtin'),
@@ -190,7 +190,7 @@ describe('composeTurnTools', () => {
     ]
     const tools = composeTurnTools(base, catalog, new Set(), 'plan')
 
-    expect(Object.keys(tools)).toEqual(['readFile', 'writeFile', 'exitPlanMode', 'webSearch'])
+    expect(Object.keys(tools)).toEqual(['readFile', 'writeFile', 'exitPlanMode', 'webSearch', 'task'])
   })
 })
 
@@ -218,13 +218,14 @@ describe('buildDeferredCatalog', () => {
     mcpRegistry: { list: () => mcpTools, listResources: () => [], hasModelCapabilities: () => true },
   } as any
 
-  it('defers the non-core built-ins plus the MCP resource tools', () => {
+  it('defers external MCP tools and resource tools first while keeping built-in web tools direct when they fit the budget', () => {
     const catalog = buildDeferredCatalog(options)
     const names = catalog.map((e) => e.name)
-    for (const name of DEFERRED_BUILTIN_TOOLS) expect(names).toContain(name)
+    for (const name of DEFERRED_BUILTIN_TOOLS) expect(names).not.toContain(name)
     expect(names).not.toContain('browserVisualCheck')
     expect(names).toContain('listMcpResources')
     expect(names).toContain('readMcpResource')
+    expect(names).toContain('mcp__db__query_rows')
   })
 
   it('loads the root visual-check tool directly, supports opt-out, and never exposes it to sub-agents', () => {

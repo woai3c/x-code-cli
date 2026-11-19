@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { asSchema, safeValidateTypes } from '@ai-sdk/provider-utils'
+
 import {
   MAX_BATCH_EDITS,
   MAX_BATCH_INPUT_BYTES,
@@ -10,11 +12,26 @@ import {
 import { edit } from '../src/tools/edit.js'
 
 describe('normalizeEditInput', () => {
-  it('keeps the public schema lenient for array, JSON string, and legacy inputs', () => {
-    const schema = (edit as any).inputSchema
-    expect(schema.safeParse({ filePath: '/x', edits: [{ oldString: 'a', newString: 'b' }] }).success).toBe(true)
-    expect(schema.safeParse({ filePath: '/x', edits: '[{"oldString":"a","newString":"b"}]' }).success).toBe(true)
-    expect(schema.safeParse({ filePath: '/x', oldString: 'a', newString: 'b' }).success).toBe(true)
+  it('advertises array edits and single/replaceAll fields in the model schema while preserving legacy JSON strings in runtime validation', async () => {
+    const schema = asSchema((edit as any).inputSchema)
+    const wire = await schema.jsonSchema
+    expect((wire.properties as any)?.edits?.type).toBe('array')
+    expect(
+      (await safeValidateTypes({ value: { filePath: '/x', edits: [{ oldString: 'a', newString: 'b' }] }, schema }))
+        .success,
+    ).toBe(true)
+    expect(
+      await safeValidateTypes({
+        value: { filePath: '/x', edits: '[{"oldString":"a","newString":"b"}]' },
+        schema,
+      }),
+    ).toMatchObject({
+      success: true,
+      value: { filePath: '/x', edits: '[{"oldString":"a","newString":"b"}]' },
+    })
+    expect(
+      (await safeValidateTypes({ value: { filePath: '/x', oldString: 'a', newString: 'b' }, schema })).success,
+    ).toBe(true)
   })
 
   it('normalizes legacy and array inputs', () => {

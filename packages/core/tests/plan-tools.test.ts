@@ -87,15 +87,16 @@ describe('handleExitPlanMode', () => {
     expect(state.currentPlanPath).toBeNull()
     expect(callbacks.onPlanModeChange).toHaveBeenCalledWith('acceptEdits')
     expect(captured[0].output).toContain('Plan approved')
+    expect(captured[0].output).toContain('acceptEdits mode')
     expect(captured[0].output).not.toContain('todoWrite')
 
     // The override body was persisted to disk.
     const written = await fs.readFile(planPath, 'utf-8')
     expect(written).toBe('My plan body')
 
-    // A follow-up user message is appended so the model knows the gate flipped.
-    const lastMsg = state.messages[state.messages.length - 1]
-    expect(lastMsg.role).toBe('user')
+    // No synthetic role: 'user' message is injected inside tool dispatch —
+    // multi-tool turns must keep contiguous tool results after assistant.
+    expect(state.messages).toHaveLength(0)
   })
 
   it('stays in plan mode and pushes an errored result when user rejects', async () => {

@@ -139,9 +139,8 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
   const activeToolCallsLenRef = useRef(0)
   // Mirror the /thinking toggle so the agent loop reads the LATEST value
   // even when it was changed mid-session — same pattern as modelIdRef.
-  // Initial value comes from CLI options (which read it from
-  // ~/.x-code/config.json on launch).
-  const thinkingRef = useRef<boolean>(options.thinking ?? false)
+  // Undefined means provider-default (user has not forced on/off).
+  const thinkingRef = useRef<boolean | undefined>(options.thinking)
   const loopStateRef = useRef<LoopState | null>(null)
   const shellUiRuntimeRef = useRef<ShellUiRuntime | null>(null)
   const shellEventSubscriptionRef = useRef<{
@@ -629,6 +628,9 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
         onTokenSpeedUpdate: (tokenSpeed) => {
           setState((prev) => (sameFormattedTokenSpeed(prev.tokenSpeed, tokenSpeed) ? prev : { ...prev, tokenSpeed }))
         },
+        onReasoningStateChange: (active) => {
+          setState((prev) => (prev.isReasoning === active ? prev : { ...prev, isReasoning: active }))
+        },
         onCompressionProgress: (description) => {
           setState((prev) => ({ ...prev, compressionLabel: description }))
         },
@@ -808,6 +810,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           isLoading: false,
           activeToolCalls: [],
           bufferingReads: false,
+          isReasoning: false,
           compressionLabel: null,
           reconnectLabel: null,
           goalStatus: finalGoal,
@@ -845,6 +848,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
           isLoading: false,
           activeToolCalls: [],
           bufferingReads: false,
+          isReasoning: false,
           compressionLabel: null,
           reconnectLabel: null,
           error: wasAborted ? null : classifyApiError(err).message,
@@ -1415,7 +1419,7 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
    *  happens in the App.tsx command handler, not here — keeping this
    *  hook free of disk side-effects matches the existing model-switch
    *  separation. */
-  const setThinking = useCallback((enabled: boolean) => {
+  const setThinking = useCallback((enabled: boolean | undefined) => {
     if (thinkingRef.current === enabled) return
     thinkingRef.current = enabled
     if (loopStateRef.current) markExpectedCacheMiss(loopStateRef.current, 'reasoning-change')

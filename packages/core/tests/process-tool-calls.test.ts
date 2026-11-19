@@ -1241,4 +1241,180 @@ describe('partitionToolCalls', () => {
     expect(batches.map((b) => b.length)).toEqual([1, 2])
     expect(batches[1]!.map((c) => c.toolCallId)).toEqual(['2', '3'])
   })
+
+  it('groups consecutive distinct read-only tools into a parallel batch while keeping memorySearch and duplicates serial', () => {
+    const calls = [
+      { toolName: 'readFile', toolCallId: '1', input: { filePath: '/a.ts' } },
+      { toolName: 'grep', toolCallId: '2', input: { pattern: 'foo' } },
+      { toolName: 'webFetch', toolCallId: '3', input: { url: 'https://example.com' } },
+      { toolName: 'memorySearch', toolCallId: '4', input: { query: 'deploy' } },
+      { toolName: 'readFile', toolCallId: '5', input: { filePath: '/a.ts' } },
+      { toolName: 'writeFile', toolCallId: '6', input: { filePath: '/b.ts', content: 'x' } },
+    ]
+    expect(partitionToolCalls(calls).map((b) => b.map((c) => c.toolCallId))).toEqual([
+      ['1', '2', '3'],
+      ['4'],
+      ['5'],
+      ['6'],
+    ])
+    expect(partitionToolCalls(calls, { allowParallelReads: false }).map((b) => b.length)).toEqual([1, 1, 1, 1, 1, 1])
+  })
+})
+
+describe('manualToolExecutors context and error propagation', () => {
+  it('threads modelProvider context to webSearch and marks failed read/search outputs as errors', async () => {
+    const state = createLoopState()
+    const receivedContexts: unknown[] = []
+    state.manualToolExecutors.set('webSearch', async (_input, execOpts) => {
+      receivedContexts.push(execOpts.context)
+      return '### Result\nhttps://example.com\nsnippet'
+    })
+    state.manualToolExecutors.set('readFile', async () => 'Error reading file: ENOENT: no such file')
+    state.manualToolExecutors.set('memorySearch', async () => ({
+      error: 'memorySearch query must be grounded in the current user request',
+    }))
+    state.messages.push(
+      { role: 'user', content: 'test' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc-ws', toolName: 'webSearch', input: { query: 'x' } },
+          { type: 'tool-call', toolCallId: 'tc-rf', toolName: 'readFile', input: { filePath: '/missing.ts' } },
+          { type: 'tool-call', toolCallId: 'tc-ms', toolName: 'memorySearch', input: { query: 'x' } },
+        ],
+      } as ModelMessage,
+    )
+
+    const onToolResult = vi.fn()
+    const callbacks = makeCallbacks({ onToolResult })
+    await processToolCalls(
+      [
+        { toolName: 'webSearch', toolCallId: 'tc-ws', input: { query: 'x' } },
+        { toolName: 'readFile', toolCallId: 'tc-rf', input: { filePath: '/missing.ts' } },
+        { toolName: 'memorySearch', toolCallId: 'tc-ms', input: { query: 'x' } },
+      ],
+      state,
+      { ...options, modelId: 'deepseek:deepseek-flash' },
+      callbacks,
+      stubModel,
+    )
+
+    expect(receivedContexts).toEqual([{ modelProvider: 'deepseek' }])
+    expect(onToolResult).toHaveBeenCalledWith('tc-ws', expect.stringContaining('https://example.com'), false)
+    expect(onToolResult).toHaveBeenCalledWith('tc-rf', expect.stringContaining('Error reading file:'), true)
+    expect(onToolResult).toHaveBeenCalledWith('tc-ms', expect.stringContaining('grounded'), true)
+  })
+
+  it('permits read-only explore sub-agents in plan mode while blocking worker and unrestricted custom sub-agents', async () => {
+    const state = createLoopState('plan')
+    const subAgentRegistry = {
+      get: (name: string) =>
+        name === 'explore'
+          ? { name: 'explore', description: 'Explore', prompt: 'p', tools: ['readFile', 'grep', 'shell'], maxTurns: 5 }
+          : name === 'worker'
+            ? { name: 'worker', description: 'Work', prompt: 'p', tools: ['*'], maxTurns: 5 }
+            : name === 'custom-unrestricted'
+              ? { name: 'custom-unrestricted', description: 'Custom', prompt: 'p', maxTurns: 5 }
+              : name === 'custom-mcp'
+                ? {
+                    name: 'custom-mcp',
+                    description: 'MCP',
+                    prompt: 'p',
+                    tools: ['readFile', 'mcp__db__write'],
+                    maxTurns: 5,
+                  }
+                : undefined,
+      list: () => [],
+      names: () => ['explore', 'worker', 'custom-unrestricted', 'custom-mcp'],
+    }
+    state.messages.push(
+      { role: 'user', content: 'plan this' } as ModelMessage,
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-worker',
+            toolName: 'task',
+            input: { subagent_type: 'worker', description: 'edit code', prompt: 'do work' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-custom-unrestricted',
+            toolName: 'task',
+            input: { subagent_type: 'custom-unrestricted', description: 'unrestricted', prompt: 'do work' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-custom-mcp',
+            toolName: 'task',
+            input: { subagent_type: 'custom-mcp', description: 'mcp', prompt: 'do work' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'tc-explore',
+            toolName: 'task',
+            input: { subagent_type: 'explore', description: 'read code', prompt: 'find refs' },
+          },
+        ],
+      } as ModelMessage,
+    )
+
+    const onToolResult = vi.fn()
+    const runSubAgentLoop = vi.fn(async (_msg, _model, opts, _cb, subState) => {
+      expect(opts.toolFilter?.allow).toEqual(['readFile', 'grep'])
+      expect(opts.toolFilter?.deny).toEqual(
+        expect.arrayContaining(['writeFile', 'edit', 'shell', 'shellOutput', 'killShell', 'exitPlanMode']),
+      )
+      subState!.messages.push({ role: 'assistant', content: 'exploration summary' } as ModelMessage)
+      return { state: subState!, turnCount: 1 }
+    })
+    await processToolCalls(
+      [
+        {
+          toolName: 'task',
+          toolCallId: 'tc-worker',
+          input: { subagent_type: 'worker', description: 'edit code', prompt: 'do work' },
+        },
+        {
+          toolName: 'task',
+          toolCallId: 'tc-custom-unrestricted',
+          input: { subagent_type: 'custom-unrestricted', description: 'unrestricted', prompt: 'do work' },
+        },
+        {
+          toolName: 'task',
+          toolCallId: 'tc-custom-mcp',
+          input: { subagent_type: 'custom-mcp', description: 'mcp', prompt: 'do work' },
+        },
+        {
+          toolName: 'task',
+          toolCallId: 'tc-explore',
+          input: { subagent_type: 'explore', description: 'read code', prompt: 'find refs' },
+        },
+      ],
+      state,
+      { ...options, subAgentRegistry: subAgentRegistry as never },
+      makeCallbacks({ onToolResult }),
+      stubModel,
+      runSubAgentLoop,
+    )
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      'tc-worker',
+      expect.stringContaining('sub-agent "worker" is unavailable in plan mode'),
+      true,
+    )
+    expect(onToolResult).toHaveBeenCalledWith(
+      'tc-custom-unrestricted',
+      expect.stringContaining('sub-agent "custom-unrestricted" is unavailable in plan mode'),
+      true,
+    )
+    expect(onToolResult).toHaveBeenCalledWith(
+      'tc-custom-mcp',
+      expect.stringContaining('sub-agent "custom-mcp" is unavailable in plan mode'),
+      true,
+    )
+    expect(onToolResult).toHaveBeenCalledWith('tc-explore', expect.stringContaining('exploration summary'), false)
+    expect(runSubAgentLoop).toHaveBeenCalledTimes(1)
+  })
 })

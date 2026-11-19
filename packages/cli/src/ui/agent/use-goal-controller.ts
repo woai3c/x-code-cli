@@ -55,7 +55,7 @@ interface UseGoalControllerOptions {
   setState: Dispatch<SetStateAction<AgentState>>
   modelRef: MutableRef<LanguageModel>
   modelIdRef: MutableRef<string>
-  thinkingRef: MutableRef<boolean>
+  thinkingRef: MutableRef<boolean | undefined>
   permissionModeRef: MutableRef<PermissionMode>
   loopStateRef: MutableRef<LoopState | null>
   abortControllerRef: MutableRef<AbortController | null>
@@ -298,6 +298,7 @@ export function useGoalController({
       authorityRequest: null,
       pendingQuestion: null,
       bufferingReads: false,
+      isReasoning: false,
     }))
     if (pendingQuestion) pendingQuestion.resolve(pendingQuestion.abortAnswer)
   }, [pendingAuthorityRef, pendingQuestionRef, permissionResolversRef, setState])

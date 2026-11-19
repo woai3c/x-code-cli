@@ -33,8 +33,8 @@ export const SLASH_COMMANDS = [
   },
   {
     name: '/thinking',
-    description: 'Toggle extended thinking on/off (no-arg = show status) — saved',
-    argumentHint: '[on|off]',
+    description: 'Configure extended thinking (no-arg = picker) — saved',
+    argumentHint: '[default|on|off]',
   },
   {
     name: '/theme',
@@ -43,7 +43,7 @@ export const SLASH_COMMANDS = [
   },
   {
     name: '/plan',
-    description: 'Toggle plan mode on/off (no-arg = show status) — saved',
+    description: 'Toggle plan mode on/off for this session (no-arg = show status)',
     argumentHint: '[on|off]',
   },
   { name: '/clear', description: 'Clear conversation history' },

@@ -315,7 +315,10 @@ export class MemoryService {
       .filter((candidate) => candidate.protected || candidate.routes.some((route) => route !== 'pinned'))
       .map((candidate) => candidate.topicId)
     let candidateIds = lexicalCandidateIds
-    if (args.semantic) {
+    const shouldRunSelector =
+      args.semantic === true ||
+      (args.semantic === undefined && lexicalCandidateIds.length === 0 && config.recall.semanticSelector === 'auto')
+    if (shouldRunSelector) {
       const outcome = await this.runSelector({
         query: recallQuery,
         manifest: this.index.manifest(),

@@ -9,7 +9,7 @@ import { generateText, streamText } from 'ai'
 import { createGoal, requestGoalBlocked } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import type { LoopState } from '../src/agent/loop-state.js'
-import { agentLoop } from '../src/agent/loop.js'
+import { agentLoop, buildTools } from '../src/agent/loop.js'
 import { createCheckpoint } from '../src/agent/snapshot.js'
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
 import { isManagedMemoryAccess, isManagedMemoryMutation } from '../src/agent/tool-execution.js'
@@ -46,10 +46,6 @@ vi.mock('ai', async () => {
 // Mock knowledge modules to avoid filesystem side effects
 vi.mock('../src/knowledge/loader.js', () => ({
   buildKnowledgeContext: vi.fn().mockResolvedValue(''),
-}))
-
-vi.mock('../src/agent/session-summary.js', () => ({
-  generateSessionSummary: vi.fn().mockResolvedValue({}),
 }))
 
 vi.mock('../src/agent/snapshot.js', () => ({
@@ -1318,5 +1314,51 @@ describe('agent loop', () => {
 
     expect(turnCount).toBe(1)
     expect(mockCallbacks.onError).not.toHaveBeenCalled()
+  })
+
+  it('notifies onReasoningStateChange when reasoning deltas start and end', async () => {
+    const transitions: boolean[] = []
+    vi.mocked(streamText).mockReturnValue({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'reasoning-delta', text: 'thinking step 1' }
+          yield { type: 'reasoning-delta', text: 'thinking step 2' }
+          yield { type: 'text-delta', text: 'final answer' }
+        },
+      },
+      response: Promise.resolve({ messages: [{ role: 'assistant', content: 'final answer' }] }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 6 }),
+      finishReason: Promise.resolve('stop'),
+      toolCalls: Promise.resolve([]),
+    } as any)
+
+    await agentLoop(
+      'explain',
+      {} as any,
+      { modelId: 'test:model', trustMode: false, maxTurns: 5, printMode: false },
+      {
+        ...mockCallbacks,
+        onReasoningStateChange: (active) => transitions.push(active),
+      },
+    )
+
+    expect(transitions).toEqual([true, false])
+  })
+
+  it('strips shellOutput and killShell whenever shell is denied in toolFilter', () => {
+    const childState = createLoopState('default', { agentRole: 'sub-agent' })
+    const tools = buildTools(
+      {
+        modelId: 'test:model',
+        trustMode: false,
+        printMode: false,
+        toolFilter: {
+          allow: ['readFile', 'grep', 'shell'],
+          deny: ['shell'],
+        },
+      },
+      childState,
+    )
+    expect(Object.keys(tools).sort()).toEqual(['grep', 'readFile'])
   })
 })

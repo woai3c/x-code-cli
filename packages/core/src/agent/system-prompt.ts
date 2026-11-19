@@ -28,7 +28,8 @@ If a tool result starts with [Truncated:], do not guess what was removed. Re-rea
 - Platform: {platform}
 - Shell: {shell}
 - Working Directory: {cwd}
-- Is Git Repo: {isGitRepo}`
+- Is Git Repo: {isGitRepo}
+- Date: {currentDate}`
 
 const BROWSER_RULES =
   '- After significant visual web-UI changes, start or reuse the local dev server and call browserVisualCheck once before finishing. Call it again only after a visual fix.'
@@ -54,7 +55,7 @@ const MEMORY_RULES = `
 const PLAN_MODE_OVERLAY = `
 
 ## Plan Mode
-Plan mode is active. Explore and design the implementation; do not execute it. The runtime exposes only planning-safe tools and permits writeFile/edit only for this session's plan file:
+Plan mode is active. Explore and design the implementation; do not execute it. The runtime exposes only planning-safe tools, allows task delegation only to read-only sub-agents (such as explore and plan), and permits writeFile/edit only for this session's plan file:
 
 {planFilePath}
 
@@ -91,6 +92,7 @@ ${options.agentPrompt}
 - Shell: ${shellProvider.type}
 - Working Directory: ${options.cwd ?? process.cwd()}
 - Is Git Repo: ${options.isGitRepo ? 'yes' : 'no'}
+- Date: ${formatCurrentLocalDate()}
 
 # Knowledge context
 ${options.knowledgeContext || '(none)'}
@@ -158,20 +160,28 @@ export function formatSkillCapabilities(skills: readonly { name: string; descrip
  *  tools only get registered when MCP is active, so their advertising
  *  must travel with this same block. Exported for the context-composition
  *  estimator (same recompute-and-subtract pattern as formatSkillCapabilities). */
-export function formatMcpCapabilities(mcpTools: readonly SystemPromptMcpTool[] | undefined): string {
+export function formatMcpCapabilities(
+  mcpTools: readonly SystemPromptMcpTool[] | undefined,
+  options?: { includeResourceTools?: boolean },
+): string {
   if (mcpTools === undefined) return ''
+  const includeResourceTools = options?.includeResourceTools !== false
 
   const lines: string[] = [
     '',
     '',
     '## MCP Tools',
     'These tools come from connected MCP servers. Prefer internal tools when both fit; use these for capabilities only the server provides.',
-    '- listMcpResources: List resources exposed by connected MCP servers (with optional `server` filter).',
-    '- readMcpResource: Read the contents of an MCP resource by URI (URIs come from listMcpResources).',
   ]
+  if (includeResourceTools) {
+    lines.push(
+      '- listMcpResources: List resources exposed by connected MCP servers (with optional `server` filter).',
+      '- readMcpResource: Read the contents of an MCP resource by URI (URIs come from listMcpResources).',
+    )
+  }
 
   if (mcpTools.length === 0) {
-    return lines.join('\n')
+    return includeResourceTools ? lines.join('\n') : ''
   }
 
   // Group by server for readability. Within a group, preserve incoming
@@ -233,6 +243,14 @@ export function formatDeferredCapabilities(deferredTools: readonly SystemPromptD
   return lines.join('\n')
 }
 
+function formatCurrentLocalDate(): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 /** Build the full system prompt with dynamic values and optional knowledge context */
 export function buildSystemPrompt(options?: {
   knowledgeContext?: string
@@ -250,6 +268,9 @@ export function buildSystemPrompt(options?: {
    *  absent or empty, the prompt body is byte-identical to the
    *  pre-MCP version. */
   mcpTools?: readonly SystemPromptMcpTool[]
+  /** When false, omit listMcpResources/readMcpResource from `## MCP Tools`
+   *  because those resource tools are listed under `## Deferred Tools`. */
+  mcpIncludeResourceTools?: boolean
   /** Optional deferred-tool surface (top-level agent only). When provided, a
    *  `## Deferred Tools` section listing tool NAMES is appended in place of
    *  the `## MCP Tools` block, and the model loads each tool's real schema on
@@ -272,6 +293,7 @@ export function buildSystemPrompt(options?: {
     .replace(/\{cwd\}/g, process.cwd())
     .replace(/\{model\}/g, options?.modelId ?? 'unknown')
     .replace(/\{isGitRepo\}/g, options?.isGitRepo ? 'yes' : 'no')
+    .replace(/\{currentDate\}/g, formatCurrentLocalDate())
     .replace(/\{browserRules\}/g, options?.hasBrowserVisualCheck ? BROWSER_RULES : '')
     .replace(/\{peerRules\}/g, options?.hasPeerTools ? PEER_RULES : '')
     .replace(/\{delegationRules\}/g, options?.hasTaskTool ? DELEGATION_RULES : '')
@@ -281,7 +303,8 @@ export function buildSystemPrompt(options?: {
     // sub-agents pass mcpTools (full injection). Both undefined → "".
     .replace(
       /\{mcpCapabilities\}/g,
-      formatDeferredCapabilities(options?.deferredTools) + formatMcpCapabilities(options?.mcpTools),
+      formatDeferredCapabilities(options?.deferredTools) +
+        formatMcpCapabilities(options?.mcpTools, { includeResourceTools: options?.mcpIncludeResourceTools }),
     )
     .replace(/\{skillCapabilities\}/g, formatSkillCapabilities(options?.skills))
 

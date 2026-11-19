@@ -50,6 +50,11 @@ const PLAN_MODE_TOOL_NAMES = new Set([
   'writeFile',
   'edit',
   'exitPlanMode',
+  'task',
+  'memorySearch',
+  'activateSkill',
+  'listMcpResources',
+  'readMcpResource',
 ])
 
 export type ToolProfile = 'full' | 'standard'
@@ -128,18 +133,20 @@ export function buildDeferredCatalog(
   options: AgentOptions,
   availableTools: Record<string, unknown> = toolRegistry,
 ): DeferredToolEntry[] {
-  const entries: DeferredToolEntry[] = []
+  const builtinEntries: DeferredToolEntry[] = []
+  const mcpResourceEntries: DeferredToolEntry[] = []
+  const mcpToolEntries: DeferredToolEntry[] = []
   const profile = resolveEffectiveToolProfile(options.toolProfile)
   const deferredBuiltins = profile === 'standard' ? STANDARD_DEFERRED_BUILTIN_TOOLS : DEFERRED_BUILTIN_TOOLS
 
   for (const name of deferredBuiltins) {
     const def = availableTools[name]
-    if (def) entries.push(builtinEntry(name, def))
+    if (def) builtinEntries.push(builtinEntry(name, def))
   }
 
   if (options.mcpRegistry?.hasModelCapabilities()) {
-    entries.push(builtinEntry('listMcpResources', listMcpResources))
-    entries.push(builtinEntry('readMcpResource', readMcpResource))
+    mcpResourceEntries.push(builtinEntry('listMcpResources', listMcpResources))
+    mcpResourceEntries.push(builtinEntry('readMcpResource', readMcpResource))
 
     for (const e of options.mcpRegistry.list()) {
       // Gate 3: MCP tools with annotations.alwaysLoad skip deferral — the
@@ -153,7 +160,7 @@ export function buildDeferredCatalog(
       const hint = typeof e.annotations?.searchHint === 'string' ? (e.annotations.searchHint as string) : ''
       const searchText =
         `${e.callableName} ${nameTokens(e.callableName)} ${e.serverName} ${e.description} ${hint} ${schemaText.join(' ')}`.toLowerCase()
-      entries.push({
+      mcpToolEntries.push({
         name: e.callableName,
         description: truncateDescription(e.description),
         searchText,
@@ -164,11 +171,16 @@ export function buildDeferredCatalog(
     }
   }
 
-  if (entries.length === 0) return []
+  // Eviction priority: defer external MCP tools + MCP resource tools first so
+  // bulky third-party schemas never evict core built-in web/delegation tools;
+  // in explicit `standard` profile, built-ins also participate upfront.
+  const evictionOrder =
+    profile === 'standard'
+      ? [...mcpToolEntries, ...mcpResourceEntries, ...builtinEntries]
+      : [...mcpToolEntries, ...mcpResourceEntries, ...builtinEntries]
+  if (evictionOrder.length === 0) return []
 
-  const candidateBuiltinNames = new Set(
-    entries.filter((entry) => entry.source === 'builtin').map((entry) => entry.name),
-  )
+  const candidateBuiltinNames = new Set(builtinEntries.map((entry) => entry.name))
   let directTokens = Object.entries(availableTools).reduce(
     (sum, [name, def]) => (candidateBuiltinNames.has(name) ? sum : sum + estimateToolDefinitionTokens(name, def)),
     0,
@@ -178,18 +190,31 @@ export function buildDeferredCatalog(
       directTokens += estimateToolDefinitionTokens(entry.callableName, bridgeMcpTool(entry))
     }
   }
-  for (const entry of entries) directTokens += estimateToolDefinitionTokens(entry.name, entry.def)
+  for (const entry of evictionOrder) directTokens += estimateToolDefinitionTokens(entry.name, entry.def)
 
   if (directTokens <= DIRECT_TOOL_TOKEN_BUDGET) return []
 
   directTokens += estimateToolDefinitionTokens('toolSearch', toolSearch)
-  const deferred: DeferredToolEntry[] = []
-  for (const entry of entries) {
-    if (directTokens <= DIRECT_TOOL_TOKEN_BUDGET) break
-    deferred.push(entry)
+  const deferredSet = new Set<DeferredToolEntry>()
+
+  // Once deferral activates, move the entire non-alwaysLoad MCP surface behind
+  // toolSearch first so MCP servers aren't split half-direct / half-deferred.
+  for (const entry of [...mcpToolEntries, ...mcpResourceEntries]) {
+    deferredSet.add(entry)
     directTokens -= estimateToolDefinitionTokens(entry.name, entry.def)
   }
-  return deferred
+
+  // Defer built-ins only when requested by `standard` profile or when core +
+  // alwaysLoad MCP tools still exceed DIRECT_TOOL_TOKEN_BUDGET.
+  for (const entry of builtinEntries) {
+    if (profile !== 'standard' && directTokens <= DIRECT_TOOL_TOKEN_BUDGET) break
+    deferredSet.add(entry)
+    directTokens -= estimateToolDefinitionTokens(entry.name, entry.def)
+  }
+
+  // Preserve canonical output order (built-ins first, then MCP grouped by server)
+  // so systemPromptCache remains deterministic and byte-stable.
+  return [...builtinEntries, ...mcpResourceEntries, ...mcpToolEntries].filter((entry) => deferredSet.has(entry))
 }
 
 /** Splice every activated deferred tool's definition into the base tool set

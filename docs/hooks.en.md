@@ -171,8 +171,8 @@ Every hook receives a single JSON line on stdin. Top-level shape:
 
   // SubagentStart / SubagentStop
   "agent": {
-    "name": "code-reviewer",
-    "description": "review the diff",
+    "name": "worker",
+    "description": "implement the change",
     "prompt": "<full prompt sent to sub-agent>", // SubagentStart only
   },
   "durationMs": 12_345, // SubagentStop only

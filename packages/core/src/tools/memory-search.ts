@@ -3,18 +3,32 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import type { LoopState } from '../agent/loop-state.js'
-import { tokenizeMemoryText } from '../knowledge/memory/search-index.js'
+import { normalizeMemoryText, tokenizeMemoryText } from '../knowledge/memory/search-index.js'
 import type { MemoryService } from '../knowledge/memory/service.js'
 import { extractText } from '../utils/message-helpers.js'
 
 const MAX_TOPICS_PER_TURN = 5
+
+const SYNTHETIC_USER_MESSAGE_PREFIXES = [
+  'Output token limit hit.',
+  '[loop-guard]',
+  '[Request interrupted by user',
+  'Attached media from tool result:',
+  '## Exited Plan Mode',
+  '[Previous conversation summary]',
+]
+
+function isSyntheticUserMessage(text: string): boolean {
+  const trimmed = text.trimStart()
+  return SYNTHETIC_USER_MESSAGE_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+}
 
 function latestUserText(state: LoopState): string {
   for (let index = state.messages.length - 1; index >= 0; index--) {
     const message = state.messages[index]
     if (message?.role === 'user') {
       const text = extractText(message.content)
-      if (!text.startsWith('Output token limit hit.')) return text
+      if (!isSyntheticUserMessage(text)) return text
     }
   }
   return ''
@@ -24,7 +38,12 @@ function relatedToTurn(query: string, userText: string): boolean {
   const queryTokens = new Set(tokenizeMemoryText(query))
   if (queryTokens.size === 0) return false
   const allowedTokens = new Set(tokenizeMemoryText(userText))
-  return [...queryTokens].every((token) => allowedTokens.has(token))
+  const normalizedUserText = normalizeMemoryText(userText)
+  return [...queryTokens].every(
+    (token) =>
+      allowedTokens.has(token) ||
+      ([...token].length >= 2 && /^[^\x00-\x7F]+$/u.test(token) && normalizedUserText.includes(token)),
+  )
 }
 
 export function createMemorySearchTool(service: MemoryService, state: LoopState, repositoryId: string) {

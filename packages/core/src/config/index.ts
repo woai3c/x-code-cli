@@ -472,6 +472,7 @@ export function loadUserConfig(): UserConfig {
     const parsed = JSON.parse(raw) as unknown
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const config = parsed as UserConfig
+      if ('thinking' in config && typeof config.thinking !== 'boolean') delete config.thinking
       if ('subAgentModel' in config) {
         const normalized = normalizeSubAgentModelSpec(config.subAgentModel)
         if (normalized) config.subAgentModel = normalized

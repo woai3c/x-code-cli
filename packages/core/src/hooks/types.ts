@@ -135,7 +135,7 @@ export type HookEvent =
       name: 'SubagentStart'
       session: SessionContext
       agent: {
-        /** The sub-agent's registered name (e.g. `code-reviewer`). */
+        /** The sub-agent's registered name (e.g. `explore`, `worker`). */
         name: string
         /** The parent agent's one-line task description. */
         description: string

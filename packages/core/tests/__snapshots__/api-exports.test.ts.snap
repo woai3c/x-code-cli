@@ -170,7 +170,6 @@ exports[`@x-code-cli/core public API > export list matches snapshot 1`] = `
   "formatSkillActivationBody",
   "formatSkillCapabilities",
   "formatTranscription",
-  "generateSessionSummary",
   "generateTaskSlug",
   "getAvailableProviders",
   "getCompressionThreshold",

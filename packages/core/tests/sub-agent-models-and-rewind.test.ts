@@ -74,8 +74,18 @@ describe('built-in sub-agent set (explore, plan, worker)', () => {
       deny: ['askUser', 'exitPlanMode', 'task'],
     })
     expect(buildSubAgentToolFilter(worker, 'plan')).toEqual({
-      allow: undefined,
-      deny: ['askUser', 'exitPlanMode', 'task', 'writeFile', 'edit', 'shell'],
+      allow: [
+        'readFile',
+        'glob',
+        'grep',
+        'listDir',
+        'webSearch',
+        'webFetch',
+        'listMcpResources',
+        'readMcpResource',
+        'activateSkill',
+      ],
+      deny: ['askUser', 'exitPlanMode', 'task', 'writeFile', 'edit', 'shell', 'shellOutput', 'killShell'],
     })
   })
 
@@ -458,5 +468,127 @@ describe('worker sub-agent file mutations integrate with /rewind', () => {
     expect(permissionAsked).toBe(false)
     expect(await fs.readFile(targetPath, 'utf-8')).toBe('const x = 2\n')
     expect(parentState.readFileCache.has(targetPath)).toBe(false)
+  })
+
+  it('grants one tool-free synthesis turn when a sub-agent hits maxTurns on a tool round', async () => {
+    const parentState = createLoopState()
+    const parentModel = { provider: 'openai', modelId: 'gpt-6.2-sol' } as unknown as LanguageModel
+    const parentOptions: AgentOptions = {
+      modelId: 'openai:gpt-6.2-sol',
+      trustMode: false,
+      printMode: false,
+      subAgentRegistry: createBuiltInRegistry(),
+    }
+
+    const calls: Array<{ maxTurns?: number; allow?: readonly string[] }> = []
+    const result = await runSubAgent(
+      {
+        parentState,
+        parentOptions,
+        callbacks: noopCallbacks(),
+        toolCallId: 'tc-max-turns-salvage',
+        agentName: 'explore',
+        description: 'broad explore',
+        prompt: 'find everything',
+        knowledgeContext: '',
+        isGitRepo: false,
+      },
+      parentModel,
+      async (_prompt, _subModel, subOptions, _subCallbacks, existingSubState) => {
+        const child = existingSubState!
+        calls.push({ maxTurns: subOptions.maxTurns, allow: subOptions.toolFilter?.allow })
+        if (calls.length === 1) {
+          child.messages.push(
+            { role: 'user', content: 'find everything' } as ModelMessage,
+            {
+              role: 'assistant',
+              content: [{ type: 'tool-call', toolCallId: 'tc-1', toolName: 'grep', input: { pattern: 'x' } }],
+            } as ModelMessage,
+            {
+              role: 'tool',
+              content: [
+                {
+                  type: 'tool-result',
+                  toolCallId: 'tc-1',
+                  toolName: 'grep',
+                  output: { type: 'text', value: 'found x' },
+                },
+              ],
+            } as ModelMessage,
+          )
+          return { state: child, turnCount: 25 }
+        }
+        child.messages.push({ role: 'assistant', content: 'Synthesized findings: found x' } as ModelMessage)
+        return { state: child, turnCount: 1 }
+      },
+    )
+
+    expect(calls).toEqual([
+      { maxTurns: 25, allow: ['readFile', 'glob', 'grep', 'listDir', 'shell'] },
+      { maxTurns: 1, allow: [] },
+    ])
+    expect(result.resultText).toContain('Synthesized findings: found x')
+    expect(result.turnCount).toBe(26)
+  })
+
+  it('does not mistake an early tool-call preamble for a completed answer when the synthesis turn fails', async () => {
+    const parentState = createLoopState()
+    const parentModel = { provider: 'openai', modelId: 'gpt-6.2-sol' } as unknown as LanguageModel
+    const parentOptions: AgentOptions = {
+      modelId: 'openai:gpt-6.2-sol',
+      trustMode: false,
+      printMode: false,
+      subAgentRegistry: createBuiltInRegistry(),
+    }
+
+    let invocation = 0
+    const result = await runSubAgent(
+      {
+        parentState,
+        parentOptions,
+        callbacks: noopCallbacks(),
+        toolCallId: 'tc-max-turns-failed-synthesis',
+        agentName: 'explore',
+        description: 'broad explore',
+        prompt: 'find everything',
+        knowledgeContext: '',
+        isGitRepo: false,
+      },
+      parentModel,
+      async (_prompt, _subModel, _subOptions, _subCallbacks, existingSubState) => {
+        const child = existingSubState!
+        invocation++
+        if (invocation === 1) {
+          child.messages.push(
+            { role: 'user', content: 'find everything' } as ModelMessage,
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'Let me inspect src/ first.' },
+                { type: 'tool-call', toolCallId: 'tc-1', toolName: 'grep', input: { pattern: 'x' } },
+              ],
+            } as ModelMessage,
+            {
+              role: 'tool',
+              content: [
+                {
+                  type: 'tool-result',
+                  toolCallId: 'tc-1',
+                  toolName: 'grep',
+                  output: { type: 'text', value: 'found x' },
+                },
+              ],
+            } as ModelMessage,
+          )
+          return { state: child, turnCount: 25 }
+        }
+        // Simulate failed synthesis turn (user nudge appended, no assistant reply).
+        child.messages.push({ role: 'user', content: 'Turn limit reached.' } as ModelMessage)
+        return { state: child, turnCount: 1 }
+      },
+    )
+
+    expect(result.resultText).toContain('[Sub-agent reached max turns (25) without finishing.')
+    expect(result.resultText).not.toContain('<task_result>')
   })
 })

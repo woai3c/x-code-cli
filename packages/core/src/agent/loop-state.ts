@@ -64,7 +64,10 @@ export interface LoopState {
    * guarantees authority evaluation happens before every data-bearing tool. */
   manualToolExecutors: Map<
     string,
-    (input: Record<string, unknown>, options: { toolCallId: string; abortSignal?: AbortSignal }) => Promise<unknown>
+    (
+      input: Record<string, unknown>,
+      options: { toolCallId: string; abortSignal?: AbortSignal; context?: unknown },
+    ) => Promise<unknown>
   >
   tokenUsage: TokenUsage
   /** Cumulative usage indexed two ways. Source and model are parallel views

@@ -137,8 +137,8 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 
   // SubagentStart / SubagentStop
   "agent": {
-    "name": "code-reviewer",
-    "description": "review the diff",
+    "name": "worker",
+    "description": "implement the change",
     "prompt": "<full prompt sent to sub-agent>", // 仅 SubagentStart
   },
   "durationMs": 12_345, // 仅 SubagentStop

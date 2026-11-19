@@ -289,23 +289,34 @@ export function buildContextBreakdownInput(options: AgentOptions, state: LoopSta
   // systemPromptCache. Fall back to recomputing for states that never went
   // through the prompt build (tests, resumed sessions before the next turn).
   const blocks = state.systemPromptBlocks
-  const skillBlock =
-    blocks?.skill ??
-    formatSkillCapabilities(state.permissionMode === 'plan' ? undefined : options.skillRegistry?.list())
+  const skillBlock = blocks?.skill ?? formatSkillCapabilities(options.skillRegistry?.list())
   const activeMcpRegistry = options.mcpRegistry?.hasModelCapabilities() ? options.mcpRegistry : undefined
+  const deferredNameSet = state.deferredCatalog ? new Set(state.deferredCatalog.map((entry) => entry.name)) : null
+  const fallbackDirectMcpTools =
+    state.permissionMode === 'plan' || !activeMcpRegistry
+      ? undefined
+      : deferredNameSet
+        ? (() => {
+            const directEntries = activeMcpRegistry.list().filter((entry) => !deferredNameSet.has(entry.callableName))
+            return directEntries.length > 0 ? toSystemPromptEntries(directEntries) : undefined
+          })()
+        : toSystemPromptEntries(activeMcpRegistry.list())
   const mcpDeferredBlock =
     blocks?.mcpDeferred ??
     (state.permissionMode === 'plan'
       ? ''
-      : state.deferredCatalog
-        ? formatDeferredCapabilities(
-            state.deferredCatalog.map((entry) => ({
-              name: entry.name,
-              serverName: entry.serverName,
-              source: entry.source,
-            })),
-          )
-        : formatMcpCapabilities(activeMcpRegistry ? toSystemPromptEntries(activeMcpRegistry.list()) : undefined))
+      : (state.deferredCatalog
+          ? formatDeferredCapabilities(
+              state.deferredCatalog.map((entry) => ({
+                name: entry.name,
+                serverName: entry.serverName,
+                source: entry.source,
+              })),
+            )
+          : '') +
+        formatMcpCapabilities(fallbackDirectMcpTools, {
+          includeResourceTools: !deferredNameSet?.has('listMcpResources'),
+        }))
 
   // MCP-backed tools: alwaysLoad entries are registered directly in
   // buildTools, the rest arrive via the deferred catalog. The registry list

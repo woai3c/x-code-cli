@@ -19,19 +19,11 @@ const MAX_COLUMNS = 500
 const RG_MAX_BUFFER = 4 * 1024 * 1024
 
 export const grep = tool({
-  description: `A powerful search tool built on ripgrep.
+  description: `Regex content search built on ripgrep (escape literal braces in regexes, e.g. interface\\{\\}).
 
-Usage:
-- ALWAYS use this grep tool for content search tasks. NEVER invoke grep or rg as a shell command — this tool has been optimized for correct permissions and access.
-- Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+").
-- Filter files with the glob parameter ("*.ts", "*.{ts,tsx}") OR the type parameter ("ts", "py", "rust") — type is a fast way to sweep a whole language.
-- Pattern syntax: Uses ripgrep — literal braces need escaping (use interface\\{\\} to find interface{} in Go code).
-- outputMode controls what comes back:
-  - "content" (default) — matching lines with line numbers; supports context lines (linesBefore / linesAfter / context).
-  - "files_with_matches" — only the paths of files that contain a match (fast; use when you just need to know WHICH files match).
-  - "count" — number of matching lines per file.
-- Context lines (linesBefore / linesAfter / context) only apply to outputMode "content".
-- Results are capped at headLimit lines (default ${DEFAULT_HEAD_LIMIT}). Long lines are truncated at ${MAX_COLUMNS} chars.`,
+- Filter files via glob ("*.{ts,tsx}") or type ("ts", "py", "rust").
+- outputMode: "content" (default, line-numbered matches + optional context), "files_with_matches" (paths only), or "count" (matches per file).
+- Capped at headLimit lines (default ${DEFAULT_HEAD_LIMIT}); lines longer than ${MAX_COLUMNS} chars are preview-truncated.`,
   inputSchema: z.object({
     pattern: z.string().min(1).max(16_384).describe('Regex pattern to search for'),
     path: z.string().max(4096).optional().describe('File or directory to search in (defaults to working directory)'),

@@ -150,6 +150,14 @@ const MODEL_MAX_OUTPUT_TOKENS: ReadonlyMap<string, number> = new Map([
   ['zhipu:glm-5.3', 131072],
   ['zhipu:glm-5.3-flash', 131072],
   ['zhipu:glm-4.7-flash', 131072],
+  // xAI — Grok 4.5–4.7 support 64K+ output; prevents starving deep reasoning.
+  ['xai:grok-4.7', 65536],
+  ['xai:grok-4.6', 65536],
+  ['xai:grok-4.5', 65536],
+  // Moonshot — Kimi K3 tiers share output budget with reasoning tokens.
+  ['moonshotai:kimi-k3.1-pro', 65536],
+  ['moonshotai:kimi-k3', 65536],
+  ['moonshotai:kimi-k3.1-pro-highspeed', 65536],
 ])
 
 /** Resolve the max_tokens ceiling we send to the provider. */

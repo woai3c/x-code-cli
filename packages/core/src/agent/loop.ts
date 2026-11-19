@@ -402,7 +402,7 @@ export function buildTools(options: AgentOptions, state: LoopState) {
         delete tools[name]
       }
     }
-    if (tools.shell && (!tools.shellOutput || !tools.killShell)) {
+    if (!tools.shell || !tools.shellOutput || !tools.killShell) {
       delete tools.shell
       delete tools.shellOutput
       delete tools.killShell
@@ -523,15 +523,15 @@ async function runTurnAttempt(
   // /thinking toggle. If the user explicitly chose a reasoning effort level
   // for this model (stored in config.modelReasoningEffort), we use it.
   const effort = userConfig.modelReasoningEffort?.[options.modelId]
-  const effectiveEffort = getReasoningEffort(options.modelId, options.thinking ?? false, effort)
-  const reasoningLevel = getReasoningLevel(options.modelId, options.thinking ?? false, effort)
-  const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking ?? false, effort)
+  const effectiveEffort = getReasoningEffort(options.modelId, options.thinking, effort)
+  const reasoningLevel = getReasoningLevel(options.modelId, options.thinking, effort)
+  const thinkingOptions = getThinkingProviderOptions(options.modelId, options.thinking, effort)
   // Gemini returns thought summaries only when the request opts in, and this
   // client has no renderer for them: reasoning deltas are counted and dropped
   // by turn-stream. Ask for them during debug runs only, so the summary shows
   // up in debug.log next to the billed `thinking.usage` line while interactive
   // turns keep sending the same request body.
-  if (process.env.DEBUG_STDOUT === '1' && (options.thinking ?? false) && options.modelId.startsWith('google:')) {
+  if (process.env.DEBUG_STDOUT === '1' && options.thinking !== false && options.modelId.startsWith('google:')) {
     thinkingOptions.google = { ...(thinkingOptions.google ?? {}), thinkingConfig: { includeThoughts: true } }
   }
   const mergedProviderOptions = mergeThinkingOptions(cached.providerOptions, thinkingOptions)
@@ -552,12 +552,6 @@ async function runTurnAttempt(
       maxRetries: 3,
       abortSignal: attemptControl.signal,
       headers: requestHeaders,
-      // Per-request context for webSearch's DeepSeek fallback. This travels
-      // with the request and stays correct when concurrent sub-agent loops
-      // run on different models. The tools record is loosely typed as
-      // Record<string, any>, so the SDK infers the context map as undefined;
-      // cast at this single call site (same rationale as providerOptions).
-      toolsContext: { webSearch: { modelProvider: options.modelId.split(':')[0] } } as never,
       // Explicit ceiling so provider defaults don't silently truncate long
       // replies. Most providers clamp a too-high value, but some reject it
       // outright with HTTP 400. getMaxOutputTokens applies per-model ceilings;
@@ -1031,7 +1025,7 @@ export async function agentLoop(
       }
       const activeMcpRegistry = options.mcpRegistry?.hasModelCapabilities() ? options.mcpRegistry : undefined
       const planMode = state.permissionMode === 'plan'
-      const promptSkills = planMode ? undefined : options.skillRegistry?.list()
+      const promptSkills = options.skillRegistry?.list()
       const promptDeferredTools = planMode
         ? undefined
         : state.deferredCatalog?.map((e) => ({
@@ -1039,50 +1033,41 @@ export async function agentLoop(
             serverName: e.serverName,
             source: e.source,
           }))
+      const deferredNameSet = state.deferredCatalog ? new Set(state.deferredCatalog.map((e) => e.name)) : null
+      const mcpIncludeResourceTools = !deferredNameSet?.has('listMcpResources')
+      const directMcpTools =
+        planMode || !activeMcpRegistry
+          ? undefined
+          : deferredNameSet
+            ? (() => {
+                const directEntries = activeMcpRegistry
+                  .list()
+                  .filter((entry) => !deferredNameSet.has(entry.callableName))
+                return directEntries.length > 0 ? toSystemPromptEntries(directEntries) : undefined
+              })()
+            : toSystemPromptEntries(activeMcpRegistry.list())
       state.systemPromptCache = buildSystemPrompt({
         knowledgeContext: fullKnowledgeContext ?? '',
         modelId: options.modelId,
         isGitRepo,
         planMode,
         planFilePath: state.currentPlanPath ?? undefined,
-        // When deferral is active (top-level agent), MCP tools + non-core
-        // built-ins are in the catalog, listed by NAME under `## Deferred
-        // Tools` instead of the old `## MCP Tools` block — the model loads
-        // them on demand via toolSearch. The full name list is fixed at boot,
-        // so the prompt stays byte-stable for prefix caching.
-        //
-        // Sub-agents (no catalog) keep the old `## MCP Tools` block. Empty /
-        // absent registry → both placeholders resolve to "" and the prompt is
-        // byte-identical to the pre-MCP shape.
         deferredTools: promptDeferredTools,
-        mcpTools:
-          planMode || state.deferredCatalog
-            ? undefined
-            : activeMcpRegistry
-              ? toSystemPromptEntries(activeMcpRegistry.list())
-              : undefined,
+        mcpTools: directMcpTools,
+        mcpIncludeResourceTools,
         skills: promptSkills,
         hasBrowserVisualCheck: !planMode && Object.hasOwn(baseTools, BROWSER_VISUAL_CHECK_TOOL_NAME),
         hasPeerTools: !planMode && (Object.hasOwn(baseTools, 'listAgents') || Object.hasOwn(baseTools, 'sendMessage')),
         hasTaskTool:
-          !planMode &&
-          (Object.hasOwn(baseTools, 'task') || Boolean(state.deferredCatalog?.some((entry) => entry.name === 'task'))),
-        hasMemoryService: !planMode && Boolean(memoryService),
+          Object.hasOwn(baseTools, 'task') || Boolean(state.deferredCatalog?.some((entry) => entry.name === 'task')),
+        hasMemoryService: Boolean(memoryService),
       })
-      // Snapshot the exact capability blocks embedded in the prompt above.
-      // The context-composition estimator subtracts these strings from the
-      // cached prompt to isolate each category — recomputing them later
-      // would mismatch after a mid-session /skill or /mcp refresh and skew
-      // the per-row split (the total stays exact either way, it's calibrated
-      // to the real reported input).
       state.systemPromptBlocks = {
         knowledge: fullKnowledgeContext ?? '',
         skill: formatSkillCapabilities(promptSkills),
-        mcpDeferred: promptDeferredTools
-          ? formatDeferredCapabilities(promptDeferredTools)
-          : formatMcpCapabilities(
-              !planMode && activeMcpRegistry ? toSystemPromptEntries(activeMcpRegistry.list()) : undefined,
-            ),
+        mcpDeferred:
+          formatDeferredCapabilities(promptDeferredTools) +
+          formatMcpCapabilities(directMcpTools, { includeResourceTools: mcpIncludeResourceTools }),
       }
     }
     const systemPrompt = state.systemPromptCache

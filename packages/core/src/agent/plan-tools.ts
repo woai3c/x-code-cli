@@ -94,25 +94,13 @@ export async function handleExitPlanMode(
       'exitPlanMode',
       [
         'Plan approved by user. Plan mode has been exited.',
+        'Write tools (writeFile, edit) are now auto-approved (acceptEdits mode); shell commands still go through normal permission classification.',
         persisted ? `The approved plan is saved at: ${persisted}` : '',
-        'You can now edit files and run shell commands. Start implementing the plan.',
+        'Start implementing the plan.',
       ]
         .filter(Boolean)
         .join('\n'),
     )
-    state.messages.push({
-      role: 'user',
-      content: [
-        '## Exited Plan Mode',
-        '',
-        'You have exited plan mode. You can now make edits, run tools, and take actions.',
-        'Write tools (writeFile, edit) are now auto-approved (acceptEdits mode); shell commands',
-        'still go through normal permission classification.',
-        persisted ? `The plan file is located at ${persisted} if you need to reference it.` : '',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    })
     return
   }
   pushToolResult(

@@ -146,9 +146,14 @@ describe('getReasoningLevel', () => {
     expect(getReasoningLevel('openai:gpt-6.2-sol', true)).toBe('high')
   })
 
-  it('returns none when disabled and no effort specified', () => {
+  it('returns none when disabled and no effort specified, and undefined (provider-default) when unset', () => {
     expect(getReasoningLevel('deepseek:deepseek-flash', false)).toBe('none')
     expect(getReasoningLevel('openai:gpt-6.2-sol', false)).toBe('none')
+    expect(getReasoningLevel('deepseek:deepseek-flash', undefined)).toBeUndefined()
+    expect(getReasoningLevel('openai:gpt-6.2-sol', undefined)).toBeUndefined()
+    expect(getReasoningLevel('google:gemini-4-hydrogen', undefined)).toBeUndefined()
+    expect(getThinkingProviderOptions('alibaba:qwen4-max', undefined)).toEqual({})
+    expect(getThinkingProviderOptions('zhipu:glm-5.3', undefined)).toEqual({})
   })
 
   it('floors disabled reasoning for Gemini 3.8/4 ids that are not in the catalog', () => {

@@ -2,34 +2,35 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
-export const shellOutput = tool({
-  description: `Read new output from a shell session returned by shell, and interact with PTY sessions.
+import { createCompatibleInputSchema } from './schema-compat.js'
 
-- Returns only output produced since the previous read, plus structured running or exit status.
-- When output is truncated, the complete shell transcript is saved to a temporary log. Use readFile with the returned path and offset/limit to inspect it.
-- By default an empty read waits up to 5 seconds for output or completion without polling.
-- For a shell started with tty: true, chars writes terminal input. Use \\u0003 for Ctrl+C.
-- For a non-TTY shell, \\u0003 terminates the managed process tree; other non-empty input is rejected.
-- cols and rows resize a PTY and must be provided together.
-- Set yieldTimeMs: 0 or legacy block: false to read immediately.`,
-  inputSchema: z.object({
-    shellId: z.string().describe('The opaque background shell id returned by shell.'),
-    chars: z
-      .string()
-      .optional()
-      .describe('Terminal input for a PTY session. Omit or use an empty string to only wait.'),
-    cols: z.number().int().positive().max(1_000).optional().describe('New PTY width; requires rows.'),
-    rows: z.number().int().positive().max(1_000).optional().describe('New PTY height; requires cols.'),
-    yieldTimeMs: z
-      .number()
-      .int()
-      .nonnegative()
-      .optional()
-      .describe('Wait window in milliseconds (default: 5000; 0: immediate).'),
-    maxOutputTokens: z.number().int().positive().optional().describe('Optional model-facing output budget in tokens.'),
-    block: z.boolean().optional().describe('Legacy wait flag. Explicit false reads immediately; true waits.'),
-    timeout: z.number().int().nonnegative().optional().describe('Legacy wait duration used with block: true.'),
-  }),
+const shellOutputPublicSchema = z.object({
+  shellId: z.string().describe('The opaque background shell id returned by shell.'),
+  chars: z.string().optional().describe('Terminal input for a PTY session. Omit or use an empty string to only wait.'),
+  cols: z.number().int().positive().max(1_000).optional().describe('New PTY width; requires rows.'),
+  rows: z.number().int().positive().max(1_000).optional().describe('New PTY height; requires cols.'),
+  yieldTimeMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('Wait window in milliseconds (default: 5000; 0: immediate).'),
+  maxOutputTokens: z.number().int().positive().optional().describe('Optional model-facing output budget in tokens.'),
+})
+
+const shellOutputRuntimeSchema = shellOutputPublicSchema.extend({
+  block: z.boolean().optional(),
+  timeout: z.number().int().nonnegative().optional(),
+})
+
+export const shellOutput = tool({
+  description: `Read incremental output from a background shell session and interact with PTY sessions.
+
+- Returns output produced since the previous read plus running/exit status; waits up to 5s by default (set yieldTimeMs: 0 for immediate read).
+- For tty: true sessions, chars sends terminal input (\\u0003 for Ctrl+C); cols and rows resize the PTY together.
+- For non-TTY sessions, \\u0003 terminates the process tree; other non-empty chars are rejected.
+- Truncated transcripts spill to a temp log path readable via readFile.`,
+  inputSchema: createCompatibleInputSchema(shellOutputPublicSchema, shellOutputRuntimeSchema),
   // Session-aware execution is routed through tool-execution.ts.
 })
 

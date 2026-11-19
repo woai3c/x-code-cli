@@ -18,6 +18,7 @@ import type { AgentCallbacks, AgentOptions, ExecutionAuthority, TokenUsage } fro
 import { debugLog, errorMessage, isAbortError } from '../../utils.js'
 import { withBrowserOperation } from '../browser/operation-lock.js'
 import { type BrowserMcp, PLAYWRIGHT_MCP_PACKAGE, getBrowserMcp } from '../browser/registry.js'
+import { markExpectedCacheMiss } from '../cache-stats.js'
 import { createLoopState } from '../loop-state.js'
 import type { LoopState } from '../loop-state.js'
 import { appendUsage } from '../session-store.js'
@@ -179,16 +180,38 @@ export function resolveSubAgentRuntimeModel(
   }
 }
 
+const PLAN_MODE_SAFE_SUBAGENT_TOOLS = new Set([
+  'readFile',
+  'glob',
+  'grep',
+  'listDir',
+  'webSearch',
+  'webFetch',
+  'listMcpResources',
+  'readMcpResource',
+  'activateSkill',
+])
+
+/** True iff `agentDef` declares an explicit read-only built-in tool allowlist
+ *  safe to run before plan approval (with `shell` stripped by toolFilter). */
+export function isPlanModeSafeSubAgent(
+  agentDef: Pick<SubAgentDefinition, 'name' | 'internal' | 'tools'> | undefined,
+): boolean {
+  if (!agentDef || agentDef.internal || agentDef.name === 'worker' || agentDef.name === 'browser') return false
+  if (!Array.isArray(agentDef.tools) || agentDef.tools.length === 0) return false
+  const nonShellTools = agentDef.tools.filter((toolName) => toolName !== 'shell')
+  if (nonShellTools.length === 0) return false
+  return nonShellTools.every((toolName) => PLAN_MODE_SAFE_SUBAGENT_TOOLS.has(toolName))
+}
+
 export function buildSubAgentToolFilter(agentDef: SubAgentDefinition, parentPermissionMode: string) {
   const deny = [...(agentDef.disallowedTools ?? [])]
   if (!deny.includes('task')) deny.push('task')
 
-  // In plan mode, deny write tools for ALL sub-agents — not just
-  // worker. Plan mode's read-only invariant must hold regardless
-  // of which agent is running; shell is included because it can write
-  // files or execute destructive commands.
+  // In plan mode, deny write/shell/plan-exit tools for ALL sub-agents — Plan
+  // mode's read-only invariant must hold regardless of which agent runs.
   if (parentPermissionMode === 'plan') {
-    for (const t of ['writeFile', 'edit', 'shell']) {
+    for (const t of ['writeFile', 'edit', 'shell', 'shellOutput', 'killShell', 'exitPlanMode']) {
       if (!deny.includes(t)) deny.push(t)
     }
   }
@@ -196,9 +219,14 @@ export function buildSubAgentToolFilter(agentDef: SubAgentDefinition, parentPerm
   // `'*'` is a wildcard meaning "every tool" — matches `tools: ['*']`
   // semantics for full-capability worker agents. Pass `undefined` so
   // `buildTools` skips the allowlist filter and only the explicit deny
-  // list applies. Without this, `['*']` would be treated as a literal
-  // tool name and every real tool would be filtered out.
-  const allow = agentDef.tools?.includes('*') ? undefined : agentDef.tools
+  // list applies (except in plan mode, which pins to safe read-only built-ins).
+  const rawAllow = agentDef.tools?.includes('*') ? undefined : agentDef.tools
+  const allow =
+    parentPermissionMode === 'plan'
+      ? (rawAllow ?? [...PLAN_MODE_SAFE_SUBAGENT_TOOLS]).filter((toolName) =>
+          PLAN_MODE_SAFE_SUBAGENT_TOOLS.has(toolName),
+        )
+      : rawAllow
 
   return {
     allow,
@@ -480,27 +508,71 @@ async function runSubAgentUnlocked(
   let completionFinalText: string | undefined
   let completionOutcome: 'completed' | 'aborted' | 'failed' = 'failed'
   try {
-    const { state: finalSubState, turnCount } = await runLoop(prompt, subModel, subOptions, subCallbacks, subState)
+    const initialRun = await runLoop(prompt, subModel, subOptions, subCallbacks, subState)
+    let finalSubState = initialRun.state
+    let turnCount = initialRun.turnCount
+    let ranSummaryTurn = false
+    let preSummaryMessageCount = 0
 
-    const finalText = extractFinalText(finalSubState.messages)
+    // When a sub-agent hits maxTurns on a tool round (last message is a tool
+    // result with no final synthesis), grant one tool-free summary turn so the
+    // gathered findings are salvaged instead of discarded.
+    if (
+      turnCount >= agentDef.maxTurns &&
+      finalSubState.messages.at(-1)?.role === 'tool' &&
+      !parentOptions.abortSignal?.aborted
+    ) {
+      ranSummaryTurn = true
+      preSummaryMessageCount = finalSubState.messages.length
+      markExpectedCacheMiss(finalSubState, 'tool-surface-change')
+      const summaryRun = await runLoop(
+        'Turn limit reached. Do NOT call any tools. Synthesize everything gathered so far into your required final response now, noting any unfinished parts.',
+        subModel,
+        { ...subOptions, maxTurns: 1, toolFilter: { allow: [] }, hookBus: undefined },
+        subCallbacks,
+        finalSubState,
+      )
+      finalSubState = summaryRun.state
+      turnCount += summaryRun.turnCount
+    }
+
     const toolUseCount = countToolCalls(finalSubState.messages)
-
     accumulateChildUsage(parentState, finalSubState, subModelId)
     callbacks.onUsageUpdate(parentState.tokenUsage)
     void appendUsage(parentState, parentOptions.modelId)
 
     const durationMs = Date.now() - startTime
-    const resultText = finalText || '[Sub-agent completed without producing a final response]'
 
-    completionFinalText = resultText
-    completionOutcome = 'completed'
-
-    if (turnCount >= agentDef.maxTurns && !finalText) {
-      // finalText is guaranteed empty here (the !finalText branch) and the
-      // messages array hasn't been mutated since line 246's call, so the
-      // partial-output value can only ever be 'none' on this path.
+    if (parentOptions.abortSignal?.aborted) {
+      const partial = extractFinalText(finalSubState.messages)
+      const text = partial
+        ? `[Sub-agent interrupted by user]\n\nPartial output:\n${partial}`
+        : '[Sub-agent interrupted by user]'
+      completionFinalText = text
+      completionOutcome = 'aborted'
       return (completedResult = {
-        resultText: `[Sub-agent reached max turns (${agentDef.maxTurns}) without finishing. Partial output: none]`,
+        resultText: text,
+        tokenUsage: finalSubState.tokenUsage,
+        turnCount,
+        toolCallCount: toolUseCount,
+        durationMs,
+        aborted: true,
+      })
+    }
+
+    const finalText = ranSummaryTurn
+      ? extractFinalText(finalSubState.messages.slice(preSummaryMessageCount))
+      : finalSubState.messages.at(-1)?.role === 'assistant'
+        ? extractFinalText(finalSubState.messages.slice(-1))
+        : extractFinalText(finalSubState.messages)
+
+    if (turnCount >= agentDef.maxTurns && (!finalText || finalSubState.messages.at(-1)?.role !== 'assistant')) {
+      const partial = extractFinalText(finalSubState.messages) || 'none'
+      const exhaustedText = `[Sub-agent reached max turns (${agentDef.maxTurns}) without finishing. Partial output: ${partial}]`
+      completionFinalText = exhaustedText
+      completionOutcome = 'completed'
+      return (completedResult = {
+        resultText: exhaustedText,
         tokenUsage: finalSubState.tokenUsage,
         turnCount,
         toolCallCount: toolUseCount,
@@ -508,6 +580,11 @@ async function runSubAgentUnlocked(
         aborted: false,
       })
     }
+
+    const resultText = finalText || '[Sub-agent completed without producing a final response]'
+
+    completionFinalText = resultText
+    completionOutcome = 'completed'
 
     return (completedResult = {
       resultText: `<task_result>\n${resultText}\n</task_result>`,

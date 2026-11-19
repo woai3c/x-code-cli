@@ -16,7 +16,6 @@ import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 import { getShellProvider } from './shell-provider.js'
 
-const YEAR = new Date().getFullYear()
 const SEARCH_TIMEOUT_MS = 15_000
 // DeepSeek search is a full model turn server-side, not a plain lookup, so
 // it needs a much wider budget than the REST search APIs.
@@ -447,16 +446,15 @@ function formatResults(response: ProviderResponse): string {
 
 export const webSearch = tool({
   description:
-    `Search the web for information. Useful for looking up documentation, error messages, or current information. ` +
-    `The current year is ${YEAR} — use it whenever the user asks for recent/latest/current information ` +
-    `(e.g. prefer "React 19 release notes ${YEAR}" over "React latest release notes").`,
+    'Search the web for documentation, error messages, or current information. Include the current year from Environment when querying recent releases or docs.',
   inputSchema: z.object({
     query: z.string().describe('The search query'),
     maxResults: z.number().int().min(1).max(20).optional().describe('Max results (default: 5, max: 20)'),
   }),
-  // Per-request model provider, supplied via streamText toolsContext. This
-  // channel is race-safe for concurrent sub-agent loops; the module-level
-  // setWebSearchModelProvider value is only a fallback.
+  // Per-request model provider, supplied by manual tool dispatch in
+  // tool-execution.ts so concurrent sub-agent loops on different models stay
+  // isolated; the module-level setWebSearchModelProvider value is a fallback
+  // for direct callers/tests.
   contextSchema: z.object({ modelProvider: z.string().optional() }),
   execute: async ({ query, maxResults }, { toolCallId, abortSignal, context }) => {
     const n = maxResults ?? 5

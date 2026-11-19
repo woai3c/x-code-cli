@@ -297,6 +297,8 @@ export interface AgentCallbacks {
   onUsageUpdate: (usage: TokenUsage) => void
   /** Optional live/completed token generation speed (tok/s) for the UI status bar. */
   onTokenSpeedUpdate?: (update: TokenSpeedUpdate) => void
+  /** Optional notification when streamed reasoning/thinking chunks start or end. */
+  onReasoningStateChange?: (active: boolean) => void
   onContextCompressed: (summary: string) => void
   /** Fired at each phase boundary during context compression so the UI
    *  can show a spinner label that tracks progress. */
@@ -475,19 +477,6 @@ export interface AgentOptions {
 
   /** Global Memory v2 service. Present only on the root agent. */
   memoryService?: MemoryService
-}
-
-export interface SessionSummary {
-  id: string
-  title: string
-  startedAt: string
-  endedAt: string
-  status: 'completed' | 'in_progress' | 'abandoned'
-  summary: string
-  keyResults: string[]
-  pendingWork: string[]
-  filesModified: string[]
-  decisions: string[]
 }
 
 // ─── Re-export AI SDK types ───

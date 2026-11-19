@@ -103,6 +103,8 @@ export interface AgentState {
   permissionMode: PermissionMode
   /** Keeps the reading status stable across consecutive read-only tool calls. */
   bufferingReads: boolean
+  /** True while the active model turn is streaming reasoning/thinking tokens. */
+  isReasoning?: boolean
   /** Current context-compression phase, when compression is active. */
   compressionLabel: string | null
   /** Current local attachment-processing phase, including model download progress. */

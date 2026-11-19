@@ -43,8 +43,9 @@ Remove E2E credentials from the local environment or secret store to disable the
 
 ## Deliberately unselected review and learning automation
 
-Independent pre-acceptance Agent review is `NOT CONFIGURED`. X-Code's built-in `code-reviewer` supplies a real
-separate-context candidate, but its restricted shell is not a verified strict no-edit boundary and this repository has not
+Independent pre-acceptance Agent review is `NOT CONFIGURED`. An isolated read-only sub-agent (`explore` or a custom
+reviewer definition) supplies a real
+separate-context candidate, but this repository has not
 selected the review packet, model and data scope, cost, timeout, or failure route. Before enabling it as a required stage,
 maintainers must define those boundaries, bind evidence to the exact candidate, run a representative review, and verify
 that findings return through implementation, verification, and a new review. Until then, use labeled implementer

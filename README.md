@@ -76,18 +76,18 @@ Alternatively, configure at least one provider API key:
 
 The curated `/model` catalog tracks the current API families below. Older supported entries remain selectable.
 
-| Provider  | Current catalog highlights                                      | Smart default       |
-| --------- | --------------------------------------------------------------- | ------------------- |
-| Anthropic | Claude Fable 5.1, Opus 5, Sonnet 5, Haiku 4.5                   | Claude Sonnet 5     |
-| OpenAI    | GPT-6 Astra, GPT-5.6 Sol / Terra / Luna                         | GPT-5.6 Sol         |
-| DeepSeek  | DeepSeek V4.1 Flash (native vision), V4 Pro (text only)         | DeepSeek V4.1 Flash |
-| Alibaba   | Qwen3.8 Max / Flash (native vision), Qwen3.7 and Qwen3 variants | Qwen3.8 Max         |
-| Google    | Gemini 3.8 / 3.7 / 3.6 / 3.5 Flash, Gemini 2.5                  | Gemini 3.8 Flash    |
-| xAI       | Grok 4.6, Grok 4.20 reasoning / non-reasoning                   | Grok 4.6            |
-| Zhipu     | GLM-5.3, GLM-5.3 Flash (native vision), earlier GLM models      | GLM-5.3             |
-| Moonshot  | Kimi K3, K2.7 Code / Highspeed, K2.6                            | Kimi K3             |
+| Provider  | Current catalog highlights                              | Smart default       |
+| --------- | ------------------------------------------------------- | ------------------- |
+| Anthropic | Claude Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5       | Claude Sonnet 5.5   |
+| OpenAI    | GPT-6.2 Astra / Sol, GPT-6.1 Terra, GPT-6 Luna          | GPT-6.2 Sol         |
+| DeepSeek  | DeepSeek V4.1 Flash (native vision), V4 Pro (text only) | DeepSeek V4.1 Flash |
+| Alibaba   | Qwen4 Max, Qwen3.8 Max / Flash (native vision)          | Qwen4 Max           |
+| Google    | Gemini 4 Carbon / Argon / Hydrogen, Gemini 3.8 Flash    | Gemini 4 Hydrogen   |
+| xAI       | Grok 4.7, Grok 4.6, Grok 4.5                            | Grok 4.7            |
+| Zhipu     | GLM-5.3, GLM-5.3 Flash (native vision), GLM-4.7 Flash   | GLM-5.3             |
+| Moonshot  | Kimi K3.1 Pro, Kimi K3.1 Pro Highspeed, Kimi K3         | Kimi K3.1 Pro       |
 
-GPT-6 Astra is intentionally not the OpenAI smart default: GPT-5.6 Sol remains the safer default for ChatGPT subscription compatibility and lower accidental API cost. Models whose reasoning cannot be disabled automatically map `/thinking off` to their lowest supported effort.
+GPT-6.2 Astra is intentionally not the OpenAI smart default: GPT-6.2 Sol remains the safer default for ChatGPT subscription compatibility and lower accidental API cost. Models whose reasoning cannot be disabled automatically map `/thinking off` to their lowest supported effort.
 
 **OpenAI-compatible escape hatch** (vLLM / OpenRouter / internal gateways): set both `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`, then address models as `custom:<your-model-id>`.
 
@@ -188,8 +188,8 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 
 ### Intelligent Development
 
-- **Built-in tools** — file I/O, shell execution, code search (Grep / Glob), web fetch, sub-agent delegation, todo tracking, and more
-- **Sub-agents** — ships with 5 (explore / general-purpose / plan / code-reviewer / goal-verifier), supports custom agents
+- **Built-in tools** — file I/O, shell execution, code search (Grep / Glob), web search & fetch, sub-agent delegation, local visual checks, and more
+- **Sub-agents** — ships with 4 built-ins (`explore` / `plan` / `worker` / `goal-verifier`, plus opt-in `browser`), supports custom agents and per-agent model overrides via `/agent`
 - **Plan mode** — `--plan` or `/plan` enters read-only exploration; the agent designs a plan, then executes after approval
 - **Durable goal loops** — `/goal` runs execute → verify → repair cycles until passing or hitting a stop condition
 - **Model-directed Git worktrees** — when repository state and verification risk warrant it, the agent can use ordinary Git commands to create and clean up a temporary worktree instead of risking the active checkout
@@ -221,7 +221,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 
 - **Streaming output** — results render as they are generated
 - **Theme switching** — `/theme` controls diff colors and syntax-highlight palette
-- **Unified thinking mode** — `/thinking on|off` consolidates provider-specific reasoning parameters
+- **Unified thinking mode** — `/thinking [default|on|off]` consolidates provider-specific reasoning parameters
 - **Multiline input** — `Alt+Enter` or trailing `\` inserts a newline
 - **Input history** — `↑`/`↓` on empty prompt recalls previous messages
 - **Mid-turn steering** — keep typing while the agent is working: your message is queued above the spinner and injected at the next tool boundary
@@ -268,7 +268,8 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/login [--device-auth\|status]` | Sign in with ChatGPT or show authentication status                   |
 | `/logout`                        | Sign out from ChatGPT                                                |
 | `/model [model-id\|refresh]`     | Pick a preloaded model or explicitly refresh the ChatGPT catalog     |
-| `/thinking [on\|off]`            | Enable / disable thinking mode                                       |
+| `/agent [list\|<name>\|reset]`   | Inspect sub-agents and configure per-agent or default models         |
+| `/thinking [default\|on\|off]`   | Configure extended thinking mode                                     |
 | `/theme [name]`                  | Switch UI theme                                                      |
 | `/plan [on\|off]`                | Enable / disable plan mode                                           |
 | `/goal [objective]`              | Start a durable goal loop (see [docs/goal.en.md](./docs/goal.en.md)) |

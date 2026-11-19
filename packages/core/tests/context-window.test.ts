@@ -99,13 +99,8 @@ describe('getMaxOutputTokens', () => {
     expect(getMaxOutputTokens('alibaba:qwen3.8-flash')).toBe(65536)
     expect(getMaxOutputTokens('zhipu:glm-5.3')).toBe(131072)
     expect(getMaxOutputTokens('zhipu:glm-4.7-flash')).toBe(131072)
-  })
-
-  it('returns default for models without an explicit cap', () => {
-    // xAI and Moonshot tiers don't have explicit max-output-token caps — they
-    // fall through to the default.
-    expect(getMaxOutputTokens('xai:grok-4.7')).toBe(16384)
-    expect(getMaxOutputTokens('moonshotai:kimi-k3.1-pro')).toBe(16384)
+    expect(getMaxOutputTokens('xai:grok-4.7')).toBe(65536)
+    expect(getMaxOutputTokens('moonshotai:kimi-k3.1-pro')).toBe(65536)
   })
 
   it('returns default for unknown models', () => {

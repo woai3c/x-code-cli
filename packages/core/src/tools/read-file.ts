@@ -261,19 +261,11 @@ async function checkReadCache(
  *  directly (tests, etc.). */
 export function createReadFileTool(cache?: ReadFileCache, options: ReadFileToolOptions = {}) {
   return tool({
-    description: `Read a file from the local filesystem. Assume this tool can read all files on the machine.
+    description: `Read a file from the local filesystem by absolute filePath (use listDir for directories).
 
-Usage:
-- The filePath parameter must be an absolute path, not a relative path.
-- You can optionally specify offset and limit (especially handy for long files), but it's recommended to read the whole file first.
-- PDFs are processed locally. Use pages such as "1-5" for a maximum of 20 pages, and pdfMode="visual" for layouts, charts, or signatures.
-- Results are returned with line numbers starting at 1.
-- This tool can read images (PNG, JPG, etc.) and PDFs — their content is presented inline.
-- This tool can read MP3, M4A, WAV, FLAC, and OGG Vorbis audio files (up to 20 minutes) — they are transcribed locally using a Whisper model, returning timestamped text. The original audio is never uploaded.
-- For content analysis of supported media, use this tool before shell or OS media utilities. If it returns usable content, analyze that directly; use external utilities only after an explicit processing failure or for a user-requested conversion or codec diagnostic.
-- This tool renders Jupyter notebooks (.ipynb) as readable cells (source + text outputs), skipping binary image outputs.
-- This tool can only read files, not directories. To list a directory, use listDir or shell with ls.
-- If a file path is provided by the user, assume it is valid.`,
+- Text files return 1-based numbered lines (up to ${LARGE_FILE_LINE_THRESHOLD} lines / ${MAX_READ_BYTES / 1024} KB by default); pass offset and limit to inspect targeted ranges in large files.
+- Supports images, PDFs (use pages e.g. "1-5" up to 20 pages, and pdfMode="visual" for layouts/charts), Office documents, Jupyter notebooks (.ipynb), and local Whisper transcription for MP3/M4A/WAV/FLAC/OGG audio (up to 20 min).
+- Prefer this tool over external media CLI utilities unless processing fails or format conversion is requested.`,
     inputSchema: z
       .object({
         filePath: z.string().describe('Absolute path to the file'),

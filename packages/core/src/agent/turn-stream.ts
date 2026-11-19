@@ -110,6 +110,12 @@ export async function streamChunksToUI(
   let lastLiveRounded = -1
   let lastModelChunkAtMs: number | null = null
   let sawInlineToolOutput = false
+  let reasoningStreamActive = false
+  const setReasoningActive = (active: boolean): void => {
+    if (reasoningStreamActive === active) return
+    reasoningStreamActive = active
+    if (state.agentRole === 'root') callbacks.onReasoningStateChange?.(active)
+  }
 
   const recordOutputBytes = (bytes: number): void => {
     if (bytes <= 0) return
@@ -140,116 +146,124 @@ export async function streamChunksToUI(
     tracker.toolActivity = true
   }
 
-  for await (const chunk of result.stream) {
-    attemptControl.touch()
-    if (chunk.type === 'error') {
-      throw chunk.error instanceof Error ? chunk.error : new Error(String(chunk.error))
-    }
-    if (!tracker.receivedData) {
-      tracker.receivedData = true
-      if (retrying) callbacks.onStreamRetry?.(null)
-    }
-    if (chunk.type === 'text-delta') {
-      const text = chunk.text ?? ''
-      const bytes = Buffer.byteLength(text, 'utf8')
-      debugLog('stream.text-delta', `bytes=${bytes}`)
-      recordOutputBytes(bytes)
-      textFilter.push(text)
-    } else if (chunk.type === 'tool-input-delta') {
-      const delta = chunk.delta ?? ''
-      const deltaId = chunk.id ?? chunk.toolCallId ?? ''
-      if (delta) {
-        if (deltaId) streamedToolInputIds.add(deltaId)
-        recordOutputBytes(Buffer.byteLength(delta, 'utf8'))
+  try {
+    for await (const chunk of result.stream) {
+      attemptControl.touch()
+      if (chunk.type === 'error') {
+        throw chunk.error instanceof Error ? chunk.error : new Error(String(chunk.error))
       }
-    } else if (chunk.type === 'tool-call') {
-      markToolActivity()
-      lastModelChunkAtMs = now()
-      const callId = chunk.toolCallId ?? ''
-      if ((!callId || !streamedToolInputIds.has(callId)) && chunk.input !== undefined) {
-        try {
-          recordOutputBytes(Buffer.byteLength(JSON.stringify(chunk.input), 'utf8'))
-        } catch {
-          /* ignore non-serializable mock input */
-        }
+      if (!tracker.receivedData) {
+        tracker.receivedData = true
+        if (retrying) callbacks.onStreamRetry?.(null)
       }
-      const inputKeys =
-        chunk.input && typeof chunk.input === 'object' && !Array.isArray(chunk.input)
-          ? Object.keys(chunk.input as Record<string, unknown>).sort()
-          : []
-      debugLog('stream.tool-call', `${chunk.toolName ?? ''} keys=[${inputKeys.join(',')}]`)
-      const toolCallId = chunk.toolCallId ?? ''
-      const toolName = chunk.toolName ?? ''
-      if (
-        isManagedMemoryAccess(
-          toolName,
-          (chunk.input ?? {}) as Record<string, unknown>,
-          options.memoryService?.memoryRoot,
-        )
-      ) {
-        suppressedMemoryAccessCallIds.add(toolCallId)
-        debugLog('stream.memory-access-call', `${toolName} ${toolCallId} — suppressed`)
-        continue
-      }
-      if (deferredNames.has(toolName) && !state.activatedTools.has(toolName)) {
-        suppressedDeferredCallIds.add(toolCallId)
-        debugLog('stream.deferred-early-call', `${toolName} ${toolCallId} — suppressed (not loaded yet)`)
-        continue
-      }
-      if (toolCallId) {
-        setProgressReporter(toolCallId, (message) => callbacks.onToolProgress(toolCallId, message))
-      }
-      callbacks.onToolCall(toolCallId, toolName, (chunk.input ?? {}) as Record<string, unknown>)
-    } else if (chunk.type === 'tool-result') {
-      sawInlineToolOutput = true
-      markToolActivity()
-      const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
-      debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} bytes=${Buffer.byteLength(raw, 'utf8')}`)
-      if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
-      if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
-      const isError = /^Error(?:\s|:)/i.test(raw.trimStart())
-      callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw), isError)
-    } else if (chunk.type === 'reasoning-delta') {
-      // Providers only send thought summaries when the request asks for them
-      // (Gemini includeThoughts). There is no renderer for them yet, so record
-      // the volume and drop the payload instead of pricing it into the turn.
-      const bytes = Buffer.byteLength(chunk.text ?? '', 'utf8')
-      if (bytes > 0) {
-        tracker.sawReasoningDelta = true
+      if (chunk.type === 'text-delta') {
+        setReasoningActive(false)
+        const text = chunk.text ?? ''
+        const bytes = Buffer.byteLength(text, 'utf8')
+        debugLog('stream.text-delta', `bytes=${bytes}`)
         recordOutputBytes(bytes)
+        textFilter.push(text)
+      } else if (chunk.type === 'tool-input-delta') {
+        setReasoningActive(false)
+        const delta = chunk.delta ?? ''
+        const deltaId = chunk.id ?? chunk.toolCallId ?? ''
+        if (delta) {
+          if (deltaId) streamedToolInputIds.add(deltaId)
+          recordOutputBytes(Buffer.byteLength(delta, 'utf8'))
+        }
+      } else if (chunk.type === 'tool-call') {
+        setReasoningActive(false)
+        markToolActivity()
+        lastModelChunkAtMs = now()
+        const callId = chunk.toolCallId ?? ''
+        if ((!callId || !streamedToolInputIds.has(callId)) && chunk.input !== undefined) {
+          try {
+            recordOutputBytes(Buffer.byteLength(JSON.stringify(chunk.input), 'utf8'))
+          } catch {
+            /* ignore non-serializable mock input */
+          }
+        }
+        const inputKeys =
+          chunk.input && typeof chunk.input === 'object' && !Array.isArray(chunk.input)
+            ? Object.keys(chunk.input as Record<string, unknown>).sort()
+            : []
+        debugLog('stream.tool-call', `${chunk.toolName ?? ''} keys=[${inputKeys.join(',')}]`)
+        const toolCallId = chunk.toolCallId ?? ''
+        const toolName = chunk.toolName ?? ''
+        if (
+          isManagedMemoryAccess(
+            toolName,
+            (chunk.input ?? {}) as Record<string, unknown>,
+            options.memoryService?.memoryRoot,
+          )
+        ) {
+          suppressedMemoryAccessCallIds.add(toolCallId)
+          debugLog('stream.memory-access-call', `${toolName} ${toolCallId} — suppressed`)
+          continue
+        }
+        if (deferredNames.has(toolName) && !state.activatedTools.has(toolName)) {
+          suppressedDeferredCallIds.add(toolCallId)
+          debugLog('stream.deferred-early-call', `${toolName} ${toolCallId} — suppressed (not loaded yet)`)
+          continue
+        }
+        if (toolCallId) {
+          setProgressReporter(toolCallId, (message) => callbacks.onToolProgress(toolCallId, message))
+        }
+        callbacks.onToolCall(toolCallId, toolName, (chunk.input ?? {}) as Record<string, unknown>)
+      } else if (chunk.type === 'tool-result') {
+        setReasoningActive(false)
+        sawInlineToolOutput = true
+        markToolActivity()
+        const raw = typeof chunk.output === 'string' ? chunk.output : JSON.stringify(chunk.output ?? '')
+        debugLog('stream.tool-result', `${chunk.toolCallId ?? ''} bytes=${Buffer.byteLength(raw, 'utf8')}`)
+        if (chunk.toolCallId) clearProgressReporter(chunk.toolCallId)
+        if (suppressedMemoryAccessCallIds.has(chunk.toolCallId ?? '')) continue
+        const isError = /^Error(?:\s|:)/i.test(raw.trimStart())
+        callbacks.onToolResult(chunk.toolCallId ?? '', truncateToolResult(raw), isError)
+      } else if (chunk.type === 'reasoning-delta') {
+        const bytes = Buffer.byteLength(chunk.text ?? '', 'utf8')
+        if (bytes > 0) {
+          setReasoningActive(true)
+          tracker.sawReasoningDelta = true
+          recordOutputBytes(bytes)
+        }
+        debugLog('stream.reasoning-delta', `bytes=${bytes}`)
+      } else if (chunk.type === 'tool-error') {
+        setReasoningActive(false)
+        sawInlineToolOutput = true
+        markToolActivity()
+        const toolCallId = chunk.toolCallId ?? ''
+        if (toolCallId) clearProgressReporter(toolCallId)
+        if (suppressedMemoryAccessCallIds.has(toolCallId)) {
+          debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed memory access`)
+          continue
+        }
+        if (suppressedDeferredCallIds.has(toolCallId)) {
+          debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed deferred early-call`)
+          continue
+        }
+        const message = chunk.error instanceof Error ? chunk.error.message : String(chunk.error ?? 'tool call failed')
+        debugLog(
+          'stream.tool-error',
+          `${chunk.toolName ?? ''} ${toolCallId} messageBytes=${Buffer.byteLength(message, 'utf8')}`,
+        )
+        callbacks.onToolResult(toolCallId, toolErrorString(message), true)
+      } else {
+        if (chunk.type === 'reasoning-end') setReasoningActive(false)
+        if (
+          chunk.type === 'text-end' ||
+          chunk.type === 'reasoning-end' ||
+          chunk.type === 'tool-input-end' ||
+          chunk.type === 'finish-step' ||
+          chunk.type === 'finish'
+        ) {
+          if (!sawInlineToolOutput) lastModelChunkAtMs = now()
+        }
+        debugLog('stream.other-chunk', chunk.type)
       }
-      debugLog('stream.reasoning-delta', `bytes=${bytes}`)
-    } else if (chunk.type === 'tool-error') {
-      sawInlineToolOutput = true
-      markToolActivity()
-      const toolCallId = chunk.toolCallId ?? ''
-      if (toolCallId) clearProgressReporter(toolCallId)
-      if (suppressedMemoryAccessCallIds.has(toolCallId)) {
-        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed memory access`)
-        continue
-      }
-      if (suppressedDeferredCallIds.has(toolCallId)) {
-        debugLog('stream.tool-error', `${chunk.toolName ?? ''} ${toolCallId} — suppressed deferred early-call`)
-        continue
-      }
-      const message = chunk.error instanceof Error ? chunk.error.message : String(chunk.error ?? 'tool call failed')
-      debugLog(
-        'stream.tool-error',
-        `${chunk.toolName ?? ''} ${toolCallId} messageBytes=${Buffer.byteLength(message, 'utf8')}`,
-      )
-      callbacks.onToolResult(toolCallId, toolErrorString(message), true)
-    } else {
-      if (
-        chunk.type === 'text-end' ||
-        chunk.type === 'reasoning-end' ||
-        chunk.type === 'tool-input-end' ||
-        chunk.type === 'finish-step' ||
-        chunk.type === 'finish'
-      ) {
-        if (!sawInlineToolOutput) lastModelChunkAtMs = now()
-      }
-      debugLog('stream.other-chunk', chunk.type)
     }
+  } finally {
+    setReasoningActive(false)
   }
   textFilter.finish()
   tracker.suppressedReplay = textFilter.suppressedReplay()

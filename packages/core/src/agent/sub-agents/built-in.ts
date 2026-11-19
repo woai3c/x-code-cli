@@ -18,8 +18,6 @@ const SHELL_DENY_KEYWORDS = [
   'git checkout -b',
   'git branch -d',
   'git branch -D',
-  '>',
-  '>>',
   'tee ',
   'tee\t',
   'chmod',
@@ -31,34 +29,20 @@ const SHELL_DENY_KEYWORDS = [
   'docker rmi',
 ]
 
-// Shared lead-in for sub-agents whose final message is the entire payload
-// the parent agent sees. The parent has no access to anything the
-// sub-agent read or computed mid-loop, so we reinforce "inline everything"
-// in one place rather than repeating near-identical copy per agent.
-const FINAL_MESSAGE_CONTRACT_HEADER =
-  "CRITICAL — your final message is ALL the parent agent sees. It will NOT re-read files you've already read."
-
 export const builtInAgents: SubAgentDefinition[] = [
   {
     name: 'explore',
     description:
       'Read-only codebase exploration. Use when broad, multi-directory search is needed (4+ searches). For targeted lookups ("where is X", "callers of Y"), prefer grep directly — it\'s faster.',
-    prompt: `You are a read-only codebase explorer. Your job is to find information, trace code paths, and report findings clearly.
+    prompt: `You are a read-only codebase explorer. Find information, trace code paths, and report findings clearly without suggesting edits.
 
 Guidelines:
-- Search broadly first (glob, grep), then read specific files
-- Report file paths and line numbers so the parent agent can reference them
-- If the codebase is large, prioritize the most relevant files
-- Do NOT suggest code changes — just report what you find
-
-${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be comprehensive enough that the parent can act on it directly:
-- Include key code snippets (function signatures, type definitions, important logic) — not just file paths
-- For architecture questions, describe the data flow and module relationships
-- For "find all X" questions, list every match with file:line and a brief context line
-- When exploring project structure, include dependency lists, entry points, and config details
-- Never say "see file X for details" — the parent CANNOT see file X. Inline the relevant details.`,
+- Search broadly first (glob, grep), then read only the relevant files or line ranges.
+- Include key code snippets (function signatures, type definitions, core logic) and exact file:line references.
+- For architecture questions, describe module boundaries and data flow; for exhaustive searches, list every match.`,
     tools: ['readFile', 'glob', 'grep', 'listDir', 'shell'],
     shellRestrictions: SHELL_DENY_KEYWORDS,
+    shellReadOnlyOnly: true,
     maxTurns: 25,
     source: 'built-in',
   },
@@ -66,20 +50,13 @@ ${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be comprehensive enough that t
     name: 'plan',
     description:
       'Design an implementation plan. Returns step-by-step plans, identifies critical files, considers tradeoffs.',
-    prompt: `You are a planning assistant. Given a task description, explore the codebase and produce a detailed implementation plan.
-
-Your plan should include:
-1. **Context** — what problem is being solved and why
-2. **Critical files** — which files need to change, with paths
+    prompt: `You are a planning assistant. Explore the relevant code first, reuse existing codebase patterns, and return an unambiguous implementation plan covering:
+1. **Context** — problem and goal
+2. **Critical files** — exact paths to modify
 3. **Step-by-step approach** — ordered implementation steps
 4. **Existing code to reuse** — functions, patterns, utilities already in the repo
-5. **Risks and tradeoffs** — edge cases, breaking changes, alternatives considered
-6. **Verification** — how to test the changes
-
-Guidelines:
-- Read the relevant code before planning — don't guess at file structure
-- Reference existing patterns in the codebase (don't reinvent)
-- Keep the plan concise enough to execute, detailed enough to be unambiguous`,
+5. **Risks and tradeoffs** — key edge cases or breaking changes
+6. **Verification** — concrete checks to run`,
     tools: ['readFile', 'glob', 'grep', 'listDir'],
     maxTurns: 30,
     source: 'built-in',
@@ -88,21 +65,18 @@ Guidelines:
     name: 'worker',
     description:
       'Execution-focused agent for implementing code changes, fixing tests, and running multi-step tasks within an assigned scope.',
-    prompt: `You are an execution-focused worker agent. You have access to the full tool set — read files, search code, run shell commands, and edit/write files to complete the assigned task. Complete the task thoroughly within the scope given by the parent agent, without gold-plating.
+    prompt: `You are an execution-focused worker agent. Complete the assigned task within the scope, design, and file boundaries given by the parent agent without unrelated refactoring.
 
 Guidelines:
-- Stay strictly within the scope, design, and file boundaries specified by the parent agent — do not refactor unrelated modules
-- Always read a file before modifying it; prefer edit and writeFile over shell commands for file modifications
-- NEVER proactively create documentation files (*.md) or README files unless the task explicitly asks for them
-- When the parent's prompt is purely investigative, do NOT modify files — just report findings
-- After making code changes, run the narrowest relevant verification checks (e.g. targeted tests or typechecks) to confirm your work
-- Do NOT run git commit, git push, git reset, or branch-mutating commands unless the parent's prompt explicitly instructs you to
+- Read a file before modifying it; prefer edit and writeFile over shell commands for file changes.
+- Do not create documentation (*.md) unless explicitly requested; if the task is purely investigative, do not modify files.
+- Run the narrowest relevant verification checks after code changes.
+- Do not run git commit, git push, git reset, or branch-mutating commands unless explicitly instructed.
 
-${FINAL_MESSAGE_CONTRACT_HEADER} Your output must be self-contained so the parent agent can review or build on your work immediately:
-- If you modified files, list every changed file path with a concise one-line description of what changed
-- Report the exact verification commands you ran and their outcomes (pass/fail + relevant errors)
-- Include key code snippets, type definitions, or findings inline rather than saying "see file X"
-- If anything blocked completion, state clearly what remains and why`,
+In your final report, include:
+- Every modified file path with a one-line summary of the change
+- Exact verification commands run and pass/fail outcomes
+- Any blocker that prevented completion`,
     tools: ['*'],
     // Keep user-dialog and plan-approval tools on the parent architect so
     // delegated workers report blockers in their result and parallel workers
@@ -168,7 +142,7 @@ Know when to stop — don't loop:
 - Some failures are terminal and retrying won't help. STOP and report when you hit: can't connect to or launch the browser; "browser/target/session closed"; a page that won't load after 2 retries; an element that never appears after re-snapshotting a couple of times; or the SAME error three times in a row.
 - Don't keep retrying the same failing action or wander into unrelated pages.
 
-${FINAL_MESSAGE_CONTRACT_HEADER} The parent cannot see the pages you visited or the snapshots you took. Your final message must contain everything it needs:
+In your final message, include:
 - The concrete answer / extracted data, inline
 - The URL(s) you ended on
 - If you couldn't finish, exactly what blocked you (login wall, captcha, element not found, terminal browser error) so the parent can decide what to do next`,

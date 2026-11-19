@@ -76,18 +76,18 @@ xc logout                   # 退出并删除本地 ChatGPT 凭据
 
 内置 `/model` 目录已跟进以下当前 API 型号；仍可用的旧型号继续保留。
 
-| 厂商      | 当前目录重点型号                                       | 智能默认值          |
-| --------- | ------------------------------------------------------ | ------------------- |
-| Anthropic | Claude Fable 5.1、Opus 5、Sonnet 5、Haiku 4.5          | Claude Sonnet 5     |
-| OpenAI    | GPT-6 Astra、GPT-5.6 Sol / Terra / Luna                | GPT-5.6 Sol         |
-| DeepSeek  | DeepSeek V4.1 Flash（原生视觉）、V4 Pro（仅文本）      | DeepSeek V4.1 Flash |
-| 阿里通义  | Qwen3.8 Max / Flash（原生视觉）、Qwen3.7 与 Qwen3 系列 | Qwen3.8 Max         |
-| Google    | Gemini 3.8 / 3.7 / 3.6 / 3.5 Flash、Gemini 2.5         | Gemini 3.8 Flash    |
-| xAI       | Grok 4.6、Grok 4.20 推理版 / 非推理版                  | Grok 4.6            |
-| 智谱      | GLM-5.3、GLM-5.3 Flash（原生视觉）及较早 GLM 型号      | GLM-5.3             |
-| Moonshot  | Kimi K3、K2.7 Code / Highspeed、K2.6                   | Kimi K3             |
+| 厂商      | 当前目录重点型号                                     | 智能默认值          |
+| --------- | ---------------------------------------------------- | ------------------- |
+| Anthropic | Claude Fable 5.2、Opus 5.5、Sonnet 5.5、Haiku 5.5    | Claude Sonnet 5.5   |
+| OpenAI    | GPT-6.2 Astra / Sol、GPT-6.1 Terra、GPT-6 Luna       | GPT-6.2 Sol         |
+| DeepSeek  | DeepSeek V4.1 Flash（原生视觉）、V4 Pro（仅文本）    | DeepSeek V4.1 Flash |
+| 阿里通义  | Qwen4 Max、Qwen3.8 Max / Flash（原生视觉）           | Qwen4 Max           |
+| Google    | Gemini 4 Carbon / Argon / Hydrogen、Gemini 3.8 Flash | Gemini 4 Hydrogen   |
+| xAI       | Grok 4.7、Grok 4.6、Grok 4.5                         | Grok 4.7            |
+| 智谱      | GLM-5.3、GLM-5.3 Flash（原生视觉）、GLM-4.7 Flash    | GLM-5.3             |
+| Moonshot  | Kimi K3.1 Pro、Kimi K3.1 Pro Highspeed、Kimi K3      | Kimi K3.1 Pro       |
 
-GPT-6 Astra 不会自动成为 OpenAI 智能默认值：保留 GPT-5.6 Sol 可以兼顾 ChatGPT 订阅兼容性，并降低误用高价 API 的风险。对于不能关闭推理的型号，`/thinking off` 会自动降到该型号支持的最低推理档位。
+GPT-6.2 Astra 不会自动成为 OpenAI 智能默认值：保留 GPT-6.2 Sol 可以兼顾 ChatGPT 订阅兼容性，并降低误用高价 API 的风险。对于不能关闭推理的型号，`/thinking off` 会自动降到该型号支持的最低推理档位。
 
 **OpenAI 兼容接入**（vLLM / OpenRouter / 代理网关等）：同时设置 `OPENAI_COMPATIBLE_API_KEY` 与 `OPENAI_COMPATIBLE_BASE_URL`，模型 ID 写成 `custom:<your-model-id>`。
 
@@ -188,8 +188,8 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 
 ### 智能开发
 
-- **内置工具** — 文件读写、Shell 执行、代码搜索（Grep / Glob）、网页抓取、子 Agent 委派、Todo 追踪等
-- **子 Agent** — 内置 5 个（explore / general-purpose / plan / code-reviewer / goal-verifier），支持自定义
+- **内置工具** — 文件读写、Shell 执行、代码搜索（Grep / Glob）、联网搜索与抓取、子 Agent 委派、本地 UI 视觉检查等
+- **子 Agent** — 内置 4 个（`explore` / `plan` / `worker` / `goal-verifier`，另可选开启 `browser`），支持自定义与 `/agent` 独立模型配置
 - **Plan 模式** — `--plan` 或 `/plan` 进入只读探索，Agent 先制定方案、批准后再执行
 - **持续目标循环** — `/goal` 自动执行→验证→修复，直到验证通过或触发停止条件
 - **模型自主 Git worktree** — 当仓库状态和验证风险确有需要时，Agent 可自主使用普通 Git 命令创建并清理临时 worktree，避免冒险改动当前工作区
@@ -221,7 +221,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 
 - **流式输出** — 边生成边显示
 - **主题切换** — `/theme` 控制 diff 配色和语法高亮风格
-- **统一思考模式** — `/thinking on|off` 将各厂商的 thinking 参数统一为单一开关
+- **统一思考模式** — `/thinking [default|on|off]` 将各厂商的 thinking 参数统一管理
 - **多行输入** — `Alt+Enter` 或行尾 `\` 插入换行
 - **历史回溯** — 空输入框时 `↑`/`↓` 召回已提交的提示词
 - **中途转向（steering）** — Agent 运行中也能继续输入：消息先排队显示在 spinner 上方，在下一个工具边界自动注入
@@ -268,7 +268,8 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/login [--device-auth\|status]` | 登录 ChatGPT 或查看认证状态                                                         |
 | `/logout`                        | 退出 ChatGPT 登录                                                                   |
 | `/model [model-id\|refresh]`     | 选择已预加载的模型，或显式刷新 ChatGPT 模型目录                                     |
-| `/thinking [on\|off]`            | 启用 / 禁用思考模式                                                                 |
+| `/agent [list\|<name>\|reset]`   | 查看子 Agent 并配置默认或单 Agent 专属模型                                          |
+| `/thinking [default\|on\|off]`   | 配置思考模式（默认跟随模型 / 开启 / 关闭）                                          |
 | `/theme [name]`                  | 切换 UI 主题                                                                        |
 | `/plan [on\|off]`                | 启用 / 禁用 Plan 模式                                                               |
 | `/goal [目标]`                   | 启动持续目标循环（详见 [docs/goal.md](./docs/goal.md)）                             |
