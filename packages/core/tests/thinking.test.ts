@@ -18,88 +18,21 @@ beforeEach(() => {
 
 afterEach(() => restoreOpenAIAuth())
 
-describe('supportsReasoningTier', () => {
-  it('is true for tier-capable models', () => {
-    expect(supportsReasoningTier('moonshotai:kimi-k3.1-pro')).toBe(true)
-    expect(supportsReasoningTier('google:gemini-4-carbon')).toBe(true)
-    expect(supportsReasoningTier('google:gemini-4-argon')).toBe(true)
-    expect(supportsReasoningTier('google:gemini-4-hydrogen')).toBe(true)
-    expect(supportsReasoningTier('google:gemini-3.8-flash')).toBe(true)
+describe('reasoning tier eligibility and profiles', () => {
+  it('gates granular reasoning tiers to matching model families rather than whole providers', () => {
     expect(supportsReasoningTier('openai:gpt-6.2-sol')).toBe(true)
-    expect(supportsReasoningTier('openai:gpt-6.1-terra')).toBe(true)
-    expect(supportsReasoningTier('openai:gpt-6-luna')).toBe(true)
-    expect(supportsReasoningTier('anthropic:claude-sonnet-5-5')).toBe(true)
-    expect(supportsReasoningTier('xai:grok-4.7')).toBe(true)
-    expect(supportsReasoningTier('anthropic:claude-fable-5-2')).toBe(true)
-    expect(supportsReasoningTier('openai:gpt-6.2-astra')).toBe(true)
-  })
-
-  it('is false for models whose provider has tiers but the model family does not', () => {
-    expect(supportsReasoningTier('google:gemini-2.5-pro')).toBe(false)
-    expect(supportsReasoningTier('google:gemini-2.5-flash')).toBe(false)
-    expect(supportsReasoningTier('moonshotai:kimi-k2.6')).toBe(false)
-    expect(supportsReasoningTier('moonshotai:kimi-k2.7-code')).toBe(false)
-    expect(supportsReasoningTier('xai:grok-4.20')).toBe(false)
-    expect(supportsReasoningTier('xai:grok-4.20-non-reasoning')).toBe(false)
-  })
-
-  it('is true for current DeepSeek Flash and V4 models', () => {
+    expect(supportsReasoningTier('google:gemini-4-carbon')).toBe(true)
     expect(supportsReasoningTier('deepseek:deepseek-flash')).toBe(true)
-    expect(supportsReasoningTier('deepseek:deepseek-v4-pro')).toBe(true)
-  })
-
-  it('is true for current Zhipu GLM-5.3 tiers', () => {
     expect(supportsReasoningTier('zhipu:glm-5.3')).toBe(true)
-    expect(supportsReasoningTier('zhipu:glm-5.3-flash')).toBe(true)
-  })
 
-  it('is false for providers without any tier support', () => {
-    expect(supportsReasoningTier('alibaba:qwen4-max')).toBe(false)
-  })
-
-  it('is false for older models in providers that have tiers', () => {
+    expect(supportsReasoningTier('google:gemini-2.5-pro')).toBe(false)
     expect(supportsReasoningTier('deepseek:deepseek-chat')).toBe(false)
-    expect(supportsReasoningTier('deepseek:deepseek-reasoner')).toBe(false)
-    expect(supportsReasoningTier('zhipu:glm-5.2')).toBe(false)
-    expect(supportsReasoningTier('zhipu:glm-5')).toBe(false)
     expect(supportsReasoningTier('zhipu:glm-4.7')).toBe(false)
-  })
-})
+    expect(supportsReasoningTier('xai:grok-4.20')).toBe(false)
+    expect(supportsReasoningTier('alibaba:qwen4-max')).toBe(false)
 
-describe('model-specific reasoning profiles', () => {
-  it('returns only tiers supported by the selected model family', () => {
-    expect(getReasoningTierOptions('google:gemini-4-carbon')?.map((tier) => tier.value)).toEqual([
-      'low',
-      'medium',
-      'high',
-    ])
-    expect(getReasoningTierOptions('google:gemini-4-hydrogen')?.map((tier) => tier.value)).toEqual([
-      'low',
-      'medium',
-      'high',
-    ])
-    expect(getReasoningTierOptions('openai:gpt-6.2-sol')?.map((tier) => tier.value)).toEqual([
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-      'max',
-    ])
-    expect(getReasoningTierOptions('openai:gpt-6.1-terra')?.map((tier) => tier.value)).toEqual([
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-      'max',
-    ])
-    expect(getReasoningTierOptions('openai:gpt-6-luna')?.map((tier) => tier.value)).toEqual([
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-      'max',
-    ])
-    expect(getReasoningTierOptions('anthropic:claude-opus-5-5')?.map((tier) => tier.value)).toEqual([
+    expect(getReasoningTierOptions('google:gemini-4-carbon')?.map((t) => t.value)).toEqual(['low', 'medium', 'high'])
+    expect(getReasoningTierOptions('openai:gpt-6.2-sol')?.map((t) => t.value)).toEqual([
       'low',
       'medium',
       'high',
@@ -108,122 +41,49 @@ describe('model-specific reasoning profiles', () => {
     ])
   })
 
-  it('floors disabled reasoning for models that reject off', () => {
+  it('floors disabled reasoning to low for models that reject off, including uncatalogued Gemini 3.8/4 ids', () => {
     for (const id of [
       'anthropic:claude-fable-5-2',
-      'anthropic:claude-opus-5-5',
       'openai:gpt-6.2-astra',
       'google:gemini-4-carbon',
-      'google:gemini-4-hydrogen',
-      'xai:grok-4.7',
+      'google:gemini-4-future-model',
+      'google:gemini-3.8-flash-001',
       'zhipu:glm-5.3',
-      'moonshotai:kimi-k3.1-pro',
     ]) {
-      expect(getReasoningEffort(id, false), id).toBe('low')
+      expect(getReasoningEffort(id, false) ?? getReasoningLevel(id, false), id).toBe('low')
     }
-    expect(getReasoningLevel('google:gemini-4-carbon', false)).toBe('low')
-    expect(getReasoningEffort('google:gemini-4-hydrogen', false)).toBe('low')
-    expect(getReasoningLevel('openai:gpt-6.2-astra', false)).toBe('low')
-  })
-})
-
-describe('getReasoningLevel', () => {
-  it('returns the effort tier for tier-capable models', () => {
-    expect(getReasoningLevel('deepseek:deepseek-flash', false, 'high')).toBeUndefined()
-    expect(getReasoningLevel('openai:gpt-6.2-sol', false, 'low')).toBe('low')
-    expect(getReasoningLevel('openai:gpt-6-luna', false, 'medium')).toBe('medium')
-    expect(getReasoningLevel('openai:gpt-6-luna', false, 'xhigh')).toBe('xhigh')
-    expect(getReasoningLevel('anthropic:claude-sonnet-5-5', true, 'low')).toBe('low')
-  })
-
-  it('maps portable "max" tiers to "xhigh" while leaving DeepSeek on its native option', () => {
-    expect(getReasoningLevel('deepseek:deepseek-flash', false, 'max')).toBeUndefined()
-    expect(getReasoningLevel('moonshotai:kimi-k3.1-pro', false, 'max')).toBe('xhigh')
-  })
-
-  it('returns high when enabled and no effort specified', () => {
-    expect(getReasoningLevel('deepseek:deepseek-flash', true)).toBe('high')
-    expect(getReasoningLevel('openai:gpt-6.2-sol', true)).toBe('high')
-  })
-
-  it('returns none when disabled and no effort specified, and undefined (provider-default) when unset', () => {
-    expect(getReasoningLevel('deepseek:deepseek-flash', false)).toBe('none')
-    expect(getReasoningLevel('openai:gpt-6.2-sol', false)).toBe('none')
-    expect(getReasoningLevel('deepseek:deepseek-flash', undefined)).toBeUndefined()
-    expect(getReasoningLevel('openai:gpt-6.2-sol', undefined)).toBeUndefined()
-    expect(getReasoningLevel('google:gemini-4-hydrogen', undefined)).toBeUndefined()
-    expect(getThinkingProviderOptions('alibaba:qwen4-max', undefined)).toEqual({})
-    expect(getThinkingProviderOptions('zhipu:glm-5.3', undefined)).toEqual({})
-  })
-
-  it('floors disabled reasoning for Gemini 3.8/4 ids that are not in the catalog', () => {
-    // These generations reject thinkingLevel "minimal", so an uncatalogued id
-    // must degrade to the minimum supported level.
-    expect(getReasoningLevel('google:gemini-3.8-flash-001', false)).toBe('low')
-    expect(getReasoningLevel('google:gemini-4-future-model', false)).toBe('low')
-    expect(getReasoningLevel('google:gemini-4-hydrogen', true)).toBe('high')
-    // Older Gemini 3 releases still support minimal; Gemini 2.5 keeps the
-    // portable off switch, which maps to thinkingBudget 0.
     expect(getReasoningLevel('google:gemini-3.5-flash', false)).toBe('none')
     expect(getReasoningLevel('google:gemini-2.5-pro', false)).toBe('none')
   })
-
-  it('returns undefined for alibaba/zhipu/custom providers', () => {
-    expect(getReasoningLevel('alibaba:qwen4-max', true)).toBeUndefined()
-    expect(getReasoningLevel('zhipu:glm-5.3', true, 'high')).toBeUndefined()
-    expect(getReasoningLevel('custom:my-model', true)).toBeUndefined()
-  })
-
-  it('omits reasoning control for fixed-reasoning Grok 4.20 variants', () => {
-    expect(getReasoningLevel('xai:grok-4.20', false)).toBeUndefined()
-    expect(getReasoningLevel('xai:grok-4.20', true, 'low')).toBeUndefined()
-    expect(getReasoningLevel('xai:grok-4.20-non-reasoning', true, 'high')).toBeUndefined()
-  })
-
-  it('ignores effort for models that do not support tiers', () => {
-    expect(getReasoningLevel('deepseek:deepseek-chat', false, 'high')).toBe('none')
-    expect(getReasoningLevel('deepseek:deepseek-chat', true, 'high')).toBe('high')
-  })
 })
 
-describe('getThinkingProviderOptions', () => {
-  it('returns alibaba enableThinking', () => {
-    expect(getThinkingProviderOptions('alibaba:qwen4-max', true)).toEqual({
-      alibaba: { enableThinking: true },
-    })
-    expect(getThinkingProviderOptions('alibaba:qwen4-max', false)).toEqual({
-      alibaba: { enableThinking: false },
-    })
+describe('getReasoningLevel and getThinkingProviderOptions', () => {
+  it('resolves portable tri-state reasoning (explicit tier, on -> high, off -> none, unset -> undefined)', () => {
+    expect(getReasoningLevel('openai:gpt-6.2-sol', false, 'medium')).toBe('medium')
+    expect(getReasoningLevel('openai:gpt-6.2-sol', true)).toBe('high')
+    expect(getReasoningLevel('openai:gpt-6.2-sol', false)).toBe('none')
+    expect(getReasoningLevel('openai:gpt-6.2-sol', undefined)).toBeUndefined()
+    expect(getReasoningLevel('deepseek:deepseek-chat', false, 'high')).toBe('none')
+    expect(getReasoningLevel('xai:grok-4.20', true, 'low')).toBeUndefined()
+    expect(getReasoningLevel('alibaba:qwen4-max', true)).toBeUndefined()
   })
 
-  it('returns zhipu thinking toggle for models without tiers', () => {
-    expect(getThinkingProviderOptions('zhipu:glm-4.7', true)).toEqual({
-      zhipu: { thinking: { type: 'enabled' } },
-    })
-    expect(getThinkingProviderOptions('zhipu:glm-4.7', false)).toEqual({
-      zhipu: { thinking: { type: 'disabled' } },
-    })
-  })
-
-  it('returns zhipu thinking enabled when tier is set', () => {
-    expect(getThinkingProviderOptions('zhipu:glm-5.3-flash', false, 'high')).toEqual({
-      zhipu: { thinking: { type: 'enabled' }, reasoningEffort: 'high' },
-    })
-  })
-
-  it('keeps always-thinking Zhipu models enabled at low effort when switched off', () => {
+  it('routes provider-specific thinking options for Alibaba, Zhipu, DeepSeek, Anthropic, and OpenAI max', () => {
+    expect(getThinkingProviderOptions('alibaba:qwen4-max', true)).toEqual({ alibaba: { enableThinking: true } })
+    expect(getThinkingProviderOptions('alibaba:qwen4-max', false)).toEqual({ alibaba: { enableThinking: false } })
+    expect(getThinkingProviderOptions('zhipu:glm-4.7', false)).toEqual({ zhipu: { thinking: { type: 'disabled' } } })
     expect(getThinkingProviderOptions('zhipu:glm-5.3-flash', false)).toEqual({
       zhipu: { thinking: { type: 'enabled' }, reasoningEffort: 'low' },
     })
-  })
-
-  it.each(['low', 'high', 'max'])('uses the provider-native DeepSeek %s tier', (effort) => {
-    expect(getThinkingProviderOptions('deepseek:deepseek-flash', true, effort)).toEqual({
-      deepseek: { reasoningEffort: effort },
+    expect(getThinkingProviderOptions('zhipu:glm-5.3-flash', false, 'high')).toEqual({
+      zhipu: { thinking: { type: 'enabled' }, reasoningEffort: 'high' },
     })
-  })
 
-  it('uses provider-native max where the portable reasoning enum stops at xhigh', () => {
+    expect(getReasoningLevel('moonshotai:kimi-k3.1-pro', false, 'max')).toBe('xhigh')
+    expect(getReasoningLevel('deepseek:deepseek-flash', false, 'max')).toBeUndefined()
+    expect(getThinkingProviderOptions('deepseek:deepseek-flash', true, 'max')).toEqual({
+      deepseek: { reasoningEffort: 'max' },
+    })
     expect(getThinkingProviderOptions('anthropic:claude-opus-5-5', true, 'max')).toEqual({
       anthropic: { thinking: { type: 'adaptive' }, effort: 'max' },
     })
@@ -233,14 +93,7 @@ describe('getThinkingProviderOptions', () => {
     expect(getThinkingProviderOptions('openai:gpt-99', true, 'max')).toEqual({})
   })
 
-  it('returns empty object for providers using top-level reasoning', () => {
-    expect(getThinkingProviderOptions('deepseek:deepseek-flash', true)).toEqual({})
-    expect(getThinkingProviderOptions('openai:gpt-6.2-sol', true, 'high')).toEqual({})
-    expect(getThinkingProviderOptions('anthropic:claude-sonnet-5-5', true)).toEqual({})
-    expect(getThinkingProviderOptions('google:gemini-4-carbon', true, 'low')).toEqual({})
-  })
-
-  it('sends DeepSeek max natively without an xhigh compatibility warning', async () => {
+  it('sends DeepSeek max natively on the wire without an xhigh compatibility warning', async () => {
     let requestBody: { reasoning_effort?: string } = {}
     const provider = createDeepSeek({
       baseURL: 'https://example.test',

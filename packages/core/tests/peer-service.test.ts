@@ -1,16 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { createPeerIdentity } from '../src/peers/identity.js'
+import type { PeerFrameV1 } from '../src/peers/protocol.js'
 import { createPeerRateLimiter } from '../src/peers/rate-limit.js'
 import { type PeerRegistry, createPeerRegistry } from '../src/peers/registry.js'
 import { type PeerService, createPeerService } from '../src/peers/service.js'
 import type { PeerTransport } from '../src/peers/transport/transport.js'
 import { createUnixSocketTransport } from '../src/peers/transport/unix-socket-transport.js'
-import type { PeerIdentity } from '../src/peers/types.js'
+import type { PeerIdentity, PeerRegistrationV1, RegistrationCandidate } from '../src/peers/types.js'
 
 const describeUnix = describe.runIf(process.platform !== 'win32')
 
@@ -690,5 +692,140 @@ describeUnix('PeerService over real Unix domain sockets', () => {
         text: 'colliding peer reachable',
       }),
     ])
+  })
+})
+
+describe('PeerService transport compatibility and terminal sanitization', () => {
+  it('uses the Unix registry kind for an injected legacy transport without metadata', async () => {
+    const previousHome = process.env.X_CODE_HOME
+    const testHome =
+      process.platform === 'win32'
+        ? path.join(os.homedir(), `.x-code-peer-legacy-${randomUUID()}`)
+        : await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-peer-legacy-'))
+    process.env.X_CODE_HOME = testHome
+    const transport: PeerTransport = {
+      async listen(options) {
+        return {
+          address: options.address,
+          async close() {},
+        }
+      },
+      async request() {
+        throw new Error('not used')
+      },
+    }
+    const service = createPeerService({ enabled: true, name: 'legacy-transport', transport })
+
+    try {
+      await service.start()
+      expect(service.isAvailable(), service.getUnavailableReason()).toBe(true)
+    } finally {
+      await service.shutdown()
+      if (previousHome === undefined) delete process.env.X_CODE_HOME
+      else process.env.X_CODE_HOME = previousHome
+      await fs.rm(testHome, { recursive: true, force: true })
+    }
+  })
+
+  it('sanitizes custom registry and protocol values before canonical queue admission', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    const receiver = createPeerIdentity({ name: 'receiver', cwd: '/receiver' })
+    const sender = createPeerIdentity({ name: 'sender', cwd: '/sender' })
+    const timestamp = '2026-08-13T00:00:00.000Z'
+    const registration: PeerRegistrationV1 = {
+      version: 1,
+      instanceId: sender.instanceId,
+      pid: process.pid,
+      name: 'send\x1b]52;c;Y2xpcGJvYXJk\x07er\u202e',
+      cwd: '/repo\x1b[2J/safe',
+      transport: { kind: 'unix', address: '/runtime/sender.sock' },
+      inboxToken: sender.inboxToken,
+      permissionClass: 'prompted',
+      status: 'idle',
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      protocolVersion: 1,
+    }
+    const senderCandidate: RegistrationCandidate = {
+      registration,
+      registrationPath: `/registrations/${registration.instanceId}.json`,
+      mtimeMs: 1,
+    }
+    let onRequest: ((frame: PeerFrameV1, senderInstanceId: string) => Promise<PeerFrameV1>) | undefined
+    const registry: PeerRegistry = {
+      initialize: vi.fn(async () => {}),
+      write: vi.fn(async () => {}),
+      read: vi.fn(async (instanceId) => (instanceId === sender.instanceId ? senderCandidate : null)),
+      listCandidates: vi.fn(async () => ({ candidates: [senderCandidate], scanned: 1, rejected: 0, truncated: false })),
+      listLive: vi.fn(async () => ({
+        peers: [
+          {
+            name: senderCandidate.registration.name,
+            address: sender.address,
+            cwd: senderCandidate.registration.cwd,
+            status: 'idle' as const,
+            startedAt: timestamp,
+          },
+        ],
+        registrations: [senderCandidate],
+        partial: false,
+      })),
+      removeOwn: vi.fn(async () => true),
+      cleanupConfirmedDead: vi.fn(async () => false),
+      paths: () => ({ registryDir: '/runtime/peers', socketDir: '/runtime/sockets' }),
+    }
+    const transport: PeerTransport = {
+      kind: 'unix',
+      validateAddress: () => true,
+      listen: vi.fn(async (options) => {
+        onRequest = options.onRequest
+        return {
+          address: options.address,
+          closed: new Promise<{ expected: boolean }>(() => {}),
+          close: vi.fn(async () => {}),
+        }
+      }),
+      request: vi.fn(async () => {
+        throw new Error('not used')
+      }),
+    }
+    const service = createPeerService({
+      enabled: true,
+      config: { inbound: 'accept' },
+      identity: receiver,
+      registry,
+      transport,
+      cwd: '/receiver',
+      now: () => new Date(timestamp),
+    })
+
+    try {
+      await service.start()
+      expect(await service.listAgents()).toMatchObject([{ name: 'sender', cwd: '/repo/safe' }])
+
+      const response = await onRequest!(
+        {
+          v: 1,
+          type: 'message',
+          requestId: randomUUID(),
+          messageId: randomUUID(),
+          senderInstanceId: sender.instanceId,
+          text: `你好\x1b]52;c;${'z'.repeat(100_000)}\x07世界\n🧑🏽‍💻`,
+          summary: `sum\x1b]8;;${'z'.repeat(300)}\x1b\\mary`,
+          sentAt: timestamp,
+          senderPermissionClass: 'prompted',
+        },
+        sender.instanceId,
+      )
+      expect(response).toMatchObject({ type: 'ack', status: 'delivered' })
+      expect(service.claimAccepted(1)?.messages[0]).toMatchObject({
+        from: { name: 'sender', cwd: '/repo/safe' },
+        text: '你好世界\n🧑🏽‍💻',
+        summary: 'summary',
+      })
+    } finally {
+      await service.shutdown()
+      platformSpy.mockRestore()
+    }
   })
 })

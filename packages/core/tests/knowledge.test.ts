@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 import { createLoopState } from '../src/agent/loop-state.js'
+import { buildKnowledgeContext } from '../src/knowledge/loader.js'
 import { MemoryService } from '../src/knowledge/memory/service.js'
 import { makeMemoryRoot, memoryConfig, topicMarkdown, writeTopic } from './memory-test-helpers.js'
 
@@ -199,5 +201,32 @@ describe('Memory v2 knowledge source', () => {
     expect(state.lastMemoryRecallTrace?.selectorUsed).toBe(false)
     await service.shutdown(0)
     await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('injects byte-identical AGENTS.md rule content only once while preserving distinct layers', async () => {
+    const previousHome = process.env.X_CODE_HOME
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'x-code-knowledge-dedupe-'))
+    const userDir = path.join(root, 'user')
+    const projectDir = path.join(root, 'project')
+    try {
+      await fs.mkdir(userDir, { recursive: true })
+      await fs.mkdir(path.join(projectDir, '.git'), { recursive: true })
+      process.env.X_CODE_HOME = userDir
+      await fs.writeFile(path.join(userDir, 'AGENTS.md'), 'shared exact rule\n', 'utf8')
+      await fs.writeFile(path.join(projectDir, 'AGENTS.md'), 'shared exact rule\n', 'utf8')
+      await fs.writeFile(path.join(projectDir, 'AGENTS.local.md'), 'distinct local rule\n', 'utf8')
+
+      const context = await buildKnowledgeContext({ cwd: projectDir })
+
+      expect(context.match(/shared exact rule/g)).toHaveLength(1)
+      expect(context).toContain('### User Preferences')
+      expect(context).not.toContain('### Project AGENTS.md')
+      expect(context).toContain('### Local Preferences')
+      expect(context).toContain('distinct local rule')
+    } finally {
+      if (previousHome === undefined) delete process.env.X_CODE_HOME
+      else process.env.X_CODE_HOME = previousHome
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 })

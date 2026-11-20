@@ -83,6 +83,7 @@ packages/
 - **`.x-code/` at repo root is gitignored** — session summaries, auto-memory, local prefs, custom sub-agent definitions. Tests redirect via `X_CODE_HOME`.
 - **`DEBUG_STDOUT=1 xc`** writes to `~/.x-code/logs/debug.log` (10 MB rolling). `debugLog()` in core is a no-op without it.
 - **Tests use vitest** with globals (`describe`, `it`, `expect`, `vi` available without imports). Test files ignored by eslint.
+- **Test observable behavior, not implementation details**: assert user-visible outcomes, security boundaries, wire contracts, and cross-platform invariants. Do not mirror static `catalog.ts` tables in tests, extract trivial helpers or add `*ForTesting` exports just to unit-test internals, or create one-off micro-test files per fix — fold regressions into the owning domain suite and verify CLI/TUI changes through command handlers, session flows, or PTY harnesses.
 - **API export snapshot** (`packages/core/tests/api-exports.test.ts`) locks the `@x-code-cli/core` public export list. Run `pnpm test -- -u` to update after intentional changes.
 
 ## Gotchas

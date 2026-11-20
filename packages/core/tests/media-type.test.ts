@@ -3,39 +3,19 @@ import { describe, expect, it } from 'vitest'
 import { knownMediaTypeFor } from '../src/utils/media-type.js'
 
 describe('knownMediaTypeFor', () => {
-  it('maps .jpg to image/jpeg', () => {
+  it('resolves supported raster image extensions case-insensitively', () => {
     expect(knownMediaTypeFor('photo.jpg')).toBe('image/jpeg')
-  })
-
-  it('maps .jpeg to image/jpeg', () => {
-    expect(knownMediaTypeFor('photo.jpeg')).toBe('image/jpeg')
-  })
-
-  it('maps .png to image/png', () => {
-    expect(knownMediaTypeFor('screenshot.png')).toBe('image/png')
-  })
-
-  it('maps .webp to image/webp', () => {
-    expect(knownMediaTypeFor('hero.webp')).toBe('image/webp')
-  })
-
-  it('maps .gif to image/gif', () => {
+    expect(knownMediaTypeFor('photo.JPEG')).toBe('image/jpeg')
+    expect(knownMediaTypeFor('screenshot.PNG')).toBe('image/png')
+    expect(knownMediaTypeFor('hero.WebP')).toBe('image/webp')
     expect(knownMediaTypeFor('animation.gif')).toBe('image/gif')
-  })
-
-  it('maps .bmp to image/bmp', () => {
     expect(knownMediaTypeFor('bitmap.bmp')).toBe('image/bmp')
+    expect(knownMediaTypeFor('scan.tiff')).toBe('image/tiff')
   })
 
-  it('maps TIFF explicitly and safely rejects unknown extensions', () => {
-    expect(knownMediaTypeFor('file.tiff')).toBe('image/tiff')
-    expect(knownMediaTypeFor('file.svg')).toBeNull()
+  it('rejects SVG and unknown or missing extensions', () => {
+    expect(knownMediaTypeFor('vector.svg')).toBeNull()
+    expect(knownMediaTypeFor('archive.zip')).toBeNull()
     expect(knownMediaTypeFor('noext')).toBeNull()
-  })
-
-  it('handles case-insensitive extensions', () => {
-    expect(knownMediaTypeFor('photo.JPG')).toBe('image/jpeg')
-    expect(knownMediaTypeFor('photo.PNG')).toBe('image/png')
-    expect(knownMediaTypeFor('photo.WebP')).toBe('image/webp')
   })
 })

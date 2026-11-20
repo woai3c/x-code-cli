@@ -1,5 +1,16 @@
-import type { OpenAIAuthSnapshot } from '@x-code-cli/core'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
+import {
+  createModelRegistry,
+  initializeOpenAIAuthContext,
+  resetOpenAIAuthContextForTesting,
+  writeOpenAIChatGPTCredentials,
+} from '@x-code-cli/core'
+import type { LanguageModel, OpenAIAuthSnapshot } from '@x-code-cli/core'
+
+import { replaceActiveModelProvider } from '../src/ui/app/model-activation.js'
 import {
   commitOpenAIAuthTransition,
   createOpenAIAuthTransitionState,
@@ -17,7 +28,7 @@ function snapshot(revision: string, mode: 'api-key' | 'chatgpt' | 'none'): OpenA
   }
 }
 
-describe('OpenAI auth transition state', () => {
+describe('OpenAI auth transition state and provider replacement', () => {
   it('keeps a revision pending until this consumer successfully applies it', () => {
     const initial = snapshot('api-key:old', 'api-key')
     const observed = snapshot('chatgpt:new', 'chatgpt')
@@ -75,5 +86,44 @@ describe('OpenAI auth transition state', () => {
       blockedMessage: 'blocked',
       note: ' Sending messages is disabled until authentication recovers.',
     })
+  })
+
+  it('replaces a live API-key model with the ChatGPT provider even when the catalog is empty', async () => {
+    const previousHome = process.env.X_CODE_HOME
+    const previousApiKey = process.env.OPENAI_API_KEY
+    const testHome = path.join(os.tmpdir(), `x-code-auth-model-${crypto.randomUUID()}`)
+    process.env.X_CODE_HOME = testHome
+    process.env.OPENAI_API_KEY = 'platform-key-must-never-leak'
+    resetOpenAIAuthContextForTesting()
+
+    try {
+      initializeOpenAIAuthContext()
+      const options = { modelRegistry: createModelRegistry() }
+      const staleApiKeyModel = options.modelRegistry.languageModel('openai:gpt-5.6-sol')
+      let activeModel: LanguageModel = staleApiKeyModel
+
+      await writeOpenAIChatGPTCredentials({
+        version: 1,
+        accessToken: 'oauth-access',
+        refreshToken: 'oauth-refresh',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        accountId: 'account-1',
+      })
+      initializeOpenAIAuthContext()
+      replaceActiveModelProvider('openai:gpt-5.6-sol', options, (_modelId, model) => {
+        activeModel = model
+      })
+
+      expect(activeModel).not.toBe(staleApiKeyModel)
+      expect(options.modelRegistry).not.toBeUndefined()
+      expect(activeModel.modelId).toBe('gpt-5.6-sol')
+    } finally {
+      resetOpenAIAuthContextForTesting()
+      if (previousHome === undefined) delete process.env.X_CODE_HOME
+      else process.env.X_CODE_HOME = previousHome
+      if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousApiKey
+      fs.rmSync(testHome, { recursive: true, force: true })
+    }
   })
 })

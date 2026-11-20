@@ -1,4 +1,5 @@
 import { resetScrollbackSpacing, writeMessageToStdout } from '../src/ui/render/stdout-writer.js'
+import { GLYPH_RESULT_BRACKET } from '../src/ui/render/terminal-glyphs.js'
 
 const { originalNoColor } = vi.hoisted(() => {
   const originalNoColor = process.env.NO_COLOR
@@ -184,5 +185,44 @@ describe('stdout writer spacing', () => {
     expect(output).not.toContain('\x1b]52;c;c2VjcmV0\x07')
     expect(output).not.toContain('\x07')
     expect(output).not.toContain('\u202e')
+  })
+
+  it('renders peer messages as source-aware cards and peer status updates as compact status lines', () => {
+    let msgOut = ''
+    writeMessageToStdout(
+      (chunk) => {
+        msgOut += chunk
+      },
+      {
+        id: 'peer-1',
+        role: 'user',
+        content: '第一行 👋\nsecond line',
+        timestamp: 0,
+        kind: 'peer-message',
+        peer: { name: 'backend', address: 'peer:00000000-0000-4000-8000-000000000001', summary: 'handoff' },
+      },
+    )
+    const plainMsg = msgOut.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '')
+    expect(plainMsg).toContain('Peer message · backend · peer:00000000-0000-4000-8000-000000000001')
+    expect(plainMsg).toContain('Summary: handoff')
+    expect(plainMsg).toContain('   第一行 👋\n   second line')
+    expect(plainMsg).not.toContain('❯')
+
+    let statusOut = ''
+    resetScrollbackSpacing()
+    writeMessageToStdout(
+      (chunk) => {
+        statusOut += chunk
+      },
+      {
+        id: 'status-1',
+        role: 'assistant',
+        content: 'Message deadbeef: denied by backend.',
+        timestamp: 0,
+        kind: 'peer-status',
+      },
+    )
+    const plainStatus = statusOut.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '')
+    expect(plainStatus).toContain(`${GLYPH_RESULT_BRACKET}  Message deadbeef: denied by backend.`)
   })
 })

@@ -17,7 +17,3 @@ export function startChatGPTModelPreload(
   )
   return true
 }
-
-export function resetChatGPTModelPreloadForTesting(): void {
-  startupPreloadStarted = false
-}

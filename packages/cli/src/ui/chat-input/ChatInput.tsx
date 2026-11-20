@@ -1325,20 +1325,14 @@ export function ChatInput({
     let didClearScreen = false
     if (messages.length < writtenMessageCountRef.current) {
       didClearScreen = true
-      const retainedClearEcho =
-        messages.length === 1 && messages[0]?.kind === 'command-echo' && messages[0].content.trim() === '/clear'
       const clearRows = stdout?.rows ?? 25
       const oldFrameTop = Math.max(1, lastFrameTopRef.current || clearRows - lastFrameHRef.current + 1)
       for (let row = oldFrameTop; row <= clearRows; row++) preBuf += `\x1b[${row};1H\x1b[K`
       preBuf += `\x1b[${clearRows};1H${'\n'.repeat(clearRows)}\x1b[H`
-      // A retained /clear echo is NOT written into the old viewport here.
-      // Leaving writtenMessageCountRef at 0 lets the normal message loop +
-      // commit path below render it as the first content of the fresh
-      // viewport — the same padded card every other command echo gets.
-      // (Writing it at the old viewport's bottom pushed it into scrollback,
-      // hiding it entirely and dropping its bg padding rows on terminals
-      // that trim bg-only rows when they enter history.)
-      writtenMessageCountRef.current = retainedClearEcho ? 0 : messages.length
+      // Replay any retained messages (the `/clear` echo, or surviving history +
+      // confirmation notice after `/rewind` or `/clear-peer-context`) from row 1
+      // of the freshly cleared viewport instead of stranding an empty screen.
+      writtenMessageCountRef.current = 0
       prevFrameRef.current = []
       lastFrameHRef.current = 0
       lastFrameTopRef.current = 0
