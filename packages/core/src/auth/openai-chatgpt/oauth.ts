@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 
-import { debugLog } from '../../utils.js'
+import { debugLog } from '../../utils/index.js'
 import { OpenAIChatGPTAuthError } from './types.js'
 import type { OpenAIChatGPTCredentials, OpenAIChatGPTJwtClaims, OpenAIChatGPTTokenResponse } from './types.js'
 

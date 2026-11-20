@@ -1,5 +1,6 @@
 import { StringDecoder } from 'node:string_decoder'
 
+import { utf8BytePrefix } from '../../../utils/index.js'
 import type { ManagedOutputCapture, ManagedProcessFrame } from '../provider.js'
 
 const ACTIVATION_OUTPUT_MAX_BYTES = 1024 * 1024
@@ -17,16 +18,7 @@ interface OrderedControlFrame {
   frame: Exclude<ManagedProcessFrame, { kind: 'output' }>
 }
 
-function utf8Prefix(buffer: Buffer, maxBytes: number): Buffer {
-  if (buffer.length <= maxBytes) return buffer
-  const end = Math.max(0, maxBytes)
-  let codePointStart = end - 1
-  while (codePointStart >= 0 && (buffer[codePointStart] & 0xc0) === 0x80) codePointStart--
-  if (codePointStart < 0) return Buffer.alloc(0)
-  const lead = buffer[codePointStart]!
-  const expectedBytes = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1
-  return buffer.subarray(0, end - codePointStart < expectedBytes ? codePointStart : end)
-}
+const utf8Prefix = utf8BytePrefix
 
 function utf8Suffix(buffer: Buffer, maxBytes: number): Buffer {
   if (buffer.length <= maxBytes) return buffer

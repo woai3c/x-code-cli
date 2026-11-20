@@ -79,7 +79,7 @@ xc plugin install ./my-plugin
   "skills": "./skills", // <name>/SKILL.md 子目录的目录
   "agents": "./agents", // <name>.md 文件的目录
   "commands": "./commands", // 目录里每个 .md 文件成为一个 /<name> slash 命令
-  // 支持 $ARGUMENTS / ${CLAUDE_PLUGIN_ROOT} 等替换变量
+  // 支持 $ARGUMENTS / ${ARGUMENTS} / ${CLAUDE_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_DATA} 替换变量
 
   // mcpServers: 既可以是路径，指向形如
   // `{ "mcpServers": { ... } }` 的 JSON 文件（同 ~/.x-code/config.json），
@@ -133,7 +133,7 @@ xc plugin install ./my-plugin
 ### 字段细节
 
 - **`name`** — 小写字母、数字、短横线，必须字母或数字开头。
-- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS` 与 `${CLAUDE_PLUGIN_ROOT}` 替换。同名命令同时也能从 `~/.x-code/commands/<name>.md`（用户级）和 `<cwd>/.x-code/commands/<name>.md`（项目级）加载，优先级 **project > plugin > user**（参见 README 的「自定义斜杠命令」）。
+- **`skills`** / **`agents`** / **`commands`** — 指向各自目录。**绝大多数 Claude Code 插件 manifest 不写这三个字段**——loader 会自动探测 `skills/` / `agents/` / `commands/` 子目录（约定优先）。只在你想用非常规路径时声明。`commands/` 里每个 `.md` 文件成为 `/<name>` slash 命令，body 是 prompt 模板，支持 `$ARGUMENTS`（或 `${ARGUMENTS}`）、`${CLAUDE_PLUGIN_ROOT}` 与 `${CLAUDE_PLUGIN_DATA}` 替换。同名命令同时也能从 `~/.x-code/commands/<name>.md`（用户级）和 `<cwd>/.x-code/commands/<name>.md`（项目级）加载，优先级 **project > plugin > user**（参见 README 的「自定义斜杠命令」）。
 - **`mcpServers`** — 路径或 inline 对象。不声明时自动探测 `.mcp.json`（Claude Code 约定）或 `mcp.json`。每个 server 的 schema 遵循 `~/.x-code/config.json`；环境变量用 `${NAME}` 或 `${NAME:-fallback}`。已保存的 `userConfig` 值会直接注入 stdio server 环境，不要再把它写成 `${NAME}`。X-Code 不会给 MCP args 注入 plugin root 变量；需要运行随插件分发的 server 时，应使用已安装的可执行文件/npm 包，或让用户配置路径。
 - **`hooks`** — 路径或 inline 对象。不声明时自动探测 `hooks/hooks.json`。详见 [hooks.md](./hooks.md)。
 

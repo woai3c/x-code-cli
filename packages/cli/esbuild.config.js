@@ -91,10 +91,12 @@ await rm(OUT_DIR, { recursive: true, force: true })
 await esbuild.build({
   entryPoints: {
     cli: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
-    'audio-transcribe-worker': fileURLToPath(new URL('../core/src/agent/audio-transcribe-worker.ts', import.meta.url)),
-    'pdf-render-worker': fileURLToPath(new URL('../core/src/agent/pdf-render-worker.ts', import.meta.url)),
+    'audio-transcribe-worker': fileURLToPath(
+      new URL('../core/src/agent/ingest/audio-transcribe-worker.ts', import.meta.url),
+    ),
+    'pdf-render-worker': fileURLToPath(new URL('../core/src/agent/ingest/pdf-render-worker.ts', import.meta.url)),
     'image-compress-worker': fileURLToPath(new URL('../core/src/utils/image-compress-worker.ts', import.meta.url)),
-    'office-xlsx-worker': fileURLToPath(new URL('../core/src/agent/office-xlsx-worker.ts', import.meta.url)),
+    'office-xlsx-worker': fileURLToPath(new URL('../core/src/agent/ingest/office-xlsx-worker.ts', import.meta.url)),
   },
   bundle: true,
   platform: 'node',

@@ -29,7 +29,7 @@ import path from 'node:path'
 import { parseHookConfig } from '../hooks/config-schema.js'
 import type { HookEventName } from '../hooks/types.js'
 import { parseServersBlock } from '../mcp/config-schema.js'
-import { isDir, isFile } from '../utils.js'
+import { isDir, isFile } from '../utils/index.js'
 import { extractMcpServersBlock } from './mcp-contributions.js'
 import type { PluginManifest, PluginSource } from './types.js'
 

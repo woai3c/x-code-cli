@@ -24,6 +24,7 @@
 // tool calls of the same toolName and check if K of them share the hash.
 import crypto from 'node:crypto'
 
+import { stableStringify } from '../utils/index.js'
 import type { LoopState } from './loop-state.js'
 
 /** Tool calls at or above this count in the rolling window trigger the soft
@@ -35,15 +36,6 @@ export const HARD_LOOP_THRESHOLD = 5
 
 /** Size of the rolling window we scan for duplicates. */
 const LOOP_WINDOW_SIZE = 8
-
-/** Stable JSON stringify: sorts object keys deterministically so semantically
- *  identical inputs hash to the same value regardless of key order. */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']'
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  return '{' + entries.map(([k, v]) => JSON.stringify(k) + ':' + stableStringify(v)).join(',') + '}'
-}
 
 /** Hash a tool call for duplicate detection. Truncated to 16 hex chars —
  *  collision probability at that length is vanishingly small for the 8-entry

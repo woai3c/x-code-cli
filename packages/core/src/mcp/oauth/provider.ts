@@ -28,7 +28,7 @@ import type {
 
 import { spawn } from 'node:child_process'
 
-import { debugLog } from '../../utils.js'
+import { debugLog } from '../../utils/index.js'
 import { type RunningCallbackServer, startCallbackServer } from './callback-server.js'
 import { McpTokenStorage } from './token-storage.js'
 

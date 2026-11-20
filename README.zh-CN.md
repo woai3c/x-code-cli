@@ -194,9 +194,9 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **持续目标循环** — `/goal` 自动执行→验证→修复，直到验证通过或触发停止条件
 - **模型自主 Git worktree** — 当仓库状态和验证风险确有需要时，Agent 可自主使用普通 Git 命令创建并清理临时 worktree，避免冒险改动当前工作区
 - **跨会话消息** — 命名后的本机 Session 可以互相发现，并在权限边界内移交工作（macOS / Linux / Windows x64；Windows arm64 artifact 已随包提供，但在完成 arm64 真机验收前属于预览支持；详见[文档](./docs/peer-messaging.md)）
-- **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / PDF / Office 文档（docx / xlsx / pptx / odt / ods / odp）/ 图片 / 音频
+- **文件附件** — `@path` 或裸绝对路径引用文件，自动识别 text / code / Jupyter Notebook（`.ipynb`）/ PDF / Office 文档（docx / xlsx / pptx / odt / ods / odp）/ 图片 / 音频
 - **本地 PDF 处理** — 按页提取可选文本；扫描页或视觉页交给当前视觉模型，纯文本模型则使用本地 OCR。大型视觉 PDF 通过 `readFile` 页范围渐进读取，原始 PDF 字节不会上传
-- **本地音频转写** — MP3 / WAV / FLAC / OGG Vorbis 附件（最大 25 MiB、20 分钟）始终由隔离进程中的 Whisper（whisper.cpp）在本地转写，只有带时间戳的文字会交给模型。模型下载前会探测 native runtime，并由隔离进程中的流式解码器按实际 PCM 帧执行硬上限；排队等待与转写共用总超时。首次模型下载固定 revision 并通过 SHA-256 校验后才缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
+- **本地音频转写** — MP3 / WAV / FLAC / OGG Vorbis / M4A（AAC / ALAC）附件（最大 25 MiB、20 分钟）始终由隔离进程中的 Whisper（whisper.cpp）在本地转写，只有带时间戳的文字会交给模型。模型下载前会探测 native runtime，并由隔离进程中的流式解码器按实际 PCM 帧执行硬上限；排队等待与转写共用总超时。首次模型下载固定 revision 并通过 SHA-256 校验后才缓存于 `~/.x-code/whisper-models/`（默认 `tiny`，可通过 `X_CODE_WHISPER_MODEL` 换成其他型号，如 `base`）
 - **图片附件隐私回退** — 本地图片附件只会交给当前视觉模型；纯文本模型使用本地 OCR，不会自动把附件转发给另一个已配置厂商
 
 ### 上下文管理
@@ -212,7 +212,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 
 - **MCP 集成** — 支持 stdio + HTTP（含 OAuth），`/mcp` 管理，服务器工具自动并入 Agent 工具集
 - **插件系统** — skill / sub-agent / 命令 / MCP / hooks 打包分发；与 Claude Code 插件格式兼容
-- **Skills** — `SKILL.md` 描述可复用工作流模板，`/<skill-name>` 触发
+- **Skills** — `SKILL.md` 描述可复用工作流模板（自动识别 `.agents/skills/`、`.claude/skills/` 与 `.x-code/skills/`），`/<skill-name>` 或 `activateSkill` 触发
 - **自定义斜杠命令** — markdown 文件放进 `~/.x-code/commands/` 或项目级目录，`/<name>` 直接使用
 - **Hooks** — 10 个生命周期事件回调，用 shell 命令拦截/改写 Agent 行为
 - **浏览器自动化** — 默认可对本地 UI 做一次性截图检查（`/browser check-off` 可关闭）；`/browser on` 另行开启交互式浏览器子 Agent
@@ -225,7 +225,7 @@ xc -m sonnet "重构 formatDate 函数"    # 指定模型
 - **多行输入** — `Alt+Enter` 或行尾 `\` 插入换行
 - **历史回溯** — 空输入框时 `↑`/`↓` 召回已提交的提示词
 - **中途转向（steering）** — Agent 运行中也能继续输入：消息先排队显示在 spinner 上方，在下一个工具边界自动注入
-- **实时页脚** — 输入框下方常驻当前模型与上下文用量（如 `Kimi K3 · 6.6k / 200k · 3%`）
+- **实时页脚** — 输入框下方常驻当前模型、上下文用量、生成吞吐率与紧凑工作目录（如 `Kimi K3.1 Pro · ctx 6.6k / 1m · 1% · 78.4 tok/s · ~/…/my-app`）
 - **后台终端** — 长命令自动转为可管理的 Shell Session；`/ps` 查看，`/stop [shell-id]` 停止（详见[文档](./docs/shell-sessions.md)）
 - **跨平台** — Windows、macOS、Linux
 
@@ -269,6 +269,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/logout`                        | 退出 ChatGPT 登录                                                                   |
 | `/model [model-id\|refresh]`     | 选择已预加载的模型，或显式刷新 ChatGPT 模型目录                                     |
 | `/agent [list\|<name>\|reset]`   | 查看子 Agent 并配置默认或单 Agent 专属模型                                          |
+| `/context [tokens\|reset]`       | 覆盖所有模型的上下文窗口大小（无参数查看状态，`reset` 恢复默认）                    |
 | `/thinking [default\|on\|off]`   | 配置思考模式（默认跟随模型 / 开启 / 关闭）                                          |
 | `/theme [name]`                  | 切换 UI 主题                                                                        |
 | `/plan [on\|off]`                | 启用 / 禁用 Plan 模式                                                               |
@@ -283,7 +284,7 @@ xc plugin marketplace <sub>       管理插件市场订阅（list / add / remove
 | `/compact`                       | 手动压缩上下文                                                                      |
 | `/resume`                        | 从历史会话中选择恢复                                                                |
 | `/fork [名称]`                   | 分叉已完成的上下文，可选命名（仍共享当前工作区）                                    |
-| `/rewind`                        | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
+| `/rewind [checkpoint-id]`        | 回到某条用户消息之前（还原文件 + 截断历史）                                         |
 | `/init`                          | 分析代码库后创建或更新 `AGENTS.md`                                                  |
 | `/review [PR号]`                 | 评审 GitHub PR（需本地装好 `gh`）                                                   |
 | `/memory [子命令]`               | 查看、搜索、解释或重载全局长期记忆（详见 [docs/knowledge.md](./docs/knowledge.md)） |

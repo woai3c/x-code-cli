@@ -99,8 +99,8 @@ project servers for that session. The trust decision persists at
 
 **OAuth**: HTTP servers that require OAuth surface as `needs_auth` on
 first connect. Run `/mcp auth <name>` to drive the full OAuth flow — a
-browser opens the authorization URL, the callback writes the token to
-`~/.x-code/mcp/tokens/<server>.json`. Subsequent launches inject
+browser opens the authorization URL, and the callback persists the client
+registration and token in `~/.x-code/mcp-auth.json` (mode `0600`). Subsequent launches inject
 `Authorization: Bearer ...` automatically.
 
 **Don't hard-code tokens into `headers`** — the OAuth flow handles them.
@@ -130,16 +130,25 @@ left literal.
 
 ## `/mcp` commands
 
-| Command                | Description                                                                               |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| `/mcp list`            | List every configured server with its status (connected / disabled / needs_auth / failed) |
-| `/mcp tools [server]`  | List tools available; optional filter by server name                                      |
-| `/mcp add`             | Interactive add of a stdio / HTTP server to user or project config                        |
-| `/mcp add-json`        | Add a server from raw JSON (handy for pasting docs examples)                              |
-| `/mcp remove`          | Remove a server from config                                                               |
-| `/mcp auth <server>`   | Drive the OAuth flow for an HTTP server                                                   |
-| `/mcp logout <server>` | Clear the stored OAuth token for a server                                                 |
-| `/mcp refresh`         | Re-read config files and reconnect every server (no CLI restart needed)                   |
+| Command                                  | Description                                                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `/mcp list`                              | List every configured server with its status (`connected` / `connecting` / `disabled` / `needs auth` / `failed`) |
+| `/mcp tools [server]`                    | List tools available; optional filter by server name                                                             |
+| `/mcp add [flags] <name> <cmd\|url> […]` | Add a stdio or HTTP (`--http`) server to user or project config via flags and positional args                    |
+| `/mcp add-json [--scope …] <name> '{…}'` | Add a server from a raw JSON object (handy for complex configs or pasting docs examples)                         |
+| `/mcp remove [--scope …] <name>`         | Confirm and remove a server from config (alias `/mcp rm`; stored OAuth tokens stay until `/mcp logout`)          |
+| `/mcp auth <server>`                     | Drive the OAuth flow for an HTTP server                                                                          |
+| `/mcp logout <server>`                   | Clear the stored OAuth token for a server from `~/.x-code/mcp-auth.json`                                         |
+| `/mcp refresh`                           | Re-read config files and reconnect every server (no CLI restart needed)                                          |
+
+Common `/mcp add` examples (writes to `user` scope by default; `--scope project` also auto-trusts the current project; run `/mcp refresh` afterwards to connect):
+
+```text
+/mcp add fs npx -y @modelcontextprotocol/server-filesystem /path/to/allowed-dir
+/mcp add --scope project --env API_KEY=${COMPANY_API_KEY} company -- node ./mcp/index.js
+/mcp add --http --header "X-Client: x-code" github https://api.githubcopilot.com/mcp/
+/mcp add-json linear '{"url":"https://mcp.linear.app/mcp"}'
+```
 
 Example `/mcp list` output:
 
@@ -218,16 +227,17 @@ First run:
 
 ```
 $ xc
-[mcp] linear: needs auth
+> /mcp list
+MCP servers:
+  linear        needs auth — run /mcp auth linear to log in
 > /mcp auth linear
-Opening browser to authorize linear...
-Listening on http://localhost:33421/oauth/callback
-[browser opens, user authorizes]
-[token saved to ~/.x-code/mcp/tokens/linear.json]
-linear connected — 8 tools, 2 resources
+Authenticating "linear" — opening browser...
+Opened https://...
+Waiting for the authorization redirect...
+✓ Authenticated "linear" — 8 tools, 2 resources
 ```
 
-Subsequent launches inject the Bearer token automatically — no re-auth
+Client metadata and tokens are saved in `~/.x-code/mcp-auth.json`. Subsequent launches inject the Bearer token automatically — no re-auth
 needed until the token expires.
 
 ---
@@ -235,8 +245,8 @@ needed until the token expires.
 ## Plugin-contributed mcpServers
 
 Plugins can declare `mcpServers` in their manifest (inline or as a file
-path). They load identically to user-configured servers, with two
-differences:
+path). They load identically to user-configured servers, with three
+notes:
 
 - **Treated as already-trusted** — the project trust dialog doesn't
   fire (the user already consented to the plugin at install time)

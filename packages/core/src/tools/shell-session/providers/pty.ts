@@ -17,6 +17,7 @@ import type {
 import { createDeferred } from '../session.js'
 import type { ProcessTerminationResult, TerminationBudget, TerminationReason } from '../types.js'
 import { ActivationFrameBuffer } from './activation-frames.js'
+import { confirmedTerminationResult, delay, failedTerminationResult, nextImmediate } from './shared.js'
 import type { WindowsSupervisorArtifact } from './windows-job.js'
 import { resolveWindowsSupervisorArtifact } from './windows-job.js'
 import { defaultWindowsPowerShellExecutable, powerShellWrapper } from './windows-powershell.js'
@@ -33,14 +34,6 @@ type TreeProbe = 'live' | 'confirmed-exited' | 'unknown'
 
 const require = createRequire(import.meta.url)
 let loadedNodePty: NodePtyModule | undefined
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function nextImmediate(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve))
-}
 
 function ensurePosixSpawnHelperExecutable(): void {
   if (process.platform === 'win32') return
@@ -249,24 +242,17 @@ class PosixPtyManagedProcess implements ManagedProcess {
   }
 
   private confirmed(gracefulAttempted: boolean, forceAttempted: boolean): ProcessTerminationResult {
-    return {
-      gracefulAttempted,
-      forceAttempted,
-      rootExited: this.rootExit.settled,
-      treeConfirmedExited: true,
-      ...this.currentExitStatus,
-    }
+    return confirmedTerminationResult(this.rootExit.settled, this.currentExitStatus, gracefulAttempted, forceAttempted)
   }
 
   private failure(gracefulAttempted: boolean, forceAttempted: boolean, message: string): ProcessTerminationResult {
-    return {
+    return failedTerminationResult(
+      this.rootExit.settled,
+      this.currentExitStatus,
       gracefulAttempted,
       forceAttempted,
-      rootExited: this.rootExit.settled,
-      treeConfirmedExited: false,
-      ...this.currentExitStatus,
-      failure: { code: 'termination-unconfirmed', message },
-    }
+      message,
+    )
   }
 }
 

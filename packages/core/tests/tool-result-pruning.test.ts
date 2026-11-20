@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { collapseConsumedToolResults, collapseStaleToolResults } from '../src/agent/tool-result-pruning.js'
+import { collapseConsumedToolResults, collapseStaleToolResults } from '../src/agent/context/tool-result-pruning.js'
 
 function toolMsg(toolName: string, output: { type: string; value: unknown }): ModelMessage {
   return { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't', toolName, output }] } as ModelMessage

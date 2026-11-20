@@ -488,21 +488,3 @@ export const PROVIDER_BASE_URLS: Record<string, { options: readonly ProviderBase
 export const PROVIDER_REASONING_PROFILES: Record<string, readonly ReasoningTierProfile[]> = Object.fromEntries(
   PROVIDERS.filter((p) => p.reasoningTiers).map((p) => [p.name, p.reasoningTiers!]),
 )
-
-/** Legacy provider-wide view retained for public API compatibility. Internal
- * model selection uses PROVIDER_REASONING_PROFILES so each family gets only
- * the effort values it actually supports. */
-export const PROVIDER_REASONING_TIERS: Record<
-  string,
-  { modelPattern?: RegExp; options: readonly ReasoningTierOption[] }
-> = Object.fromEntries(
-  Object.entries(PROVIDER_REASONING_PROFILES).map(([name, profiles]) => {
-    const options = Array.from(
-      new Map(profiles.flatMap((profile) => profile.options).map((option) => [option.value, option])).values(),
-    )
-    const patterns = profiles.map((profile) => profile.modelPattern).filter((pattern) => pattern !== undefined)
-    const modelPattern =
-      patterns.length === profiles.length ? new RegExp(patterns.map((pattern) => pattern.source).join('|')) : undefined
-    return [name, { ...(modelPattern ? { modelPattern } : {}), options }]
-  }),
-)

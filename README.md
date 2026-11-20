@@ -194,9 +194,9 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Durable goal loops** — `/goal` runs execute → verify → repair cycles until passing or hitting a stop condition
 - **Model-directed Git worktrees** — when repository state and verification risk warrant it, the agent can use ordinary Git commands to create and clean up a temporary worktree instead of risking the active checkout
 - **Cross-session messaging** — named local sessions can discover one another and exchange peer-authorized work (macOS / Linux / Windows x64; a Windows arm64 artifact is packaged as a preview pending native-device acceptance; see [docs](./docs/peer-messaging.en.md))
-- **File attachments** — `@path` or bare absolute paths auto-ingest text / code / PDF / Office docs (docx / xlsx / pptx / odt / ods / odp) / images / audio
+- **File attachments** — `@path` or bare absolute paths auto-ingest text / code / Jupyter notebooks (`.ipynb`) / PDF / Office docs (docx / xlsx / pptx / odt / ods / odp) / images / audio
 - **Local PDF processing** — selectable text is extracted page by page; scanned or visual pages become images for the active vision model or local OCR for a text model. Large visual PDFs are loaded progressively with `readFile` page ranges. Original PDF bytes are never uploaded
-- **Local audio transcription** — MP3 / WAV / FLAC / OGG Vorbis attachments (up to 25 MiB and 20 minutes) are always transcribed locally via Whisper (whisper.cpp) in an isolated process; only timestamped text reaches the model. Before any model download, the native runtime is probed and a streaming decoder enforces the limit against actual decoded PCM frames. Queue wait and transcription share a hard timeout. First-use model downloads are revision-pinned and SHA-256 verified before being cached under `~/.x-code/whisper-models/` (default `tiny`; set `X_CODE_WHISPER_MODEL` to pick another, e.g. `base`)
+- **Local audio transcription** — MP3 / WAV / FLAC / OGG Vorbis / M4A (AAC / ALAC) attachments (up to 25 MiB and 20 minutes) are always transcribed locally via Whisper (whisper.cpp) in an isolated process; only timestamped text reaches the model. Before any model download, the native runtime is probed and a streaming decoder enforces the limit against actual decoded PCM frames. Queue wait and transcription share a hard timeout. First-use model downloads are revision-pinned and SHA-256 verified before being cached under `~/.x-code/whisper-models/` (default `tiny`; set `X_CODE_WHISPER_MODEL` to pick another, e.g. `base`)
 - **Private attachment fallback** — local image attachments go only to the active vision model; text-only models receive local OCR, without automatically forwarding the attachment to another configured provider
 
 ### Context Management
@@ -212,7 +212,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 
 - **MCP integration** — stdio + HTTP (with OAuth), `/mcp` management, server tools merge into agent toolset
 - **Plugin system** — bundle skills / sub-agents / commands / MCP / hooks; supports common Claude Code plugin conventions
-- **Skills** — reusable workflow templates as `SKILL.md`, triggered via `/<skill-name>`
+- **Skills** — reusable workflow templates as `SKILL.md` (auto-discovered across `.agents/skills/`, `.claude/skills/`, and `.x-code/skills/`), triggered via `/<skill-name>` or `activateSkill`
 - **Custom slash commands** — drop markdown into `~/.x-code/commands/` or project scope, invoke with `/<name>`
 - **Hooks** — 10 lifecycle event callbacks to intercept or rewrite agent behavior via shell commands
 - **Browser automation** — automatic one-shot local UI screenshots (`/browser check-off` disables them); `/browser on` additionally enables an interactive browser sub-agent
@@ -225,7 +225,7 @@ xc -m sonnet "Refactor the formatDate function" # Specify a model
 - **Multiline input** — `Alt+Enter` or trailing `\` inserts a newline
 - **Input history** — `↑`/`↓` on empty prompt recalls previous messages
 - **Mid-turn steering** — keep typing while the agent is working: your message is queued above the spinner and injected at the next tool boundary
-- **Live footer** — the active model and current context usage (e.g. `Kimi K3 · 6.6k / 200k · 3%`) are always visible under the input
+- **Live footer** — active model, context usage, token throughput, and compact working directory (e.g. `Kimi K3.1 Pro · ctx 6.6k / 1m · 1% · 78.4 tok/s · ~/…/my-app`) stay visible under the input
 - **Background terminals** — long commands become manageable shell sessions; inspect them with `/ps` and stop them with `/stop [shell-id]` (see the [guide](./docs/shell-sessions.en.md))
 - **Cross-platform** — Windows, macOS, Linux
 
@@ -269,6 +269,7 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/logout`                        | Sign out from ChatGPT                                                |
 | `/model [model-id\|refresh]`     | Pick a preloaded model or explicitly refresh the ChatGPT catalog     |
 | `/agent [list\|<name>\|reset]`   | Inspect sub-agents and configure per-agent or default models         |
+| `/context [tokens\|reset]`       | Override the context window across models (no-arg = show status)     |
 | `/thinking [default\|on\|off]`   | Configure extended thinking mode                                     |
 | `/theme [name]`                  | Switch UI theme                                                      |
 | `/plan [on\|off]`                | Enable / disable plan mode                                           |
@@ -283,7 +284,7 @@ xc plugin marketplace <sub>       Manage marketplace subscriptions (list / add /
 | `/compact`                       | Manually compress context                                            |
 | `/resume`                        | Pick a past session to resume                                        |
 | `/fork [name]`                   | Branch completed context with an optional name (working tree shared) |
-| `/rewind`                        | Roll back to a previous message (restores files + truncates history) |
+| `/rewind [checkpoint-id]`        | Roll back to a previous message (restores files + truncates history) |
 | `/init`                          | Create or update `AGENTS.md` at project root                         |
 | `/review [PR#]`                  | Review a GitHub PR (requires `gh`)                                   |
 | `/memory [subcommand]`           | Inspect, search, explain, or reload global long-term memory          |

@@ -9,7 +9,7 @@ import type { ModelMessage } from 'ai'
 
 import { hashToolCall, recordToolCall } from '../src/agent/loop-guard.js'
 import { createLoopState } from '../src/agent/loop-state.js'
-import { createCheckpoint, restoreCheckpoint } from '../src/agent/snapshot.js'
+import { createCheckpoint, restoreCheckpoint } from '../src/agent/session/snapshot.js'
 import { partitionToolCalls, processToolCalls } from '../src/agent/tool-execution.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel } from '../src/types/index.js'
 

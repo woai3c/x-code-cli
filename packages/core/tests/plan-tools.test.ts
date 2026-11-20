@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createLoopState } from '../src/agent/loop-state.js'
-import { handleExitPlanMode } from '../src/agent/plan-tools.js'
+import { handleExitPlanMode } from '../src/agent/session/plan-tools.js'
 import type { AgentCallbacks } from '../src/types/index.js'
 
 function makeCallbacks(overrides: Partial<AgentCallbacks> = {}): AgentCallbacks {

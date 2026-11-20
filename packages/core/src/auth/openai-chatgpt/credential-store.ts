@@ -2,8 +2,8 @@ import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { userXcodeDir } from '../../utils.js'
 import { acquireFileLock } from '../../utils/file-lock.js'
+import { userXcodeDir } from '../../utils/index.js'
 import { OpenAIChatGPTAuthError } from './types.js'
 import type { OpenAIChatGPTCredentials } from './types.js'
 
@@ -55,19 +55,16 @@ function validateCredentials(value: unknown): OpenAIChatGPTCredentials {
   return item as OpenAIChatGPTCredentials
 }
 
-export async function readOpenAIChatGPTCredentials(): Promise<OpenAIChatGPTCredentials> {
-  let raw: string
-  try {
-    raw = await fs.readFile(openAIChatGPTCredentialPath(), 'utf-8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new OpenAIChatGPTAuthError('login-required', 'ChatGPT is not signed in. Run `xc login`.')
-    }
-    throw new OpenAIChatGPTAuthError('credentials-invalid', 'Could not read stored ChatGPT credentials.', {
-      cause: err,
-    })
+function mapCredentialReadError(err: unknown): never {
+  if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+    throw new OpenAIChatGPTAuthError('login-required', 'ChatGPT is not signed in. Run `xc login`.')
   }
+  throw new OpenAIChatGPTAuthError('credentials-invalid', 'Could not read stored ChatGPT credentials.', {
+    cause: err,
+  })
+}
 
+function parseRawCredentials(raw: string): OpenAIChatGPTCredentials {
   try {
     return validateCredentials(JSON.parse(raw) as unknown)
   } catch (err) {
@@ -75,11 +72,19 @@ export async function readOpenAIChatGPTCredentials(): Promise<OpenAIChatGPTCrede
     throw new OpenAIChatGPTAuthError(
       'credentials-invalid',
       'Stored ChatGPT credentials are invalid. Run `xc logout`, then `xc login`.',
-      {
-        cause: err,
-      },
+      { cause: err },
     )
   }
+}
+
+export async function readOpenAIChatGPTCredentials(): Promise<OpenAIChatGPTCredentials> {
+  let raw: string
+  try {
+    raw = await fs.readFile(openAIChatGPTCredentialPath(), 'utf-8')
+  } catch (err) {
+    mapCredentialReadError(err)
+  }
+  return parseRawCredentials(raw)
 }
 
 export function readOpenAIChatGPTCredentialsSync(): OpenAIChatGPTCredentials {
@@ -87,25 +92,9 @@ export function readOpenAIChatGPTCredentialsSync(): OpenAIChatGPTCredentials {
   try {
     raw = fsSync.readFileSync(openAIChatGPTCredentialPath(), 'utf-8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new OpenAIChatGPTAuthError('login-required', 'ChatGPT is not signed in. Run `xc login`.')
-    }
-    throw new OpenAIChatGPTAuthError('credentials-invalid', 'Could not read stored ChatGPT credentials.', {
-      cause: err,
-    })
+    mapCredentialReadError(err)
   }
-  try {
-    return validateCredentials(JSON.parse(raw) as unknown)
-  } catch (err) {
-    if (err instanceof OpenAIChatGPTAuthError) throw err
-    throw new OpenAIChatGPTAuthError(
-      'credentials-invalid',
-      'Stored ChatGPT credentials are invalid. Run `xc logout`, then `xc login`.',
-      {
-        cause: err,
-      },
-    )
-  }
+  return parseRawCredentials(raw)
 }
 
 export async function writeOpenAIChatGPTCredentials(credentials: OpenAIChatGPTCredentials): Promise<void> {

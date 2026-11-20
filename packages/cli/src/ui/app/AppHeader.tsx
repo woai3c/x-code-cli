@@ -3,7 +3,8 @@
 // printHeader() writes the banner directly to stdout BEFORE Ink starts.
 // This avoids the Ink <Static> re-render bug where the header would
 // appear multiple times as the dynamic area changes height.
-import { VERSION } from '../../version.js'
+import { VERSION } from '@x-code-cli/core'
+
 import { GLYPH_HEADER_PIPE } from '../render/terminal-glyphs.js'
 import { chalk as c, paint } from '../render/tokens.js'
 

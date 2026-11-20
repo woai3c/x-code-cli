@@ -4,9 +4,9 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { decodeAudioToPcm } from '../src/agent/audio-decode.js'
-import { MAX_AUDIO_DURATION_SECONDS, MAX_AUDIO_PCM_INPUT_BYTES } from '../src/agent/audio-limits.js'
-import { prepareM4aForDecode } from '../src/agent/audio-mp4.js'
+import { decodeAudioToPcm } from '../src/agent/ingest/audio-decode.js'
+import { MAX_AUDIO_DURATION_SECONDS, MAX_AUDIO_PCM_INPUT_BYTES } from '../src/agent/ingest/audio-limits.js'
+import { prepareM4aForDecode } from '../src/agent/ingest/audio-mp4.js'
 import { TINY_VORBIS_EXPECTED, makeTinyAlacBuffer, makeTinyM4aBuffer, makeTinyVorbisBuffer } from './helpers/audio.js'
 
 let tempDir: string

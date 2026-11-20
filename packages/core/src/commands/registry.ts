@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 
 import { pluginDataDir } from '../plugins/paths.js'
-import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
+import { type ReloadSummary, diffNamedEntries } from '../utils/registry-diff.js'
 import { type LoadCommandsOptions, loadPluginCommands } from './loader.js'
 import type { CommandDefinition } from './types.js'
 

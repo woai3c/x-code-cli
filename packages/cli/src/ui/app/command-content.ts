@@ -1,6 +1,6 @@
 import { MODEL_ALIASES } from '@x-code-cli/core'
+import { VERSION } from '@x-code-cli/core'
 
-import { VERSION } from '../../version.js'
 import type { SlashCommand } from '../chat-input/types.js'
 
 export const SLASH_COMMANDS = [

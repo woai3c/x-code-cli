@@ -1,6 +1,6 @@
 import { truncateToolResult } from '../tools/index.js'
 import { reportProgress } from '../tools/progress.js'
-import { debugLog, isAbortError } from '../utils.js'
+import { debugLog, isAbortError } from '../utils/index.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
 import { toolErrorFromUnknown, toolErrorString } from './messages.js'
 import { runSubAgent } from './sub-agents/runner.js'

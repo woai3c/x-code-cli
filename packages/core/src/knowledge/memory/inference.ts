@@ -7,7 +7,7 @@ import type { MemoryReasoningMode } from '../../config/index.js'
 import { providerOf } from '../../providers/capabilities.js'
 import { getOpenAIChatGPTReasoningTiers } from '../../providers/openai-chatgpt-models.js'
 import { acceptsReasoningControl, getReasoningLevel, getThinkingProviderOptions } from '../../providers/thinking.js'
-import { debugLog } from '../../utils.js'
+import { debugLog } from '../../utils/index.js'
 
 export type MemoryReasoningControl = 'off' | 'low' | 'provider-default'
 

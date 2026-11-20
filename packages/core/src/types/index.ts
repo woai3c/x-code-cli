@@ -485,5 +485,5 @@ export type { ModelMessage, LanguageModel }
 
 // ─── Re-export sub-agent types ───
 
-export type { SubAgentEvent, SubAgentDefinition, SubAgentTrace } from '../agent/sub-agents/types.js'
+export type { SubAgentEvent, SubAgentDefinition } from '../agent/sub-agents/types.js'
 export type { SubAgentRegistry } from '../agent/sub-agents/registry.js'

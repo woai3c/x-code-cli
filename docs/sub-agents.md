@@ -10,15 +10,15 @@ X-Code CLI 通过 `task` 工具支持子 agent 委派：模型可以把某个独
 
 CLI 默认提供 3 个核心子 agent（另有可选的 `browser`，以及仅供 `/goal` 内部验收使用的隐藏 `goal-verifier`）：
 
-| 名字      | 适合                                                      | 工具白名单                                             |
-| --------- | --------------------------------------------------------- | ------------------------------------------------------ |
-| `explore` | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（受限） |
-| `plan`    | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）          |
-| `worker`  | 在父 agent 指定的范围内执行编码实现、修复测试与多步任务   | 默认完整工具集（task 除外）                            |
+| 名字      | 适合                                                      | 工具白名单                                                   |
+| --------- | --------------------------------------------------------- | ------------------------------------------------------------ |
+| `explore` | 在大代码库里搜索某个关键字 / 符号 / 调用链；只 read，不改 | `readFile`、`glob`、`grep`、`listDir`、`shell`（仅只读命令） |
+| `plan`    | 给定任务，探索代码并产出实施计划                          | `readFile`、`glob`、`grep`、`listDir`（只读）                |
+| `worker`  | 在父 agent 指定的范围内执行编码实现、修复测试与多步任务   | 默认完整工具集（排除 `task`、`askUser`、`exitPlanMode`）     |
 
 > 工具名是 **camelCase**（跟代码里 `toolRegistry` 的 key 一致）——`read_file`、`write_file` 这种 snake_case 写法**不会匹配**，会让子 agent 拿到一个空工具集。
 >
-> `shell（受限）` 表示 `shell` 工具仍可用，但 `shellRestrictions` 默认拦截破坏性命令（`rm`、`mv`、`git push`、`> redirect` 等，完整列表见 `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`）。
+> 内置 `explore`（及 `goal-verifier`）同时开启 `shellReadOnlyOnly`（每条子命令都必须通过只读分类器，拦截重定向、`tsc -b` 等一切产生写入或产物的命令）与 `shellRestrictions` 关键字黑名单（`packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`）。自定义子 agent 可在 frontmatter 中通过 `shellRestrictions` 配置关键字黑名单。
 >
 > `plan` 内置 sub-agent 的产出是纯 Markdown 计划文本，不会切换主会话的权限模式。`/plan` 这个 CLI 命令/参数跟 `plan` sub-agent 是两件事。
 
@@ -44,7 +44,7 @@ task(subagent_type="explore", description="find all callers of formatDate",
 - `/agent model <model|inherit>`：设置或重置所有子 agent 的默认模型
 - `/agent reset`：将所有子 agent 重置为继承主会话模型
 
-配置持久化在 `~/.x-code/config.json` 的 `subAgentModels` / `subAgentModel` 字段中。解析优先级：`subAgentModels[name]` > 自定义 `.md` frontmatter 的 `model` > `subAgentModel` > 主会话模型。
+配置持久化在 `~/.x-code/config.json` 的 `subAgentModels` / `subAgentModel` 字段中。解析优先级：`subAgentModels[name]` > 自定义 `.md` frontmatter 的 `model` > `subAgentModel` > 主会话模型（内部验收用的 `goal-verifier` 忽略全局 `subAgentModel`，默认保持与主会话同模型以保证审计强度，除非显式设置 `subAgentModels["goal-verifier"]`）。
 
 ---
 
@@ -170,7 +170,7 @@ shellRestrictions: [rm, sudo, npm publish]
 
 1. **禁递归**：子 agent 不能调 `task` 工具。运行时会拒绝。
 2. **共享 AbortSignal**：用户 Esc 会同时杀掉主 agent 和所有运行中的子 agent。
-3. **Plan 模式继承**：父 session 在 plan 模式下，**所有**子 agent 的写工具（`writeFile` / `edit` / `shell`）都会被禁用，`worker` 也不例外。
+3. **Plan 模式限制**：父 session 在 plan 模式下，**只允许显式只读的子 agent**（如内置 `explore`、`plan`，或白名单仅含只读内置工具的自定义子 agent）运行——`worker`、`browser` 及未声明只读白名单的自定义子 agent 会在派发时直接被拒绝；获准运行的只读子 agent 也会额外剥离 `writeFile`、`edit`、`shell`、`shellOutput`、`killShell` 与 `exitPlanMode`。
 4. **文件快照与 `/rewind` 联动**：`worker` 等子 agent 通过 `edit` / `writeFile` 修改或新建的文件会自动记入主会话快照，主会话执行 `/rewind` 时可一并回滚。
 5. **独立上下文**：子 agent 看不到主 session 的 message history；它会收到自己的定义 prompt、项目知识、相关召回记忆，以及 task 调用的 prompt 参数。
 6. **Token 共享**：所有子 agent 的 token 用量加进父 session 的总账。
@@ -195,7 +195,7 @@ tools: [readFile, shell, glob]
 shellRestrictions: [rm, sudo, npm publish, git push]
 ```
 
-可用工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`exitPlanMode`、`shellOutput`、`killShell`。**`task` 工具永远禁用**（防递归），`memorySearch` 只注册给根 Agent，子 agent 拿不到。
+可用内置工具名一览（**必须 camelCase**，跟 `packages/core/src/tools/index.ts` 的 `toolRegistry` 一致）：`readFile`、`writeFile`、`edit`、`shell`、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`askUser`、`exitPlanMode`、`shellOutput`、`killShell`，以及按需注入的 `activateSkill`（存在已启用 skill 时）和 `listMcpResources` / `readMcpResource` / `<server>__<tool>`（MCP 激活时）。**`task` 工具永远禁用**（防递归）；`memorySearch`、`browserVisualCheck`、`getGoal`、`updateGoal`、`listAgents`、`sendMessage`、`toolSearch` 只注册给根 Agent，子 agent 拿不到。
 
 允许 `shell` 时，运行器会自动补上 `shellOutput` 和 `killShell`，确保后台命令可继续读取和终止。因此不能在 `disallowedTools` 中禁用任一配套工具；这种定义会被拒绝。详见 [shell-sessions.md](./shell-sessions.md)。
 

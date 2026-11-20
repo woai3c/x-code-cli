@@ -8,8 +8,8 @@ import {
   buildContextBreakdownInput,
   calibrateContextBreakdown,
   estimateContextBreakdown,
-} from '../src/agent/context-usage.js'
-import { estimateTextTokenCount } from '../src/agent/context-window.js'
+} from '../src/agent/context/context-usage.js'
+import { estimateTextTokenCount } from '../src/agent/context/context-window.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import {
   formatDeferredCapabilities,

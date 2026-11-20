@@ -18,7 +18,7 @@ import path from 'node:path'
 
 import { getOpenAIAuthContext } from '../auth/openai-chatgpt/auth-resolver.js'
 import { MODEL_ALIASES, PROVIDERS, PROVIDER_DETECTION_ORDER } from '../providers/catalog.js'
-import { userXcodeDir } from '../utils.js'
+import { userXcodeDir } from '../utils/index.js'
 
 /** Provider → environment variable mapping, derived from the catalog. */
 const ENV_MAP: Record<string, string> = Object.fromEntries(PROVIDERS.map((p) => [p.name, p.envKey]))

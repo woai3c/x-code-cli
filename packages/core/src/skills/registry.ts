@@ -15,7 +15,7 @@
 // every other code path that captured `options.skillRegistry` (agent
 // loop's buildTools, App.tsx's slash-command tab completion, …) stays
 // pointed at the right thing without needing to be re-wired.
-import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
+import { type ReloadSummary, diffNamedEntries } from '../utils/registry-diff.js'
 import { type LoadSkillsOptions, loadSkills, userSkillsDir } from './loader.js'
 import { loadDisabledSkillsSet } from './settings.js'
 

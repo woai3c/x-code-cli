@@ -9,8 +9,8 @@
 import { agentLoop, createLoopState, hydrateLoopState, saveSession, stripTerminalControls } from '@x-code-cli/core'
 import type { AgentCallbacks, AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
 
-import { registerCleanupController } from './cleanup-controller.js'
-import { SHELL_SHUTDOWN_BUDGET, runShutdownPhases } from './shutdown-coordinator.js'
+import { registerCleanupController } from './runtime/cleanup-controller.js'
+import { SHELL_SHUTDOWN_BUDGET, runShutdownPhases } from './runtime/shutdown-coordinator.js'
 
 export async function runPrintMode(
   model: LanguageModel,

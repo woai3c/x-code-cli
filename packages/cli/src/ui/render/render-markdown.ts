@@ -20,7 +20,7 @@ import { stripTerminalControls } from '@x-code-cli/core'
 import { highlightCodeShiki } from './shiki-highlight.js'
 import { detectFenceLanguage, highlightLine } from './syntax-highlight.js'
 import { GLYPH_BLOCKQUOTE_BAR, GLYPH_LIST_BULLET } from './terminal-glyphs.js'
-import { charWidth, graphemes } from './text-width.js'
+import { charWidth, graphemes, stripAnsi } from './text-width.js'
 import { chalk as c, paint } from './tokens.js'
 
 const EOL = '\n'
@@ -48,13 +48,6 @@ const MD_SYNTAX_RE = /[#*`|[>_~\-]|\n\n|^\d+\. |\n\d+\. /
 function hasMarkdownSyntax(s: string): boolean {
   if (s.length > 500) return true
   return MD_SYNTAX_RE.test(s)
-}
-
-// Strip renderer-generated CSI and OSC 8 sequences so visual width
-// calculations only count printable cells.
-const ANSI_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
-function stripAnsi(str: string): string {
-  return str.replace(ANSI_RE, '')
 }
 
 function safeHyperlinkHref(href: string): string | null {

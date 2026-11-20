@@ -7,7 +7,7 @@
 // are rejected before we try to spawn anything.
 import { z } from 'zod'
 
-import { errorMessage } from '../utils.js'
+import { errorMessage } from '../utils/index.js'
 import type { McpServerConfig } from './types.js'
 
 /** Single permissive schema covering both transports. Field presence

@@ -10,15 +10,15 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { truncateUtf8 } from '../utils.js'
 import {
   ATTACH_BYTE_BUDGET,
   MAX_EDGE_PX,
   buildImageProcessingFailureNotice,
   compressImage,
 } from '../utils/image-compress.js'
+import { truncateUtf8 } from '../utils/index.js'
 import { LruCache, bufferFingerprint } from '../utils/lru-cache.js'
-import { ocrImage } from './image-ocr.js'
+import { ocrImage } from './ingest/image-ocr.js'
 import { toolMediaUserMessage } from './messages.js'
 import type { ToolImage } from './messages.js'
 

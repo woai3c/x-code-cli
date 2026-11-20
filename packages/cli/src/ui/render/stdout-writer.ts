@@ -38,13 +38,8 @@ import { renderEditDiff } from './render-diff.js'
 import { renderInlineMarkdown, renderMarkdown } from './render-markdown.js'
 import { highlightShellCommand } from './shiki-highlight.js'
 import { GLYPH_ELLIPSIS, GLYPH_PROMPT_ARROW, GLYPH_RESULT_BRACKET, GLYPH_TOOL_BULLET } from './terminal-glyphs.js'
-import { sliceByWidth, visualWidth } from './text-width.js'
+import { sliceByWidth, stripAnsi as stripAnsiCodes, visualWidth } from './text-width.js'
 import { chalk as c, paint, paintEchoArrow, paintEchoBg, paintEchoFg } from './tokens.js'
-
-const ANSI_STRIP_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
-function stripAnsiCodes(s: string): string {
-  return s.replace(ANSI_STRIP_RE, '')
-}
 
 /** Function that writes to stdout through Ink's log-update coordination. */
 export type InkWrite = (data: string) => void

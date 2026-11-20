@@ -4,11 +4,11 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { MAX_PDF_SOURCE_BYTES, extractPdfTextWithFallback, processPdf } from '../src/agent/pdf-ingest.js'
+import { MAX_PDF_SOURCE_BYTES, extractPdfTextWithFallback, processPdf } from '../src/agent/ingest/pdf-ingest.js'
 import { createReadFileTool } from '../src/tools/read-file.js'
 import { makePdfBuffer } from './helpers/pdf.js'
 
-vi.mock('../src/agent/image-ocr.js', () => ({
+vi.mock('../src/agent/ingest/image-ocr.js', () => ({
   ocrImage: vi.fn(async () => 'mock local OCR'),
 }))
 

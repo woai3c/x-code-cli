@@ -10,7 +10,7 @@ import { createGoal, requestGoalBlocked } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import type { LoopState } from '../src/agent/loop-state.js'
 import { agentLoop, buildTools } from '../src/agent/loop.js'
-import { createCheckpoint } from '../src/agent/snapshot.js'
+import { createCheckpoint } from '../src/agent/session/snapshot.js'
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
 import { isManagedMemoryAccess, isManagedMemoryMutation } from '../src/agent/tool-execution.js'
 import { buildKnowledgeContext } from '../src/knowledge/loader.js'
@@ -48,7 +48,7 @@ vi.mock('../src/knowledge/loader.js', () => ({
   buildKnowledgeContext: vi.fn().mockResolvedValue(''),
 }))
 
-vi.mock('../src/agent/snapshot.js', () => ({
+vi.mock('../src/agent/session/snapshot.js', () => ({
   createCheckpoint: vi.fn().mockResolvedValue(null),
 }))
 
@@ -62,7 +62,7 @@ vi.mock('../src/agent/browser/visual-check.js', () => ({
 // Block jsonl persistence — keep tests free of fs side effects in the
 // project's `.x-code/sessions/` (which would leak between runs and pollute
 // developers' repos when they execute the suite locally).
-vi.mock('../src/agent/session-store.js', () => ({
+vi.mock('../src/agent/session/session-store.js', () => ({
   appendHeader: vi.fn().mockResolvedValue(undefined),
   appendUsage: vi.fn().mockResolvedValue(undefined),
   appendInterrupted: vi.fn().mockResolvedValue(undefined),

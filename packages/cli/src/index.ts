@@ -45,25 +45,30 @@ import type {
   PeerService,
   TerminationReason,
 } from '@x-code-cli/core'
+import { VERSION } from '@x-code-cli/core'
 
 import { startApp } from './app.js'
-import { runAuthCli, shouldEnterProductAfterAuth } from './auth-cli.js'
-import { startChatGPTModelPreload } from './chatgpt-model-preload.js'
-import { getCleanupController } from './cleanup-controller.js'
+import { runAuthCli, shouldEnterProductAfterAuth } from './auth/auth-cli.js'
+import { startChatGPTModelPreload } from './auth/chatgpt-model-preload.js'
 import { parseCliArgs } from './cli-args.js'
-import { restoreInvocationCwd } from './launch-cwd.js'
 import { installEnvProxy } from './network/proxy.js'
-import { startCliPeerService } from './peer-lifecycle.js'
 import { runPluginCli } from './plugins/cli.js'
-import { runShutdownPhases } from './shutdown-coordinator.js'
-import { checkForUpdate, printNoApiKeyMessage, printNoWebSearchKeyHint, printResumeHint } from './startup-prints.js'
-import { installTerminalStreamErrorGuards } from './terminal-stream-errors.js'
+import { getCleanupController } from './runtime/cleanup-controller.js'
+import { restoreInvocationCwd } from './runtime/launch-cwd.js'
+import { startCliPeerService } from './runtime/peer-lifecycle.js'
+import { runShutdownPhases } from './runtime/shutdown-coordinator.js'
+import {
+  checkForUpdate,
+  printNoApiKeyMessage,
+  printNoWebSearchKeyHint,
+  printResumeHint,
+} from './runtime/startup-prints.js'
+import { installTerminalStreamErrorGuards } from './runtime/terminal-stream-errors.js'
 import { getSessionExitInfo } from './ui/app/session-exit.js'
 import { rebuildPalette } from './ui/chat-input/palette.js'
 import { setShikiTheme, warmShikiEngine } from './ui/render/shiki-highlight.js'
 import { setSyntaxTheme } from './ui/render/syntax-highlight.js'
 import { getThemeColors, parseThemeName, setTheme } from './ui/render/theme.js'
-import { VERSION } from './version.js'
 
 restoreInvocationCwd()
 installTerminalStreamErrorGuards([process.stdout, process.stderr])

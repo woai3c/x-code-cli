@@ -50,13 +50,13 @@ packages/
 
 **Rendering**: Ink's dynamic region is permanently empty. Every visible UI element is drawn by `ChatInput.tsx` writing directly to `process.stdout` via cell-level diff. `package.json` aliases `ink` to `@jrichman/ink@6.6.9` — never import from `@jrichman/ink` directly.
 
-**Agent loop** (`core/src/agent/loop.ts:agentLoop`): one call = one user message, spinning `runTurn` rounds until stop/tool-calls/abort. `LoopState` is reused across submits within a CLI session. `systemPromptCache` must remain byte-stable between invalidation events (model switch, `/skill` or `/mcp` refresh, permission-mode flip) — any per-turn interpolation into the system prompt silently disables prompt caching for OpenAI-compatible providers.
+**Agent loop** (`core/src/agent/loop.ts:agentLoop`): one call = one user message, spinning `runTurn` rounds until stop/tool-calls/abort. `LoopState` is reused across submits within a CLI session. `systemPromptCache` must remain byte-stable between invalidation events (model switch, `/skill`, `/mcp`, or `/plugin` refresh, `/browser` toggle, permission-mode flip) — any per-turn interpolation into the system prompt silently disables prompt caching for OpenAI-compatible providers. Context management lives in `core/src/agent/context/`, session/plan/checkpoint persistence in `core/src/agent/session/`, and document/audio/image ingestion in `core/src/agent/ingest/`.
 
 **Deferred tools** (`core/src/agent/tool-search/`): MCP tools and non-core built-ins are listed by name under `## Deferred Tools` in the system prompt and loaded on demand via `toolSearch`; `buildDeferredCatalog` evicts third-party MCP schemas first and falls back to full injection for small catalogs so the prompt stays byte-stable. Sub-agents get no catalog and keep the inline `## MCP Tools` block.
 
-**Sub-agents** (`core/src/agent/sub-agents/`): `task` tool delegates to isolated agentLoop with fresh LoopState (`explore`, `plan`, `worker`, internal `goal-verifier`, plus opt-in `browser`). Registry is built at CLI startup and frozen. Adding/editing agent files requires a CLI restart because the agent list is embedded in the byte-stable `systemPromptCache`. Sub-agents always deny `task` (no recursion). In plan mode, only read-only sub-agents may run and write/shell tools are denied via tool filter.
+**Sub-agents** (`core/src/agent/sub-agents/`): `task` tool delegates to isolated agentLoop with fresh LoopState (`explore`, `plan`, `worker`, internal `goal-verifier`, plus opt-in `browser`). Registry is built at CLI startup and hot-reloaded in place on `/plugin refresh` (or `/browser on|off`); editing agent files on disk requires `/plugin refresh` or a CLI restart because the agent list is embedded in the byte-stable `systemPromptCache`. Sub-agents always deny `task` (no recursion). In plan mode, only read-only sub-agents may run and write/shell tools are denied via tool filter.
 
-**Cross-session messaging** (`core/src/peers/`, `cli/src/peer-lifecycle.ts`): `--name` enables local discovery and messaging for interactive root sessions. Peer input taints the derived context and routes tool calls through the authority evaluator; do not bypass that path. Transport uses local Unix sockets on macOS/Linux and audited Named Pipes (`xc-peer-broker`) on Windows.
+**Cross-session messaging** (`core/src/peers/`, `core/src/peers/transport/`, `cli/src/runtime/peer-lifecycle.ts`): `--name` enables local discovery and messaging for interactive root sessions. Peer input taints the derived context and routes tool calls through the authority evaluator; do not bypass that path. Transport uses local Unix sockets on macOS/Linux and audited Named Pipes (`xc-peer-broker`) on Windows.
 
 **Knowledge** (`core/src/knowledge/`): four layers merged into system prompt — user AGENTS.md, user memory Core profile (`~/.x-code/memory/MEMORY.md`), project AGENTS.md chain (root→leaf, leaf wins), AGENTS.local.md.
 
@@ -64,12 +64,13 @@ packages/
 
 **Permissions**: 3-level model (always-allow / ask / deny). Shell commands classified via `shell-utils.ts` with quote-aware compound-command splitting and LRU cache.
 
-**Shared internal modules** (`core/src/`):
+**Shared internal modules** (`core/src/utils/`):
 
 - `frontmatter.ts` — unified YAML frontmatter parser (commands, skills, sub-agents). `coerceTypes` option enables array/number parsing (sub-agents only).
 - `registry-diff.ts` — `diffNamedEntries()` for all registry `reload()` methods.
-- `settings-io.ts` — fault-tolerant JSON settings read/modify/write (skills + plugins).
-- `utils.ts:generateTimestampId` — canonical `YYYYMMDD-HHMMSS-mmm` for session/checkpoint IDs.
+- `settings-io.ts` — fault-tolerant JSON settings read/modify/write (skills, plugins, OAuth token storage).
+- `worker-url.ts` — cross-platform worker entrypoint URL resolution across `tsx`, `tsc`, and `esbuild`.
+- `index.ts:generateTimestampId` — canonical `YYYYMMDD-HHMMSS-mmm` for session/checkpoint IDs.
 
 **User directory resolution**: `userXcodeDir()` for all file I/O (respects `X_CODE_HOME`). The frozen `USER_XCODE_DIR` constant is only for byte-stable system-prompt content and log init.
 

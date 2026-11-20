@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { repairOrphanToolCalls, truncateToolResultsInMessages } from '../src/agent/tool-result-sanitize.js'
+import {
+  repairOrphanTrackedToolCalls,
+  truncateToolResultsInMessages,
+} from '../src/agent/context/tool-result-sanitize.js'
+import { createTrackedMessage } from '../src/agent/provenance.js'
+
+function repairOrphanToolCalls(messages: ModelMessage[]): void {
+  const entries = messages.map((m) => createTrackedMessage(m, { authority: 'user', derivedFromPeer: false }))
+  repairOrphanTrackedToolCalls(entries)
+  messages.splice(0, messages.length, ...entries.map((e) => e.message))
+}
 
 function assistantToolCallMsg(toolCallId: string, toolName: string): ModelMessage {
   return {

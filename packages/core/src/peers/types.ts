@@ -1,4 +1,3 @@
-export const PEER_PROTOCOL_VERSION = 1 as const
 export const MAX_REGISTRATION_BYTES = 64 * 1024
 export const MAX_REGISTRATION_CANDIDATES = 256
 

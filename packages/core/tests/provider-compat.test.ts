@@ -5,15 +5,15 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
 import type { ModelMessage } from 'ai'
 
-import { ocrImage } from '../src/agent/image-ocr.js'
+import { collapseStaleToolResults } from '../src/agent/context/tool-result-pruning.js'
+import { ocrImage } from '../src/agent/ingest/image-ocr.js'
 import {
   downgradeBinaryPartsForProvider,
   reattachToolResultImagesForProvider,
   stripBinaryPartsFromMessages,
 } from '../src/agent/provider-compat.js'
-import { collapseStaleToolResults } from '../src/agent/tool-result-pruning.js'
 
-vi.mock('../src/agent/image-ocr.js', () => ({
+vi.mock('../src/agent/ingest/image-ocr.js', () => ({
   ocrImage: vi.fn(async () => 'mock compatibility OCR'),
 }))
 

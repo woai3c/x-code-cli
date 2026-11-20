@@ -8,7 +8,7 @@ import {
   getContextWindowOverride,
   getMaxOutputTokens,
   setContextWindowOverride,
-} from '../src/agent/context-window.js'
+} from '../src/agent/context/context-window.js'
 import { isolateOpenAIAuth } from './provider-env.js'
 
 let restoreOpenAIAuth: () => void

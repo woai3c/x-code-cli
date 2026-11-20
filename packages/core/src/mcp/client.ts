@@ -20,7 +20,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 
 import { Stream } from 'node:stream'
 
-import { debugLog } from '../utils.js'
+import { debugLog } from '../utils/index.js'
 import { VERSION } from '../version.js'
 import { McpOAuthProvider } from './oauth/provider.js'
 import {

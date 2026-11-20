@@ -14,11 +14,11 @@ import type {
   TokenUsage,
   TrackedModelMessage,
 } from '../types/index.js'
-import { generateTimestampId } from '../utils.js'
+import { generateTimestampId } from '../utils/index.js'
 import { createCacheMissSummary } from './cache-stats.js'
 import type { CacheMissReason, CacheMissSummary, ProviderTurnUsage } from './cache-stats.js'
 import type { GoalInput, GoalState } from './goal/types.js'
-import type { CheckpointEntry } from './snapshot.js'
+import type { CheckpointEntry } from './session/snapshot.js'
 import type { DeferredToolEntry } from './tool-search/catalog.js'
 import { createModelMessageView, replaceTrackedMessages } from './tracked-messages.js'
 import { createUsageBreakdown } from './usage.js'

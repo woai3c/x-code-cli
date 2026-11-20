@@ -3,7 +3,7 @@ import type { LanguageModel } from 'ai'
 import { z } from 'zod'
 
 import type { MemoryReasoningMode } from '../../config/index.js'
-import { truncateUtf8 } from '../../utils.js'
+import { truncateUtf8 } from '../../utils/index.js'
 import { generateStructuredObject, runMemoryInference } from './inference.js'
 import type { RecallQuery } from './types.js'
 

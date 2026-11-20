@@ -1,3 +1,5 @@
+import { utf8BytePrefix } from '../../utils/index.js'
+
 const DEFAULT_MAX_BYTES = 1024 * 1024
 const BLOCK_BYTES = 16 * 1024
 
@@ -7,16 +9,7 @@ export interface ShellOutputSnapshot {
   omittedBytes: number
 }
 
-function utf8Prefix(buffer: Buffer, maxBytes: number): Buffer {
-  const end = Math.min(buffer.length, Math.max(0, maxBytes))
-  if (end === 0) return Buffer.alloc(0)
-  let codePointStart = end - 1
-  while (codePointStart >= 0 && (buffer[codePointStart]! & 0xc0) === 0x80) codePointStart--
-  if (codePointStart < 0) return Buffer.alloc(0)
-  const lead = buffer[codePointStart]!
-  const expectedBytes = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1
-  return buffer.subarray(0, end - codePointStart < expectedBytes ? codePointStart : end)
-}
+const utf8Prefix = utf8BytePrefix
 
 /**
  * A byte-bounded output accumulator. It retains the beginning and end of the
@@ -53,10 +46,6 @@ export class HeadTailOutputBuffer {
   get retainedBytes(): number {
     if (!this.truncated) return this.totalBytes
     return this.head.length + this.tailLength - this.tailLeadingContinuationBytes()
-  }
-
-  get isEmpty(): boolean {
-    return this.totalBytes === 0
   }
 
   append(value: string | Uint8Array): void {

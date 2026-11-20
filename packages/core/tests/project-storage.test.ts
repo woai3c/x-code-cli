@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { ensureProjectStorageDir } from '../src/project-storage.js'
+import { ensureProjectStorageDir } from '../src/utils/project-storage.js'
 
 const tempDirs: string[] = []
 const COMMENT = '\n# X-Code CLI project-local state (sessions, history, plans, memory, and local settings)'

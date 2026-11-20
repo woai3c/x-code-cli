@@ -9,7 +9,7 @@
 // the byte-accurate implementation.
 import { describe, expect, it } from 'vitest'
 
-import { truncateForLog } from '../src/utils.js'
+import { truncateForLog } from '../src/utils/index.js'
 
 describe('truncateForLog', () => {
   it('returns ASCII input unchanged when under maxBytes', () => {

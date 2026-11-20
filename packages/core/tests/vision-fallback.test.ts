@@ -9,7 +9,7 @@ import path from 'node:path'
 
 import { generateText } from 'ai'
 
-import { captionImage, captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
+import { captionImage, captionImageBuffer, pickVisionProvider } from '../src/agent/ingest/vision-fallback.js'
 import { MAX_IMAGE_SOURCE_BYTES } from '../src/utils/image-compress.js'
 import { PROVIDER_ENV_VARS, isolateOpenAIAuth } from './provider-env.js'
 

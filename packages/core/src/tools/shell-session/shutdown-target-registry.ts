@@ -1,4 +1,4 @@
-import { errorMessage } from '../../utils.js'
+import { errorMessage } from '../../utils/index.js'
 import type { ManagedProcess } from './provider.js'
 import type { EmergencyTerminationResult, ShellFailure, TerminationReason } from './types.js'
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { generateTaskSlug } from '../src/agent/plan-storage.js'
+import { generateTaskSlug } from '../src/agent/session/plan-storage.js'
 
 describe('generateTaskSlug', () => {
   it('uses short ASCII input directly without a model request', () => {

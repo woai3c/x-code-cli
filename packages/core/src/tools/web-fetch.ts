@@ -16,6 +16,7 @@ import { LruCache } from '../utils/lru-cache.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { VERSION } from '../version.js'
 import { reportProgress } from './progress.js'
+import { withTimeoutSignal } from './utils.js'
 
 const FETCH_TIMEOUT_MS = 15_000
 // Markdown returned to the model. Bumped from 30 KB (which cut docs pages in half)
@@ -215,8 +216,7 @@ const turndown = new TurndownService({
 }) as { turndown: (html: string) => string }
 
 function withTimeout(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS)
-  return signal ? AbortSignal.any([signal, timeout]) : timeout
+  return withTimeoutSignal(signal, FETCH_TIMEOUT_MS)
 }
 
 /** @internal Exported for redirect-validation tests. */

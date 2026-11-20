@@ -11,8 +11,8 @@
 // on this list at startup, so toggle/remove takes effect on next launch.
 import path from 'node:path'
 
-import { mutateSettingsFile, readSettingsFile } from '../settings-io.js'
-import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { XCODE_DIR, userXcodeDir } from '../utils/index.js'
+import { mutateSettingsFile, readSettingsFile } from '../utils/settings-io.js'
 import { collectProjectSkillDirs } from './loader.js'
 
 export type SkillSettingsScope = 'user' | 'project'

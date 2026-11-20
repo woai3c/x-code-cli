@@ -1,6 +1,6 @@
 import { zodToJsonSchema } from 'zod-to-json-schema'
 
-import { estimateTextTokenCount } from './context-window.js'
+import { estimateTextTokenCount } from './context/context-window.js'
 
 /** Estimate the model-facing wire size of one function tool. Shared by the
  *  direct-tool budget and /usage so policy and observability use one number. */

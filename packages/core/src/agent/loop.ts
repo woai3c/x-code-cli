@@ -1,6 +1,6 @@
 // @x-code-cli/core — Agent Loop (orchestration: streaming, tool calls, permission)
 //
-// Context compression lives in `./compression.ts`; this file just
+// Context compression lives in `./context/compression.js`; this file just
 // orchestrates the per-turn streaming + tool dispatch loop.
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -39,22 +39,25 @@ import { createTaskTool } from '../tools/task.js'
 import { toolSearch } from '../tools/tool-search.js'
 import { createUpdateGoalTool } from '../tools/update-goal.js'
 import type { AgentCallbacks, AgentOptions, MessageProvenance, PeerOrigin, QueuedAgentInput } from '../types/index.js'
-import { debugLog, errorMessage, isAbortError } from '../utils.js'
+import { debugLog, errorMessage, isAbortError } from '../utils/index.js'
+import { isFailedToolResultPart } from '../utils/tool-errors.js'
 import { classifyApiError, isContextTooLongError, isImageDataError } from './api-errors.js'
 import { markExpectedCacheMiss } from './cache-stats.js'
-import { checkAndCompressContext, handleContextTooLong } from './compression.js'
-import { getCompressionThreshold, getMaxOutputTokens } from './context-window.js'
+import { checkAndCompressContext, handleContextTooLong } from './context/compression.js'
+import { getCompressionThreshold, getMaxOutputTokens } from './context/context-window.js'
+import { collapseConsumedToolResults, collapseStaleToolResults } from './context/tool-result-pruning.js'
+import { repairOrphanTrackedToolCalls } from './context/tool-result-sanitize.js'
 import { createLoopState } from './loop-state.js'
 import type { LoopState, StepStats } from './loop-state.js'
-import { generateTaskSlug, makePlanFilePath } from './plan-storage.js'
 import { effectiveExecutionAuthority, summarizePeerOrigins } from './provenance.js'
 import {
   downgradeBinaryPartsForProvider,
   reattachToolResultImagesForProvider,
   stripBinaryPartsFromMessages,
 } from './provider-compat.js'
-import { appendCheckpoint, appendHeader, appendStepStats, flushPendingMessages } from './session-store.js'
-import { createCheckpoint } from './snapshot.js'
+import { generateTaskSlug, makePlanFilePath } from './session/plan-storage.js'
+import { appendCheckpoint, appendHeader, appendStepStats, flushPendingMessages } from './session/session-store.js'
+import { createCheckpoint } from './session/snapshot.js'
 import {
   appendStreamRecoveryContext,
   createStreamAttemptControl,
@@ -71,8 +74,6 @@ import {
   formatSkillCapabilities,
 } from './system-prompt.js'
 import { processToolCalls } from './tool-execution.js'
-import { collapseConsumedToolResults, collapseStaleToolResults } from './tool-result-pruning.js'
-import { repairOrphanTrackedToolCalls } from './tool-result-sanitize.js'
 import { buildDeferredCatalog, composeTurnTools } from './tool-search/catalog.js'
 import { appendTrackedMessage, recalculateContextSecurity } from './tracked-messages.js'
 import { classifyTurnFailure, collectTurnResponse, streamChunksToUI } from './turn-stream.js'
@@ -201,22 +202,7 @@ interface ToolResultPart {
   isError?: boolean
 }
 
-function isFailedToolResult(part: ToolResultPart): boolean {
-  if (part.isError) return true
-  if (!part.output || typeof part.output !== 'object') return false
-  const output = part.output as Record<string, unknown>
-  return (
-    output.isError === true ||
-    output.success === false ||
-    output.ok === false ||
-    ('error' in output && output.error !== undefined && output.error !== null && output.error !== false) ||
-    output.status === 'error' ||
-    output.status === 'failed' ||
-    (typeof output.exitCode === 'number' && output.exitCode !== 0) ||
-    output.type === 'error-text' ||
-    output.type === 'error-json'
-  )
-}
+const isFailedToolResult = isFailedToolResultPart
 
 function successfulToolResultText(messages: readonly ModelMessage[]): string {
   const outputs: string[] = []
@@ -251,8 +237,8 @@ function userContentToText(content: UserContent): string {
 
 export type { LoopState } from './loop-state.js'
 // Re-exported for the CLI's resume / manual-compact path (see use-agent.ts).
-export { compressMessages, compressMessagesWithUsage } from './compression.js'
-export type { CompressionResult } from './compression.js'
+export { compressMessagesWithUsage } from './context/compression.js'
+export type { CompressionResult } from './context/compression.js'
 
 /** What `agentLoop` returns to its caller.
  *

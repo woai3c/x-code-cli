@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { errorMessage } from '../../utils.js'
+import { errorMessage } from '../../utils/index.js'
 import type { InitialWaitPolicy, WaitPolicy } from './types.js'
 
 export const INITIAL_YIELD_MS = 10_000

@@ -16,7 +16,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { errorMessage, fileExists } from '../utils.js'
+import { errorMessage, fileExists } from '../utils/index.js'
 import { GEMINI_MANIFEST_REL, MANIFEST_CANDIDATES, isSafePluginPathComponent } from './paths.js'
 import type { ManifestFormat, PluginManifest } from './types.js'
 

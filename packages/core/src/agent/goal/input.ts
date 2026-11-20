@@ -28,7 +28,3 @@ export function promoteNextGoalInput(state: LoopState, goalId: string): GoalInpu
   input.promotedAt = new Date().toISOString()
   return input
 }
-
-export function pendingGoalInputs(state: LoopState, goalId: string): GoalInput[] {
-  return state.goalInputs.filter((input) => input.goalId === goalId && !input.promotedAt)
-}

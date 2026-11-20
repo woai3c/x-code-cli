@@ -1,4 +1,4 @@
-import { runShutdownPhases } from '../src/shutdown-coordinator.js'
+import { runShutdownPhases } from '../src/runtime/shutdown-coordinator.js'
 
 const timing = {
   shellBudget: { gracefulMs: 1, forceMs: 1, confirmMs: 1 },

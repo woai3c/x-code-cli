@@ -6,7 +6,7 @@ import { createPeerIdentity } from '../src/peers/identity.js'
 import type { PeerFrameV1 } from '../src/peers/protocol.js'
 import type { PeerRegistry } from '../src/peers/registry.js'
 import { createPeerService } from '../src/peers/service.js'
-import type { PeerTransport } from '../src/peers/transport.js'
+import type { PeerTransport } from '../src/peers/transport/transport.js'
 import type { PeerRegistrationV1, RegistrationCandidate } from '../src/peers/types.js'
 
 function candidate(registration: PeerRegistrationV1): RegistrationCandidate {

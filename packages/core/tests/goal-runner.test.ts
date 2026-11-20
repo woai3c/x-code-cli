@@ -4,14 +4,14 @@ import { hasPendingGoalInput } from '../src/agent/goal/input.js'
 import { isSameBlocker, runGoalLoop } from '../src/agent/goal/runner.js'
 import { createGoal, requestGoalBlocked, requestGoalComplete } from '../src/agent/goal/state.js'
 import { createLoopState } from '../src/agent/loop-state.js'
-import { appendGoalInput } from '../src/agent/session-store.js'
+import { appendGoalInput } from '../src/agent/session/session-store.js'
 import type { AgentCallbacks, AgentOptions } from '../src/types/index.js'
 
 const { runSubAgent } = vi.hoisted(() => ({
   runSubAgent: vi.fn(),
 }))
 
-vi.mock('../src/agent/session-store.js', () => ({
+vi.mock('../src/agent/session/session-store.js', () => ({
   appendGoalInput: vi.fn().mockResolvedValue(undefined),
   appendGoalState: vi.fn().mockResolvedValue(undefined),
   appendGoalVerification: vi.fn().mockResolvedValue(undefined),

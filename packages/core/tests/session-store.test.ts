@@ -43,7 +43,7 @@ import {
   loadSession,
   markBoundaryAndReflush,
   pickLatestSession,
-} from '../src/agent/session-store.js'
+} from '../src/agent/session/session-store.js'
 import { accumulateUsage, normalizeLanguageModelUsage } from '../src/agent/usage.js'
 
 let tempDir: string

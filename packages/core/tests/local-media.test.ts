@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { openMediaTag, toToolResultContent, toUserContentParts, wrapLocalText } from '../src/agent/local-media.js'
+import {
+  openMediaTag,
+  toToolResultContent,
+  toUserContentParts,
+  wrapLocalText,
+} from '../src/agent/ingest/local-media.js'
 
 describe('local media adapters', () => {
   it('escapes untrusted path attributes without changing local text content', () => {

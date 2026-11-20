@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { XCODE_DIR, debugLog } from '../utils.js'
+import { XCODE_DIR, debugLog } from '../utils/index.js'
 import type { AllowRule } from './session-store.js'
 
 const PERMISSIONS_VERSION = 2

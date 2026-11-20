@@ -1,4 +1,4 @@
-import { resetChatGPTModelPreloadForTesting, startChatGPTModelPreload } from '../src/chatgpt-model-preload.js'
+import { resetChatGPTModelPreloadForTesting, startChatGPTModelPreload } from '../src/auth/chatgpt-model-preload.js'
 
 describe('ChatGPT model preload', () => {
   beforeEach(resetChatGPTModelPreloadForTesting)

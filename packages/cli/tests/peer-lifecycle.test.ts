@@ -1,6 +1,6 @@
 import type { PeerService, PeerServiceOptions } from '@x-code-cli/core'
 
-import { resolveCliPeerMessagingConfig, startCliPeerService } from '../src/peer-lifecycle.js'
+import { resolveCliPeerMessagingConfig, startCliPeerService } from '../src/runtime/peer-lifecycle.js'
 
 function fakeService(start: () => Promise<void> = async () => {}): PeerService {
   return { start } as PeerService

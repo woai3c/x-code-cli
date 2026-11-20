@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import path from 'node:path'
 
-import { restoreInvocationCwd } from '../src/launch-cwd.js'
+import { restoreInvocationCwd } from '../src/runtime/launch-cwd.js'
 
 describe('restoreInvocationCwd', () => {
   it('restores an absolute package-manager invocation directory', () => {

@@ -21,8 +21,8 @@
 // scope wins; a missing entry falls through.
 import path from 'node:path'
 
-import { mutateSettingsFile, readSettingsFile } from '../settings-io.js'
-import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { XCODE_DIR, userXcodeDir } from '../utils/index.js'
+import { mutateSettingsFile, readSettingsFile } from '../utils/settings-io.js'
 import type { PluginScope } from './types.js'
 
 /** Highest precedence first. The first scope with an explicit entry wins. */
@@ -91,12 +91,6 @@ export class EnableState {
       }
     }
     return { enabled: DEFAULT_ENABLED, decidedBy: undefined }
-  }
-
-  /** Raw map for one scope — used by `/plugin list` to show the per-scope
-   *  flags alongside the effective state. */
-  scopeEntries(scope: PluginScope): Record<string, boolean> {
-    return { ...(this.perScope.get(scope) ?? {}) }
   }
 }
 

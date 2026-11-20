@@ -17,7 +17,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { PermissionDecision } from '../types/index.js'
-import { debugLog, userXcodeDir } from '../utils.js'
+import { debugLog, userXcodeDir } from '../utils/index.js'
 
 function permissionsFile(): string {
   return path.join(userXcodeDir(), 'mcp-permissions.json')

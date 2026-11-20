@@ -12,13 +12,10 @@ import type {
 import { type Deferred, createDeferred } from '../session.js'
 import type { ProcessTerminationResult, TerminationBudget, TerminationReason } from '../types.js'
 import { ActivationFrameBuffer } from './activation-frames.js'
+import { confirmedTerminationResult, delay, failedTerminationResult } from './shared.js'
 
 const MIN_CONFIRM_DELAY_MS = 25
 const MAX_CONFIRM_DELAY_MS = 100
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 function exitStatus(child: ChildProcessWithoutNullStreams): ManagedExitStatus {
   return {
@@ -201,24 +198,22 @@ class PosixManagedProcess implements ManagedProcess {
   }
 
   private confirmed(gracefulAttempted: boolean, forceAttempted: boolean): ProcessTerminationResult {
-    return {
+    return confirmedTerminationResult(
+      this.child.exitCode !== null || this.child.signalCode !== null,
+      exitStatus(this.child),
       gracefulAttempted,
       forceAttempted,
-      rootExited: this.child.exitCode !== null || this.child.signalCode !== null,
-      treeConfirmedExited: true,
-      ...exitStatus(this.child),
-    }
+    )
   }
 
   private failure(gracefulAttempted: boolean, forceAttempted: boolean, message: string): ProcessTerminationResult {
-    return {
+    return failedTerminationResult(
+      this.child.exitCode !== null || this.child.signalCode !== null,
+      exitStatus(this.child),
       gracefulAttempted,
       forceAttempted,
-      rootExited: this.child.exitCode !== null || this.child.signalCode !== null,
-      treeConfirmedExited: false,
-      ...exitStatus(this.child),
-      failure: { code: 'termination-unconfirmed', message },
-    }
+      message,
+    )
   }
 }
 

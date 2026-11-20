@@ -1,7 +1,7 @@
 import http from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
 
-import { errorMessage } from '../../../core/dist/utils.js'
+import { errorMessage } from '@x-code-cli/core'
 
 export interface CapturedProviderRequest {
   sequence: number

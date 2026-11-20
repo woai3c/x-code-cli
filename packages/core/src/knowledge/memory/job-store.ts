@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { fileExists } from '../../utils.js'
 import { atomicWriteFile, syncDirectory } from '../../utils/atomic-file.js'
 import { acquireFileLock } from '../../utils/file-lock.js'
 import type { FileLockLease } from '../../utils/file-lock.js'
+import { fileExists } from '../../utils/index.js'
 import { redactMemoryValue } from './redaction.js'
 import type { MemoryJob } from './types.js'
 

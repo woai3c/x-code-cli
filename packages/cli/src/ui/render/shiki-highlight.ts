@@ -335,8 +335,3 @@ export function highlightShellCommand(command: string): string {
   shellHighlightCache.set(cacheKey, highlighted)
   return highlighted
 }
-
-/** Test hook: true once the engine finished warming up. */
-export function isShikiReady(): boolean {
-  return highlighter !== null
-}

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { MAX_FRAME_BYTES, encodePeerFrame } from '../src/peers/protocol.js'
-import { createUnixSocketTransport } from '../src/peers/unix-socket-transport.js'
+import { createUnixSocketTransport } from '../src/peers/transport/unix-socket-transport.js'
 
 let directory: string
 

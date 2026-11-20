@@ -12,14 +12,19 @@ import { tool } from 'ai'
 
 import { z } from 'zod'
 
-import { formatTranscription, transcribeAudio } from '../agent/audio-transcribe.js'
-import { assertSafeTextContent, inspectFile } from '../agent/file-classifier.js'
-import type { TextEncoding } from '../agent/file-classifier.js'
-import { extractOfficeTextResult } from '../agent/file-ingest.js'
-import { ocrImage } from '../agent/image-ocr.js'
-import { BUILT_IN_MEDIA_ANALYSIS_NOTE, toToolResultContent } from '../agent/local-media.js'
-import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../agent/notebook-render.js'
-import { PDF_AUTO_MAX_RENDERED_PAGES, PDF_READ_MAX_PAGES, formatPdfReference, processPdf } from '../agent/pdf-ingest.js'
+import { formatTranscription, transcribeAudio } from '../agent/ingest/audio-transcribe.js'
+import { assertSafeTextContent, inspectFile } from '../agent/ingest/file-classifier.js'
+import type { TextEncoding } from '../agent/ingest/file-classifier.js'
+import { extractOfficeTextResult } from '../agent/ingest/file-ingest.js'
+import { ocrImage } from '../agent/ingest/image-ocr.js'
+import { BUILT_IN_MEDIA_ANALYSIS_NOTE, toToolResultContent } from '../agent/ingest/local-media.js'
+import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../agent/ingest/notebook-render.js'
+import {
+  PDF_AUTO_MAX_RENDERED_PAGES,
+  PDF_READ_MAX_PAGES,
+  formatPdfReference,
+  processPdf,
+} from '../agent/ingest/pdf-ingest.js'
 import {
   buildUnsupportedImageNotice,
   isModelAcceptedImage,
@@ -28,7 +33,6 @@ import {
   normalizeImageMime,
   sniffImageMime,
 } from '../providers/capabilities.js'
-import { truncateUtf8 } from '../utils.js'
 import { FileSizeLimitError, readFileWithinLimit } from '../utils/bounded-read.js'
 import {
   ATTACH_BYTE_BUDGET,
@@ -37,6 +41,7 @@ import {
   buildImageProcessingFailureNotice,
   compressImage,
 } from '../utils/image-compress.js'
+import { truncateUtf8 } from '../utils/index.js'
 import { knownMediaTypeFor } from '../utils/media-type.js'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
@@ -421,7 +426,7 @@ export function createReadFileTool(cache?: ReadFileCache, options: ReadFileToolO
         if (kind === 'office') {
           const verdict = await checkReadCache(cache, filePath, false)
           if (verdict && verdict.hit) return verdict.stub
-          const extraction = await extractOfficeTextResult(filePath, abortSignal, classification.mediaType)
+          const extraction = await extractOfficeTextResult(filePath, abortSignal)
           abortSignal?.throwIfAborted()
           if (!extraction.ok) return extraction.text
           const { text } = extraction

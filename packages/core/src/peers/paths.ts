@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { userXcodeDir } from '../utils.js'
+import { userXcodeDir } from '../utils/index.js'
 import { isUuid } from './identity.js'
 
 async function validateDirectoryIdentity(directory: string): Promise<void> {

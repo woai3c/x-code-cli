@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createPeerService } from '../src/peers/service.js'
-import type { PeerTransport } from '../src/peers/transport.js'
+import type { PeerTransport } from '../src/peers/transport/transport.js'
 
 describe('PeerService transport compatibility', () => {
   it('uses the Unix registry kind for an injected legacy transport without metadata', async () => {

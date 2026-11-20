@@ -2,7 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { resolveWindowsNativeArtifact, resolveWindowsNativeRoot } from '../../../native/windows-native-artifact.js'
-import { debugLog, errorMessage } from '../../../utils.js'
+import { debugLog, errorMessage } from '../../../utils/index.js'
 import type {
   ManagedExitStatus,
   ManagedProcess,
@@ -15,6 +15,12 @@ import type {
 import { createDeferred } from '../session.js'
 import type { ProcessTerminationResult, TerminationBudget, TerminationReason } from '../types.js'
 import { ActivationFrameBuffer } from './activation-frames.js'
+import {
+  confirmedTerminationResult,
+  dispatchWindowsSupervisorLifecycleFrame,
+  failedTerminationResult,
+  timeoutWake,
+} from './shared.js'
 import { defaultWindowsPowerShellExecutable, powerShellCommandLine } from './windows-powershell.js'
 import {
   WINDOWS_SUPERVISOR_PROTOCOL_VERSION,
@@ -32,18 +38,6 @@ export interface WindowsSupervisorArtifact {
 export interface WindowsJobObjectProviderOptions {
   artifact?: Promise<WindowsSupervisorArtifact> | WindowsSupervisorArtifact
   executable?: string
-}
-
-function timeoutWake(ms: number): { promise: Promise<false>; dispose(): void } {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  return {
-    promise: new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), ms)
-    }),
-    dispose() {
-      if (timer) clearTimeout(timer)
-    },
-  }
 }
 
 export function resolveWindowsSupervisorNativeRoot(modulePath: string): string {
@@ -198,21 +192,16 @@ class WindowsManagedProcess implements ManagedProcess {
       }
     }
 
-    return {
+    return failedTerminationResult(
+      this.rootExit.settled,
+      this.currentExitStatus,
       gracefulAttempted,
       forceAttempted,
-      rootExited: this.rootExit.settled,
-      treeConfirmedExited: false,
-      ...this.currentExitStatus,
-      failure: {
-        code: 'termination-unconfirmed',
-        message:
-          this.protocolFailure ??
-          (this.helperState === 'exited'
-            ? 'Windows shell supervisor exited before reporting an empty Job Object'
-            : 'Windows Job Object did not report active-process-zero before the termination deadline'),
-      },
-    }
+      this.protocolFailure ??
+        (this.helperState === 'exited'
+          ? 'Windows shell supervisor exited before reporting an empty Job Object'
+          : 'Windows Job Object did not report active-process-zero before the termination deadline'),
+    )
   }
 
   private async writeControl(
@@ -246,13 +235,7 @@ class WindowsManagedProcess implements ManagedProcess {
   }
 
   private confirmed(gracefulAttempted: boolean, forceAttempted: boolean): ProcessTerminationResult {
-    return {
-      gracefulAttempted,
-      forceAttempted,
-      rootExited: this.rootExit.settled,
-      treeConfirmedExited: true,
-      ...this.currentExitStatus,
-    }
+    return confirmedTerminationResult(this.rootExit.settled, this.currentExitStatus, gracefulAttempted, forceAttempted)
   }
 }
 
@@ -376,11 +359,19 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
   }
 
   private onProtocolFrame(kind: number, payload: Buffer): void {
-    if (kind === WindowsSupervisorFrameKind.ready) {
-      if (payload.length !== 4) return this.failProtocol(new Error('ready frame has an invalid payload'))
-      const rootPid = payload.readUInt32LE()
-      this.handle.setRootPid(rootPid)
-      this.readyState.resolve({ rootPid, treeKind: 'windows-job-object' })
+    if (
+      dispatchWindowsSupervisorLifecycleFrame({
+        kind,
+        payload,
+        treeKind: 'windows-job-object',
+        handle: this.handle,
+        readyState: this.readyState,
+        frames: this.frames,
+        failProtocol: (err) => this.failProtocol(err),
+        spawnErrorFallback: 'Windows shell supervisor failed to start the command',
+        terminationErrorFallback: 'Windows Job Object termination failed',
+      })
+    ) {
       return
     }
     if (kind === WindowsSupervisorFrameKind.stdout || kind === WindowsSupervisorFrameKind.stderr) {
@@ -396,31 +387,6 @@ class WindowsSpawnAttempt implements ManagedSpawnAttempt {
         kind: 'stream-end',
         stream: kind === WindowsSupervisorFrameKind.stdoutEof ? 'stdout' : 'stderr',
       })
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.rootExit) {
-      if (payload.length !== 4) return this.failProtocol(new Error('root-exit frame has an invalid payload'))
-      const exitCode = payload.readUInt32LE()
-      this.handle.observeRootExit(exitCode)
-      this.frames.push({ kind: 'root-exit', exitCode })
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.treeEmpty) {
-      if (payload.length !== 0) return this.failProtocol(new Error('tree-empty frame has an invalid payload'))
-      this.handle.observeTreeExit()
-      this.frames.push({ kind: 'tree-exit' })
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.spawnError) {
-      const message = payload.toString('utf8') || 'Windows shell supervisor failed to start the command'
-      this.handle.observeProtocolFailure(message)
-      this.readyState.reject(new Error(message))
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.terminationError) {
-      const message = payload.toString('utf8') || 'Windows Job Object termination failed'
-      this.handle.observeProtocolFailure(message)
-      this.frames.push({ kind: 'failure', message })
       return
     }
     this.failProtocol(new Error(`unknown Windows shell supervisor frame kind ${kind}`))

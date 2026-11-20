@@ -10,7 +10,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..')
 export const DEFAULT_MODEL = 'deepseek:deepseek-flash'
 
 /** Provider env-var → list of model ids that can be selected when that key is set.
- *  Keep aligned with `packages/core/src/types/index.ts::PROVIDER_DETECTION_ORDER`. */
+ *  Keep aligned with `packages/core/src/providers/catalog.ts::PROVIDER_DETECTION_ORDER`. */
 const PROVIDER_MODELS: Record<string, string[]> = {
   DEEPSEEK_API_KEY: ['deepseek:deepseek-flash', 'deepseek:deepseek-v4-pro'],
   ANTHROPIC_API_KEY: ['anthropic:claude-fable-5-2', 'anthropic:claude-sonnet-5-5', 'anthropic:claude-haiku-5-5'],

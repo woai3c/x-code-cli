@@ -3,7 +3,7 @@ import {
   OPENAI_CHATGPT_AUTH_RESPONSE_HEADER,
   OPENAI_CHATGPT_USAGE_LIMIT_HEADER,
 } from '../providers/openai-chatgpt-fetch.js'
-import { errorMessage } from '../utils.js'
+import { errorMessage } from '../utils/index.js'
 
 /** Substrings that signal the request exceeded the model's context window. */
 const CONTEXT_TOO_LONG_PATTERNS = [

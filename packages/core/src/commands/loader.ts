@@ -8,8 +8,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { parseFrontmatter } from '../frontmatter.js'
-import { XCODE_DIR, errorMessage, userXcodeDir } from '../utils.js'
+import { parseFrontmatter } from '../utils/frontmatter.js'
+import { XCODE_DIR, errorMessage, userXcodeDir } from '../utils/index.js'
 import type { CommandDefinition } from './types.js'
 
 async function loadCommandsFromDir(

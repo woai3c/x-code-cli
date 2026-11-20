@@ -8,9 +8,9 @@ import path from 'node:path'
 import { createPeerRateLimiter } from '../src/peers/rate-limit.js'
 import { type PeerRegistry, createPeerRegistry } from '../src/peers/registry.js'
 import { type PeerService, createPeerService } from '../src/peers/service.js'
-import type { PeerTransport } from '../src/peers/transport.js'
+import type { PeerTransport } from '../src/peers/transport/transport.js'
+import { createUnixSocketTransport } from '../src/peers/transport/unix-socket-transport.js'
 import type { PeerIdentity } from '../src/peers/types.js'
-import { createUnixSocketTransport } from '../src/peers/unix-socket-transport.js'
 
 const describeUnix = describe.runIf(process.platform !== 'win32')
 

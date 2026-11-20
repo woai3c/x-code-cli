@@ -1,7 +1,7 @@
 // @x-code-cli/core — Message types and helpers
 import type { ModelMessage } from 'ai'
 
-import { errorMessage } from '../utils.js'
+import { errorMessage } from '../utils/index.js'
 
 export interface ToolImage {
   data: string

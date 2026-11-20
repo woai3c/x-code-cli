@@ -14,7 +14,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { getUserConfigPath } from '../config/index.js'
-import { XCODE_DIR } from '../utils.js'
+import { XCODE_DIR } from '../utils/index.js'
 import { parseServerConfig } from './config-schema.js'
 import { type McpServerConfig } from './types.js'
 

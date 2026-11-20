@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { estimateTextTokenCount } from '../../agent/context-window.js'
+import { estimateTextTokenCount } from '../../agent/context/context-window.js'
 import type { MemoryFact, MemoryTopic } from './types.js'
 
 const WORD_RE = /[\p{L}\p{M}\p{N}]+/gu

@@ -8,7 +8,7 @@ import {
   getCompressionThreshold,
   getContextWindow,
   getMaxOutputTokens,
-} from '../src/agent/context-window.js'
+} from '../src/agent/context/context-window.js'
 import {
   initializeOpenAIAuthContext,
   resetOpenAIAuthContextForTesting,

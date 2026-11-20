@@ -5,23 +5,24 @@ import { generateText } from 'ai'
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import {
-  KEEP_RECENT,
   KEEP_RECENT_TOKENS,
   checkAndCompressContext,
-  compressMessages,
   compressMessagesWithUsage,
   handleContextTooLong,
-} from '../src/agent/compression.js'
+} from '../src/agent/context/compression.js'
 import { createLoopState } from '../src/agent/loop-state.js'
-import { markBoundaryAndReflush } from '../src/agent/session-store.js'
+import { markBoundaryAndReflush } from '../src/agent/session/session-store.js'
 import type { AgentCallbacks } from '../src/types/index.js'
+
+const compressMessages = async (...args: Parameters<typeof compressMessagesWithUsage>) =>
+  (await compressMessagesWithUsage(...args)).messages
 
 vi.mock('ai', async () => {
   const actual = await vi.importActual('ai')
   return { ...actual, generateText: vi.fn() }
 })
 
-vi.mock('../src/agent/session-store.js', () => ({
+vi.mock('../src/agent/session/session-store.js', () => ({
   appendUsage: vi.fn().mockResolvedValue(undefined),
   markBoundaryAndReflush: vi.fn().mockResolvedValue(undefined),
 }))

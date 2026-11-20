@@ -85,7 +85,7 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 }
 ```
 
-**OAuth**：HTTP server 若需 OAuth 认证，首次连接返回 `needs_auth` 状态。用 `/mcp auth <name>` 触发完整 OAuth 流程——浏览器打开授权 URL，回调后 token 持久化到 `~/.x-code/mcp/tokens/<server>.json`。下次启动自动注入 `Authorization: Bearer ...` 头。
+**OAuth**：HTTP server 若需 OAuth 认证，首次连接返回 `needs_auth` 状态。用 `/mcp auth <name>` 触发完整 OAuth 流程——浏览器打开授权 URL，回调后凭据与 token 以 `0600` 权限持久化到 `~/.x-code/mcp-auth.json`。下次启动自动注入 `Authorization: Bearer ...` 头。
 
 **不要把 token 手写到 `headers`** 里——OAuth 流程会自动处理。
 
@@ -108,16 +108,25 @@ X-Code CLI 内置 MCP 客户端，可以把任意符合 MCP 协议的服务器�
 
 ## `/mcp` 命令族
 
-| 命令                   | 说明                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------ |
-| `/mcp list`            | 列出所有配置的 server + 当前状态（connected / disabled / needs_auth / failed） |
-| `/mcp tools [server]`  | 列出可用工具；可选按 server 名过滤                                             |
-| `/mcp add`             | 交互式添加一个 stdio / HTTP server 到用户或项目 config                         |
-| `/mcp add-json`        | 从一段裸 JSON 添加一个 server（适合粘贴文档示例）                              |
-| `/mcp remove`          | 从 config 移除 server                                                          |
-| `/mcp auth <server>`   | 触发 HTTP server 的 OAuth 流程                                                 |
-| `/mcp logout <server>` | 清除 server 的 OAuth token                                                     |
-| `/mcp refresh`         | 重读 config 文件并重连所有 server（无需重启 xc）                               |
+| 命令                                     | 说明                                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `/mcp list`                              | 列出所有配置的 server + 当前状态（`connected` / `connecting` / `disabled` / `needs auth` / `failed`） |
+| `/mcp tools [server]`                    | 列出可用工具；可选按 server 名过滤                                                                    |
+| `/mcp add [flags] <name> <cmd\|url> […]` | 用命令行参数添加 stdio 或 HTTP（`--http`）server 到用户或项目 config                                  |
+| `/mcp add-json [--scope …] <name> '{…}'` | 从一段裸 JSON 对象添加一个 server（适合复杂配置或直接粘贴文档示例）                                   |
+| `/mcp remove [--scope …] <name>`         | 确认后从 config 移除 server（别名 `/mcp rm`；保留已存 OAuth token，清除用 `/mcp logout`）             |
+| `/mcp auth <server>`                     | 触发 HTTP server 的 OAuth 流程                                                                        |
+| `/mcp logout <server>`                   | 清除 `~/.x-code/mcp-auth.json` 中该 server 的 OAuth token                                             |
+| `/mcp refresh`                           | 重读 config 文件并重连所有 server（无需重启 xc）                                                      |
+
+`/mcp add` 常用写法（默认写入 `user` scope；`--scope project` 会同时自动信任当前项目目录，写完跑 `/mcp refresh` 立即连接）：
+
+```text
+/mcp add fs npx -y @modelcontextprotocol/server-filesystem /path/to/allowed-dir
+/mcp add --scope project --env API_KEY=${COMPANY_API_KEY} company -- node ./mcp/index.js
+/mcp add --http --header "X-Client: x-code" github https://api.githubcopilot.com/mcp/
+/mcp add-json linear '{"url":"https://mcp.linear.app/mcp"}'
+```
 
 `/mcp list` 输出示例：
 
@@ -192,16 +201,17 @@ MCP 工具名格式为 `<server>__<tool>`（双下划线分隔）。例：
 
 ```
 $ xc
-[mcp] linear: needs auth
+> /mcp list
+MCP servers:
+  linear        needs auth — run /mcp auth linear to log in
 > /mcp auth linear
-Opening browser to authorize linear...
-Listening on http://localhost:33421/oauth/callback
-[browser opens, user authorizes]
-[token saved to ~/.x-code/mcp/tokens/linear.json]
-linear connected — 8 tools, 2 resources
+Authenticating "linear" — opening browser...
+Opened https://...
+Waiting for the authorization redirect...
+✓ Authenticated "linear" — 8 tools, 2 resources
 ```
 
-之后所有启动自动带 Bearer token，无需重新认证（token 过期前）。
+认证成功后，OAuth 客户端信息与 token 保存在 `~/.x-code/mcp-auth.json`；之后所有启动自动带 Bearer token，无需重新认证（token 过期前）。
 
 ---
 

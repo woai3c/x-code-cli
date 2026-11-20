@@ -91,8 +91,8 @@ do not activate.
   "skills": "./skills", // directory of <name>/SKILL.md
   "agents": "./agents", // directory of <name>.md
   "commands": "./commands", // each .md becomes a /<name> slash command;
-  // body is a prompt template that
-  // supports $ARGUMENTS and ${CLAUDE_PLUGIN_ROOT}
+  // body is a prompt template that supports
+  // $ARGUMENTS / ${ARGUMENTS}, ${CLAUDE_PLUGIN_ROOT}, and ${CLAUDE_PLUGIN_DATA}
 
   // mcpServers: either a path to a JSON file shaped
   // `{ "mcpServers": { ... } }` (same as ~/.x-code/config.json),
@@ -156,8 +156,9 @@ do not activate.
   fields**; the loader auto-detects `skills/` / `agents/` / `commands/`
   subdirs by convention. Only set explicitly when using a non-standard
   layout. Each `.md` inside `commands/` becomes a `/<name>` slash
-  command — its body is a prompt template and supports both
-  `$ARGUMENTS` and `${CLAUDE_PLUGIN_ROOT}` substitution. The same
+  command — its body is a prompt template and supports
+  `$ARGUMENTS` (`${ARGUMENTS}`), `${CLAUDE_PLUGIN_ROOT}`, and
+  `${CLAUDE_PLUGIN_DATA}` substitution. The same
   `/<name>` slash command can also be defined directly in
   `~/.x-code/commands/<name>.md` (user scope) or
   `<cwd>/.x-code/commands/<name>.md` (project scope) — precedence is

@@ -5,9 +5,13 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
-import { resolveWindowsPeerBrokerArtifact } from '../src/peers/windows-peer-broker-artifact.js'
+import {
+  resolveWindowsPeerBrokerArtifact,
+  resolveWindowsPeerBrokerNativeRoot,
+} from '../src/peers/transport/windows-peer-broker-artifact.js'
 
 interface ManifestEntry {
   file: string
@@ -62,6 +66,11 @@ describe('Windows native artifacts', () => {
   })
 
   it('validates protocol, path, hash, and PE architecture before launching a broker', async () => {
+    const defaultModulePath = fileURLToPath(
+      new URL('../src/peers/transport/windows-peer-broker-artifact.ts', import.meta.url),
+    )
+    expect(resolveWindowsPeerBrokerNativeRoot(defaultModulePath)).toBe(nativeRoot)
+    await expect(resolveWindowsPeerBrokerArtifact('x64')).resolves.toMatchObject({ protocolVersion: 2 })
     await expect(resolveWindowsPeerBrokerArtifact('x64', testRoot)).resolves.toMatchObject({ protocolVersion: 2 })
     await expect(resolveWindowsPeerBrokerArtifact('arm64', testRoot)).resolves.toMatchObject({ protocolVersion: 2 })
 

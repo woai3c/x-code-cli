@@ -27,7 +27,8 @@ import type {
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { debugLog, userXcodeDir } from '../../utils.js'
+import { debugLog, userXcodeDir } from '../../utils/index.js'
+import { readSettingsFile } from '../../utils/settings-io.js'
 
 function authFile(): string {
   return path.join(userXcodeDir(), 'mcp-auth.json')
@@ -80,15 +81,6 @@ export class McpTokenStorage {
     }
   }
 
-  async listServers(): Promise<Array<{ name: string; url: string; hasTokens: boolean }>> {
-    await this.ensureLoaded()
-    return Object.entries(this.cache!).map(([name, entry]) => ({
-      name,
-      url: entry.url,
-      hasTokens: !!entry.tokens,
-    }))
-  }
-
   // ── helpers ────────────────────────────────────────────────────────────
 
   /** Compute the absolute expiry timestamp from issuedAt + expires_in.
@@ -104,21 +96,11 @@ export class McpTokenStorage {
     return issued + t.expires_in * 1000
   }
 
-  /** True iff stored tokens exist AND look fresh enough to use
-   *  (i.e. won't expire in the next `skewMs` window). When expiry
-   *  isn't known we return true and let the next 401 drive a refresh. */
-  static isAccessTokenLikelyValid(stored: StoredServerAuth | undefined, skewMs = 60_000): boolean {
-    if (!stored?.tokens?.access_token) return false
-    const expiresAt = McpTokenStorage.expiresAt(stored)
-    if (expiresAt === undefined) return true
-    return Date.now() + skewMs < expiresAt
-  }
-
   // ── internals ──────────────────────────────────────────────────────────
 
   private async ensureLoaded(): Promise<void> {
     if (this.cache !== null) return
-    this.cache = await readFile()
+    this.cache = (await readSettingsFile(authFile(), { errorLogTag: 'mcp.token-read-failed' })) as FileShape
   }
 
   private async flush(): Promise<void> {
@@ -137,19 +119,6 @@ export class McpTokenStorage {
   }
 }
 
-async function readFile(): Promise<FileShape> {
-  try {
-    const raw = await fs.readFile(authFile(), 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as FileShape
-    }
-  } catch {
-    // missing / malformed — start clean
-  }
-  return {}
-}
-
 /** Singleton instance. Wiring is simple: CLI startup constructs it once,
  *  passes it to loadMcpServers (which threads it into per-server OAuth
  *  providers) and to /mcp auth / /mcp logout handlers. */
@@ -157,13 +126,6 @@ let globalInstance: McpTokenStorage | null = null
 export function getTokenStorage(): McpTokenStorage {
   if (!globalInstance) globalInstance = new McpTokenStorage()
   return globalInstance
-}
-
-/** Test hook — replace the singleton so unit tests don't touch
- *  ~/.x-code/. Note that X_CODE_HOME also reroutes the file, so most
- *  tests can just set that env var and avoid this hook. */
-export function setTokenStorageForTesting(s: McpTokenStorage | null): void {
-  globalInstance = s
 }
 
 export type { OAuthClientInformationFull, OAuthClientInformationMixed, OAuthTokens }

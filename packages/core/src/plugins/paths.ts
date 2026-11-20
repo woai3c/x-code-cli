@@ -18,7 +18,7 @@
 //   installed_plugins.json           — bookkeeping of installed plugins
 import path from 'node:path'
 
-import { XCODE_DIR, userXcodeDir } from '../utils.js'
+import { XCODE_DIR, userXcodeDir } from '../utils/index.js'
 
 const PLUGINS_DIR_NAME = 'plugins'
 const WINDOWS_RESERVED_COMPONENT_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i

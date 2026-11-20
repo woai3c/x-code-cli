@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { repairOrphanTrackedToolCalls } from '../src/agent/context/tool-result-sanitize.js'
 import { createLoopState } from '../src/agent/loop-state.js'
 import {
   canonicalTranscriptDigest,
@@ -19,8 +20,7 @@ import {
   flushPendingMessages,
   hydrateLoopState,
   loadSession,
-} from '../src/agent/session-store.js'
-import { repairOrphanTrackedToolCalls } from '../src/agent/tool-result-sanitize.js'
+} from '../src/agent/session/session-store.js'
 import { appendTrackedMessage } from '../src/agent/tracked-messages.js'
 
 let testDir: string

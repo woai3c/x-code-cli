@@ -71,8 +71,8 @@ when you're scripting trusted installs.
 | `https://…` or `git@…`        | `https://gitlab.example/foo/bar.git`      | Any git-clone-able URL.                                                                                                                              |
 | Filesystem path               | `./my-plugin`, `/abs/path/to/plugin`      | Useful for plugin authors iterating locally.                                                                                                         |
 
-The first three install under the `local` marketplace unless you used
-the `<name>@<marketplace>` form. The marketplace name shows up in
+The last three install under the `local` marketplace (as opposed to
+the `<name>@<marketplace>` form). The marketplace name shows up in
 `/plugin list` so you can tell at a glance where each plugin came from.
 
 ---

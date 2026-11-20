@@ -41,11 +41,19 @@ to 1.5 seconds and the complete shutdown path has a 4-second hard cap.
 Keep it to short flushes or notifications; use `TurnComplete` for work that
 must finish reliably.
 
-`PostToolUse` does not yet cover every tool-result path. It currently fires
-for completed `writeFile` / `edit` / `shell`, `browserVisualCheck`, and MCP
-dispatches. It does not fire for SDK-auto-executed read/search tools, bypass
-handlers such as `askUser` / `task` / MCP resource reads, or synthetic results
-created by permission denial, interruption, or a thrown execution error.
+`PreToolUse` fires before tool dispatch across built-in tools, sub-agents
+(`task`), and MCP tools, except follow-up background-session controls
+`shellOutput` and `killShell` (and `PreToolUse` may not alter `shell.cwd`).
+
+`PostToolUse` fires for completed `writeFile` / `edit` / `shell` (once when the
+session reaches its terminal observation, not on intermediate `running`
+snapshots), executor-backed built-ins (`readFile` text output, `glob`, `grep`,
+`listDir`, `webSearch`, `webFetch`, `activateSkill`, `getGoal`, `updateGoal`,
+`memorySearch`), `browserVisualCheck`, and MCP dispatches. It does not fire for
+bypass handlers (`askUser`, `task`, `exitPlanMode`, MCP resource tools,
+`toolSearch`, peer messaging tools), structured multimodal `readFile` results,
+or synthetic results created by permission denial, interruption, or an uncaught
+execution error.
 
 ---
 
@@ -147,11 +155,11 @@ Every hook receives a single JSON line on stdin. Top-level shape:
   "tool": {
     // PreToolUse, PostToolUse
     "name": "writeFile",
-    "args": { "path": "src/foo.ts", "content": "..." },
+    "args": { "filePath": "/abs/path/to/project/src/foo.ts", "content": "..." },
     "callId": "call_abc123",
 
     // PostToolUse only:
-    "output": "wrote 42 bytes",
+    "output": "File written: /abs/path/to/project/src/foo.ts (12 lines)",
     "isError": false,
   },
   "prompt": "Refactor X to do Y", // UserPromptSubmit only
@@ -201,8 +209,8 @@ unparseable as JSON is treated as `allow` plus a debug-log breadcrumb.
 // Stop the agent from doing the thing
 { "decision": "deny", "reason": "Editing prod config is forbidden" }
 
-// Rewrite the tool args (PreToolUse) or output (PostToolUse)
-{ "decision": "modify", "args": { "path": "/safer/path" } }
+// Rewrite the tool args (PreToolUse — replaces the full args object) or output (PostToolUse)
+{ "decision": "modify", "args": { "filePath": "/safer/path.txt", "content": "..." } }
 { "decision": "modify", "output": "[redacted]" }
 ```
 
@@ -279,19 +287,23 @@ handling; the exact termination mechanism depends on the operating system.
 ## End-to-end example: lint before writes
 
 ```js
-// hooks/lint.js — fired on PreToolUse for writeFile|edit
+// hooks/lint.js — fired on PreToolUse for writeFile
 const data = require('fs').readFileSync(0, 'utf-8') // read stdin
 const event = JSON.parse(data)
-const filePath = event.tool.args.path
+const filePath = event.tool?.args?.filePath
+const content = event.tool?.args?.content
 
-if (!filePath.endsWith('.ts')) {
+if (typeof filePath !== 'string' || !filePath.endsWith('.ts') || typeof content !== 'string') {
   console.log(JSON.stringify({ decision: 'allow' }))
   process.exit(0)
 }
 
-const { execSync } = require('child_process')
+const { execFileSync } = require('child_process')
 try {
-  execSync(`eslint --quiet "${filePath}"`, { stdio: 'pipe' })
+  execFileSync('npx', ['eslint', '--quiet', '--stdin', '--stdin-filename', filePath], {
+    input: content,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
   console.log(JSON.stringify({ decision: 'allow' }))
 } catch (e) {
   console.log(
@@ -310,7 +322,7 @@ Manifest:
   "name": "ts-lint-gate",
   "version": "0.1.0",
   "hooks": {
-    "PreToolUse": [{ "matcher": "writeFile|edit", "command": "node ${pluginDir}/hooks/lint.js" }]
+    "PreToolUse": [{ "matcher": "^writeFile$", "command": "node ${pluginDir}/hooks/lint.js" }]
   }
 }
 ```

@@ -7,7 +7,9 @@ const execFileAsync = promisify(execFile)
 
 describe('Windows peer broker process wrapper', () => {
   it('survives a broker exit while writes are queued', async () => {
-    const moduleUrl = pathToFileURL(path.resolve('packages/core/dist/peers/windows-peer-broker-process.js')).href
+    const moduleUrl = pathToFileURL(
+      path.resolve('packages/core/dist/peers/transport/windows-peer-broker-process.js'),
+    ).href
     const script = `
       import { spawn } from 'node:child_process'
       import { spawnWindowsPeerBrokerProcess } from ${JSON.stringify(moduleUrl)}

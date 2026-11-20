@@ -18,7 +18,7 @@
 import { execa } from 'execa'
 
 import { getPluginUserConfigEnv } from '../plugins/user-config.js'
-import { debugLog, errorMessage } from '../utils.js'
+import { debugLog, errorMessage } from '../utils/index.js'
 import type { HookConfigEntry, HookDecision, HookEvent, RegisteredHook } from './types.js'
 import { buildVariableContext, expandVariables } from './variables.js'
 

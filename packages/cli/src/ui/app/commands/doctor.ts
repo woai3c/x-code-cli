@@ -11,8 +11,7 @@ import {
   resolveSubAgentModelSelection,
 } from '@x-code-cli/core'
 import type { AgentOptions } from '@x-code-cli/core'
-
-import { VERSION } from '../../../version.js'
+import { VERSION } from '@x-code-cli/core'
 
 export interface DoctorCommandDeps {
   options: AgentOptions

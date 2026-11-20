@@ -1,7 +1,7 @@
 import { setImmediate } from 'node:timers'
 
 import { stripTerminalControls } from '../../peers/terminal-sanitize.js'
-import { debugLog } from '../../utils.js'
+import { debugLog, splitUtf8ByBytes } from '../../utils/index.js'
 import type { ShellEventPayload, ShellSessionEvent, ShellSessionListener, ShellSessionSummary } from './types.js'
 
 const MAX_OUTPUT_EVENT_BYTES = 8 * 1024
@@ -17,17 +17,7 @@ interface QueueEntry {
   outputBytes: number
 }
 
-function utf8Prefix(value: string, maxBytes: number): { value: string; bytes: number; rest: string } {
-  const buffer = Buffer.from(value, 'utf8')
-  if (buffer.length <= maxBytes) return { value, bytes: buffer.length, rest: '' }
-  let end = maxBytes
-  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--
-  return {
-    value: buffer.subarray(0, end).toString('utf8'),
-    bytes: end,
-    rest: buffer.subarray(end).toString('utf8'),
-  }
-}
+const utf8Prefix = splitUtf8ByBytes
 
 function sameListeners(left: readonly ShellSessionListener[], right: readonly ShellSessionListener[]): boolean {
   return left.length === right.length && left.every((listener, index) => listener === right[index])
@@ -52,10 +42,6 @@ export class ShellSessionEventHub {
     private readonly snapshotProvider: () => ShellSessionSummary[],
     private readonly now: () => number = Date.now,
   ) {}
-
-  get highWaterMark(): number {
-    return this.sequence
-  }
 
   get pendingOutputByteLength(): number {
     return this.pendingOutputBytes
@@ -118,7 +104,11 @@ export class ShellSessionEventHub {
     let remaining = sanitized
     let lastEvent: ShellSessionEvent | undefined
     do {
-      const part = utf8Prefix(remaining, MAX_OUTPUT_EVENT_BYTES)
+      let part = utf8Prefix(remaining, MAX_OUTPUT_EVENT_BYTES)
+      if (part.bytes === 0 && remaining.length > 0) {
+        const first = String.fromCodePoint(remaining.codePointAt(0)!)
+        part = { value: first, bytes: Buffer.byteLength(first, 'utf8'), rest: remaining.slice(first.length) }
+      }
       remaining = part.rest
       const event = this.createEvent({
         ...payload,

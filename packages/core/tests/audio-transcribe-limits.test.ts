@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { transcribeAudio } from '../src/agent/audio-transcribe.js'
+import { transcribeAudio } from '../src/agent/ingest/audio-transcribe.js'
 
 const runner = vi.hoisted(() => ({
   prepareWhisperAudio: vi.fn(),
@@ -12,8 +12,8 @@ const runner = vi.hoisted(() => ({
   runWhisperTranscription: vi.fn(),
 }))
 
-vi.mock('../src/agent/audio-transcribe-runner.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/agent/audio-transcribe-runner.js')>()
+vi.mock('../src/agent/ingest/audio-transcribe-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/ingest/audio-transcribe-runner.js')>()
   return {
     ...actual,
     prepareWhisperAudio: runner.prepareWhisperAudio,

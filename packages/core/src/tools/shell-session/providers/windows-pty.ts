@@ -3,7 +3,7 @@ import type { IDisposable, IPty } from 'node-pty'
 import { randomBytes } from 'node:crypto'
 import { type Server, type Socket, createServer } from 'node:net'
 
-import { errorMessage } from '../../../utils.js'
+import { errorMessage } from '../../../utils/index.js'
 import type {
   ManagedExitStatus,
   ManagedOutputCapture,
@@ -15,6 +15,13 @@ import type {
 import { createDeferred } from '../session.js'
 import type { ProcessTerminationResult, TerminationBudget, TerminationReason } from '../types.js'
 import { ActivationFrameBuffer } from './activation-frames.js'
+import {
+  confirmedTerminationResult,
+  dispatchWindowsSupervisorLifecycleFrame,
+  failedTerminationResult,
+  nextImmediate,
+  timeoutWake,
+} from './shared.js'
 import type { WindowsSupervisorArtifact } from './windows-job.js'
 import {
   WindowsSupervisorFrameDecoder,
@@ -38,22 +45,6 @@ export interface WindowsPtySpawnOptions {
 }
 
 const MIN_CONTROL_WAIT_MS = 25
-
-function timeoutWake(ms: number): { promise: Promise<false>; dispose(): void } {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  return {
-    promise: new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), ms)
-    }),
-    dispose() {
-      if (timer) clearTimeout(timer)
-    },
-  }
-}
-
-function nextImmediate(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve))
-}
 
 function closeServer(server: Server | undefined): void {
   if (!server) return
@@ -291,24 +282,17 @@ class WindowsPtyManagedProcess implements ManagedProcess {
   }
 
   private confirmed(gracefulAttempted: boolean, forceAttempted: boolean): ProcessTerminationResult {
-    return {
-      gracefulAttempted,
-      forceAttempted,
-      rootExited: this.rootExit.settled,
-      treeConfirmedExited: true,
-      ...this.currentExitStatus,
-    }
+    return confirmedTerminationResult(this.rootExit.settled, this.currentExitStatus, gracefulAttempted, forceAttempted)
   }
 
   private failure(gracefulAttempted: boolean, forceAttempted: boolean, message: string): ProcessTerminationResult {
-    return {
+    return failedTerminationResult(
+      this.rootExit.settled,
+      this.currentExitStatus,
       gracefulAttempted,
       forceAttempted,
-      rootExited: this.rootExit.settled,
-      treeConfirmedExited: false,
-      ...this.currentExitStatus,
-      failure: { code: 'termination-unconfirmed', message },
-    }
+      message,
+    )
   }
 }
 
@@ -324,7 +308,6 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
   private events?: Socket
   private control?: Socket
   private launchSent = false
-  private terminal?: IPty
   private dataDisposable?: IDisposable
   private exitDisposable?: IDisposable
   private cancelled = false
@@ -407,7 +390,6 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
         terminal.kill()
         throw new Error('Windows PTY supervisor spawned without a process id')
       }
-      this.terminal = terminal
       this.handle.attachTerminal(terminal)
       this.dataDisposable = terminal.onData((data) => {
         this.frames.push({ kind: 'output', stream: 'stdout', chunk: Buffer.from(data, 'utf8') })
@@ -486,36 +468,19 @@ export class WindowsPtySpawnAttempt implements ManagedSpawnAttempt {
   }
 
   private onProtocolFrame(kind: number, payload: Buffer): void {
-    if (kind === WindowsSupervisorFrameKind.ready) {
-      if (payload.length !== 4) return this.failProtocol(new Error('ready frame has an invalid payload'))
-      const rootPid = payload.readUInt32LE()
-      this.handle.setRootPid(rootPid)
-      this.readyState.resolve({ rootPid, treeKind: 'windows-conpty' })
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.rootExit) {
-      if (payload.length !== 4) return this.failProtocol(new Error('root-exit frame has an invalid payload'))
-      const exitCode = payload.readUInt32LE()
-      this.handle.observeRootExit(exitCode)
-      this.frames.push({ kind: 'root-exit', exitCode })
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.treeEmpty) {
-      if (payload.length !== 0) return this.failProtocol(new Error('tree-empty frame has an invalid payload'))
-      this.handle.observeTreeExit()
-      this.frames.push({ kind: 'tree-exit' })
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.spawnError) {
-      const message = payload.toString('utf8') || 'Windows PTY supervisor failed to start the command'
-      this.handle.observeProtocolFailure(message)
-      this.readyState.reject(new Error(message))
-      return
-    }
-    if (kind === WindowsSupervisorFrameKind.terminationError) {
-      const message = payload.toString('utf8') || 'Windows PTY Job Object termination failed'
-      this.handle.observeProtocolFailure(message)
-      this.frames.push({ kind: 'failure', message })
+    if (
+      dispatchWindowsSupervisorLifecycleFrame({
+        kind,
+        payload,
+        treeKind: 'windows-conpty',
+        handle: this.handle,
+        readyState: this.readyState,
+        frames: this.frames,
+        failProtocol: (err) => this.failProtocol(err),
+        spawnErrorFallback: 'Windows PTY supervisor failed to start the command',
+        terminationErrorFallback: 'Windows PTY Job Object termination failed',
+      })
+    ) {
       return
     }
     this.failProtocol(new Error(`unexpected Windows PTY supervisor frame kind ${kind}`))

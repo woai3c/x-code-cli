@@ -133,3 +133,10 @@ export function sliceByWidth(str: string, maxCols: number): string {
   }
   return str.slice(0, i)
 }
+
+const ANSI_STRIP_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
+
+/** Strip ANSI CSI and OSC 8 escape sequences so visual width calculations count only printable cells. */
+export function stripAnsi(str: string): string {
+  return str.replace(ANSI_STRIP_RE, '')
+}

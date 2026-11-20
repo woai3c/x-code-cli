@@ -2,16 +2,16 @@
 // model without ever degrading base64 bytes into ordinary prompt text.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { captionImageBuffer, pickVisionProvider } from '../src/agent/ingest/vision-fallback.js'
 import { createLoopState } from '../src/agent/loop-state.js'
-import { appendUsage } from '../src/agent/session-store.js'
+import { appendUsage } from '../src/agent/session/session-store.js'
 import { deliverToolImages } from '../src/agent/tool-execution.js'
-import { captionImageBuffer, pickVisionProvider } from '../src/agent/vision-fallback.js'
 
-vi.mock('../src/agent/session-store.js', () => ({
+vi.mock('../src/agent/session/session-store.js', () => ({
   appendUsage: vi.fn(async () => undefined),
 }))
 
-vi.mock('../src/agent/vision-fallback.js', () => ({
+vi.mock('../src/agent/ingest/vision-fallback.js', () => ({
   captionImageBuffer: vi.fn(async () => 'A MAP OF BERLIN WITH A SEARCH BOX AT [40,20]'),
   pickVisionProvider: vi.fn(() => null),
 }))

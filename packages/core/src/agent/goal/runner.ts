@@ -1,10 +1,10 @@
 import type { LanguageModel } from 'ai'
 
 import type { AgentCallbacks, AgentOptions } from '../../types/index.js'
-import { debugLog, errorMessage } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils/index.js'
 import type { LoopState } from '../loop-state.js'
 import type { AgentLoopResult } from '../loop.js'
-import { appendGoalInput, appendGoalState, appendGoalVerification } from '../session-store.js'
+import { appendGoalInput, appendGoalState, appendGoalVerification } from '../session/session-store.js'
 import { runFinalSummaryTurn } from './final-summary.js'
 import { admitGoalInput, hasPendingGoalInput, promoteNextGoalInput } from './input.js'
 import {

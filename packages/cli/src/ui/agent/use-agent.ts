@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
+  KEEP_RECENT_TOKENS,
+  MIN_KEEP_MESSAGES,
   accumulateUsage,
   agentLoop,
   appendInterrupted,
@@ -20,6 +22,7 @@ import {
   debugLog,
   errorMessage,
   estimateContextBreakdown,
+  estimateTokenCount,
   extractFileReferences,
   flushPendingMessages,
   formatQueuedAgentInput,
@@ -1276,24 +1279,16 @@ export function useAgent(initialModel: LanguageModel, options: AgentOptions, ini
     if (!ls) return { status: 'nothing' as const, reason: 'no-conversation' as const }
     const lease = turnCoordinatorRef.current.tryAcquire('compact', currentAuthority())
     if (!lease) return { status: 'failed' as const, message: 'Another turn or maintenance operation is in progress.' }
-    let compressionApi: typeof import('@x-code-cli/core')
-    try {
-      compressionApi = await import('@x-code-cli/core')
-    } catch (error) {
-      lease.release()
-      throw error
-    }
-    const { estimateTokenCount, KEEP_RECENT, KEEP_RECENT_TOKENS } = compressionApi
 
     const before = estimateTokenCount(ls.messages)
-    if (ls.messages.length <= KEEP_RECENT) {
+    if (ls.messages.length <= MIN_KEEP_MESSAGES) {
       lease.release()
       return {
         status: 'nothing' as const,
         reason: 'too-few-messages' as const,
         estimatedTokens: before,
         messageCount: ls.messages.length,
-        minimumMessages: KEEP_RECENT + 1,
+        minimumMessages: MIN_KEEP_MESSAGES + 1,
       }
     }
     const controller = new AbortController()

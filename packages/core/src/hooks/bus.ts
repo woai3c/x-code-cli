@@ -20,7 +20,7 @@
 // broken hook never blocks the loop. The executor already does the
 // "non-zero exit / timeout → allow" handling — this layer adds the
 // matcher-regex error guard.
-import { debugLog } from '../utils.js'
+import { debugLog } from '../utils/index.js'
 import { type ExecuteHookOptions, executeHook } from './executor.js'
 import { type HookRegistry, emptyHookRegistry } from './registry.js'
 import type { HookDecision, HookEvent, RegisteredHook } from './types.js'

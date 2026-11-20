@@ -10,7 +10,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { getUserConfigPath } from '../config/index.js'
-import { XCODE_DIR, debugLog } from '../utils.js'
+import { XCODE_DIR, debugLog } from '../utils/index.js'
 import { McpClient } from './client.js'
 import { parseServersBlock } from './config-schema.js'
 import { buildCallableName as buildCallable } from './name-mangling.js'
@@ -65,32 +65,6 @@ export interface LoadResult {
   /** True iff project-level mcpServers were skipped because the user
    *  declined trust. The CLI uses this to print a heads-up message. */
   projectSkipped: boolean
-}
-
-/** Load the standard config files from disk + invoke the loader.
- *  Convenience wrapper used by the CLI entry point so it doesn't have
- *  to know about file paths. */
-export async function loadMcpFromDisk(opts: {
-  cwd: string
-  askUser: LoadOptions['askUser']
-  oauthProviderFor?: OAuthProviderFactory
-  onExitRequested?: () => void
-  /** Plugin-contributed mcpServers — already-trusted, merged into the
-   *  effective config alongside user-level servers. Built by
-   *  packages/core/src/plugins/integration.ts. */
-  extraServers?: Record<string, McpServerConfig>
-}): Promise<LoadResult> {
-  const userServers = await readMcpServersFromFile(getUserConfigPath())
-  const projectServers = await readMcpServersFromFile(path.join(opts.cwd, XCODE_DIR, 'config.json'))
-  return loadMcpServers({
-    userServers,
-    projectServers,
-    extraServers: opts.extraServers,
-    projectPath: opts.cwd,
-    askUser: opts.askUser,
-    oauthProviderFor: opts.oauthProviderFor,
-    onExitRequested: opts.onExitRequested,
-  })
 }
 
 /** Phase-1 loader for async startup: reads configs from disk, runs the

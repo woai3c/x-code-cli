@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { resolveWebSearchProvider, setWebSearchModelProvider, webSearch } from '../src/tools/web-search.js'
+import { resolveWebSearchProvider, webSearch } from '../src/tools/web-search.js'
 
-const execute = (input: { query: string; maxResults?: number }, abortSignal?: AbortSignal) =>
-  webSearch.execute!(input, { toolCallId: 'test', messages: [], abortSignal } as any)
+const execute = (input: { query: string; maxResults?: number }, abortSignal?: AbortSignal, modelProvider?: string) =>
+  webSearch.execute!(input, {
+    toolCallId: 'test',
+    messages: [],
+    abortSignal,
+    ...(modelProvider ? { context: { modelProvider } } : {}),
+  } as any)
 
 const SEARCH_KEYS = [
   'TAVILY_API_KEY',
@@ -30,7 +35,6 @@ function stubFetchJson(body: unknown) {
 }
 
 afterEach(() => {
-  setWebSearchModelProvider(undefined)
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })
@@ -169,7 +173,6 @@ describe('webSearch', () => {
   it('uses DeepSeek built-in search for deepseek models without a search key', async () => {
     clearSearchEnv()
     vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
-    setWebSearchModelProvider('deepseek')
     const mockFetch = stubFetchJson({
       content: [
         {
@@ -187,7 +190,7 @@ describe('webSearch', () => {
       ],
     })
 
-    const result = (await execute({ query: 'deepseek query' })) as string
+    const result = (await execute({ query: 'deepseek query' }, undefined, 'deepseek')) as string
 
     const [url, init] = mockFetch.mock.calls[0]!
     expect(url).toBe('https://api.deepseek.com/anthropic/v1/messages')
@@ -210,9 +213,8 @@ describe('webSearch', () => {
   it('does not use DeepSeek search for non-deepseek models', async () => {
     clearSearchEnv()
     vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
-    setWebSearchModelProvider('anthropic')
 
-    const result = (await execute({ query: 'q' })) as string
+    const result = (await execute({ query: 'q' }, undefined, 'anthropic')) as string
     expect(result).toMatch(/requires a search API key/)
   })
 
@@ -244,10 +246,9 @@ describe('webSearch', () => {
     expect(result).toMatch(/EXA_API_KEY is missing/)
   })
 
-  it('prefers per-request tool context over the module-level provider', async () => {
+  it('uses per-request tool context modelProvider for DeepSeek search', async () => {
     clearSearchEnv()
     vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
-    setWebSearchModelProvider('anthropic')
     const mockFetch = stubFetchJson({
       content: [
         {
@@ -257,11 +258,7 @@ describe('webSearch', () => {
       ],
     })
 
-    const result = (await webSearch.execute!({ query: 'ctx wins' }, {
-      toolCallId: 'test',
-      messages: [],
-      context: { modelProvider: 'deepseek' },
-    } as any)) as string
+    const result = (await execute({ query: 'ctx wins' }, undefined, 'deepseek')) as string
 
     expect(String(mockFetch.mock.calls[0]![0])).toBe('https://api.deepseek.com/anthropic/v1/messages')
     expect(result).toContain('https://example.com/ctx')
@@ -306,27 +303,24 @@ describe('webSearch', () => {
   it('errors when DeepSeek returns no search result block', async () => {
     clearSearchEnv()
     vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
-    setWebSearchModelProvider('deepseek')
     stubFetchJson({ content: [{ type: 'text', text: 'I cannot search right now.' }] })
 
-    const result = (await execute({ query: 'q' })) as string
+    const result = (await execute({ query: 'q' }, undefined, 'deepseek')) as string
     expect(result).toMatch(/chose not to run a web search/)
   })
 
   it('names the token budget when max_tokens cuts the DeepSeek search turn', async () => {
     clearSearchEnv()
     vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
-    setWebSearchModelProvider('deepseek')
     stubFetchJson({ content: [{ type: 'text', text: 'Partial' }], stop_reason: 'max_tokens' })
 
-    const result = (await execute({ query: 'q' })) as string
+    const result = (await execute({ query: 'q' }, undefined, 'deepseek')) as string
     expect(result).toMatch(/max_tokens/)
   })
 
   it('caps DeepSeek max_uses at maxResults to bound per-search billing', async () => {
     clearSearchEnv()
     vi.stubEnv('DEEPSEEK_API_KEY', 'ds-key')
-    setWebSearchModelProvider('deepseek')
     const mockFetch = stubFetchJson({
       content: [
         {
@@ -336,7 +330,7 @@ describe('webSearch', () => {
       ],
     })
 
-    await execute({ query: 'q', maxResults: 2 })
+    await execute({ query: 'q', maxResults: 2 }, undefined, 'deepseek')
 
     const body = JSON.parse(mockFetch.mock.calls[0]![1]!.body as string)
     expect(body.tools[0].max_uses).toBe(2)

@@ -21,11 +21,3 @@ export function knownMediaTypeFor(filePath: string): string | null {
   if (ext === '.webm') return 'audio/webm'
   return null
 }
-
-/**
- * @deprecated Use knownMediaTypeFor() and handle null. This compatibility
- * fallback remains for one release cycle; ingestion code must not use it.
- */
-export function mediaTypeFor(filePath: string): string {
-  return knownMediaTypeFor(filePath) ?? 'image/png'
-}

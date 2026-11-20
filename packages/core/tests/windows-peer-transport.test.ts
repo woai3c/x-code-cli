@@ -10,16 +10,16 @@ import { promisify } from 'node:util'
 import { createPeerIdentity } from '../src/peers/identity.js'
 import { createPeerRegistry } from '../src/peers/registry.js'
 import { createPeerService } from '../src/peers/service.js'
-import { createWindowsNamedPipeTransport } from '../src/peers/windows-named-pipe-transport.js'
-import { resolveWindowsPeerBrokerArtifact } from '../src/peers/windows-peer-broker-artifact.js'
+import { createWindowsNamedPipeTransport } from '../src/peers/transport/windows-named-pipe-transport.js'
+import { resolveWindowsPeerBrokerArtifact } from '../src/peers/transport/windows-peer-broker-artifact.js'
 import {
   WindowsPeerBrokerFrameDecoder,
   WindowsPeerBrokerFrameKind,
   decodeOneStringPayload,
   encodeStartServerPayload,
   encodeWindowsPeerBrokerFrame,
-} from '../src/peers/windows-peer-broker-protocol.js'
-import { createWindowsPeerRuntimeSecurity } from '../src/peers/windows-peer-runtime-security.js'
+} from '../src/peers/transport/windows-peer-broker-protocol.js'
+import { createWindowsPeerRuntimeSecurity } from '../src/peers/transport/windows-peer-runtime-security.js'
 
 const describeWindows = process.platform === 'win32' ? describe : describe.skip
 const addressHint = path.join(os.tmpdir(), 'x-code-windows-peer.sock')

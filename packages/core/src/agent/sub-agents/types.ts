@@ -28,19 +28,6 @@ export interface SubAgentDefinition {
   pluginId?: string
 }
 
-export interface SubAgentTrace {
-  toolCalls: Array<{
-    toolName: string
-    input: unknown
-    result: string
-    durationMs: number
-    isError: boolean
-  }>
-  finalText: string
-  tokenUsage: TokenUsage
-  turnCount: number
-}
-
 export type SubAgentEvent =
   | { kind: 'start'; toolCallId: string; agentName: string; description: string; prompt: string }
   | { kind: 'tool-call'; toolCallId: string; subToolName: string; subInput: unknown }

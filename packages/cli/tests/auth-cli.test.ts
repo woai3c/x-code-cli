@@ -11,7 +11,7 @@ import {
 } from '@x-code-cli/core'
 
 import { OpenAIChatGPTTokenManager } from '../../core/src/auth/openai-chatgpt/token-manager.js'
-import { runAuthCli, shouldEnterProductAfterAuth } from '../src/auth-cli.js'
+import { runAuthCli, shouldEnterProductAfterAuth } from '../src/auth/auth-cli.js'
 
 describe('ChatGPT auth CLI', () => {
   let testHome: string

@@ -35,11 +35,6 @@ export type HookEventName =
   | 'TurnComplete'
   | 'SessionEnd'
 
-/** Subset of events that emit a decision the agent acts on. Other events
- *  are fire-and-forget — hooks may run side effects (logging,
- *  notifications) but the agent ignores their stdout. */
-export type DecisionEvent = 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse'
-
 /** One hook entry as it appears in hooks.json. */
 export interface HookConfigEntry {
   /** Optional regex matching tool name. Only meaningful for PreToolUse /

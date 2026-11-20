@@ -195,33 +195,15 @@ export async function checkPermissionDetailed(
   return { approved: decision === 'yes' }
 }
 
-export async function checkPermission(
-  toolCall: { toolCallId: string; toolName: string; input: PermissionInput },
-  trustMode: boolean,
-  onAskPermission: (toolCall: {
-    toolCallId: string
-    toolName: string
-    input: PermissionInput
-  }) => Promise<PermissionDecision>,
-  permissionMode: PermissionMode = 'default',
-  projectCwd?: string,
-  executionCwd?: string,
-): Promise<boolean> {
-  return (await checkPermissionDetailed(toolCall, trustMode, onAskPermission, permissionMode, projectCwd, executionCwd))
-    .approved
+export async function checkPermission(...args: Parameters<typeof checkPermissionDetailed>): Promise<boolean> {
+  return (await checkPermissionDetailed(...args)).approved
 }
 
 export { addSessionAllowRule, clearSessionRules, buildAllowRule } from './session-store.js'
-export {
-  extractCommandPrefix,
-  extractCompoundPrefixes,
-  extractCompoundRules,
-  suggestRuleLabel,
-} from './session-store.js'
+export { extractCommandPrefix, extractCompoundRules, suggestRuleLabel } from './session-store.js'
 export { loadPersistedRules, persistRule } from './session-store.js'
 export {
   MAX_EGRESS_APPROVAL_BYTES,
-  authoritySnapshotHash,
   canonicalizeToolInput,
   classifyToolCall,
   evaluateToolAuthority,

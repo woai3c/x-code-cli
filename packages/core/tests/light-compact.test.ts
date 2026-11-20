@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest'
 
 import type { ModelMessage } from 'ai'
 
-import { lightCompactMessages, truncateOldToolResults } from '../src/agent/light-compact.js'
+import { lightCompactTrackedMessages, truncateOldToolResults } from '../src/agent/context/light-compact.js'
+import { createTrackedMessage } from '../src/agent/provenance.js'
+
+function lightCompactMessages(messages: ModelMessage[]): { messages: ModelMessage[]; dropped: number } {
+  const entries = messages.map((m) => createTrackedMessage(m, { authority: 'user', derivedFromPeer: false }))
+  const result = lightCompactTrackedMessages(entries)
+  return {
+    dropped: result.dropped,
+    messages: result.dropped === 0 ? messages : result.trackedMessages.map((e) => e.message),
+  }
+}
 
 function toolResultMsg(toolCallId: string, text: string): ModelMessage {
   return {

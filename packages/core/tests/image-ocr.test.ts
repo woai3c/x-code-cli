@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { disposeOcrWorker, ocrImage } from '../src/agent/image-ocr.js'
+import { disposeOcrWorker, ocrImage } from '../src/agent/ingest/image-ocr.js'
 
 const mocks = vi.hoisted(() => ({
   createWorker: vi.fn(),

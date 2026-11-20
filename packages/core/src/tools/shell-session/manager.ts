@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { stripTerminalControls } from '../../peers/terminal-sanitize.js'
-import { debugLog, errorMessage } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils/index.js'
 import { ShellSessionEventHub } from './event-hub.js'
 import type { ShellOutputSnapshot } from './output-buffer.js'
 import type { ManagedProcessFrame, ManagedShellProvider, ManagedSpawnAttempt } from './provider.js'

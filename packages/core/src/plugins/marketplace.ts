@@ -34,7 +34,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { debugLog, errorMessage } from '../utils.js'
+import { debugLog, errorMessage } from '../utils/index.js'
 import { isSafePluginPathComponent, knownMarketplacesPath, marketplaceDir, marketplaceIndexPath } from './paths.js'
 import type { KnownMarketplace, KnownMarketplaces, Marketplace, MarketplaceEntry, PluginSource } from './types.js'
 

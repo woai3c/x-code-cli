@@ -28,7 +28,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { errorMessage, isDir, isFile } from '../utils.js'
+import { errorMessage, isDir, isFile } from '../utils/index.js'
 import { EnableState } from './enable-state.js'
 import { listInstalledPlugins } from './installer.js'
 import { ManifestParseError, discoverManifest, parseManifest } from './manifest.js'

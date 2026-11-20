@@ -21,7 +21,7 @@
 import http from 'node:http'
 import { AddressInfo } from 'node:net'
 
-import { debugLog } from '../../utils.js'
+import { debugLog } from '../../utils/index.js'
 
 export interface CallbackResult {
   code: string

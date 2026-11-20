@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { crc32 } from 'node:zlib'
 
-import { inspectFile } from '../src/agent/file-classifier.js'
+import { inspectFile } from '../src/agent/ingest/file-classifier.js'
 import {
   MAX_ATTACHMENT_TEXT_BYTES,
   MAX_IMAGE_SOURCE_BYTES,
@@ -15,10 +15,12 @@ import {
   buildUserContent,
   classifyFile,
   extractFileReferences,
-  extractOfficeText,
+  extractOfficeTextResult,
   ingestFile,
-} from '../src/agent/file-ingest.js'
-import { disposeOcrWorker } from '../src/agent/image-ocr.js'
+} from '../src/agent/ingest/file-ingest.js'
+import { disposeOcrWorker } from '../src/agent/ingest/image-ocr.js'
+
+const extractOfficeText = async (filePath: string) => (await extractOfficeTextResult(filePath)).text
 
 // Mock tesseract so the OCR fallback path doesn't spawn a real worker
 // thread on test images. Without this, when the sub-agent test forces

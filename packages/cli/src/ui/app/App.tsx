@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from 'ink'
 
 import {
-  PROVIDER_BASE_URLS,
+  VERSION,
   createModelRegistry,
   errorMessage,
   estimateTokenCount,
@@ -33,10 +33,9 @@ import {
 import type { AgentOptions, CacheMissSummary, DiffStats, LanguageModel, LoadedSession } from '@x-code-cli/core'
 import type { SkillDefinition, StepStats, TokenUsage, UsageBreakdown } from '@x-code-cli/core'
 
-import { formatOpenAIAuthStatus, loginChatGPT, logoutChatGPT } from '../../auth-cli.js'
-import type { CliCleanupController } from '../../cleanup-controller.js'
-import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../startup-prints.js'
-import { VERSION } from '../../version.js'
+import { formatOpenAIAuthStatus, loginChatGPT, logoutChatGPT } from '../../auth/auth-cli.js'
+import type { CliCleanupController } from '../../runtime/cleanup-controller.js'
+import { drainPendingUpdateHint, registerUpdateHintHandler } from '../../runtime/startup-prints.js'
 import { visibleBackgroundTerminals } from '../agent/shell-session-ui.js'
 import { useAgent } from '../agent/use-agent.js'
 import { usePeerInboxAdapter } from '../agent/use-peer-inbox-adapter.js'
@@ -70,7 +69,7 @@ import { createMcpCommandHandler } from './commands/mcp.js'
 import { createPluginCommandHandler } from './commands/plugin.js'
 import { routeSlashCommand } from './commands/router.js'
 import { createSkillCommandHandler } from './commands/skill.js'
-import { replaceActiveModelProvider } from './model-activation.js'
+import { promptProviderBaseUrl, renderModelLabel, replaceActiveModelProvider } from './model-activation.js'
 import {
   commitOpenAIAuthTransition,
   createOpenAIAuthTransitionState,
@@ -784,14 +783,6 @@ export function App({
     await submit(text)
   }
 
-  /** Look up a human-friendly label for a model id; falls back to the raw id. */
-  function renderModelLabel(modelId: string): string {
-    for (const models of Object.values(getProviderModels())) {
-      for (const m of models) if (m.id === modelId) return m.label
-    }
-    return modelId
-  }
-
   /** Resolve the reasoning-effort tier label for a model (e.g. "High", "Max")
    *  from UserConfig.modelReasoningEffort, or null when the model has no tier
    *  configured or doesn't honor tiers. Mirrors the agent loop's effort
@@ -888,6 +879,40 @@ export function App({
     return plan.note
   }
 
+  function buildAuthReconciliationResult(
+    currentModelId: string,
+    observed: ReturnType<typeof getOpenAIAuthSnapshot>,
+    plan: ReturnType<typeof planOpenAIModelReconciliation>,
+    notice: string | undefined,
+    onAfterApplied: () => void,
+  ): ModelRequestPreflightResult {
+    const registry = createModelRegistry()
+    const nextModel = plan.modelId ? registry.languageModel(plan.modelId as `${string}:${string}`) : undefined
+    return {
+      ...(nextModel && plan.modelId ? { model: nextModel, modelId: plan.modelId } : {}),
+      ...(plan.blockedMessage ? { blockedMessage: plan.blockedMessage } : {}),
+      ...(notice ? { notice } : {}),
+      onApplied: () => {
+        options.modelRegistry = registry
+        resetVisionModelProviders()
+        if (nextModel && plan.modelId) {
+          switchModel(plan.modelId, nextModel)
+          options.modelId = plan.modelId
+          unavailableModelRef.current = null
+          setReasoningTierLabel(resolveReasoningTierLabel(plan.modelId))
+          if (plan.modelId !== currentModelId) saveUserConfig({ model: plan.modelId })
+        } else if (plan.blockedMessage) {
+          unavailableModelRef.current = {
+            authRevision: observed.revision,
+            message: plan.blockedMessage,
+            modelId: currentModelId,
+          }
+        }
+        onAfterApplied()
+      },
+    }
+  }
+
   async function prepareInitialOpenAIEntitlementCheck(
     currentModelId: string,
     observed: ReturnType<typeof getOpenAIAuthSnapshot>,
@@ -909,38 +934,13 @@ export function App({
       'The active ChatGPT credentials cannot provide a usable model. Run /login again or configure another provider.',
       renderModelLabel,
     )
-    const registry = createModelRegistry()
-    const nextModel = plan.modelId ? registry.languageModel(plan.modelId as `${string}:${string}`) : undefined
     const notice =
       plan.modelId !== currentModelId || plan.blockedMessage
         ? `The saved OpenAI model was checked against the active ChatGPT account. ${formatChatGPTCatalogStatus()}${plan.note}`
         : undefined
-    return {
-      ...(nextModel && plan.modelId ? { model: nextModel, modelId: plan.modelId } : {}),
-      ...(plan.blockedMessage ? { blockedMessage: plan.blockedMessage } : {}),
-      ...(notice ? { notice } : {}),
-      onApplied: () => {
-        options.modelRegistry = registry
-        resetVisionModelProviders()
-        if (nextModel && plan.modelId) {
-          switchModel(plan.modelId, nextModel)
-          options.modelId = plan.modelId
-          unavailableModelRef.current = null
-          setReasoningTierLabel(resolveReasoningTierLabel(plan.modelId))
-          if (plan.modelId !== currentModelId) saveUserConfig({ model: plan.modelId })
-        } else if (plan.blockedMessage) {
-          unavailableModelRef.current = {
-            authRevision: observed.revision,
-            message: plan.blockedMessage,
-            modelId: currentModelId,
-          }
-        }
-        checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(
-          observed,
-          getOpenAIChatGPTModelCatalogState(),
-        )
-      },
-    }
+    return buildAuthReconciliationResult(currentModelId, observed, plan, notice, () => {
+      checkedOpenAIEntitlementKeyRef.current = openAIModelEntitlementKey(observed, getOpenAIChatGPTModelCatalogState())
+    })
   }
 
   async function handleExternalAuthChange(
@@ -1019,35 +1019,13 @@ export function App({
       notice += plan.note
     }
 
-    const registry = createModelRegistry()
-    const nextModel = plan.modelId ? registry.languageModel(plan.modelId as `${string}:${string}`) : undefined
-    return {
-      ...(nextModel && plan.modelId ? { model: nextModel, modelId: plan.modelId } : {}),
-      ...(plan.blockedMessage ? { blockedMessage: plan.blockedMessage } : {}),
-      notice,
-      onApplied: () => {
-        options.modelRegistry = registry
-        resetVisionModelProviders()
-        if (nextModel && plan.modelId) {
-          switchModel(plan.modelId, nextModel)
-          options.modelId = plan.modelId
-          unavailableModelRef.current = null
-          setReasoningTierLabel(resolveReasoningTierLabel(plan.modelId))
-          if (plan.modelId !== currentModelId) saveUserConfig({ model: plan.modelId })
-        } else if (plan.blockedMessage) {
-          unavailableModelRef.current = {
-            authRevision: observed.revision,
-            message: plan.blockedMessage,
-            modelId: currentModelId,
-          }
-        }
-        checkedOpenAIEntitlementKeyRef.current =
-          observed.context.mode === 'chatgpt' && currentModelId.startsWith('openai:')
-            ? openAIModelEntitlementKey(observed, getOpenAIChatGPTModelCatalogState())
-            : null
-        commitOpenAIAuthTransition(transition, observed)
-      },
-    }
+    return buildAuthReconciliationResult(currentModelId, observed, plan, notice, () => {
+      checkedOpenAIEntitlementKeyRef.current =
+        observed.context.mode === 'chatgpt' && currentModelId.startsWith('openai:')
+          ? openAIModelEntitlementKey(observed, getOpenAIChatGPTModelCatalogState())
+          : null
+      commitOpenAIAuthTransition(transition, observed)
+    })
   }
 
   async function handleLogin(commandText: string, arg: string) {
@@ -1313,22 +1291,7 @@ export function App({
     const modelId = picked.id
 
     // ── Base URL picker (multi-endpoint providers) ──
-    const modelProvider = providerOf(modelId)
-    const baseUrlConfig = PROVIDER_BASE_URLS[modelProvider]
-    if (baseUrlConfig) {
-      const baseAnswer = await askQuestion(
-        `Pick the API endpoint for ${modelProvider}:`,
-        baseUrlConfig.options.map((o) => ({ label: o.label, description: o.url })),
-        { noOther: true },
-      )
-      const chosen = baseUrlConfig.options.find((o) => o.label === baseAnswer)
-      if (chosen) {
-        const prev = loadUserConfig().baseUrls ?? {}
-        saveUserConfig({ baseUrls: { ...prev, [modelProvider]: chosen.url } })
-      }
-      // Esc cancel keeps working — config stays as-is (may be empty,
-      // may have a previous choice from an earlier picker session).
-    }
+    await promptProviderBaseUrl(providerOf(modelId), askQuestion)
 
     // ── Reasoning-tier picker ──
     // Only for models that actually honor a tier (e.g. thinkingLevel is

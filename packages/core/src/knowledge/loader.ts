@@ -20,7 +20,7 @@
 // ignored. Writes (`/init`, future tooling) always target AGENTS.md.
 import path from 'node:path'
 
-import { fileExists, readFileSafe, userXcodeDir } from '../utils.js'
+import { fileExists, readFileSafe, userXcodeDir } from '../utils/index.js'
 import type { MemoryService } from './memory/service.js'
 
 /** Filenames recognised at each directory, tried in order. The first one

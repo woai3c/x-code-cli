@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { McpToolEntry } from '../../mcp/types.js'
-import { errorMessage } from '../../utils.js'
+import { errorMessage } from '../../utils/index.js'
 import type { ToolImage } from '../messages.js'
 import { sanitizeBrowserDiagnostic } from './diagnostics.js'
 import { withBrowserOperation } from './operation-lock.js'

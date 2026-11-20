@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 
-import { installTerminalStreamErrorGuards } from '../src/terminal-stream-errors.js'
+import { installTerminalStreamErrorGuards } from '../src/runtime/terminal-stream-errors.js'
 
 describe('terminal stream error guards', () => {
   it('isolates EPIPE during terminal disconnect cleanup', () => {

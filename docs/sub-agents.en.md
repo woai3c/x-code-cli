@@ -15,21 +15,23 @@ doesn't pollute the main conversation.
 
 Three core sub-agents ship by default (plus the opt-in `browser`, and an internal `goal-verifier` used automatically by `/goal`):
 
-| Name      | Best for                                                                  | Tool whitelist                                              |
-| --------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `explore` | Searching a large codebase for a symbol / keyword / call chain; read-only | `readFile`, `glob`, `grep`, `listDir`, `shell` (restricted) |
-| `plan`    | Given a task, explore the code and produce an implementation plan         | `readFile`, `glob`, `grep`, `listDir` (read-only)           |
-| `worker`  | Implementing code changes, fixing tests, and running bounded tasks        | default full tool set (minus `task`)                        |
+| Name      | Best for                                                                  | Tool whitelist                                                  |
+| --------- | ------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `explore` | Searching a large codebase for a symbol / keyword / call chain; read-only | `readFile`, `glob`, `grep`, `listDir`, `shell` (read-only only) |
+| `plan`    | Given a task, explore the code and produce an implementation plan         | `readFile`, `glob`, `grep`, `listDir` (read-only)               |
+| `worker`  | Implementing code changes, fixing tests, and running bounded tasks        | default full tool set (minus `task`, `askUser`, `exitPlanMode`) |
 
 > Tool names are **camelCase** — they match the keys in `toolRegistry`
 > (`packages/core/src/tools/index.ts`). The snake_case spellings
 > (`read_file`, `write_file`, etc.) **don't match anything** and silently
 > leave the sub-agent with an empty tool set.
 >
-> `shell (restricted)` means the `shell` tool is available but
-> `shellRestrictions` blocks destructive commands by default (`rm`, `mv`,
-> `git push`, output redirects, etc. — full list in
-> `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`).
+> Built-in `explore` (and `goal-verifier`) enforce **both** `shellReadOnlyOnly`
+> (every command segment must pass the read-only shell classifier, rejecting
+> redirects, `tsc -b`, and any mutating/emitting command) and the keyword
+> blocklist in `packages/core/src/agent/sub-agents/built-in.ts:SHELL_DENY_KEYWORDS`.
+> Custom sub-agents can configure keyword blocklists via `shellRestrictions`
+> in frontmatter.
 >
 > The `plan` built-in sub-agent produces a Markdown plan rather than switching
 > the parent session's permission mode. The `/plan` CLI command/flag and the
@@ -59,7 +61,7 @@ Every sub-agent **inherits the main conversation's active model by default** (`i
 - `/agent model <model|inherit>` — set or reset the default model for all sub-agents
 - `/agent reset` — reset all sub-agents back to inheriting the main model
 
-Settings persist in `~/.x-code/config.json` under `subAgentModels` and `subAgentModel`. Resolution precedence: `subAgentModels[name]` > custom `.md` frontmatter `model` > `subAgentModel` > parent session model.
+Settings persist in `~/.x-code/config.json` under `subAgentModels` and `subAgentModel`. Resolution precedence: `subAgentModels[name]` > custom `.md` frontmatter `model` > `subAgentModel` > parent session model (internal `goal-verifier` ignores the global `subAgentModel` fallback so auditing stays on the main model unless `subAgentModels["goal-verifier"]` is explicitly set).
 
 ---
 
@@ -245,9 +247,12 @@ auto-dispatches via task:
    runtime rejects it.
 2. **Shared AbortSignal**: Esc cancels the main agent and all running
    sub-agents simultaneously.
-3. **Plan mode inherited**: when the parent session is in plan mode,
-   **all** sub-agents have their write tools (`writeFile` / `edit` /
-   `shell`) denied — `worker` included.
+3. **Plan mode gating**: when the parent session is in plan mode, **only
+   read-only sub-agents** (`explore`, `plan`, or custom sub-agents with an
+   explicit read-only `tools` allowlist) may run — `worker`, `browser`, and
+   unrestricted custom sub-agents are rejected before plan approval. Any
+   sub-agent that does run in plan mode also has `writeFile`, `edit`, `shell`,
+   `shellOutput`, `killShell`, and `exitPlanMode` stripped from its tool set.
 4. **Rewind integration**: files edited or created by `worker` (or custom
    sub-agents) via `edit` / `writeFile` are recorded in the root session's
    checkpoints so `/rewind` rolls them back cleanly.
@@ -278,12 +283,15 @@ tools: [readFile, shell, glob]
 shellRestrictions: [rm, sudo, npm publish, git push]
 ```
 
-The full set of tool names (**must be camelCase**, matches the
+The full set of built-in tool names (**must be camelCase**, matching the
 `toolRegistry` keys in `packages/core/src/tools/index.ts`): `readFile`,
 `writeFile`, `edit`, `shell`, `glob`, `grep`, `listDir`, `webSearch`,
-`webFetch`, `askUser`, `exitPlanMode`, `shellOutput`, `killShell`. The
-`task` tool is always denied (recursion guard), and `memorySearch` is
-registered for the root agent only — sub-agents never receive it.
+`webFetch`, `askUser`, `exitPlanMode`, `shellOutput`, `killShell`, plus
+`activateSkill` (when skills are loaded) and `listMcpResources` /
+`readMcpResource` / `<server>__<tool>` (when MCP is active). The `task` tool is
+always denied (recursion guard), and root-only tools (`memorySearch`,
+`browserVisualCheck`, `getGoal`, `updateGoal`, `listAgents`, `sendMessage`,
+`toolSearch`) are never registered for sub-agents.
 
 When `shell` is allowed, the runner automatically adds `shellOutput` and
 `killShell` so background commands remain manageable. A definition that

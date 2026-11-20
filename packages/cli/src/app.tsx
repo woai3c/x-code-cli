@@ -10,7 +10,7 @@ import { render } from 'ink'
 
 import type { AgentOptions, LanguageModel, LoadedSession } from '@x-code-cli/core'
 
-import { registerCleanupController } from './cleanup-controller.js'
+import { registerCleanupController } from './runtime/cleanup-controller.js'
 import { App } from './ui/app/App.js'
 import { printHeader } from './ui/app/AppHeader.js'
 import { registerSessionInfoGetter } from './ui/app/session-exit.js'

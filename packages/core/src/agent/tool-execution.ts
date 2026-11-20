@@ -36,13 +36,13 @@ import type {
 } from '../tools/shell-session/types.js'
 import { isReadOnly, splitShellCommands } from '../tools/shell-utils.js'
 import type { AgentCallbacks, AgentOptions, LanguageModel, PermissionDecision } from '../types/index.js'
-import { XCODE_DIR, debugLog, isAbortError } from '../utils.js'
+import { XCODE_DIR, debugLog, isAbortError } from '../utils/index.js'
 import { runBrowserVisualCheck } from './browser/visual-check.js'
 import { createBuiltInToolHandlers } from './built-in-tool-handlers.js'
+import { isManagedMemoryAccess, isManagedMemoryMutation } from './context/managed-memory-boundary.js'
 import { computeEditDiff } from './diff.js'
 import { checkForLoop, hashToolCall, recordToolCall } from './loop-guard.js'
 import type { LoopState } from './loop-state.js'
-import { isManagedMemoryAccess, isManagedMemoryMutation } from './managed-memory-boundary.js'
 import {
   isToolErrorString,
   structuredToolResultMessage,
@@ -51,9 +51,9 @@ import {
   toolResultMessage,
 } from './messages.js'
 import type { ToolImage } from './messages.js'
-import { handleExitPlanMode } from './plan-tools.js'
 import { effectiveExecutionAuthority } from './provenance.js'
-import { captureFileBeforeMutation } from './snapshot.js'
+import { handleExitPlanMode } from './session/plan-tools.js'
+import { captureFileBeforeMutation } from './session/snapshot.js'
 import { isPlanModeSafeSubAgent } from './sub-agents/runner.js'
 import type { SubAgentLoopRunner } from './sub-agents/runner.js'
 import type { ToolExecutionControl, ToolHandler, ToolHandlerContext } from './tool-handler-context.js'

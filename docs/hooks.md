@@ -29,7 +29,9 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
 
 `SessionEnd` 在退出清理阶段以 best-effort 方式执行：普通清理最多等待约 1.5 秒，整个退出流程有 4 秒硬上限。它适合短小的 flush / 通知；需要可靠完成的操作仍应放在 `TurnComplete`。
 
-`PostToolUse` 目前还没有覆盖所有 tool result 路径。它会在 `writeFile` / `edit` / `shell`、`browserVisualCheck` 和 MCP 调用完成后触发；SDK 自动执行的读取/搜索工具、`askUser` / `task` / MCP resource 等 bypass handler，以及权限拒绝、中断或抛异常后生成的合成结果暂不触发。
+`PreToolUse` 在绝大多数内置工具、子 Agent（`task`）与 MCP 工具派发前触发；仅后台会话的后续控制调用 `shellOutput` / `killShell` 不再重复触发 `PreToolUse`（且 `PreToolUse` 不允许篡改 `shell.cwd`）。
+
+`PostToolUse` 会在 `writeFile` / `edit` / `shell`（会话终态结束时触发一次，后台运行中的中间快照不触发）、手动派发的读取/搜索等内置工具（`readFile` 纯文本返回、`glob`、`grep`、`listDir`、`webSearch`、`webFetch`、`activateSkill`、`getGoal`、`updateGoal`、`memorySearch`）、`browserVisualCheck` 以及 MCP 工具调用完成后触发；`askUser` / `task` / `exitPlanMode` / MCP resource / `toolSearch` / Peer 工具等 bypass handler、`readFile` 多模态图片/PDF 结构化返回，以及因权限拒绝、中断或未捕获异常生成的合成结果暂不触发。
 
 ---
 
@@ -113,11 +115,11 @@ Hook 是插件挂在 agent 生命周期事件上的 shell 命令。CLI 用 stdin
   "tool": {
     // PreToolUse / PostToolUse
     "name": "writeFile",
-    "args": { "path": "src/foo.ts", "content": "..." },
+    "args": { "filePath": "/abs/path/to/project/src/foo.ts", "content": "..." },
     "callId": "call_abc123",
 
     // PostToolUse 才有：
-    "output": "wrote 42 bytes",
+    "output": "File written: /abs/path/to/project/src/foo.ts (12 lines)",
     "isError": false,
   },
   "prompt": "Refactor X to do Y", // 仅 UserPromptSubmit
@@ -164,8 +166,8 @@ Hook 用 stdout 回一行 JSON。stdout 为空 = 默认 `allow`（大部分 fire
 // 阻止 agent 做这件事
 { "decision": "deny", "reason": "禁止编辑 prod 配置" }
 
-// 改写参数（PreToolUse）/ 改写输出（PostToolUse）
-{ "decision": "modify", "args": { "path": "/safer/path" } }
+// 改写参数（PreToolUse，会整体替换 args 对象）/ 改写输出（PostToolUse）
+{ "decision": "modify", "args": { "filePath": "/safer/path.txt", "content": "..." } }
 { "decision": "modify", "output": "[redacted]" }
 ```
 
@@ -218,19 +220,23 @@ Hook 子进程的 `stdout` 被 `execa` 当成决策 JSON 解析，`stderr` 也�
 ## 端到端示例：写文件前自动 lint
 
 ```js
-// hooks/lint.js — PreToolUse 上挂 writeFile|edit
+// hooks/lint.js — PreToolUse 上挂 writeFile
 const data = require('fs').readFileSync(0, 'utf-8') // 读 stdin
 const event = JSON.parse(data)
-const filePath = event.tool.args.path
+const filePath = event.tool?.args?.filePath
+const content = event.tool?.args?.content
 
-if (!filePath.endsWith('.ts')) {
+if (typeof filePath !== 'string' || !filePath.endsWith('.ts') || typeof content !== 'string') {
   console.log(JSON.stringify({ decision: 'allow' }))
   process.exit(0)
 }
 
-const { execSync } = require('child_process')
+const { execFileSync } = require('child_process')
 try {
-  execSync(`eslint --quiet "${filePath}"`, { stdio: 'pipe' })
+  execFileSync('npx', ['eslint', '--quiet', '--stdin', '--stdin-filename', filePath], {
+    input: content,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
   console.log(JSON.stringify({ decision: 'allow' }))
 } catch (e) {
   console.log(
@@ -249,7 +255,7 @@ Manifest：
   "name": "ts-lint-gate",
   "version": "0.1.0",
   "hooks": {
-    "PreToolUse": [{ "matcher": "writeFile|edit", "command": "node ${pluginDir}/hooks/lint.js" }]
+    "PreToolUse": [{ "matcher": "^writeFile$", "command": "node ${pluginDir}/hooks/lint.js" }]
   }
 }
 ```

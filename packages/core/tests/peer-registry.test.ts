@@ -10,7 +10,7 @@ import path from 'node:path'
 import { createPeerIdentity } from '../src/peers/identity.js'
 import { peerSocketPath } from '../src/peers/paths.js'
 import { createPeerRegistry, parseRegistration } from '../src/peers/registry.js'
-import type { PeerTransport } from '../src/peers/transport.js'
+import type { PeerTransport } from '../src/peers/transport/transport.js'
 import type { PeerRegistrationV1 } from '../src/peers/types.js'
 
 let testDir: string

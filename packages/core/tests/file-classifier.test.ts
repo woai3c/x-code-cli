@@ -5,7 +5,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { classifyFile, inspectFile } from '../src/agent/file-classifier.js'
+import { classifyFile, inspectFile } from '../src/agent/ingest/file-classifier.js'
 import { makeTinyM4aBuffer } from './helpers/audio.js'
 
 function wavHeader(): Buffer {

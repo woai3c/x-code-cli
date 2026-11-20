@@ -1,6 +1,5 @@
 // @x-code-cli/cli — /agent slash command: inspect sub-agents and configure sub-agent models.
 import {
-  PROVIDER_BASE_URLS,
   createModelRegistry,
   getAvailableProviders,
   getOpenAIAuthStatus,
@@ -14,6 +13,7 @@ import {
 import type { AgentOptions, SubAgentDefinition } from '@x-code-cli/core'
 
 import { GLYPH_BULLET } from '../../render/terminal-glyphs.js'
+import { promptProviderBaseUrl, renderModelLabel } from '../model-activation.js'
 
 const USAGE_TEXT =
   'Usage: `/agent` · `/agent list` · `/agent <name> [model|inherit]` · `/agent model [name] <model|inherit>` · `/agent reset`'
@@ -27,15 +27,6 @@ export interface AgentCommandDeps {
     options: { label: string; description: string }[],
     opts?: { noOther?: boolean },
   ) => Promise<string>
-}
-
-function renderModelLabel(modelId: string): string {
-  for (const models of Object.values(getProviderModels())) {
-    for (const m of models) {
-      if (m.id === modelId) return m.label
-    }
-  }
-  return modelId
 }
 
 function isResetKeyword(raw: string): boolean {
@@ -258,19 +249,7 @@ export function createAgentCommandHandler(deps: AgentCommandDeps) {
     const rawSelection = picked ? picked.id : answer
     if (picked && picked.id !== 'inherit') {
       const modelProvider = picked.id.split(':', 1)[0] ?? ''
-      const baseUrlConfig = PROVIDER_BASE_URLS[modelProvider]
-      if (baseUrlConfig && !loadUserConfig().baseUrls?.[modelProvider]) {
-        const baseAnswer = await askQuestion(
-          `Pick the API endpoint for ${modelProvider}:`,
-          baseUrlConfig.options.map((o) => ({ label: o.label, description: o.url })),
-          { noOther: true },
-        )
-        const chosen = baseUrlConfig.options.find((o) => o.label === baseAnswer)
-        if (chosen) {
-          const prev = loadUserConfig().baseUrls ?? {}
-          saveUserConfig({ baseUrls: { ...prev, [modelProvider]: chosen.url } })
-        }
-      }
+      await promptProviderBaseUrl(modelProvider, askQuestion, { onlyIfUnset: true })
     }
     if (target === 'all') {
       applyGlobalModel(text, rawSelection)

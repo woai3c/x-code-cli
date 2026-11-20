@@ -6,7 +6,7 @@ import { getOpenAIAuthContext, getOpenAIAuthGeneration } from '../auth/openai-ch
 import { readOpenAIChatGPTCredentials } from '../auth/openai-chatgpt/credential-store.js'
 import { OPENAI_CHATGPT_OAUTH } from '../auth/openai-chatgpt/oauth.js'
 import { getOpenAIChatGPTTokenManager } from '../auth/openai-chatgpt/token-manager.js'
-import { debugLog, userXcodeDir } from '../utils.js'
+import { debugLog, raceAbortSignal, userXcodeDir } from '../utils/index.js'
 import { PROVIDER_MODELS } from './catalog.js'
 import type { ProviderModel, ReasoningTierOption } from './catalog.js'
 
@@ -462,22 +462,7 @@ export function refreshOpenAIChatGPTModels(
 }
 
 function waitForModelRefresh<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise
-  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('ChatGPT model catalog wait was cancelled.'))
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? new Error('ChatGPT model catalog wait was cancelled.'))
-    signal.addEventListener('abort', onAbort, { once: true })
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort)
-        resolve(value)
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort)
-        reject(error)
-      },
-    )
-  })
+  return raceAbortSignal(promise, signal, 'ChatGPT model catalog wait was cancelled.')
 }
 
 export async function refreshOpenAIChatGPTModelsAfterNotFound(

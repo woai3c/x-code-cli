@@ -19,7 +19,7 @@ import { buildCallableName } from '../../mcp/name-mangling.js'
 import { McpPermissionStore } from '../../mcp/permissions.js'
 import { McpRegistry, connectOneServer } from '../../mcp/registry.js'
 import type { McpServerConfig, McpToolEntry } from '../../mcp/types.js'
-import { debugLog, errorMessage } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils/index.js'
 import { sanitizeBrowserDiagnostic } from './diagnostics.js'
 import { acquireBrowserProfileLease } from './profile-lease.js'
 

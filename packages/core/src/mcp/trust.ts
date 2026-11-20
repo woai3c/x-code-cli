@@ -14,7 +14,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { userXcodeDir } from '../utils.js'
+import { userXcodeDir } from '../utils/index.js'
 
 function trustedFile(): string {
   return path.join(userXcodeDir(), 'trusted-projects.json')

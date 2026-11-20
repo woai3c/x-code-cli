@@ -3,7 +3,7 @@
 // Why parse jsonl rather than stdout: stdout in print mode is just the model's
 // final assistant text (no structured tool-call markers). Sessions jsonl has
 // every assistant tool-call + tool-result event in a parse-friendly format
-// that's stable across UI changes. See packages/core/src/agent/session-store.ts.
+// that's stable across UI changes. See packages/core/src/agent/session/session-store.ts.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'

@@ -36,14 +36,14 @@ import {
   hydrateLoopState,
   loadSession,
   markBoundaryAndReflush,
-} from '../src/agent/session-store.js'
+} from '../src/agent/session/session-store.js'
 import {
   captureFileBeforeMutation,
   createCheckpoint,
   getDiffStatsForCheckpoint,
   restoreCheckpoint,
-} from '../src/agent/snapshot.js'
-import { XCODE_DIR } from '../src/utils.js'
+} from '../src/agent/session/snapshot.js'
+import { XCODE_DIR } from '../src/utils/index.js'
 
 // ── Setup ───────────────────────────────────────────────────────────────
 

@@ -26,3 +26,21 @@ function toErrorMessage(err: unknown): string {
 export function formatToolError(action: string, err: unknown): string {
   return `Error ${action}: ${toErrorMessage(err)}`
 }
+
+/** Detect whether an AI SDK tool-result part represents a failed tool invocation. */
+export function isFailedToolResultPart(part: { isError?: boolean; output?: unknown }): boolean {
+  if (part.isError) return true
+  if (!part.output || typeof part.output !== 'object') return false
+  const output = part.output as Record<string, unknown>
+  return (
+    output.isError === true ||
+    output.success === false ||
+    output.ok === false ||
+    ('error' in output && output.error !== undefined && output.error !== null && output.error !== false) ||
+    output.status === 'error' ||
+    output.status === 'failed' ||
+    (typeof output.exitCode === 'number' && output.exitCode !== 0) ||
+    output.type === 'error-text' ||
+    output.type === 'error-json'
+  )
+}

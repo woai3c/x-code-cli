@@ -2,7 +2,9 @@ import path from 'node:path'
 
 import type { ModelMessage } from 'ai'
 
+import { stableStringify } from '../../utils/index.js'
 import { extractText } from '../../utils/message-helpers.js'
+import { isFailedToolResultPart } from '../../utils/tool-errors.js'
 import { redactMemoryValue } from './redaction.js'
 import { extractMemoryIdentifiers, extractMemoryPaths } from './search-index.js'
 import { memoryContentHash } from './transaction-store.js'
@@ -26,15 +28,6 @@ interface ToolPart {
 // never inspects user prose or tool-result prose to infer intent or meaning.
 const VERIFICATION_COMMAND_RE =
   /(?:^|[\s"'=:/\\])(?:test|tests|build|typecheck|lint|check|ci|pytest|vitest|jest|eslint|tsc)(?=$|[\s"'&,;:/\\])/i
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  return `{${Object.entries(value as Record<string, unknown>)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
-    .join(',')}}`
-}
 
 function cleanUserText(value: string): string {
   return value
@@ -87,18 +80,7 @@ function summarizeOutputSignals(output: unknown): string {
   return stableStringify({ paths, identifiers })
 }
 
-function isFailedToolResult(part: ToolPart): boolean {
-  if (part.isError) return true
-  if (part.output && typeof part.output === 'object') {
-    const output = part.output as Record<string, unknown>
-    if (output.isError === true || output.success === false || output.ok === false) return true
-    if ('error' in output && output.error !== undefined && output.error !== null && output.error !== false) return true
-    if (output.status === 'error' || output.status === 'failed') return true
-    if (typeof output.exitCode === 'number' && output.exitCode !== 0) return true
-    if (output.type === 'error-text' || output.type === 'error-json') return true
-  }
-  return false
-}
+const isFailedToolResult = isFailedToolResultPart
 
 function isVerificationToolResult(toolName: string, input: string): boolean {
   return toolName === 'shell' && VERIFICATION_COMMAND_RE.test(input)

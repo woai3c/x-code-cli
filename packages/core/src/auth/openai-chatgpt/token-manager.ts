@@ -1,3 +1,4 @@
+import { raceAbortSignal } from '../../utils/index.js'
 import {
   readOpenAIChatGPTCredentials,
   withOpenAIChatGPTCredentialLock,
@@ -22,22 +23,7 @@ export interface OpenAIChatGPTRequestAuth {
 }
 
 function waitForSharedRefresh<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise
-  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('ChatGPT token refresh wait was cancelled.'))
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? new Error('ChatGPT token refresh wait was cancelled.'))
-    signal.addEventListener('abort', onAbort, { once: true })
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort)
-        resolve(value)
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort)
-        reject(error)
-      },
-    )
-  })
+  return raceAbortSignal(promise, signal, 'ChatGPT token refresh wait was cancelled.')
 }
 
 export class OpenAIChatGPTTokenManager {

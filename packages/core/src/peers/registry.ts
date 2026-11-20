@@ -7,7 +7,12 @@ import type { PublicPeer } from '../types/index.js'
 import { isUuid, normalizePeerName } from './identity.js'
 import { ensurePeerRuntimeDirectories, isSocketPathInNamespace } from './paths.js'
 import { stripTerminalControls } from './terminal-sanitize.js'
-import type { PeerTransport } from './transport.js'
+import type { PeerTransport } from './transport/transport.js'
+import {
+  type WindowsPeerRuntimeSecurityProvider,
+  createWindowsPeerRuntimeSecurity,
+} from './transport/windows-peer-runtime-security.js'
+import { isValidWindowsPeerPipeAddress } from './transport/windows-pipe-address.js'
 import {
   type CandidateScanResult,
   MAX_REGISTRATION_BYTES,
@@ -15,11 +20,6 @@ import {
   type PeerRegistrationV1,
   type RegistrationCandidate,
 } from './types.js'
-import {
-  type WindowsPeerRuntimeSecurityProvider,
-  createWindowsPeerRuntimeSecurity,
-} from './windows-peer-runtime-security.js'
-import { isValidWindowsPeerPipeAddress } from './windows-pipe-address.js'
 
 function exactKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
   const allowedSet = new Set(allowed)

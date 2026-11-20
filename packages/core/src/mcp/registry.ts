@@ -20,7 +20,7 @@
 // useAgent.
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 
-import { debugLog, errorMessage } from '../utils.js'
+import { debugLog, errorMessage } from '../utils/index.js'
 import { McpClient } from './client.js'
 import { UnsafeEnvError, assertSafeEnv } from './env-safety.js'
 import { EnvExpansionError, expandEnvDeep } from './expand-env.js'
@@ -147,10 +147,6 @@ export class McpRegistry {
       status: s.status,
       stderrTail: s.stderrTail,
     }))
-  }
-
-  getServer(serverName: string): RegisteredServer | undefined {
-    return this.servers.get(serverName)
   }
 
   getConfig(serverName: string): McpServerConfig | undefined {
@@ -352,14 +348,6 @@ export class McpRegistry {
     }
 
     return this.restartServer(name, { driveOAuth: hooks })
-  }
-
-  /** Replace the OAuth factory wholesale. Used by the CLI when the
-   *  token storage / onBrowserOpen wiring is built lazily after the
-   *  registry has been constructed (rare, but the test harness needs
-   *  to swap it). */
-  setOAuthFactory(factory: OAuthProviderFactory | undefined): void {
-    this.oauthFactory = factory
   }
 
   // ── internals ──────────────────────────────────────────────────────────

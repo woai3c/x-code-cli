@@ -6,7 +6,7 @@ import path from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
 
 import { createLoopState } from '../src/agent/loop-state.js'
-import { createCheckpoint, restoreCheckpoint } from '../src/agent/snapshot.js'
+import { createCheckpoint, restoreCheckpoint } from '../src/agent/session/snapshot.js'
 import { createBuiltInRegistry, createSubAgentRegistry } from '../src/agent/sub-agents/registry.js'
 import { buildSubAgentToolFilter, resolveSubAgentRuntimeModel, runSubAgent } from '../src/agent/sub-agents/runner.js'
 import { processToolCalls } from '../src/agent/tool-execution.js'

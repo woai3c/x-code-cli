@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { transcribeAudio } from '../src/agent/audio-transcribe.js'
+import { transcribeAudio } from '../src/agent/ingest/audio-transcribe.js'
 
 const whisper = vi.hoisted(() => ({
   loadWhisperModule: vi.fn(async () => ({})),
@@ -16,7 +16,7 @@ const runner = vi.hoisted(() => ({
   runWhisperTranscription: vi.fn(),
 }))
 
-vi.mock('../src/agent/audio-transcribe-models.js', () => ({
+vi.mock('../src/agent/ingest/audio-transcribe-models.js', () => ({
   WHISPER_MODEL_REVISION: 'test-revision',
   WHISPER_MODELS: {
     tiny: {
@@ -27,9 +27,9 @@ vi.mock('../src/agent/audio-transcribe-models.js', () => ({
   },
 }))
 
-vi.mock('../src/agent/audio-transcribe-runner.js', async () => {
-  const actual = await vi.importActual<typeof import('../src/agent/audio-transcribe-runner.js')>(
-    '../src/agent/audio-transcribe-runner.js',
+vi.mock('../src/agent/ingest/audio-transcribe-runner.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/agent/ingest/audio-transcribe-runner.js')>(
+    '../src/agent/ingest/audio-transcribe-runner.js',
   )
   return {
     ...actual,

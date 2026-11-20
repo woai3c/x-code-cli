@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai'
 
 import type { MemoryReasoningMode } from '../../config/index.js'
-import { debugLog, errorMessage } from '../../utils.js'
+import { debugLog, errorMessage } from '../../utils/index.js'
 import { extractMemoryOperations } from './extractor.js'
 import type { MemoryJobStore } from './job-store.js'
 import { extractMemoryIdentifiers, extractMemoryPaths, normalizeMemoryText } from './search-index.js'

@@ -6,8 +6,8 @@ import {
   formatTranscription,
   isAudioFile,
   transcribeAudio,
-} from '../src/agent/audio-transcribe.js'
-import { classifyFile } from '../src/agent/file-ingest.js'
+} from '../src/agent/ingest/audio-transcribe.js'
+import { classifyFile } from '../src/agent/ingest/file-ingest.js'
 
 // Don't load the actual native whisper module in unit tests — only test
 // the pure-logic helpers (isAudioFile, formatTranscription, classifyFile).

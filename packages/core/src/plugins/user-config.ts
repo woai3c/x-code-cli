@@ -30,7 +30,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { debugLog } from '../utils.js'
+import { readSettingsFile } from '../utils/settings-io.js'
 import { pluginsRoot } from './paths.js'
 
 /** Value type for a single field. The manifest `type` field (string /
@@ -49,16 +49,7 @@ function userConfigPath(): string {
 }
 
 async function readFile(): Promise<UserConfigFile> {
-  try {
-    const raw = await fs.readFile(userConfigPath(), 'utf-8')
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    return parsed as UserConfigFile
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    debugLog('plugins.user-config-read-error', String(err))
-    return {}
-  }
+  return (await readSettingsFile(userConfigPath(), { errorLogTag: 'plugins.user-config-read-error' })) as UserConfigFile
 }
 
 async function writeFile(data: UserConfigFile): Promise<void> {
@@ -85,14 +76,6 @@ export async function getPluginUserConfig(pluginId: string): Promise<PluginUserC
 export async function setPluginUserConfig(pluginId: string, values: PluginUserConfig): Promise<void> {
   const all = await readFile()
   all[pluginId] = { ...(all[pluginId] ?? {}), ...values }
-  await writeFile(all)
-}
-
-/** Drop the config for one plugin (e.g. on uninstall). */
-export async function clearPluginUserConfig(pluginId: string): Promise<void> {
-  const all = await readFile()
-  if (!(pluginId in all)) return
-  delete all[pluginId]
   await writeFile(all)
 }
 

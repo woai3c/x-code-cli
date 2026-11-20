@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { estimateTextTokenCount } from '../../agent/context-window.js'
-import { parseFrontmatter } from '../../frontmatter.js'
-import { errorMessage, fileExists, truncateUtf8 } from '../../utils.js'
+import { estimateTextTokenCount } from '../../agent/context/context-window.js'
 import { atomicWriteFile } from '../../utils/atomic-file.js'
+import { parseFrontmatter } from '../../utils/frontmatter.js'
+import { errorMessage, fileExists, truncateUtf8 } from '../../utils/index.js'
 import { redactMemoryText } from './redaction.js'
 import { MemoryTransactionStore, memoryContentHash } from './transaction-store.js'
 import { MEMORY_ID_RE, SAFE_JOB_ID_RE } from './types.js'

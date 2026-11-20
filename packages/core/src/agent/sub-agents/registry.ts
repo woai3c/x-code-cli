@@ -5,7 +5,7 @@
 // agents from disk are async. Same-name custom agents override built-ins
 // (project > user > built-in).
 import { loadUserConfig } from '../../config/index.js'
-import { type ReloadSummary, diffNamedEntries } from '../../registry-diff.js'
+import { type ReloadSummary, diffNamedEntries } from '../../utils/registry-diff.js'
 import { browserAgent, builtInAgents } from './built-in.js'
 import { type LoadCustomAgentsOptions, loadCustomAgents } from './loader.js'
 import type { SubAgentDefinition } from './types.js'

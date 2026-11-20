@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 
-import { estimateTextTokenCount } from '../../agent/context-window.js'
+import { estimateTextTokenCount } from '../../agent/context/context-window.js'
 import { LruCache } from '../../utils/lru-cache.js'
 import { extractText } from '../../utils/message-helpers.js'
 import {

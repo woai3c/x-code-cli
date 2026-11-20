@@ -192,18 +192,8 @@ const moonshotConvertUsage = (usage: any) => {
   }
 }
 
-/**
- * Side-channel for Zhipu reasoning effort. Zhipu goes through
- * @ai-sdk/openai-compatible which doesn't auto-translate the top-level
- * `reasoning` parameter. We inject `reasoning_effort` via the fetch shim.
- */
-let _zhipuReasoningEffort: string | undefined
 const ZHIPU_REASONING_HEADER = 'x-x-code-zhipu-reasoning-effort'
 const XAI_REASONING_HEADER = 'x-x-code-xai-reasoning-effort'
-
-export function setZhipuReasoningEffort(effort: string | undefined): void {
-  _zhipuReasoningEffort = effort
-}
 
 export function withZhipuReasoningHeader(
   headers: Record<string, string | undefined> | undefined,
@@ -282,13 +272,11 @@ const xaiPromptCacheFetch: typeof fetch = async (input, init) => {
  * `reasoning` parameter, so the fetch shim adds it to the HTTP body. */
 const zhipuReasoningFetch: typeof fetch = async (input, init) => {
   const headers = new Headers(init?.headers)
-  const hasRequestEffort = headers.has(ZHIPU_REASONING_HEADER)
-  const requestEffort = headers.get(ZHIPU_REASONING_HEADER) ?? undefined
+  const effort = headers.get(ZHIPU_REASONING_HEADER) || undefined
   headers.delete(ZHIPU_REASONING_HEADER)
   const sanitizedInit = init ? { ...init, headers } : init
   if (!init?.body || typeof init.body !== 'string') return permanentErrorFetch(input, sanitizedInit)
 
-  const effort = hasRequestEffort ? requestEffort || undefined : _zhipuReasoningEffort
   if (effort) {
     try {
       const body = JSON.parse(init.body) as { model?: string; reasoning_effort?: string }

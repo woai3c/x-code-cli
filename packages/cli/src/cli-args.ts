@@ -8,7 +8,7 @@
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 
-import { VERSION } from './version.js'
+import { VERSION } from '@x-code-cli/core'
 
 export async function parseCliArgs(args: string[] = hideBin(process.argv)) {
   return yargs(args)

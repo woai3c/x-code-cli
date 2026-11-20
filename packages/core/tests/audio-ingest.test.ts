@@ -4,12 +4,12 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { transcribeAudio } from '../src/agent/audio-transcribe.js'
-import { buildUserContent, ingestFile } from '../src/agent/file-ingest.js'
+import { transcribeAudio } from '../src/agent/ingest/audio-transcribe.js'
+import { buildUserContent, ingestFile } from '../src/agent/ingest/file-ingest.js'
 import { createReadFileTool } from '../src/tools/read-file.js'
 
-vi.mock('../src/agent/audio-transcribe.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/agent/audio-transcribe.js')>()
+vi.mock('../src/agent/ingest/audio-transcribe.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/ingest/audio-transcribe.js')>()
   return { ...actual, transcribeAudio: vi.fn() }
 })
 

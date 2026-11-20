@@ -11,7 +11,7 @@
 // CLI invalidates `systemPromptCache` afterwards — the byte-stability
 // constraint described in CLAUDE.md still applies because plugins
 // contribute skills / agents / commands into the system prompt.
-import { type ReloadSummary, diffNamedEntries } from '../registry-diff.js'
+import { type ReloadSummary, diffNamedEntries } from '../utils/registry-diff.js'
 import type { LoadedPlugin, PluginLoadError } from './types.js'
 
 /** Summary of what changed between two registry snapshots — used by
@@ -87,11 +87,4 @@ export class PluginRegistry {
     this.errors = [...errors]
     return summary
   }
-}
-
-/** Empty registry — used when plugin loading is disabled (e.g.
- *  `--no-plugins` startup flag) or no plugins are installed. Cheaper than
- *  null-checking the registry everywhere downstream. */
-export function emptyPluginRegistry(): PluginRegistry {
-  return new PluginRegistry([], [])
 }

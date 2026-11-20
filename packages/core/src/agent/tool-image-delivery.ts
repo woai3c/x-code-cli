@@ -1,14 +1,14 @@
 import { capabilitiesOf, modelSupportsVision, providerOf } from '../providers/capabilities.js'
 import { reportProgress } from '../tools/progress.js'
 import type { AgentCallbacks, AgentOptions } from '../types/index.js'
-import { debugLog } from '../utils.js'
+import { debugLog } from '../utils/index.js'
+import { captionImageBuffer, pickVisionProvider } from './ingest/vision-fallback.js'
+import type { VisionUsageEvent } from './ingest/vision-fallback.js'
 import type { LoopState } from './loop-state.js'
 import { toolErrorFromUnknown } from './messages.js'
 import type { ToolImage } from './messages.js'
-import { appendUsage } from './session-store.js'
+import { appendUsage } from './session/session-store.js'
 import { accumulateUsage, normalizeLanguageModelUsage } from './usage.js'
-import { captionImageBuffer, pickVisionProvider } from './vision-fallback.js'
-import type { VisionUsageEvent } from './vision-fallback.js'
 
 const CAPTION_TIMEOUT_MS = 120_000
 

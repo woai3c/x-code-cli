@@ -6,7 +6,7 @@ import {
   disposeWhisperProcess,
   probeWhisperRuntime,
   runWhisperTranscription,
-} from '../src/agent/audio-transcribe-runner.js'
+} from '../src/agent/ingest/audio-transcribe-runner.js'
 
 const childState = vi.hoisted(() => ({
   options: [] as Array<{ execArgv?: string[] }>,

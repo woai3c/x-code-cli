@@ -11,7 +11,7 @@ import {
   encodePeerFramePayload,
   encodeStartServerPayload,
   encodeWindowsPeerBrokerFrame,
-} from '../src/peers/windows-peer-broker-protocol.js'
+} from '../src/peers/transport/windows-peer-broker-protocol.js'
 
 function frame(kind = WindowsPeerBrokerFrameKind.OutboundResponse, payload = Buffer.from('payload')): Buffer {
   return encodeWindowsPeerBrokerFrame({ kind, operationId: 7, payload })

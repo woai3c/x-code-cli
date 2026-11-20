@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { decodeAudioToPcm } from '../src/agent/audio-decode.js'
+import { decodeAudioToPcm } from '../src/agent/ingest/audio-decode.js'
 
 interface MockVorbisHeader {
   blocksize0: number

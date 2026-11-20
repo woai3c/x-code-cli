@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { formatToolError } from '../utils/tool-errors.js'
 import { reportProgress } from './progress.js'
 import { getShellProvider } from './shell-provider.js'
+import { withTimeoutSignal as withTimeout } from './utils.js'
 
 const SEARCH_TIMEOUT_MS = 15_000
 // DeepSeek search is a full model turn server-side, not a plain lookup, so
@@ -38,11 +39,6 @@ interface WebSearchProvider {
   envKey: string
   signup: string
   search(query: string, maxResults: number, signal?: AbortSignal): Promise<ProviderResponse>
-}
-
-function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  return signal ? AbortSignal.any([signal, timeout]) : timeout
 }
 
 // HTTP error bodies carry the actionable message ("model not found",
@@ -348,15 +344,6 @@ const SEARCH_PROVIDERS: WebSearchProvider[] = [
 
 const ALL_PROVIDERS: WebSearchProvider[] = [...SEARCH_PROVIDERS, deepseekProvider]
 
-/** Side-channel: provider name of the active model (modelId split on ':').
- *  Set by the agent loop each turn, mirroring setZhipuReasoningEffort, so
- *  the statically-registered tool can tell whether the user runs DeepSeek. */
-let currentModelProvider: string | undefined
-
-export function setWebSearchModelProvider(provider: string | undefined): void {
-  currentModelProvider = provider
-}
-
 type PickResult = { provider: WebSearchProvider } | { error: string } | { none: true }
 
 function pickProvider(modelProvider: string | undefined): PickResult {
@@ -384,11 +371,9 @@ function pickProvider(modelProvider: string | undefined): PickResult {
   return { none: true }
 }
 
-/** Which provider a webSearch call would use right now, for startup hints.
- *  Pass the resolved model's provider explicitly; falls back to the
- *  loop-injected side-channel. */
+/** Which provider a webSearch call would use right now, for startup hints. */
 export function resolveWebSearchProvider(modelProvider?: string): { id: string; label: string } | null {
-  const picked = pickProvider(modelProvider ?? currentModelProvider)
+  const picked = pickProvider(modelProvider)
   return 'provider' in picked ? { id: picked.provider.id, label: picked.provider.label } : null
 }
 
@@ -453,12 +438,11 @@ export const webSearch = tool({
   }),
   // Per-request model provider, supplied by manual tool dispatch in
   // tool-execution.ts so concurrent sub-agent loops on different models stay
-  // isolated; the module-level setWebSearchModelProvider value is a fallback
-  // for direct callers/tests.
+  // isolated.
   contextSchema: z.object({ modelProvider: z.string().optional() }),
   execute: async ({ query, maxResults }, { toolCallId, abortSignal, context }) => {
     const n = maxResults ?? 5
-    const picked = pickProvider(context?.modelProvider ?? currentModelProvider)
+    const picked = pickProvider(context?.modelProvider)
 
     if ('none' in picked) return buildMissingKeyError()
     if ('error' in picked) return `Error: ${picked.error}`

@@ -1,5 +1,7 @@
 import { Worker } from 'node:worker_threads'
 
+import { createAbortError, resolveCoreWorkerUrl } from './worker-url.js'
+
 /** Longest edge accepted by the model-facing image adapter. */
 export const MAX_EDGE_PX = 2000
 
@@ -467,17 +469,10 @@ export async function compressImageInProcess(
 }
 
 function imageWorkerUrl(): URL {
-  const current = new URL(import.meta.url)
-  if (current.pathname.endsWith('/src/utils/image-compress.ts')) {
-    return new URL('../../dist/utils/image-compress-worker.js', current)
-  }
-  if (current.pathname.includes('/chunks/')) return new URL('../image-compress-worker.js', current)
-  return new URL('./image-compress-worker.js', current)
+  return resolveCoreWorkerUrl(import.meta.url, 'image-compress-worker.js')
 }
 
-function abortError(signal?: AbortSignal): Error {
-  return signal?.reason instanceof Error ? signal.reason : new DOMException('The operation was aborted', 'AbortError')
-}
+const abortError = createAbortError
 
 async function runCompressionWorker(
   bytes: Buffer,

@@ -9,7 +9,7 @@ import {
 } from '../src/agent/turn-stream.js'
 import type { AgentCallbacks, AgentOptions, TokenSpeedUpdate } from '../src/types/index.js'
 
-vi.mock('../src/agent/session-store.js', () => ({
+vi.mock('../src/agent/session/session-store.js', () => ({
   appendUsage: vi.fn().mockResolvedValue(undefined),
 }))
 

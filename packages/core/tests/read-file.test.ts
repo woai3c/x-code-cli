@@ -4,10 +4,10 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../src/agent/notebook-render.js'
+import { MAX_NOTEBOOK_SOURCE_BYTES, renderNotebookFile } from '../src/agent/ingest/notebook-render.js'
 import { type ReadFileCache, createReadFileTool, parsePdfPageRange, readFile } from '../src/tools/read-file.js'
 
-vi.mock('../src/agent/image-ocr.js', () => ({
+vi.mock('../src/agent/ingest/image-ocr.js', () => ({
   ocrImage: vi.fn(async () => 'mock readFile OCR'),
 }))
 

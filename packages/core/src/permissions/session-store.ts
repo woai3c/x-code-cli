@@ -386,45 +386,6 @@ function extractPowershellPrefix(cmd: string): string | null {
 }
 
 /**
- * Like {@link extractCommandPrefix} but for compound commands returns the
- * full set of distinct prefixes — one per non-read-only, non-cd segment.
- *
- * Returns `null` if any non-read-only segment has no derivable prefix
- * (the caller has a richer fallback via {@link extractCompoundRules} now)
- * or if every segment was filtered out as read-only / cd-like (mostly
- * defensive — those auto-allow upstream).
- *
- * Kept exported for compatibility with consumers that only need the
- * prefix list — current internal callers use the richer
- * {@link extractCompoundRules}.
- */
-export function extractCompoundPrefixes(command: string): string[] | null {
-  const cmd = command.trim()
-  if (!cmd) return null
-
-  if (POWERSHELL_LAUNCHER_RE.test(cmd)) {
-    const p = extractPowershellPrefix(cmd)
-    return p ? [p] : null
-  }
-
-  const segments = splitShellCommands(cmd)
-  if (segments.length === 0) return null
-
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const seg of segments) {
-    if (isReadOnly(seg) || CD_LIKE_RE.test(seg.trim())) continue
-    const p = extractSingleCommandPrefix(seg)
-    if (!p) return null
-    if (!seen.has(p)) {
-      seen.add(p)
-      out.push(p)
-    }
-  }
-  return out.length === 0 ? null : out
-}
-
-/**
  * Per-segment rule extraction for compound commands. Returns one rule
  * per non-read-only, non-cd segment:
  *   - prefix rule when the segment has a derivable prefix (e.g.
