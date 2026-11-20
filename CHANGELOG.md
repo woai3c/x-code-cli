@@ -1,3 +1,18 @@
+## v0.6.3 (2026-11-20)
+
+### Features
+
+- streamline prompts, tool dispatch, and tri-state thinking (b903b43)
+- add worker agent and /agent model configuration (71ed289)
+- show tok/s throughput and compact cwd in footer (f76f73c)
+- adopt .agents/skills standard and auto-discover .claude/skills (4d2e9b7)
+
+### Bug Fixes
+
+- avoid exitPlanMode/askUser rejection loops in non-interactive and Q&A turns (14f978d)
+- wrap markdown table cells within terminal width (6394ec8)
+- keep prompt input responsive while streaming replies (650d421)
+
 ## v0.6.2 (2026-11-18)
 
 ### Features
